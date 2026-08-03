@@ -2,15 +2,15 @@
 
 Gioco di simulazione politica italiana, interamente client-side: un unico file HTML, nessun server, nessun backend, nessuna dipendenza da installare.
 
-Vesti i panni del fondatore di un nuovo partito politico italiano, partendo da zero: scegli l'ideologia, lo stile di leadership, gestisci fondi/iscritti/sezioni, assumi lo staff del partito, affronta dossier settimanali (crisi, media, correnti interne) e conduci il partito fino alle elezioni — con soglie reali del 3% (liste singole) e 10% (coalizioni). Il gioco è pensato per essere **endless**: dopo ogni elezione la simulazione continua.
+Vesti i panni del fondatore di un nuovo partito politico italiano, partendo da zero: scegli tra oltre una dozzina di filiazioni ideologiche e otto stili di leadership, gestisci fondi/iscritti/sezioni, assumi lo staff del partito, affronta situazioni settimanali sempre diverse e conduci il partito fino alle elezioni — con soglie reali del 3% (liste singole) e 10% (coalizioni). Il gioco è pensato per essere **endless**: dopo ogni elezione la simulazione continua.
 
 ## Come si gioca
 
-Basta aprire `index.html` in un browser (anche da mobile) — nessuna installazione richiesta. La partita si salva automaticamente nel browser (`localStorage`) e può anche essere esportata/importata come file JSON dal pannello di gioco, per portarla su un altro dispositivo o metterla al sicuro.
+Basta aprire `index.html` in un browser (anche da mobile) — nessuna installazione richiesta, nessuna intelligenza artificiale, nessuna chiave, nessuna connessione di rete necessaria per giocare. La partita si salva automaticamente nel browser (`localStorage`) e può anche essere esportata/importata come file JSON dal pannello di gioco, per portarla su un altro dispositivo o metterla al sicuro.
 
-### Intelligenza artificiale locale (opzionale)
+### Iniziativa Libera e situazioni settimanali
 
-Il gioco include una modalità "Iniziativa Libera" in cui puoi scrivere liberamente cosa vuole fare il tuo partito in una settimana. Per un impatto realistico generato da un vero modello linguistico, puoi attivare gratuitamente un **modello IA locale** (via [WebLLM](https://github.com/mlc-ai/web-llm)) dal pannello "Intelligenza artificiale locale" del gioco: si scarica una volta sola nel browser e gira interamente sul tuo dispositivo tramite WebGPU — nessuna chiave, nessun account, nessun server esterno, nessun limite di utilizzo. Richiede un browser con supporto WebGPU (non garantito su tutti i telefoni, specie su iPhone). Senza IA locale attivata, il gioco usa comunque una risoluzione automatica delle iniziative libere, meno raffinata ma pienamente funzionante.
+Ogni settimana il gioco compone una situazione da affrontare combinando temi, angolazioni narrative, città italiane reali, partiti rivali reali e il tono dato dallo stile di leadership scelto: le combinazioni possibili sono centinaia di migliaia, e restano coerenti nel tempo perché il generatore tiene conto di cosa il partito ha già fatto nelle settimane precedenti. Puoi sempre rispondere scrivendo liberamente cosa vuole fare o dire il tuo partito ("Iniziativa Libera"): il testo viene letto da un'analisi euristica locale (specificità, coerenza ideologica, contenuti gravi, impatto economico) — tutto calcolato istantaneamente nel browser, senza alcun modello linguistico esterno.
 
 ## Hosting
 

@@ -412,24 +412,6 @@
     .save-bar-label { margin-right: 0; flex-basis: 100%; }
   }
 
-  /* ---------- AI settings ---------- */
-  .ai-settings {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    margin-bottom: 1.5rem; overflow: hidden;
-  }
-  .ai-settings summary {
-    padding: 0.7rem 0.9rem; cursor: pointer; font-size: 0.85rem; font-weight: 600; color: var(--text);
-    list-style: none; display: flex; align-items: center; gap: 0.6rem; min-height: 44px;
-  }
-  .ai-settings summary::-webkit-details-marker { display: none; }
-  .ai-settings summary span:last-child { margin-left: auto; color: var(--text-dim); }
-  .ai-settings-body { padding: 0 0.9rem 1rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
-  .ai-settings-body input[type="password"], .ai-settings-body input[type="text"] {
-    width: 100%; max-width: 420px; padding: 0.6rem 0.75rem; border-radius: 8px;
-    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 0.94rem;
-  }
-  .ai-settings-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.4rem; }
-
   /* ---------- Notices ---------- */
   .notice-block {
     border: 1px solid var(--critical); background: var(--critical-soft); border-radius: 8px;
@@ -468,19 +450,6 @@
     <input type="file" id="import-input" accept="application/json,.json" style="display:none">
     <span class="save-status" id="save-status"></span>
   </div>
-
-  <details class="ai-settings" id="ai-settings">
-    <summary>Intelligenza artificiale locale <span class="chip neutral" id="ai-status-chip">Non attiva</span><span>▾</span></summary>
-    <div class="ai-settings-body">
-      <div class="field local-llm-field">
-        <label class="field-label">Modello IA nel browser — nessuna chiave, nessuna quota, nessun server esterno</label>
-        <p class="ci-hint">Scarica un piccolo modello linguistico (una volta sola, resta nella cache del browser) e lo fa girare direttamente sul tuo dispositivo: nessuna chiamata di rete durante il gioco, nessun limite di utilizzo. Richiede un browser con supporto WebGPU — non garantito su tutti i telefoni, specie su iPhone dove questa tecnologia è ancora recente. Se il tuo browser non lo supporta il gioco te lo dice chiaramente qui sotto.</p>
-        <div class="option-grid" id="local-llm-model-picker"></div>
-        <div id="local-llm-status"></div>
-        <button class="save-bar-btn primary" id="init-local-llm-btn" type="button">Attiva modello IA locale</button>
-      </div>
-    </div>
-  </details>
 
   <main id="app"></main>
 
@@ -537,240 +506,40 @@
   var RATINGS = ["BBB-", "BBB", "BBB+", "A-", "A"];
   var STORAGE_KEY = "politisit_founder_save_v2";
 
-  // ---------- Motore IA locale nel browser (WebLLM) — unico motore IA del gioco ----------
-  // Scarica una volta sola (nella cache del browser) un piccolo modello linguistico e lo fa girare
-  // interamente sul dispositivo, tramite WebGPU: nessuna chiamata di rete durante il gioco, nessuna
-  // chiave, nessun limite/quota. Richiede però che il browser supporti WebGPU, cosa non garantita su
-  // ogni dispositivo (specie iPhone, dove il supporto è ancora recente): se non è disponibile, il
-  // gioco lo segnala chiaramente in "Impostazioni IA".
-  // Tre livelli tra cui scegliere, dal più leggero (avvio rapidissimo anche su telefoni modesti,
-  // risposte più semplici) al più pesante (comprensione più ricca, ma download e avvio più lenti):
-  // così chi ha un telefono meno potente può comunque avere l'IA locale attiva in fretta, e chi vuole
-  // di più può scegliere consapevolmente di aspettare un download più corposo la prima volta.
-  var LOCAL_LLM_MODELS = [
-    { id: "SmolLM2-360M-Instruct-q4f16_1-MLC", label: "Veloce", sizeLabel: "~250 MB", desc: "Download e avvio rapidi anche su telefoni meno potenti. Risposte più semplici." },
-    { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC", label: "Equilibrato", sizeLabel: "~900 MB", desc: "Buon compromesso tra velocità di avvio e qualità delle risposte." },
-    { id: "Llama-3.2-3B-Instruct-q4f16_1-MLC", label: "Più capace", sizeLabel: "~2,3 GB", desc: "La comprensione più ricca dei tre, ma download più lungo e serve un dispositivo più potente." }
-  ];
-  var LOCAL_LLM_MODEL_STORAGE = "politisit_local_model_id";
-  var LocalLLM = { status: "idle", progressPct: 0, progressText: "", engine: null, errorMessage: "", loadedModelId: "" };
-  function getLocalLlmModelId() {
-    try { return localStorage.getItem(LOCAL_LLM_MODEL_STORAGE) || LOCAL_LLM_MODELS[0].id; } catch (e) { return LOCAL_LLM_MODELS[0].id; }
-  }
-  function setLocalLlmModelId(id) {
-    try { localStorage.setItem(LOCAL_LLM_MODEL_STORAGE, id); } catch (e) {}
-  }
-  function localLlmSupported() {
-    return typeof navigator !== "undefined" && !!navigator.gpu;
-  }
-  // Il modello locale pesa centinaia di MB: senza la Cache Storage API il browser dovrebbe
-  // riscaricarlo per intero a ogni utilizzo, cosa che WebLLM non fa proprio, fallendo invece. Questa
-  // API richiede un'origine http/https "vera" — è quasi sempre assente (o disabilitata) quando la
-  // pagina viene aperta come file locale (file://) invece che tramite un indirizzo web, che è
-  // esattamente lo scenario di "apri il file HTML scaricato": in quel caso l'IA locale non può
-  // funzionare per niente, indipendentemente da qualunque altra cosa, ed è meglio dirlo subito e
-  // chiaramente piuttosto che lasciare che il download parta e fallisca in un punto non ovvio.
-  function cacheStorageAvailable() {
-    return typeof window !== "undefined" && "caches" in window;
-  }
-  // navigator.gpu può esistere (l'oggetto è presente) anche su browser dove WebGPU in pratica non
-  // funziona (implementazione parziale, nessuna GPU compatibile, driver non supportato): richiedere
-  // davvero un adattatore prima di lanciarsi nel download pesante del modello evita di far percorrere
-  // a un dispositivo non davvero compatibile tutta la strada fino a un crash a metà caricamento.
-  async function webGpuAdapterAvailable() {
-    if (!localLlmSupported() || !navigator.gpu.requestAdapter) return false;
-    try {
-      var adapter = await navigator.gpu.requestAdapter();
-      return !!adapter;
-    } catch (e) {
-      return false;
-    }
-  }
-  // Vero se il modello locale è caricato e pronto — usato per decidere se mostrare le funzioni "capite dall'IA".
-  function aiIsActive() {
-    return LocalLLM.status === "ready";
-  }
-  // Se il download/inizializzazione non fa alcun progresso per più di questo tempo, si presume
-  // bloccato (connessione caduta, contesto WebGPU perso) invece di lasciare il pulsante su
-  // "Caricamento in corso…" per sempre. Volutamente generoso: la compilazione degli shader su un
-  // dispositivo lento può restare ferma per decine di secondi tra un progresso e l'altro anche
-  // quando sta funzionando normalmente.
-  var LOCAL_LLM_DOWNLOAD_STALL_MS = 120000;
-  async function initLocalLLM(onProgress) {
-    if (!localLlmSupported()) { LocalLLM.status = "unsupported"; return false; }
-    var targetId = getLocalLlmModelId();
-    if (LocalLLM.status === "ready" && LocalLLM.loadedModelId === targetId) return true;
-    // Un download è già in corso: non avviarne un secondo in parallelo (es. un doppio tap sul
-    // pulsante prima che si disabiliti). Due inizializzazioni WebGPU in gara possono esaurire la
-    // memoria video o lasciare lo stato a metà tra un tentativo e l'altro.
-    if (LocalLLM.status === "loading") return false;
-
-    LocalLLM.status = "loading";
-    LocalLLM.progressPct = 0;
-    LocalLLM.progressText = "Verifica del supporto WebGPU…";
-    if (onProgress) onProgress();
-
-    if (!cacheStorageAvailable()) {
-      LocalLLM.status = "unsupported";
-      LocalLLM.errorMessage = "Il browser non mette a disposizione la memoria cache necessaria per salvare il modello. " +
-        "Questo succede quasi sempre quando il gioco viene aperto come file scaricato invece che tramite un indirizzo web: " +
-        "usa il link (https://scacciafantasmi-sys.github.io/me/) invece del file HTML per l'IA locale.";
-      if (onProgress) onProgress();
-      return false;
-    }
-
-    var adapterOk = await webGpuAdapterAvailable();
-    if (!adapterOk) {
-      LocalLLM.status = "unsupported";
-      LocalLLM.errorMessage = "Il browser espone l'API WebGPU ma non è riuscito a ottenere un adattatore grafico funzionante su questo dispositivo.";
-      if (onProgress) onProgress();
-      return false;
-    }
-    LocalLLM.progressText = "Avvio del modello locale…";
-    if (onProgress) onProgress();
-
-    var stallTimeoutId;
-    var rejectStall;
-    var stallPromise = new Promise(function (_, reject) { rejectStall = reject; });
-    function armStallTimer() {
-      if (stallTimeoutId) clearTimeout(stallTimeoutId);
-      stallTimeoutId = setTimeout(function () {
-        rejectStall(new Error("Il download del modello si è fermato (nessun progresso da oltre due minuti): probabile connessione interrotta o problema con il browser. Riprova."));
-      }, LOCAL_LLM_DOWNLOAD_STALL_MS);
-    }
-    armStallTimer();
-
-    try {
-      var webllm = await import(/* webpackIgnore: true */ "https://esm.run/@mlc-ai/web-llm");
-      var enginePromise = webllm.CreateMLCEngine(targetId, {
-        initProgressCallback: function (p) {
-          LocalLLM.progressPct = Math.round((p && p.progress || 0) * 100);
-          LocalLLM.progressText = (p && p.text) || "";
-          armStallTimer();
-          if (onProgress) onProgress();
-        }
-      });
-      LocalLLM.engine = await Promise.race([enginePromise, stallPromise]);
-      clearTimeout(stallTimeoutId);
-      LocalLLM.status = "ready";
-      LocalLLM.loadedModelId = targetId;
-      return true;
-    } catch (e) {
-      clearTimeout(stallTimeoutId);
-      LocalLLM.status = "error";
-      LocalLLM.errorMessage = (e && e.message) || "Errore sconosciuto durante il caricamento del modello locale.";
-      if (onProgress) onProgress();
-      return false;
-    }
-  }
-  // Rete di sicurezza a livello di pagina: se qualcosa durante il caricamento del modello locale
-  // sfugge al try/catch di initLocalLLM (es. un errore lanciato in modo asincrono da dentro WebLLM
-  // stesso, fuori dalla promise che stiamo osservando — plausibile causa di un'intera pagina che va
-  // in errore e si ricarica su dispositivi con poca memoria durante il caricamento del modello),
-  // questi listener globali intercettano comunque l'errore e riportano lo stato a "error" invece di
-  // lasciare che la pagina si blocchi o si comporti in modo imprevedibile. Non possono impedire un
-  // crash della scheda per esaurimento memoria deciso dal sistema operativo/browser (nessun codice
-  // JavaScript può farlo), ma coprono ogni altro caso in cui l'errore avviene comunque dentro il motore JS.
-  function handleUnexpectedLocalLlmError(err) {
-    if (LocalLLM.status !== "loading") return;
-    LocalLLM.status = "error";
-    LocalLLM.errorMessage = "Errore imprevisto durante il caricamento (" + ((err && (err.message || String(err))) || "sconosciuto") +
-      "). Il browser potrebbe aver esaurito la memoria disponibile: prova il livello \"Veloce\", chiudi altre schede/app e riprova.";
-    if (window.console && console.error) console.error("Errore imprevisto durante il caricamento dell'IA locale:", err);
-    if (typeof renderLocalLlmStatus === "function") renderLocalLlmStatus();
-  }
-  if (typeof window !== "undefined") {
-    window.addEventListener("error", function (ev) { handleUnexpectedLocalLlmError(ev && ev.error); });
-    window.addEventListener("unhandledrejection", function (ev) { handleUnexpectedLocalLlmError(ev && ev.reason); });
-  }
-  // Chiede al modello locale un JSON con la forma descritta a parole nel prompt (i modelli piccoli non
-  // seguono sempre uno schema rigido: il prompt deve descrivere chiaramente le chiavi attese). Essendo
-  // questo l'unico motore IA del gioco (nessun Gemini, nessuna rinuncia dopo un solo tentativo), ogni
-  // chiamata ritenta fino a LOCAL_LLM_MAX_ATTEMPTS volte prima di ammettere una sconfitta genuina: un
-  // timeout isolato o un JSON malformato ogni tanto non deve mai bastare a rinunciare all'IA locale.
-  // Ogni singolo tentativo resta comunque limitato nel tempo (Promise.race): senza un tetto massimo,
-  // se il motore WebGPU si blocca del tutto, la promise potrebbe non risolversi mai e il gioco
-  // resterebbe bloccato all'infinito — qui invece, nel peggiore dei casi, dopo tutti i tentativi il
-  // gioco lo segnala onestamente invece di restare fermo per sempre senza alcuna spiegazione.
-  var LOCAL_LLM_TIMEOUT_MS = 45000;
-  var LOCAL_LLM_MAX_ATTEMPTS = 3;
-  async function callLocalLLMOnce(systemPrompt, userMessage) {
-    if (LocalLLM.status !== "ready" || !LocalLLM.engine) throw new Error("Modello locale non pronto.");
-    var timeoutId;
-    var timeoutPromise = new Promise(function (_, reject) {
-      timeoutId = setTimeout(function () {
-        try { LocalLLM.engine && LocalLLM.engine.interruptGenerate && LocalLLM.engine.interruptGenerate(); } catch (eIgnored) {}
-        reject(new Error("Il modello locale non ha risposto in tempo."));
-      }, LOCAL_LLM_TIMEOUT_MS);
-    });
-    var reply;
-    try {
-      reply = await Promise.race([
-        LocalLLM.engine.chat.completions.create({
-          messages: [
-            { role: "system", content: systemPrompt + " Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo, senza markdown." },
-            { role: "user", content: userMessage }
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.7
-        }),
-        timeoutPromise
-      ]);
-    } finally {
-      clearTimeout(timeoutId);
-    }
-    var text = reply && reply.choices && reply.choices[0] && reply.choices[0].message && reply.choices[0].message.content;
-    if (!text) throw new Error("Il modello locale non ha restituito una risposta.");
-    // I modelli piccoli a volte avvolgono il JSON in un blocco ```json ... ``` nonostante le istruzioni:
-    // va ripulito prima di cercare le graffe, altrimenti una risposta perfettamente valida verrebbe
-    // scartata per un dettaglio di formattazione.
-    text = text.replace(/```json/gi, "").replace(/```/g, "");
-    var jsonStart = text.indexOf("{");
-    var jsonEnd = text.lastIndexOf("}");
-    if (jsonStart === -1 || jsonEnd === -1) throw new Error("Il modello locale non ha restituito JSON valido.");
-    return JSON.parse(text.slice(jsonStart, jsonEnd + 1));
-  }
-  async function callLocalLLMJSON(systemPrompt, userMessage, onAttempt) {
-    var lastError;
-    for (var attempt = 1; attempt <= LOCAL_LLM_MAX_ATTEMPTS; attempt++) {
-      if (onAttempt) onAttempt(attempt, LOCAL_LLM_MAX_ATTEMPTS);
-      try {
-        return await callLocalLLMOnce(systemPrompt, userMessage);
-      } catch (e) {
-        lastError = e;
-        if (window.console && console.warn) console.warn("Tentativo " + attempt + "/" + LOCAL_LLM_MAX_ATTEMPTS + " con l'IA locale fallito:", e);
-      }
-    }
-    // Tutti i tentativi hanno fallito davvero: è documentato che WebGPU può perdere il "device"
-    // (quasi sempre per esaurimento di memoria) anche DOPO che il modello si era caricato con
-    // successo, silenziosamente, senza generare un errore visibile finché non lo si usa di nuovo —
-    // è il modo in cui l'IA locale sembra "sparire" da sola a metà partita. Se restasse segnata come
-    // "ready" il gioco continuerebbe a mostrare "IA locale attiva" pur non funzionando più davvero:
-    // meglio riportare lo stato a un errore onesto, così l'interfaccia lo riflette subito e la
-    // riattivazione (che ricarica il motore da zero) torna a essere l'azione ovvia da fare.
-    LocalLLM.status = "error";
-    LocalLLM.errorMessage = "Il modello locale ha smesso di rispondere (probabile perdita del contesto grafico per memoria insufficiente). " +
-      "Riattivalo dalle Impostazioni IA; se succede spesso, prova il livello \"Veloce\".";
-    if (typeof refreshAiStatusChip === "function") refreshAiStatusChip();
-    if (typeof renderLocalLlmStatus === "function") renderLocalLlmStatus();
-    throw lastError;
-  }
-
   var SWATCHES = ["#d6455c", "#3fa9dc", "#e0a53a", "#4a8f5c", "#8a5fc2", "#2f8f8f", "#b0468a", "#6b7280"];
 
+  // Famiglie ideologiche tra cui il giocatore può scegliere per il proprio partito: coprono lo
+  // spettro politico italiano in modo ampio e specifico (non solo le 5 macro-aree iniziali), così che
+  // la scelta di partenza da sola generi già identità molto diverse tra loro. "rival" è il partito
+  // reale che nel tempo cede/guadagna più voti in competizione diretta col giocatore.
   var FAMILIES = [
-    { id: "sovranista",    label: "Sovranista e Conservatore",         desc: "Identità nazionale, sicurezza, freni all'immigrazione.", rival: "fn" },
-    { id: "liberale",      label: "Liberale e Riformista",             desc: "Mercato, meritocrazia, riduzione della spesa pubblica.",  rival: "fi" },
-    { id: "progressista",  label: "Progressista e Ambientalista",      desc: "Transizione ecologica, diritti civili, welfare.",         rival: "avs" },
-    { id: "movimentista",  label: "Movimentista e Anti-establishment", desc: "Onestà pubblica, democrazia diretta, anti-casta.",        rival: "m5s" },
-    { id: "sinistra",      label: "Socialista e del Lavoro",           desc: "Lavoro, redistribuzione, sindacati.",                     rival: "pd" }
+    { id: "sovranista",       label: "Sovranista e Conservatore",         desc: "Identità nazionale, sicurezza, freni all'immigrazione.",              rival: "fn" },
+    { id: "liberale",         label: "Liberale e Riformista",             desc: "Mercato, meritocrazia, riduzione della spesa pubblica.",               rival: "fi" },
+    { id: "progressista",     label: "Progressista e Ambientalista",      desc: "Transizione ecologica, diritti civili, welfare.",                      rival: "avs" },
+    { id: "movimentista",     label: "Movimentista e Anti-establishment", desc: "Onestà pubblica, democrazia diretta, anti-casta.",                     rival: "m5s" },
+    { id: "sinistra",         label: "Socialista e del Lavoro",           desc: "Lavoro, redistribuzione, sindacati.",                                  rival: "pd" },
+    { id: "cattolico",        label: "Cattolico-Popolare",                desc: "Valori cristiano-sociali, famiglia, solidarietà, centro moderato.",    rival: "noimoderati" },
+    { id: "regionalista",     label: "Regionalista e Autonomista",        desc: "Decentramento, identità territoriale, autonomia fiscale.",             rival: "svp" },
+    { id: "comunista",        label: "Comunista e Radicale",              desc: "Anticapitalismo, redistribuzione radicale, internazionalismo.",        rival: "unionepopolare" },
+    { id: "nazionalpopolare", label: "Nazional-Popolare",                 desc: "Sovranismo duro, identitarismo intransigente, rottura con l'establishment.", rival: "lega" },
+    { id: "europeista",       label: "Europeista e Federalista",          desc: "Integrazione europea, federalismo, atlantismo.",                       rival: "piueuropa" },
+    { id: "libertario",       label: "Libertario e Individualista",       desc: "Stato minimo, libertà individuali, deregolamentazione.",               rival: "azione" },
+    { id: "tecnoprogressista", label: "Tecno-Progressista",               desc: "Innovazione, merito, riforma pragmatica guidata dai dati.",            rival: "italiaviva" },
+    { id: "meridionalista",   label: "Meridionalista",                    desc: "Questione meridionale, infrastrutture e investimenti per il Sud.",     rival: "sudchiamanord" }
   ];
 
+  // Stili di leadership: incidono su come si traducono gli eventi in numeri (visibilità, volatilità
+  // della reputazione, crescita iscritti, costi, velocità di crescita generale) e sul tono con cui il
+  // generatore di situazioni settimanali racconta le cose.
   var LEADERSHIP_STYLES = [
     { id: "carismatico", label: "Carismatico", desc: "Il leader trascina il consenso, ma ogni passo falso costa caro.", visMult: 1.3, repVolatility: 1.3, iscrittiMult: 1, fondiMult: 1, growthMult: 1 },
     { id: "tecnocratico", label: "Tecnocratico", desc: "Credibilità e competenza al centro, meno presa emotiva sulle piazze.", visMult: 0.8, repVolatility: 0.8, iscrittiMult: 1, fondiMult: 1, growthMult: 1 },
     { id: "movimentista_stile", label: "Movimentista", desc: "Militanza e mobilitazione dal basso, casse sempre in affanno.", visMult: 1, repVolatility: 1, iscrittiMult: 1.3, fondiMult: 0.85, growthMult: 1 },
-    { id: "collegiale", label: "Collegiale", desc: "Decisioni condivise, correnti più stabili, crescita più lenta ma solida.", visMult: 1, repVolatility: 1, iscrittiMult: 1, fondiMult: 1, growthMult: 0.88 }
+    { id: "collegiale", label: "Collegiale", desc: "Decisioni condivise, correnti più stabili, crescita più lenta ma solida.", visMult: 1, repVolatility: 1, iscrittiMult: 1, fondiMult: 1, growthMult: 0.88 },
+    { id: "populista_diretto", label: "Populista Diretto", desc: "Comunica sui social bypassando i media tradizionali: molto visibile, molto esposto.", visMult: 1.4, repVolatility: 1.2, iscrittiMult: 1.15, fondiMult: 0.95, growthMult: 1.05 },
+    { id: "istituzionale_paziente", label: "Istituzionale Paziente", desc: "Gioca sul lungo periodo, raramente in prima pagina: crescita lenta ma molto solida.", visMult: 0.7, repVolatility: 0.6, iscrittiMult: 0.85, fondiMult: 1.1, growthMult: 0.95 },
+    { id: "polemista_aggressivo", label: "Polemista Aggressivo", desc: "Attacca sempre gli avversari: alta visibilità, ma ogni scivolone si paga caro.", visMult: 1.5, repVolatility: 1.5, iscrittiMult: 1.1, fondiMult: 1, growthMult: 1 },
+    { id: "mediatore_silenzioso", label: "Mediatore Silenzioso", desc: "Evita gli scontri e negozia dietro le quinte: poca visibilità, reputazione molto stabile.", visMult: 0.6, repVolatility: 0.5, iscrittiMult: 0.9, fondiMult: 1.05, growthMult: 0.9 }
   ];
 
   var STAFF_FIRST_NAMES = [
@@ -802,11 +571,19 @@
   ];
 
   var CORRENTI_BY_FAMILY = {
-    sovranista:   [{ id: "identitaria", label: "Ala Identitaria" },        { id: "governista", label: "Ala Governista e Pragmatica" }],
-    liberale:     [{ id: "mercatista", label: "Ala Mercatista" },          { id: "moderata", label: "Ala Moderata e Istituzionale" }],
-    progressista: [{ id: "ecologista", label: "Ala Ecologista Radicale" }, { id: "riformista", label: "Ala Riformista" }],
-    movimentista: [{ id: "purista", label: "Ala Purista Anti-sistema" },   { id: "pragmatica", label: "Ala Pragmatica di Governo" }],
-    sinistra:     [{ id: "sindacale", label: "Ala Sindacale e Operaia" },  { id: "socialdem", label: "Ala Socialdemocratica" }]
+    sovranista:        [{ id: "identitaria", label: "Ala Identitaria" },         { id: "governista", label: "Ala Governista e Pragmatica" }],
+    liberale:          [{ id: "mercatista", label: "Ala Mercatista" },           { id: "moderata", label: "Ala Moderata e Istituzionale" }],
+    progressista:      [{ id: "ecologista", label: "Ala Ecologista Radicale" },  { id: "riformista", label: "Ala Riformista" }],
+    movimentista:      [{ id: "purista", label: "Ala Purista Anti-sistema" },    { id: "pragmatica", label: "Ala Pragmatica di Governo" }],
+    sinistra:          [{ id: "sindacale", label: "Ala Sindacale e Operaia" },   { id: "socialdem", label: "Ala Socialdemocratica" }],
+    cattolico:         [{ id: "sociale", label: "Ala Sociale e Solidarista" },   { id: "tradizionalista", label: "Ala Tradizionalista" }],
+    regionalista:      [{ id: "secessionista", label: "Ala Secessionista" },    { id: "federalista", label: "Ala Federalista Moderata" }],
+    comunista:         [{ id: "operaista", label: "Ala Operaista" },            { id: "internazionalista", label: "Ala Internazionalista" }],
+    nazionalpopolare:  [{ id: "dura", label: "Ala Dura e Intransigente" },      { id: "popolare", label: "Ala Popolare e Sociale" }],
+    europeista:        [{ id: "federalista_ue", label: "Ala Federalista Europea" }, { id: "atlantista", label: "Ala Atlantista" }],
+    libertario:        [{ id: "libertaria_pura", label: "Ala Libertaria Pura" }, { id: "conservatrice", label: "Ala Liberal-Conservatrice" }],
+    tecnoprogressista: [{ id: "innovatrice", label: "Ala dell'Innovazione" },   { id: "regolatrice", label: "Ala Regolatrice e Cauta" }],
+    meridionalista:    [{ id: "autonomista_sud", label: "Ala Autonomista del Sud" }, { id: "sviluppista", label: "Ala Sviluppista" }]
   };
 
   var COALITIONS = {
@@ -815,8 +592,8 @@
   };
 
   // ---------- Sfondo del mondo: geopolitica, tecnologia, cronaca, governo, referendum ----------
-  // Contenuto sempre attivo (non richiede IA), per dare la sensazione che il mondo vada avanti
-  // anche indipendentemente dal partito del giocatore. Dichiaratamente fittizio/ipotetico.
+  // Contenuto sempre attivo, per dare la sensazione che il mondo vada avanti anche indipendentemente
+  // dal partito del giocatore. Dichiaratamente fittizio/ipotetico.
   var WORLD_NEWS_TEMPLATES = [
     { cat: "Geopolitica", text: "Tensione crescente tra le grandi potenze su una nuova crisi commerciale internazionale." },
     { cat: "Geopolitica", text: "Un vertice dell'Unione Europea discute nuove regole sul debito comune e sulla concorrenza." },
@@ -881,6 +658,54 @@
       "La sezione promuove un'assemblea sindacale aperta.",
       "Un gruppo di militanti distribuisce volantini all'uscita di una grande azienda.",
       "Il nucleo locale apre uno sportello di tutela dei lavoratori."
+    ],
+    cattolico: [
+      "Il nucleo locale organizza una raccolta di beni di prima necessità per le famiglie del quartiere.",
+      "La sezione promuove un incontro pubblico su famiglia e welfare con la parrocchia locale.",
+      "Un gruppo di militanti apre un banchetto informativo fuori da un centro sociale.",
+      "Il nucleo locale visita una casa di riposo del territorio."
+    ],
+    regionalista: [
+      "Il nucleo locale organizza un presidio per l'autonomia amministrativa del territorio.",
+      "La sezione promuove un incontro pubblico sulle infrastrutture locali trascurate da Roma.",
+      "Un gruppo di militanti espone lo stendardo del movimento in piazza.",
+      "Il nucleo locale incontra amministratori comunali del territorio."
+    ],
+    comunista: [
+      "Il nucleo locale organizza un presidio operaio davanti a uno stabilimento in crisi.",
+      "La sezione promuove un'assemblea popolare sul caro-vita nel quartiere.",
+      "Un gruppo di militanti distribuisce volantini a un mercato rionale.",
+      "Il nucleo locale apre uno sportello di mutuo soccorso per i più fragili."
+    ],
+    nazionalpopolare: [
+      "Il nucleo locale organizza un presidio sul tema della sicurezza e dell'identità nazionale.",
+      "La sezione affigge manifesti in centro città con toni netti e diretti.",
+      "Un gruppo di militanti partecipa a una fiera di paese con un banchetto informativo.",
+      "Il nucleo locale organizza un incontro pubblico molto partecipato e acceso."
+    ],
+    europeista: [
+      "Il nucleo locale organizza un dibattito pubblico sull'integrazione europea.",
+      "La sezione promuove uno scambio con militanti di un partito gemello di un altro paese UE.",
+      "Un gruppo di militanti apre un banchetto informativo davanti a un'università.",
+      "Il nucleo locale partecipa a un'iniziativa cittadina sul futuro dell'Europa."
+    ],
+    libertario: [
+      "Il nucleo locale organizza un incontro con piccoli imprenditori e liberi professionisti.",
+      "La sezione promuove un ciclo di seminari su fisco, burocrazia e libertà d'impresa.",
+      "Un gruppo di militanti apre un banchetto vicino a un distretto commerciale.",
+      "Il nucleo locale incontra una delegazione di startup locali."
+    ],
+    tecnoprogressista: [
+      "Il nucleo locale organizza un evento su innovazione e digitalizzazione dei servizi pubblici.",
+      "La sezione promuove un hackathon cittadino su una proposta di policy locale.",
+      "Un gruppo di militanti apre uno sportello digitale di ascolto online.",
+      "Il nucleo locale incontra una delegazione di ricercatori e startup del territorio."
+    ],
+    meridionalista: [
+      "Il nucleo locale organizza un presidio sulle infrastrutture mancanti del territorio.",
+      "La sezione promuove un'assemblea pubblica sullo spopolamento e il lavoro al Sud.",
+      "Un gruppo di militanti distribuisce volantini in piazza sul divario Nord-Sud.",
+      "Il nucleo locale incontra amministratori locali sul tema degli investimenti pubblici."
     ]
   };
 
@@ -951,16 +776,34 @@
       '<div class="nuclei-grid">' + pills + '</div>' + extra + '</section>';
   }
 
-  // ---------- Continuità locale, senza alcuna chiamata di rete ----------
-  // Usa lo storico reale del partito (state.log, che si accumula da sola partita dopo partita) per far
-  // sì che la situazione della settimana segua davvero quello che il giocatore ha appena fatto, anche
-  // quando l'IA locale non è ancora stata attivata. Funziona sempre.
+  // ---------- Generatore combinatorio delle situazioni settimanali ----------
+  // Nessuna intelligenza artificiale, nessuna chiamata di rete, nessuna attesa: ogni settimana la
+  // situazione da affrontare viene composta sul momento combinando un tema, un'angolazione narrativa,
+  // una città reale, un partito rivale reale e il tono dato dallo stile di leadership scelto — il
+  // numero di combinazioni possibili è enorme (temi × angolazioni × città × partiti × cornici di
+  // leadership dà già centinaia di migliaia di esiti distinti), quindi in pratica non se ne ripetono
+  // mai due identiche. La coerenza con le settimane precedenti (memoria) arriva da due meccanismi:
+  // 1) il "seguito" diretto, che cita alla lettera l'ultima iniziativa scritta dal giocatore;
+  // 2) lo "slancio tematico" (computeThemeMomentum), che pesa di più il tema su cui il giocatore si è
+  //    concentrato più volte di recente, così i temi ricorrenti restano protagonisti nel tempo.
+
   var LOCAL_FOLLOWUP_TEMPLATES = [
     { title: "Un giornalista chiede conto della scorsa settimana", brief: function (q) { return "Un cronista locale ti contatta per un commento su questo: “" + q + "”. Cosa rispondi, e come proseguite da lì?"; } },
     { title: "Le conseguenze si fanno ancora sentire", brief: function (q) { return "Il dibattito sulla tua iniziativa recente (“" + q + "”) non si è ancora spento. Come decidi di seguire la cosa questa settimana?"; } },
     { title: "Un rivale politico commenta la tua mossa", brief: function (q) { return "Un esponente di un altro partito interviene pubblicamente su “" + q + "”. Come rispondi tu?"; } },
     { title: "Il tema resta caldo", brief: function (q) { return "L'argomento sollevato con “" + q + "” è ancora nel dibattito pubblico di questa settimana. Cosa fai per continuare a occupartene?"; } },
-    { title: "Militanti e simpatizzanti chiedono un seguito", brief: function (q) { return "Diversi iscritti ti scrivono per sapere come proseguirà quanto avviato con “" + q + "”. Come rispondi alla base del partito?"; } }
+    { title: "Militanti e simpatizzanti chiedono un seguito", brief: function (q) { return "Diversi iscritti ti scrivono per sapere come proseguirà quanto avviato con “" + q + "”. Come rispondi alla base del partito?"; } },
+    { title: "Un talk show ti invita a discuterne", brief: function (q) { return "Una trasmissione ti invita per tornare su “" + q + "”. Accetti? E cosa porti in studio?"; } },
+    { title: "Uno screenshot circola online", brief: function (q) { return "Le tue parole su “" + q + "” circolano ancora sui social, riprese e commentate. Come gestisci l'eco che ha lasciato?"; } },
+    { title: "Qualcuno ti chiede di fare un passo in più", brief: function (q) { return "Dopo “" + q + "”, ti chiedono se sei disposto ad andare oltre le parole. Cosa proponi concretamente?"; } },
+    { title: "Un sondaggio locale misura l'effetto", brief: function (q) { return "Un sondaggio informale nella tua zona di riferimento misura l'effetto di “" + q + "”. I risultati ti convincono a insistere o a cambiare rotta?"; } },
+    { title: "Una controparte chiede un confronto diretto", brief: function (q) { return "Chi hai coinvolto con “" + q + "” chiede un confronto diretto, non solo dichiarazioni. Accetti l'incontro?"; } },
+    { title: "Il tuo staff ti presenta i primi dati", brief: function (q) { return "Il tuo staff ti mostra i primi numeri reali su “" + q + "”: qualcosa da correggere, o si va avanti così?"; } },
+    { title: "La stampa locale insiste sull'argomento", brief: function (q) { return "La stampa locale non molla “" + q + "” e chiede un aggiornamento questa settimana. Cosa comunichi?"; } },
+    { title: "Un episodio simile riaccende il caso", brief: function (q) { return "Un episodio simile a quello di “" + q + "” torna alla ribalta altrove: ti chiedono se cambia qualcosa nella tua posizione."; } },
+    { title: "Qualcuno mette in dubbio i tuoi risultati", brief: function (q) { return "Qualcuno mette in dubbio pubblicamente cosa sia davvero cambiato dopo “" + q + "”. Come rispondi alle critiche?"; } },
+    { title: "Un alleato potenziale si fa avanti", brief: function (q) { return "Dopo “" + q + "”, un soggetto che potrebbe darti una mano si fa avanti per collaborare. Come procedi?"; } },
+    { title: "Il tema arriva in consiglio comunale", brief: function (q) { return "Quanto sollevato con “" + q + "” arriva in discussione in un consiglio comunale del territorio. Intervieni?"; } }
   ];
   var THEME_KEYWORD_TO_CATEGORY = [
     { re: /sanit|ospedal|medic|infermier/, cat: "Politica — Sanità" },
@@ -968,15 +811,21 @@
     { re: /sicurezz|polizia|criminalit|reato|reati/, cat: "Politica — Sicurezza" },
     { re: /\bcasa\b|affitt|sfratt|abitazion/, cat: "Politica — Casa" },
     { re: /lavoro|disoccup|sindacat|stipend/, cat: "Politica — Lavoro" },
-    { re: /ambiente|clima|inquinament|energi/, cat: "Politica — Ambiente" },
+    { re: /ambiente|clima|inquinament/, cat: "Politica — Ambiente" },
     { re: /giovan|universit/, cat: "Politica — Giovani" },
     { re: /pension|anzian/, cat: "Politica — Pensioni" },
     { re: /immigra|migrant|frontier/, cat: "Politica — Immigrazione" },
-    { re: /giustizia|process[oi]|magistrat/, cat: "Politica — Giustizia" },
-    { re: /digital|internet|tecnologi/, cat: "Politica — Digitale" },
+    { re: /giustizia|process[oi]|magistrat|carcer/, cat: "Politica — Giustizia" },
+    { re: /digital|internet|tecnologi|intelligenza artificiale|cybersic/, cat: "Politica — Digitale" },
     { re: /trasport|mobilit|treno|autobus/, cat: "Politica — Trasporti" },
     { re: /cultura|arte|museo|spettacol/, cat: "Politica — Cultura" },
-    { re: /europ|bruxelles/, cat: "Politica — Europa" }
+    { re: /europ|bruxelles/, cat: "Politica — Europa" },
+    { re: /energi|bollett|rinnovabil/, cat: "Politica — Energia" },
+    { re: /agricol|campagn|siccit|raccolt/, cat: "Politica — Agricoltura" },
+    { re: /econom|inflazion|impresa|imprese|credito|tasse|fiscal/, cat: "Politica — Economia" },
+    { re: /famigli|natalit|asil[oi] nido/, cat: "Politica — Famiglia" },
+    { re: /\bsport\b|impiant[oi] sportiv/, cat: "Politica — Sport" },
+    { re: /infrastruttur|pont[ei]|cantier|opera pubblica/, cat: "Politica — Infrastrutture" }
   ];
   function detectThemeCategory(text) {
     var t = (text || "").toLowerCase();
@@ -995,23 +844,140 @@
     }
     return null;
   }
-  function generateLocalDynamicDossier() {
+  // Guarda le ultime iniziative scritte davvero dal giocatore (non le cronache di altri) e, se almeno
+  // due delle ultime quattro riguardano lo stesso tema, lo considera un filone attivo — la vera
+  // "memoria" del gioco: non serve nessuno stato salvato apposta, si ricava sempre dal registro reale.
+  function computeThemeMomentum() {
+    var recent = [];
+    for (var i = 0; i < state.log.length && recent.length < 4; i++) {
+      var e = state.log[i];
+      if (e.type === "dossier" && e.title && e.title.indexOf("Iniziativa Libera") === 0) recent.push(e);
+    }
+    var counts = {};
+    recent.forEach(function (e) {
+      var cat = detectThemeCategory(e.choiceLabel || "");
+      if (cat) counts[cat] = (counts[cat] || 0) + 1;
+    });
+    var best = null, bestCount = 0;
+    Object.keys(counts).forEach(function (cat) { if (counts[cat] > bestCount) { best = cat; bestCount = counts[cat]; } });
+    return bestCount >= 2 ? best : null;
+  }
+
+  var SITUATION_THEMES = [
+    { id: "sanita", label: "Politica — Sanità", nouns: ["le liste d'attesa negli ospedali", "la carenza di personale sanitario", "la sanità territoriale", "il pronto soccorso sovraffollato"] },
+    { id: "scuola", label: "Politica — Scuola", nouns: ["l'edilizia scolastica", "la carenza di insegnanti", "il sovraffollamento delle classi", "l'orientamento post-diploma"] },
+    { id: "sicurezza", label: "Politica — Sicurezza", nouns: ["la sicurezza nei quartieri", "i controlli sul territorio", "la criminalità di strada", "la sicurezza nelle stazioni"] },
+    { id: "casa", label: "Politica — Casa", nouns: ["il caro-affitti", "l'emergenza sfratti", "l'edilizia popolare", "il mercato immobiliare cittadino"] },
+    { id: "lavoro", label: "Politica — Lavoro", nouns: ["la precarietà del lavoro", "i salari fermi da anni", "la crisi di un settore produttivo locale", "le tutele sindacali"] },
+    { id: "ambiente", label: "Politica — Ambiente", nouns: ["l'inquinamento urbano", "la gestione dei rifiuti", "il dissesto idrogeologico", "la transizione ecologica"] },
+    { id: "giovani", label: "Politica — Giovani", nouns: ["la fuga dei giovani all'estero", "gli affitti fuori sede per gli studenti", "le opportunità di lavoro per i giovani", "lo sport giovanile"] },
+    { id: "pensioni", label: "Politica — Pensioni", nouns: ["l'età pensionabile", "gli assegni sociali", "le pensioni minime", "il sistema previdenziale"] },
+    { id: "immigrazione", label: "Politica — Immigrazione", nouns: ["l'accoglienza dei migranti", "i flussi migratori", "l'integrazione nei quartieri", "i centri di prima accoglienza"] },
+    { id: "giustizia", label: "Politica — Giustizia", nouns: ["i tempi della giustizia civile", "il sovraffollamento carcerario", "la riforma della magistratura", "un processo di rilievo locale"] },
+    { id: "digitale", label: "Politica — Digitale", nouns: ["il divario digitale", "la cybersicurezza pubblica", "la regolamentazione dell'intelligenza artificiale", "la banda larga nelle aree interne"] },
+    { id: "trasporti", label: "Politica — Trasporti", nouns: ["i ritardi dei treni regionali", "il trasporto pubblico locale", "il traffico cittadino", "la manutenzione delle strade"] },
+    { id: "cultura", label: "Politica — Cultura", nouns: ["i finanziamenti alla cultura", "un museo cittadino a rischio chiusura", "gli eventi culturali estivi", "la tutela del patrimonio artistico"] },
+    { id: "europa", label: "Politica — Europa", nouns: ["i fondi europei non spesi", "le regole di bilancio europee", "un nuovo trattato UE in discussione", "la posizione italiana a Bruxelles"] },
+    { id: "energia", label: "Politica — Energia", nouns: ["il caro-bollette", "la dipendenza energetica dall'estero", "un impianto energetico contestato sul territorio", "lo sviluppo delle rinnovabili"] },
+    { id: "agricoltura", label: "Politica — Agricoltura", nouns: ["la crisi degli agricoltori", "i prezzi agricoli", "la siccità nelle campagne", "le importazioni agroalimentari"] },
+    { id: "economia", label: "Politica — Economia", nouns: ["l'inflazione sulla spesa quotidiana", "una crisi aziendale locale", "il costo del credito per le imprese", "la pressione fiscale"] },
+    { id: "famiglia", label: "Politica — Famiglia", nouns: ["la denatalità", "gli asili nido insufficienti", "il sostegno alle famiglie numerose", "la conciliazione tra lavoro e famiglia"] },
+    { id: "sport", label: "Politica — Sport", nouns: ["gli impianti sportivi comunali fatiscenti", "lo sport di base nelle scuole", "una squadra locale in difficoltà", "gli eventi sportivi cittadini"] },
+    { id: "infrastrutture", label: "Politica — Infrastrutture", nouns: ["un'opera pubblica bloccata da anni", "la manutenzione di ponti e strade", "il collegamento con le aree interne", "un cantiere fermo nel territorio"] }
+  ];
+  var SITUATION_SHAPES = [
+    { kind: "Inchiesta", brief: function (noun, ctx) { return "Un'inchiesta giornalistica accende i riflettori su " + noun + " a " + ctx.city + "."; } },
+    { kind: "Protesta", brief: function (noun, ctx) { return "Un comitato di cittadini organizza una protesta su " + noun + ", proprio nella tua zona di riferimento."; } },
+    { kind: "Contromossa", brief: function (noun, ctx) { return ctx.rivalName + " lancia una proposta su " + noun + ", cercando di intestarsene il tema."; } },
+    { kind: "Sondaggio", brief: function (noun, ctx) { return "Un sondaggio nazionale mostra che " + noun + " preoccupa una larga parte dell'elettorato."; } },
+    { kind: "Appello", brief: function (noun, ctx) { return "Un esperto del settore lancia un appello pubblico su " + noun + "."; } },
+    { kind: "Caso locale", brief: function (noun, ctx) { return "Un caso concreto a " + ctx.city + " riporta al centro del dibattito " + noun + "."; } },
+    { kind: "Richiesta della categoria", brief: function (noun, ctx) { return "Un'associazione di categoria chiede un incontro urgente sul tema di " + noun + "."; } },
+    { kind: "Dibattito social", brief: function (noun, ctx) { return "Sui social si scatena una discussione molto accesa su " + noun + "."; } },
+    { kind: "Question time", brief: function (noun, ctx) { return "Il Parlamento discute un provvedimento legato a " + noun + ", e i cronisti ti chiedono una posizione."; } },
+    { kind: "Confronto sul territorio", brief: function (noun, ctx) { return "Un giovane amministratore locale di " + ctx.city + " ti scrive per un confronto diretto su " + noun + "."; } },
+    { kind: "Servizio TV", brief: function (noun, ctx) { return "Una trasmissione televisiva dedica un servizio a " + noun + ", citando anche il tuo partito."; } },
+    { kind: "Scontro politico", brief: function (noun, ctx) { return ctx.rivalName + " attacca pubblicamente chi, come te, si occupa di " + noun + "."; } }
+  ];
+  var SITUATION_INTROS = [
+    "Prima di tutto: come reagisci?", "Cosa decidi di fare o dire questa settimana?", "Come pensi di rispondere?",
+    "Qual è la tua mossa?", "Come intendi muoverti su questo?", "Cosa scrivi o dichiari in proposito?"
+  ];
+  var FAMILY_SIGNATURE_THEMES = {
+    sovranista: ["sicurezza", "immigrazione", "famiglia"],
+    liberale: ["economia", "lavoro", "digitale"],
+    progressista: ["ambiente", "giovani", "cultura"],
+    movimentista: ["giustizia", "digitale", "trasporti"],
+    sinistra: ["lavoro", "pensioni", "casa"],
+    cattolico: ["famiglia", "casa", "sanita"],
+    regionalista: ["infrastrutture", "agricoltura", "trasporti"],
+    comunista: ["lavoro", "casa", "economia"],
+    nazionalpopolare: ["sicurezza", "immigrazione", "giustizia"],
+    europeista: ["europa", "economia", "digitale"],
+    libertario: ["economia", "digitale", "lavoro"],
+    tecnoprogressista: ["digitale", "giovani", "energia"],
+    meridionalista: ["infrastrutture", "lavoro", "agricoltura"]
+  };
+  var LEADERSHIP_FRAMING_HINTS = {
+    carismatico: "Tutti si aspettano da te una dichiarazione forte, come sempre.",
+    tecnocratico: "I media si chiedono se risponderai con dati concreti o con un semplice proclama.",
+    movimentista_stile: "La base militante vuole vederti in prima linea su questo, non solo a parole.",
+    collegiale: "Prima di parlare, probabilmente vorrai sentire anche gli altri dirigenti del partito.",
+    populista_diretto: "Ti aspettano già i commenti sotto al tuo prossimo post: meglio non tardare.",
+    istituzionale_paziente: "Non è il tipo di occasione in cui ti butti a parlare subito, di solito.",
+    polemista_aggressivo: "È il tipo di occasione in cui di solito non ti trattieni con gli avversari.",
+    mediatore_silenzioso: "Il tuo stile preferisce muoversi con discrezione, più che con dichiarazioni pubbliche."
+  };
+  // Estrazione pesata: ogni voce ha più o meno probabilità in base al peso restituito da weightFn,
+  // invece di essere tutte equiprobabili — così i temi vicini all'identità del partito (o il filone
+  // tematico in corso) ricorrono più spesso, senza mai escludere del tutto gli altri.
+  function pickWeighted(items, weightFn) {
+    var weights = items.map(weightFn);
+    var total = weights.reduce(function (a, b) { return a + b; }, 0);
+    if (total <= 0) return items[Math.floor(Math.random() * items.length)];
+    var r = Math.random() * total;
+    for (var i = 0; i < items.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return items[i];
+    }
+    return items[items.length - 1];
+  }
+  function generateCombinatorialSituation() {
+    var p = state.player;
+    var signature = FAMILY_SIGNATURE_THEMES[p.family] || [];
+    var momentumCat = computeThemeMomentum();
+    var theme = pickWeighted(SITUATION_THEMES, function (th) {
+      var w = signature.indexOf(th.id) !== -1 ? 3 : 1;
+      if (momentumCat && th.label === momentumCat) w *= 4;
+      return w;
+    });
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var shape = SITUATION_SHAPES[Math.floor(Math.random() * SITUATION_SHAPES.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var sentence = shape.brief(noun, { city: city, rivalName: rival.name });
+    var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
+    var intro = SITUATION_INTROS[Math.floor(Math.random() * SITUATION_INTROS.length)];
+    var brief = sentence + (framing ? " " + framing : "") + " " + intro;
+    var title = shape.kind + " — " + theme.label.replace("Politica — ", "");
+    return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: theme.label, title: title, brief: brief, choices: [] };
+  }
+  // Punto d'ingresso unico per la situazione della settimana: prova prima il "seguito" diretto se
+  // c'è un'iniziativa recente da cui ripartire (memoria forte, cita alla lettera quanto scritto dal
+  // giocatore), altrimenti compone una situazione nuova col generatore combinatorio qui sopra
+  // (memoria più debole ma comunque presente, tramite lo slancio tematico). Ritorna sempre qualcosa:
+  // nessuna dipendenza esterna, nessuna possibilità che la partita resti bloccata in attesa di nulla.
+  function generateWeeklySituation() {
+    var p = state.player;
     var lastEntry = findLastPlayerInitiative();
-    if (!lastEntry || !lastEntry.choiceLabel) return null;
-    var quoted = lastEntry.choiceLabel;
-    if (Math.random() < 0.55) {
+    if (lastEntry && lastEntry.choiceLabel && Math.random() < 0.45) {
       var tpl = LOCAL_FOLLOWUP_TEMPLATES[Math.floor(Math.random() * LOCAL_FOLLOWUP_TEMPLATES.length)];
-      return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: "Seguito", title: tpl.title, brief: tpl.brief(quoted), choices: [] };
+      var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
+      var brief = tpl.brief(lastEntry.choiceLabel) + (framing ? " " + framing : "");
+      return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: "Seguito", title: tpl.title, brief: brief, choices: [] };
     }
-    var cat = detectThemeCategory(quoted);
-    if (cat) {
-      var matching = DOSSIERS.filter(function (d) { return d.cat === cat; });
-      if (matching.length) {
-        var chosen = matching[Math.floor(Math.random() * matching.length)];
-        return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: [] };
-      }
-    }
-    return null;
+    return generateCombinatorialSituation();
   }
 
   // ---------- Dossier pool ----------
@@ -1505,7 +1471,7 @@
   // ---------- Vita autonoma dei partiti rivali ----------
   // Ogni settimana, indipendentemente da quello che fa il giocatore, c'è una probabilità che uno degli
   // altri partiti reali abbia un proprio evento (proposta, gaffe, scandalo, tensione interna...) con un
-  // effetto reale sui suoi sondaggi. Nessuna chiamata IA richiesta: sempre attivo, anche senza chiave.
+  // effetto reale sui suoi sondaggi. Sempre attivo, nessuna dipendenza esterna.
   var RIVAL_EVENTS = [
     { text: function (n) { return n + " presenta una proposta che raccoglie consensi trasversali."; }, delta: [0.3, 1.1] },
     { text: function (n) { return n + " incassa un endorsement inatteso da una figura pubblica di rilievo."; }, delta: [0.2, 0.9] },
@@ -1565,10 +1531,18 @@
     return "#" + [jit(r), jit(g), jit(b)].map(function (c) { return c.toString(16).padStart(2, "0"); }).join("");
   }
   function generateSplinterParty(parent, week) {
-    var label = SPLINTER_LABELS[Math.floor(Math.random() * SPLINTER_LABELS.length)];
-    var theme = SPLINTER_THEMES[Math.floor(Math.random() * SPLINTER_THEMES.length)];
-    var word = theme[Math.floor(Math.random() * theme.length)];
-    var name = label + " " + word;
+    // Pesca finché non trova un nome che non coincide già con un partito reale esistente (es. "Unione
+    // Popolare" è già il nome di un partito vero in PARTIES): con 7 etichette x ~18 parole il rischio
+    // di collisione è basso ma non nullo, e due partiti con lo stesso nome in gioco sarebbe confuso.
+    var existingNames = PARTIES.map(function (pt) { return pt.name.toLowerCase(); });
+    var label, word, name;
+    for (var attempt = 0; attempt < 20; attempt++) {
+      label = SPLINTER_LABELS[Math.floor(Math.random() * SPLINTER_LABELS.length)];
+      var theme = SPLINTER_THEMES[Math.floor(Math.random() * SPLINTER_THEMES.length)];
+      word = theme[Math.floor(Math.random() * theme.length)];
+      name = label + " " + word;
+      if (existingNames.indexOf(name.toLowerCase()) === -1) break;
+    }
     var id = "dyn_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "") + "_" + week;
     var short = name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase();
     return {
@@ -1890,20 +1864,19 @@
   }
 
   // ---------- Iniziativa Libera: azione a testo libero ----------
-  // Se l'IA locale è attiva, il testo viene davvero valutato dal modello (vedi callAiForInitiative).
-  // Senza IA locale attiva, resta il percorso di riserva qui sotto (resolveCustomInitiative): legge
-  // comunque il testo con un'analisi euristica delle parole (vago/specifico/grave/entrate), non un
-  // vero modello linguistico, ma il testo resta comunque nel registro e in prima pagina.
+  // Il testo scritto dal giocatore viene sempre letto da resolveCustomInitiative con un'analisi
+  // euristica delle parole (vago/specifico/grave/entrate): nessuna intelligenza artificiale, nessuna
+  // chiamata di rete, risultato immediato. Il testo resta comunque nel registro e in prima pagina.
   var INITIATIVE_TIERS = {
     bassa: { label: "Impegno contenuto", fondi: -300, iscritti: 15, reputazione: 1, visibilita: 2 },
     media: { label: "Impegno medio", fondi: -800, iscritti: 35, reputazione: 2, visibilita: 5 },
     alta: { label: "Impegno ambizioso", fondi: -1800, iscritti: 70, reputazione: 3, visibilita: 9 }
   };
 
-  // Lettura locale del testo, senza IA: non capisce il significato come un modello linguistico, ma
-  // legge davvero lunghezza/specificità e alcune parole chiave, così anche il sistema di riserva (usato
-  // senza chiave, o quando l'IA non è disponibile) reagisce in modo diverso a idee curate, idee vaghe, o
-  // contenuti che descrivono violenza/reati — non è più un dado del tutto cieco al contenuto.
+  // Lettura euristica del testo: non capisce il significato come un modello linguistico, ma legge
+  // davvero lunghezza/specificità, alcune parole chiave e il vocabolario dell'ideologia specifica
+  // scritta dal fondatore, così il risultato reagisce in modo diverso a idee curate, idee vaghe, o
+  // contenuti che descrivono violenza/reati — non è un dado cieco al contenuto scritto.
   var SEVERE_TEXT_FLAGS = ["uccid", "ammazz", "attentat", "bomba", "terroris", "strage", "sparare", "sparo", "picchi", "violenz", "incendi", "sequestr", "assassin"];
   var VAGUE_TEXT_FLAGS = ["boh", "cose", "non so", "qualcosa", "vabbe", "vabbè"];
   var CONCRETE_TEXT_FLAGS = ["organizzo", "apro", "presento", "incontro", "lancio", "costruisco", "propongo", "raccolgo", "visito", "inauguro", "denuncio", "pubblico"];
@@ -1920,12 +1893,12 @@
     "sponsor", "monetizz",
     "intervist", "ospitat", "apparizione televisiv", "conferenza a pagamento"
   ];
-  // Approssimazione grezza, senza IA: famiglie/correnti già più radicali reggono meglio (in termini di
-  // iscritti, non di reputazione pubblica) un'iniziativa grave che è coerente con quella loro identità,
-  // rispetto a un partito moderato per cui la stessa iniziativa sarebbe un tradimento totale dei suoi valori.
-  var RADICAL_LEANING_FAMILIES = { sinistra: true, sovranista: true, movimentista: true };
-  var RADICAL_LEANING_CURRENTS = { identitaria: true, purista: true, sindacale: true };
-  function analyzeInitiativeTextLocally(text) {
+  // Approssimazione grezza: famiglie/correnti già più radicali reggono meglio (in termini di iscritti,
+  // non di reputazione pubblica) un'iniziativa grave che è coerente con quella loro identità, rispetto
+  // a un partito moderato per cui la stessa iniziativa sarebbe un tradimento totale dei suoi valori.
+  var RADICAL_LEANING_FAMILIES = { sinistra: true, sovranista: true, movimentista: true, comunista: true, nazionalpopolare: true };
+  var RADICAL_LEANING_CURRENTS = { identitaria: true, purista: true, sindacale: true, operaista: true, internazionalista: true, dura: true, secessionista: true };
+  function analyzeInitiativeTextLocally(text, p) {
     var t = text.toLowerCase();
     var words = t.trim().split(/\s+/).filter(Boolean);
     var score = 0;
@@ -1934,6 +1907,13 @@
     else if (words.length <= 3) score -= 1;
     if (VAGUE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score -= 1;
     if (CONCRETE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score += 0.6;
+    // Se il fondatore ha scritto un'ideologia specifica a parole sue, un'iniziativa che ne riprende
+    // davvero il vocabolario (non solo l'area politica generale scelta a inizio partita) viene premiata:
+    // è così che quel testo, letto senza alcuna IA, ha comunque un effetto meccanico reale sul gioco.
+    if (p && p.ideologyText) {
+      var ideologyWords = p.ideologyText.toLowerCase().split(/[^a-zàèéìòù]+/).filter(function (w) { return w.length >= 5; });
+      if (ideologyWords.some(function (w) { return t.indexOf(w) !== -1; })) score += 0.8;
+    }
     var severe = SEVERE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; });
     var income = INCOME_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; });
     return { score: score, severe: severe, income: income };
@@ -1954,13 +1934,13 @@
     var tier = INITIATIVE_TIERS[tierId];
     var p = state.player;
     var style = leadershipById(p.leadership);
-    var signal = analyzeInitiativeTextLocally(text);
+    var signal = analyzeInitiativeTextLocally(text, p);
     var damp = staffHas("consigliere_strategico") ? 0.75 : 1;
     var iscrittiDelta, repDelta, visDelta, twist;
 
     if (signal.severe) {
       // Non passa dalla scala normale della fascia scelta (troppo piccola per rappresentare conseguenze
-      // così gravi): stessa logica usata con l'IA, in versione fissa offline. Il tetto di spesa NON limita
+      // così gravi): usa una scala fissa a parte. Il tetto di spesa NON limita
       // la gravità: un'iniziativa a basso costo che descrive violenza può comunque travolgere il partito.
       // La reputazione pubblica (opinione più ampia) prende comunque il colpo pieno; gli iscritti (la base
       // del partito) reggono molto meglio se il partito è già di un'area radicale coerente col contenuto.
@@ -2022,200 +2002,6 @@
     });
 
     return { resultText: outcomeText, headlines: headlines };
-  }
-
-  // ---------- Iniziativa Libera valutata da Claude (chiamata diretta dal browser) ----------
-  async function callAiForInitiative(text, tierId, onAttempt) {
-    var p = state.player;
-    var fam = familyById(p.family);
-    var style = leadershipById(p.leadership);
-    var tier = INITIATIVE_TIERS[tierId];
-
-    var systemPrompt = "Sei il motore di valutazione politica di Politis-IT, un gioco di simulazione realistico sulla fondazione " +
-      "di un partito politico italiano da zero. Il gioco è deliberatamente lento e difficile: la crescita di un partito nuovo " +
-      "richiede mesi o anni, e gli effetti di una singola iniziativa settimanale sono normalmente piccoli anche quando l'idea è buona. " +
-      "Valuta con giudizio politico plausibile, realistico e non generoso l'iniziativa che il giocatore descrive, considerando: " +
-      "coerenza con la linea ideologica dichiarata del partito, specificità e credibilità dell'idea (le idee vaghe o generiche vanno valutate " +
-      "male), rischio di reazioni negative, controproducenti o di ridicolo, e la fascia di impegno/budget scelta dal giocatore, che " +
-      "rappresenta un tetto plausibile all'ampiezza dell'effetto. Se l'iniziativa è incoerente con la linea del partito, controproducente, " +
-      "poco realistica o scritta in modo palesemente pretestuoso, assegna effetti modesti o anche negativi. " +
-      "IMPORTANTE su iniziative radicali, dure o violente: NON esiste una regola fissa per cui \"contenuto violento o illegale = crollo automatico\". " +
-      "iscritti, reputazione e visibilità sono numeri indipendenti e possono muoversi in direzioni opposte nella stessa risposta: rappresentano " +
-      "pubblici diversi che reagiscono diversamente alla stessa notizia. Ragiona così: (a) la base del partito (iscritti) reagisce soprattutto in " +
-      "base alla COERENZA tra l'azione e la linea ideologica dichiarata del partito (e, se indicata più sotto, la corrente interna dominante): " +
-      "un'azione anche dura, radicale o violenta ma coerente con un'identità già radicale del partito può entusiasmare ed espandere la sua base " +
-      "più convinta (iscritti stabili o in crescita), anche se allarma l'opinione pubblica moderata; al contrario un'azione che TRADISCE l'identità " +
-      "dichiarata del partito (es. un partito socialista che inneggia pubblicamente a un dittatore fascista, un partito ambientalista che promuove " +
-      "la deforestazione) colpisce prima di tutto la sua stessa base, spesso in modo severo, su iscritti E reputazione insieme; (b) la reputazione " +
-      "e la visibilità pubblica riflettono soprattutto l'opinione pubblica più ampia, i media nazionali e la legittimità istituzionale: violenza " +
-      "reale, terrorismo, minacce o reati gravi comportano quasi sempre conseguenze legali e mediatiche serie su questo fronte (indagini, condanna " +
-      "dei media, isolamento da possibili alleati), a prescindere da quanto piacciano alla base più radicale, ma l'ampiezza dipende dal contesto: " +
-      "un piccolo partito già ai margini ha meno legittimità istituzionale da perdere di uno che punta a un'immagine moderata e di governo. " +
-      "Il tetto di spesa della fascia scelta dal giocatore limita l'ampiezza degli effetti per iniziative politiche normali, ma NON per conseguenze " +
-      "legali/reputazionali gravi legate a violenza o reati, che possono essere molto più ampie (anche 40-90 punti di reputazione o visibilità, " +
-      "e fondi_extra fortemente negativo per spese legali) quando il contesto lo giustifica — mai per automatismo, sempre per coerenza col caso specifico. " +
-      "Se l'iniziativa nomina esplicitamente, attacca, danneggia, favorisce o coinvolge in modo diretto un partito politico italiano reale ed " +
-      "esistente (non il partito del giocatore), quel partito deve avere una conseguenza reale e proporzionata nei suoi sondaggi tramite " +
-      "partito_coinvolto/partito_delta — un evento che colpisce davvero un partito o una sua figura di spicco non può lasciarlo immobile nei numeri. " +
-      "Rispondi sempre in italiano.";
-
-    var correntiInfo = "";
-    if (p.currents && p.currents.length === 2) {
-      var pair = correntiPair();
-      var dominant = p.currents[0].share >= p.currents[1].share ? 0 : 1;
-      correntiInfo = " Il partito ha già correnti interne formate: " + pair[0].label + " (" + Math.round(p.currents[0].share) + "%) e " +
-        pair[1].label + " (" + Math.round(p.currents[1].share) + "%); la corrente dominante è \"" + pair[dominant].label +
-        "\", quindi la base attuale del partito è orientata più in quella direzione: tienine conto nel valutare quanto un'iniziativa radicale " +
-        "entusiasma o allontana gli iscritti attuali.";
-    }
-
-    var customInfo = "";
-    if (p.ideologyText) {
-      customInfo += " Il fondatore ha descritto così, con parole sue, l'ideologia specifica del partito (più precisa e vincolante della sola " +
-        "area politica generale sopra indicata, che resta comunque valida come inquadramento di massima): \"" + p.ideologyText + "\".";
-    }
-    if (p.leaderCharacter) {
-      customInfo += " Il fondatore ha descritto così il carattere/personalità del leader del partito: \"" + p.leaderCharacter + "\". " +
-        "Tienine conto per la plausibilità e il tono della narrativa (es. un leader descritto come cauto e pragmatico che lancia un'iniziativa " +
-        "plateale e aggressiva risulta meno credibile, e viceversa).";
-    }
-
-    var context = "Partito: " + p.name + " (area politica: " + fam.label + " — " + fam.desc + "; stile di leadership: " + style.label + ")." + correntiInfo + customInfo + " " +
-      "Siamo alla settimana " + state.turn + " (" + weekLabel(state.turn) + ") dalla fondazione. " +
-      "Stato attuale: " + Math.round(p.iscritti) + " iscritti, " + p.sezioni + " sezioni territoriali, reputazione " + Math.round(p.reputazione) + "/100, " +
-      "sondaggi al " + fmt1(p.sondaggi) + "%. " +
-      "Fascia di impegno/budget scelta per questa iniziativa: \"" + tier.label + "\" (circa " + fmtEuro(Math.abs(tier.fondi)) + "). " +
-      "Come riferimento di scala per questa fascia: in un esito medio ci si aspetta iscritti nell'ordine di ±" + Math.round(tier.iscritti * 1.8) +
-      ", reputazione ±" + Math.round(tier.reputazione * 2.5) + ", visibilità ±" + Math.round(tier.visibilita * 2) +
-      "; un'idea eccellente e ben calibrata può superare moderatamente questi valori, una pessima può scendere molto sotto zero — tranne per " +
-      "conseguenze legali/reputazionali gravi (vedi istruzioni), che non sono limitate da questa scala.";
-
-    var recentLog = state.log.slice(0, 3);
-    if (recentLog.length) {
-      context += " Cronaca recente del partito, dalla più recente: " + recentLog.map(function (e) {
-        return "(settimana " + e.week + ") " + e.title + (e.choiceLabel ? " — " + e.choiceLabel : "") + ": " + (e.result || "").slice(0, 140);
-      }).join(" | ") + ". Tienine conto per coerenza narrativa e per eventuali effetti cumulativi (es. iniziative simili ripetute possono valere " +
-      "meno per assuefazione, oppure costruire una traiettoria coerente che il pubblico nota).";
-    }
-
-    var userMessage = context + "\n\nEcco l'iniziativa scritta dal giocatore, testuale:\n\"" + text + "\"\n\nValutala.";
-
-    if (LocalLLM.status !== "ready") throw new Error("Il modello IA locale non è attivo. Attivalo dalle Impostazioni IA.");
-    // I modelli locali piccoli non seguono uno schema rigido come un'API strutturata: la forma del
-    // JSON atteso va descritta a parole nel prompt stesso.
-    var localSchemaHint = "Rispondi SOLO con un oggetto JSON con esattamente queste chiavi: " +
-      "\"narrativa\" (stringa, 2-3 frasi in italiano), \"titolo_giornale\" (stringa breve), " +
-      "\"iscritti\" (numero, variazione iscritti, può essere negativo), " +
-      "\"reputazione\" (numero, variazione reputazione, tipicamente tra -12 e 12, molto più negativo per contenuti gravi/violenti), " +
-      "\"visibilita\" (numero, variazione visibilità, tipicamente tra -10 e 22), " +
-      "\"fondi_extra\" (numero, variazione fondi extra oltre al costo base, normalmente 0), " +
-      "\"partito_coinvolto\" (stringa, nome esatto di un partito reale coinvolto tra questi: " +
-      activeParties().map(function (pt) { return pt.name; }).join(", ") + ", oppure stringa vuota), " +
-      "\"partito_delta\" (numero, variazione sondaggi di quel partito, normalmente 0).";
-    return await callLocalLLMJSON(systemPrompt + " " + localSchemaHint, userMessage, onAttempt);
-  }
-
-  // ---------- Dossier settimanale dinamico, generato dall'IA locale in base alla storia del partito ----------
-  // Usato solo quando il modello locale è attivo: genera la situazione della settimana come conseguenza
-  // (a volte diretta, a volte indiretta) di quello che il partito ha fatto nelle settimane precedenti,
-  // invece di pescare da un elenco fisso. In caso di qualunque errore ritorna null in silenzio: chi chiama
-  // questa funzione deve ricadere sul dossier statico, per non bloccare mai la partita.
-  async function generateAiDossier() {
-    if (LocalLLM.status !== "ready") return null;
-    var p = state.player;
-    var fam = familyById(p.family);
-    var style = leadershipById(p.leadership);
-
-    var systemPrompt = "Sei il motore narrativo di Politis-IT, un gioco di simulazione realistico sulla fondazione di un partito " +
-      "politico italiano da zero. Il tuo compito è generare la situazione/notizia che il partito deve affrontare questa settimana, " +
-      "in coerenza con l'ideologia del partito e con la cronaca recente: cosa ha fatto il partito nelle settimane precedenti (le sue " +
-      "iniziative) e come sono andate. Presta particolare attenzione alla CONTINUITÀ TEMATICA: se le iniziative recenti del giocatore " +
-      "si concentrano ripetutamente su uno stesso tema o settore (es. sanità, sicurezza, lavoro, ambiente), la situazione di QUESTA " +
-      "settimana deve nella maggior parte dei casi continuare o rispondere direttamente a quello stesso tema — un giornalista che " +
-      "chiede conto di quell'episodio specifico, uno sviluppo diretto di quell'iniziativa, una reazione di un rivale sullo stesso " +
-      "fronte — invece di introdurre ogni volta un argomento nuovo e scollegato. Solo occasionalmente, per varietà, genera un evento " +
-      "nuovo dal più ampio contesto politico, sociale o economico italiano non collegato al filone tematico recente. Non generare mai " +
-      "scelte multiple: il giocatore risponderà sempre scrivendo una propria " +
-      "iniziativa a testo libero, quindi la situazione deve essere descritta in modo che sia chiaro a cosa il giocatore può reagire. " +
-      "Resta un ipotetico scenario di gioco, dichiaratamente fittizio. Rispondi sempre in italiano.";
-
-    var fam_desc = fam.label + " — " + fam.desc;
-    var customInfo = "";
-    if (p.ideologyText) customInfo += " Ideologia specifica scritta dal fondatore: \"" + p.ideologyText + "\".";
-    if (p.leaderCharacter) customInfo += " Carattere del leader: \"" + p.leaderCharacter + "\".";
-
-    var recentLog = state.log.slice(0, 7);
-    var storyInfo = recentLog.length
-      ? " Cronaca recente del partito, dalla più recente: " + recentLog.map(function (e) {
-          return "(settimana " + e.week + ") " + e.title + (e.choiceLabel ? " — " + e.choiceLabel : "") + ": " + (e.result || "").slice(0, 140);
-        }).join(" | ") + "."
-      : " Il partito è stato appena fondato, non ha ancora una storia: genera una situazione d'esordio plausibile.";
-
-    var userMessage = "Partito: " + p.name + " (area politica: " + fam_desc + "; stile di leadership: " + style.label + ")." + customInfo +
-      " Siamo alla settimana " + state.turn + " (" + weekLabel(state.turn) + ") dalla fondazione. Stato attuale: " + Math.round(p.iscritti) +
-      " iscritti, reputazione " + Math.round(p.reputazione) + "/100, sondaggi al " + fmt1(p.sondaggi) + "%." + storyInfo +
-      "\n\nGenera la situazione di questa settimana.";
-
-    var localSchemaHint = "Rispondi SOLO con un oggetto JSON con esattamente queste chiavi: \"categoria\" (stringa breve, 2-4 parole), " +
-      "\"titolo\" (stringa breve), \"descrizione\" (stringa, 2-4 frasi in italiano).";
-    try {
-      var parsedLocal = await callLocalLLMJSON(systemPrompt + " " + localSchemaHint, userMessage);
-      if (!parsedLocal || !parsedLocal.titolo || !parsedLocal.descrizione) return null;
-      return {
-        id: "ai_dynamic", kind: "azione", dynamic: true,
-        cat: parsedLocal.categoria || "Situazione della settimana",
-        title: parsedLocal.titolo, brief: parsedLocal.descrizione, choices: []
-      };
-    } catch (e) {
-      if (window.console && console.warn) console.warn("Generazione dossier con IA locale non riuscita dopo tutti i tentativi:", e);
-      return null; // ricade sul sistema locale di continuità (generateLocalDynamicDossier) e poi sul pool statico
-    }
-  }
-
-  function applyAiInitiative(text, tierId, evalResult) {
-    var tier = INITIATIVE_TIERS[tierId];
-    var p = state.player;
-    var style = leadershipById(p.leadership);
-    var damp = staffHas("consigliere_strategico") ? 0.75 : 1;
-
-    var iscrittiDelta = (Number(evalResult.iscritti) || 0) * style.iscrittiMult * (staffHas("organizzatore") ? 1.2 : 1);
-    var repDelta = (Number(evalResult.reputazione) || 0) * style.repVolatility * (staffHas("responsabile_formazione") && evalResult.reputazione > 0 ? 1.2 : 1);
-    var visDelta = (Number(evalResult.visibilita) || 0) * style.visMult * (staffHas("portavoce") ? 1.2 : 1);
-    if (iscrittiDelta < 0) iscrittiDelta *= damp;
-    if (repDelta < 0) repDelta *= damp;
-    if (visDelta < 0) visDelta *= damp;
-
-    p.fondi += tier.fondi * style.fondiMult + (Number(evalResult.fondi_extra) || 0);
-    p.iscritti = Math.max(0, p.iscritti + iscrittiDelta);
-    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
-    p.visibilita = clamp(p.visibilita + visDelta, 0, 100);
-
-    // Se l'iniziativa nomina/coinvolge davvero un partito reale, quel partito ne risente nei sondaggi
-    // (il rifinimento verrà poi renormalizzato nel prossimo recomputePeriodic).
-    var involvedName = (evalResult.partito_coinvolto || "").trim();
-    var involvedDelta = Number(evalResult.partito_delta) || 0;
-    if (involvedName && involvedDelta) {
-      var involvedParty = activeParties().filter(function (pt) { return pt.name.toLowerCase() === involvedName.toLowerCase(); })[0];
-      if (involvedParty) {
-        state.parties[involvedParty.id] = Math.max(0.3, state.parties[involvedParty.id] + involvedDelta);
-      }
-    }
-
-    var quoted = text.length > 100 ? text.slice(0, 100) + "…" : text;
-    var otherOutlets = pickN(OUTLETS.filter(function (o) { return o !== "Il Domani d'Italia"; }), 2);
-    var headlines = [{ outlet: "Il Domani d'Italia", text: evalResult.titolo_giornale || quoted }].concat(
-      otherOutlets.map(function (o) {
-        return { outlet: o, text: HEADLINE_BANK[o]({ title: "questa iniziativa" }, { label: "L'iniziativa personale", effects: { reputazione: repDelta } }, p.motto) };
-      })
-    );
-
-    var resultText = evalResult.narrativa || "L'iniziativa si conclude senza un riscontro chiaro.";
-    state.log.unshift({
-      week: state.turn, title: "Iniziativa Libera (" + tier.label + ", valutata dall'IA)", choiceLabel: quoted,
-      result: resultText, headlines: headlines, type: "dossier"
-    });
-
-    return { resultText: resultText, headlines: headlines };
   }
 
   // ---------- Apply a dossier choice's immediate effects ----------
@@ -2352,6 +2138,8 @@
     return null;
   }
 
+  var CENTRODESTRA_ALIGNED_FAMILIES = { sovranista: true, liberale: true, cattolico: true, nazionalpopolare: true, meridionalista: true };
+  var CAMPOLARGO_ALIGNED_FAMILIES = { progressista: true, sinistra: true, comunista: true, movimentista: true };
   function allianceDossier() {
     var fam = familyById(state.player.family);
     return {
@@ -2359,11 +2147,11 @@
       brief: "Le elezioni si avvicinano. Ti contattano da più schieramenti per valutare un accordo di coalizione: correre insieme abbassa la soglia di sbarramento al 10% collettivo, ma corri con altri simboli sulla scheda.",
       choices: [
         { label: "Allearsi con il Centrodestra", hint: "FdI, Lega, Forza Italia — soglia coalizione 10%",
-          effects: { reputazione: (fam.id === "sovranista" || fam.id === "liberale") ? 3 : -4 },
+          effects: { reputazione: CENTRODESTRA_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
           result: "L'accordo con il centrodestra apre le porte a un listino comune, con soglia di coalizione al 10%.",
           alliance: "centrodestra" },
         { label: "Allearsi con il Campo Largo (PD–AVS)", hint: "PD, AVS — soglia coalizione 10%",
-          effects: { reputazione: (fam.id === "progressista" || fam.id === "sinistra") ? 3 : -4 },
+          effects: { reputazione: CAMPOLARGO_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
           result: "L'intesa con il campo largo porta il partito dentro una coalizione ampia, soglia al 10%.",
           alliance: "campolargo" },
         { label: "Corri da solo", hint: "Nessuna alleanza — soglia 3% da soli",
@@ -2575,7 +2363,7 @@
       '<div class="field"><label class="field-label" for="ideology-text-input">Ideologia specifica del partito (facoltativo)</label>' +
       '<textarea id="ideology-text-input" maxlength="300" placeholder="Es. Sovranista ma su base ambientalista, vicino ai piccoli agricoltori, molto ostile alle grandi multinazionali">' +
       (d.ideologyText || "").replace(/</g, "&lt;") + '</textarea>' +
-      '<p class="field-hint">Oltre all\'area politica sopra: descrivi con parole tue le sfumature specifiche. Se hai collegato l\'IA, ne terrà davvero conto nel valutare le tue iniziative.</p></div>' +
+      '<p class="field-hint">Oltre all\'area politica sopra: descrivi con parole tue le sfumature specifiche. Le tue iniziative che ne riprendono il vocabolario avranno davvero un piccolo bonus nella valutazione.</p></div>' +
       '<div class="field"><label class="field-label">Stile di leadership</label><div class="option-grid">' +
       LEADERSHIP_STYLES.map(function (l) {
         return '<button type="button" class="option-card' + (d.leadership === l.id ? " selected" : "") + '" data-leadership="' + l.id + '">' +
@@ -2584,7 +2372,7 @@
       '<div class="field"><label class="field-label" for="leader-character-input">Carattere del leader (facoltativo)</label>' +
       '<textarea id="leader-character-input" maxlength="250" placeholder="Es. Cauto, parla poco ma pesa le parole, evita gli scontri diretti in TV">' +
       (d.leaderCharacter || "").replace(/</g, "&lt;") + '</textarea>' +
-      '<p class="field-hint">Anche questo, se hai collegato l\'IA, influenza come vengono valutate le tue iniziative e i toni della narrazione.</p></div>' +
+      '<p class="field-hint">Resta nel profilo del partito come nota di ruolo: non ha un effetto meccanico diretto, ma ti aiuta a restare coerente scrivendo le iniziative.</p></div>' +
       '<button class="primary-btn" id="found-btn" type="button">Fonda il partito</button>' +
       "</div>";
     app.innerHTML = html;
@@ -2708,7 +2496,7 @@
   function renderIdeologyProfile() {
     var p = state.player;
     var html = '<section aria-label="Profilo ideologico"><details class="log">' +
-      '<summary>Ideologia e leader (usati dall\'IA)<span>▾</span></summary>' +
+      '<summary>Ideologia e leader<span>▾</span></summary>' +
       '<div class="staff-grid" style="grid-template-columns:1fr">' +
       '<div class="field"><label class="field-label" for="ideology-edit-input">Ideologia specifica del partito</label>' +
       '<textarea id="ideology-edit-input" maxlength="300" placeholder="Es. Sovranista ma su base ambientalista, vicino ai piccoli agricoltori...">' +
@@ -2837,8 +2625,7 @@
   function renderDossierCard(dossier) {
     var showChoices = dossier.choices && dossier.choices.length && !state.forceInitiativeOnly;
     var html = '<section aria-label="Dossier della settimana"><p class="eyebrow">' +
-      (dossier.dynamic ? "Situazione della settimana — generata dall'IA in base alla tua storia"
-        : dossier.localDynamic ? "Situazione della settimana — collegata alla tua ultima iniziativa"
+      (dossier.localDynamic ? "Situazione della settimana — generata in base alla tua storia"
         : "Dossier della settimana") + '</p>' +
       '<div class="dossier"><span class="chip neutral cat">' + dossier.cat + '</span>' +
       "<h2>" + dossier.title + '</h2><p class="brief">' + dossier.brief + "</p>";
@@ -2851,18 +2638,14 @@
       html += "</div>";
     }
     if (dossier.kind === "azione" || dossier.kind === "notizia" || state.forceInitiativeOnly) {
-      var aiOn = aiIsActive();
       html += '<div class="custom-initiative">' +
         '<p class="ci-label">' + (showChoices ? "Oppure lancia un’iniziativa tutta tua questa settimana" : "Scrivi la tua iniziativa: è l'unico modo per affrontare questa settimana") + '</p>' +
-        '<p class="ci-hint">' + (aiOn
-          ? "Scrivi cosa vuoi fare o dire: il modello IA locale valuterà davvero il contenuto e ne calcolerà l'impatto realistico."
-          : "Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Senza il modello IA locale attivo (in “Intelligenza artificiale locale” qui sopra) il gioco legge comunque il testo con un sistema più semplice, non un vero modello linguistico — idee specifiche e curate vanno meglio di due parole vaghe, e contenuti che descrivono violenza o reati hanno conseguenze molto gravi.") +
-        '</p>' +
+        '<p class="ci-hint">Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Idee specifiche e curate vanno meglio di due parole vaghe, e contenuti che descrivono violenza o reati hanno conseguenze molto gravi.</p>' +
         '<textarea id="custom-initiative-text" maxlength="220" placeholder="Es. Organizzo un presidio davanti all’ospedale per denunciare i tagli alla sanità locale..."></textarea>' +
         '<div class="ci-tiers">' +
         Object.keys(INITIATIVE_TIERS).map(function (tid) {
           var t = INITIATIVE_TIERS[tid];
-          return '<button class="ci-tier-btn" data-tier="' + tid + '" type="button"><span>' + t.label + (aiOn ? " (IA)" : "") + '</span><span class="ci-cost">' + fmtEuro(Math.abs(t.fondi)) + ' circa</span></button>';
+          return '<button class="ci-tier-btn" data-tier="' + tid + '" type="button"><span>' + t.label + '</span><span class="ci-cost">' + fmtEuro(Math.abs(t.fondi)) + ' circa</span></button>';
         }).join("") +
         "</div></div>";
     }
@@ -2975,8 +2758,8 @@
     app.innerHTML = body;
     bindInteractions();
 
-    // Dopo aver risolto un'iniziativa (via IA o sistema di riserva) l'utente resta spesso con lo
-    // scroll in basso, dov'era la casella di testo: senza questo, il pulsante "Avanti alla settimana
+    // Dopo aver risolto un'iniziativa l'utente resta spesso con lo scroll in basso, dov'era la
+    // casella di testo: senza questo, il pulsante "Avanti alla settimana
     // successiva" (che compare in cima al nuovo contenuto) può restare fuori dallo schermo e sembrare
     // che il gioco si sia bloccato, quando in realtà ha già prodotto un esito ed è pronto a proseguire.
     if (state.phase === "result" && typeof window !== "undefined" && window.scrollTo) {
@@ -3045,7 +2828,7 @@
     if (advance) {
       advance.addEventListener("click", async function () {
         advance.disabled = true;
-        advance.textContent = aiIsActive() ? "Preparazione della prossima settimana…" : "Avanti…";
+        advance.textContent = "Avanti…";
         state.turn++;
         try {
           await advanceTurnLogic();
@@ -3071,49 +2854,18 @@
         var text = (textEl.value || "").trim();
         if (!text) { showSaveStatus("Scrivi prima una breve descrizione della tua iniziativa.", true); return; }
 
-        // Esito di riserva a prova di errore: anche se resolveCustomInitiative dovesse a sua volta fallire
-        // per un motivo imprevisto, il turno si chiude comunque con un esito minimo, mai con un blocco.
-        function safeFallbackResult() {
-          try {
-            return resolveCustomInitiative(text, tierId);
-          } catch (e2) {
-            if (window.console && console.error) console.error("Anche il sistema di riserva ha lanciato un errore:", e2);
-            return { resultText: "L'iniziativa viene registrata nel programma del partito.", headlines: [] };
-          }
-        }
-
-        if (!aiIsActive()) {
-          state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
-          state.resultData = safeFallbackResult();
-          state.phase = "result";
-          save();
-          render();
-          return;
-        }
-
-        ciTierBtns.forEach(function (b) { b.disabled = true; });
-        btn.innerHTML = "<span>Valutazione dell'IA locale in corso…</span>";
         state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
-        function onAttempt(n, max) {
-          btn.innerHTML = "<span>Valutazione dell'IA locale in corso" + (max > 1 ? " (tentativo " + n + "/" + max + ")" : "") + "…</span>";
+        // Rete di sicurezza: anche se resolveCustomInitiative dovesse fallire per un motivo imprevisto,
+        // il turno si chiude comunque con un esito minimo, mai con un blocco.
+        try {
+          state.resultData = resolveCustomInitiative(text, tierId);
+        } catch (e2) {
+          if (window.console && console.error) console.error("Errore imprevisto nella valutazione dell'iniziativa:", e2);
+          state.resultData = { resultText: "L'iniziativa viene registrata nel programma del partito.", headlines: [] };
         }
-        callAiForInitiative(text, tierId, onAttempt).then(function (evalResult) {
-          state.resultData = applyAiInitiative(text, tierId, evalResult);
-          state.phase = "result";
-          save();
-          render();
-        }).catch(function (err) {
-          // L'IA locale prova già più volte da sola (vedi callLocalLLMJSON) prima di arrivare qui: se
-          // arriviamo comunque a questo punto, ha fallito ripetutamente e in modo genuino (non un singolo
-          // intoppo). La partita non deve comunque restare bloccata: il turno si risolve con il sistema
-          // di riserva, e lo diciamo chiaramente invece di far sembrare che l'IA abbia funzionato.
-          if (window.console && console.warn) console.warn("IA locale non riuscita dopo tutti i tentativi, iniziativa valutata con il sistema di riserva:", err);
-          showSaveStatus("Il modello IA locale non è riuscito a rispondere dopo diversi tentativi: iniziativa valutata con il sistema di riserva.", true);
-          state.resultData = safeFallbackResult();
-          state.phase = "result";
-          save();
-          render();
-        });
+        state.phase = "result";
+        save();
+        render();
       });
     });
 
@@ -3159,7 +2911,7 @@
         state.player.ideologyText = (ideologyEditInput.value || "").trim();
         state.player.leaderCharacter = (leaderCharacterEditInput.value || "").trim();
         save();
-        showSaveStatus("Ideologia e carattere del leader aggiornati: da ora l'IA ne terrà conto.");
+        showSaveStatus("Ideologia e carattere del leader aggiornati.");
       });
     }
   }
@@ -3226,16 +2978,11 @@
       pool = pool.concat(p.parliamentRole === "governo" ? GOVERNO_DOSSIERS : OPPOSIZIONE_DOSSIERS);
     }
 
-    // Nelle settimane "normali" (non parlamento, non tensione tra correnti): prima prova l'IA locale (se
-    // attiva) per la massima qualità narrativa, con diversi tentativi prima di arrendersi davvero (vedi
-    // callLocalLLMJSON); solo se non è attiva, o fallisce dopo tutti i tentativi, prova il sistema locale
-    // di continuità — funziona sempre, zero chiamate di rete — che comunque fa seguire la situazione
-    // della settimana a quello che hai appena fatto. Solo se nessuno dei due si applica (es. primissima
-    // settimana, nessuna storia ancora) si pesca dal pool statico casuale qui sotto.
+    // Nelle settimane "normali" (non parlamento, non tensione tra correnti): la situazione viene
+    // composta dal generatore combinatorio (vedi generateWeeklySituation), che restituisce sempre
+    // qualcosa di coerente con la storia del partito, il suo tema del momento e lo stile di leadership.
     if (!p.inParliament && !correntiTensionAdded) {
-      var dynamic = null;
-      if (aiIsActive()) dynamic = await generateAiDossier();
-      if (!dynamic) dynamic = generateLocalDynamicDossier();
+      var dynamic = generateWeeklySituation();
       if (dynamic) {
         state.aiDynamicDossier = dynamic;
         state.currentDossierId = "ai_dynamic";
@@ -3250,83 +2997,12 @@
     state.usedDossiers.push(chosen.id);
     state.currentDossierId = chosen.id;
     // Le scelte multiple restano solo per i dossier con vere conseguenze meccaniche (correnti interne,
-    // Parlamento). Per un dossier "normale" del pool statico (usato quando manca la chiave IA, o la
-    // generazione dinamica fallisce) l'unico modo di rispondere è comunque l'iniziativa a testo libero.
+    // Parlamento). Per un dossier "normale" (generato dal generatore combinatorio o pescato dal pool
+    // statico) l'unico modo di rispondere è comunque l'iniziativa a testo libero.
     var isParliamentDossier = chosen.id.indexOf("gov_") === 0 || chosen.id.indexOf("opp_") === 0;
     state.forceInitiativeOnly = chosen.kind !== "correnti" && !isParliamentDossier;
     state.phase = "building";
   }
-
-  var aiStatusChip = document.getElementById("ai-status-chip");
-  function refreshAiStatusChip() {
-    if (LocalLLM.status === "ready") {
-      aiStatusChip.textContent = "IA locale attiva";
-      aiStatusChip.className = "chip good";
-    } else {
-      aiStatusChip.textContent = "Non attiva";
-      aiStatusChip.className = "chip neutral";
-    }
-  }
-  refreshAiStatusChip();
-
-  function renderLocalLlmPicker() {
-    var picker = document.getElementById("local-llm-model-picker");
-    if (!picker) return;
-    var selectedId = getLocalLlmModelId();
-    picker.innerHTML = LOCAL_LLM_MODELS.map(function (m) {
-      return '<button type="button" class="option-card' + (m.id === selectedId ? " selected" : "") + '" data-local-model="' + m.id + '">' +
-        '<span class="olabel">' + m.label + ' <span class="chip neutral">' + m.sizeLabel + '</span></span>' +
-        '<span class="odesc">' + m.desc + '</span></button>';
-    }).join("");
-    picker.querySelectorAll("[data-local-model]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        setLocalLlmModelId(btn.getAttribute("data-local-model"));
-        renderLocalLlmPicker();
-        renderLocalLlmStatus();
-      });
-    });
-  }
-  function renderLocalLlmStatus() {
-    var el = document.getElementById("local-llm-status");
-    var btn = document.getElementById("init-local-llm-btn");
-    if (!el) return;
-    var selected = LOCAL_LLM_MODELS.filter(function (m) { return m.id === getLocalLlmModelId(); })[0] || LOCAL_LLM_MODELS[0];
-    var modelChanged = LocalLLM.status === "ready" && LocalLLM.loadedModelId !== selected.id;
-    if (LocalLLM.status === "idle" || modelChanged) {
-      el.innerHTML = modelChanged
-        ? '<p class="ci-hint">Hai scelto "' + selected.label + '": attivalo per scaricarlo e passare a questo modello.</p>' : "";
-      if (btn) { btn.disabled = false; btn.textContent = "Attiva modello IA locale"; }
-    } else if (LocalLLM.status === "loading") {
-      el.innerHTML = '<p class="ci-hint">' + (LocalLLM.progressText || "Caricamento…") + " (" + LocalLLM.progressPct + "%)</p>";
-      if (btn) { btn.disabled = true; btn.textContent = "Caricamento in corso…"; }
-    } else if (LocalLLM.status === "ready") {
-      el.innerHTML = '<p class="ci-hint" style="color:var(--good)">Modello "' + selected.label + '" pronto e attivo: da ora le iniziative vengono valutate qui, sul dispositivo, senza alcuna chiamata esterna.</p>';
-      if (btn) { btn.disabled = false; btn.textContent = "Ricarica modello locale"; }
-    } else if (LocalLLM.status === "unsupported") {
-      el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">Questo browser non supporta WebGPU in modo funzionante: il modello locale non può girare qui' +
-        (LocalLLM.errorMessage ? " (" + LocalLLM.errorMessage + ")" : "") +
-        '. Su iPhone prova ad aggiornare iOS/Safari all\'ultima versione, o riprova da un browser desktop con supporto WebGPU (es. Chrome/Edge aggiornati).</p>';
-      if (btn) { btn.disabled = true; btn.textContent = "Non disponibile su questo browser"; }
-    } else if (LocalLLM.status === "error") {
-      el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">' + LocalLLM.errorMessage + '</p>';
-      if (btn) { btn.disabled = false; btn.textContent = "Riattiva modello locale"; }
-    }
-  }
-  renderLocalLlmPicker();
-  renderLocalLlmStatus();
-  var initLocalLlmBtn = document.getElementById("init-local-llm-btn");
-  initLocalLlmBtn.addEventListener("click", function () {
-    // Disabilita subito, in modo sincrono, prima ancora che parta la chiamata asincrona: senza
-    // questo un doppio tap veloce (facile su telefono, mentre l'interfaccia sembra non rispondere
-    // subito) potrebbe avviare due caricamenti del modello in parallelo.
-    initLocalLlmBtn.disabled = true;
-    initLocalLLM(renderLocalLlmStatus).then(function (ok) {
-      renderLocalLlmPicker();
-      renderLocalLlmStatus();
-      refreshAiStatusChip();
-      if (ok) { save(); render(); }
-    });
-  });
 
   var resetBtn = document.getElementById("reset-btn");
   var resetArmed = false;
