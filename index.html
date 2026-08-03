@@ -559,6 +559,66 @@
       state.countryProfile[m.key] = clamp(state.countryProfile[m.key] + (Math.random() - 0.5) * 0.12, 1, 10);
     });
   }
+  // ---------- Tracce di lungo periodo: transizione ambientale e ricerca e sviluppo ----------
+  // Oltre al drift settimanale della Scheda Paese, questi due indicatori hanno un loro filo narrativo
+  // dedicato: quando attraversano una soglia critica o d'eccellenza, il paese lo nota, con un annuncio
+  // che resta nel diario di partito — un modo per rendere visibile il trend anche su partite molto lunghe.
+  var LONG_TERM_TRACKS = {
+    ambientalismo: {
+      label: "Transizione ambientale",
+      critico: { max: 3, title: "Allarme climatico", text: "Il paese scivola in una crisi ambientale silenziosa: eventi estremi sempre più frequenti, ritardi cronici sulla transizione energetica e un dibattito pubblico che fatica a tenere il passo." },
+      avanzato: { min: 7.5, title: "Transizione ambientale compiuta", text: "Dopo anni di investimenti e riforme, l'Italia entra nel gruppo di testa dei paesi europei per transizione ecologica: energie rinnovabili, mobilità sostenibile ed economia circolare non sono più un'eccezione." }
+    },
+    ricercaSviluppo: {
+      label: "Ricerca e sviluppo",
+      critico: { max: 3, title: "Fuga di cervelli", text: "Il sistema della ricerca italiano attraversa una crisi profonda: finanziamenti insufficienti, infrastrutture datate e una nuova ondata di fuga di cervelli verso l'estero." },
+      avanzato: { min: 7.5, title: "Polo tecnologico europeo", text: "L'Italia si afferma come uno dei poli tecnologici più dinamici d'Europa: startup, centri di ricerca e investimenti privati crescono a ritmi sostenuti, attirando talenti anche dall'estero." }
+    }
+  };
+  function checkLongTermTrackMilestones() {
+    if (!state.trackMilestonesFired) state.trackMilestonesFired = {};
+    Object.keys(LONG_TERM_TRACKS).forEach(function (key) {
+      var track = LONG_TERM_TRACKS[key];
+      var value = state.countryProfile[key];
+      ["critico", "avanzato"].forEach(function (tier) {
+        var def = track[tier];
+        var flag = key + "_" + tier;
+        if (state.trackMilestonesFired[flag]) return;
+        var hit = tier === "critico" ? value <= def.max : value >= def.min;
+        if (!hit) return;
+        state.trackMilestonesFired[flag] = true;
+        state.worldNews.unshift({ week: state.turn, cat: track.label, text: def.title + ": " + def.text });
+        state.log.unshift({ week: state.turn, title: def.title, choiceLabel: track.label, result: def.text, headlines: [], type: "cronaca" });
+      });
+    });
+  }
+  // Ogni 45-70 settimane un vero check-in di gioco (con scelte reali) sul bilancio tecnologico e
+  // climatico del paese: non solo narrativa passiva, ma una linea di partito da scegliere ogni volta.
+  function triggerTrendCheckIn() {
+    if (state.turn < state.nextTrendCheckTurn) return null;
+    state.nextTrendCheckTurn = state.turn + 45 + Math.floor(Math.random() * 25);
+    var amb = state.countryProfile.ambientalismo, rs = state.countryProfile.ricercaSviluppo;
+    var ambTrend = amb >= 6 ? "in netto miglioramento" : amb <= 4 ? "in difficoltà" : "stabile";
+    var rsTrend = rs >= 6 ? "in crescita" : rs <= 4 ? "in stallo" : "stabile";
+    return {
+      id: "trend_checkin", kind: "trend", cat: "Bilancio di Lungo Periodo",
+      eyebrow: "Bilancio periodico — transizione ecologica e ricerca",
+      title: "Bilancio Tecnologico e Climatico del Paese",
+      brief: "Un rapporto periodico fa il punto sulla transizione ecologica (" + ambTrend + ") e sulla ricerca e sviluppo (" + rsTrend + ") del paese. Qual è la linea del tuo partito su questi temi per i prossimi mesi?",
+      choices: [
+        { label: "Spingi per investimenti pubblici nella transizione ecologica", hint: "Più ambiente, meno fondi disponibili", effects: { fondi: -600, reputazione: 1, national: { ambientalismo: 0.6 } },
+          result: "Il partito si intesta una linea di investimento pubblico deciso sulla transizione ecologica." },
+        { label: "Punta su ricerca e innovazione come priorità", hint: "Più R&S, meno fondi disponibili", effects: { fondi: -600, reputazione: 1, national: { ricercaSviluppo: 0.6 } },
+          result: "Il partito rilancia la ricerca e l'innovazione come priorità strategica del paese." },
+        { label: "Chiedi un equilibrio tra le due priorità", hint: "Effetto più contenuto su entrambe", effects: { reputazione: 1, national: { ambientalismo: 0.25, ricercaSviluppo: 0.25 } },
+          result: "Il partito propone un approccio bilanciato tra transizione ecologica e innovazione tecnologica." },
+        { label: "Critica la spesa su questi temi come non prioritaria", hint: "Consenso presso chi vuole tagli, malumore altrove", effects: { reputazione: -1, iscritti: 8, national: { ambientalismo: -0.3, ricercaSviluppo: -0.3 } },
+          result: "Il partito attacca la spesa pubblica su ambiente e ricerca come fuori priorità, raccogliendo consensi tra chi chiede tagli sulla spesa pubblica." },
+        { label: "Lascia il tema ad altri, senza prendere posizione netta", hint: "Nessun effetto sui trend nazionali", effects: {},
+          result: "Il partito preferisce non esporsi apertamente su questi temi in questo momento." }
+      ]
+    };
+  }
   // Bilancio dello Stato semplificato (miliardi di euro): entrate e uscite si muovono piano nel tempo,
   // agganciate alla salute dell'economia della Scheda Paese (economia/PIL) — un paese che va meglio
   // incassa di più e spende relativamente meno in ammortizzatori sociali, e viceversa.
@@ -677,20 +737,37 @@
     { id: "consigliere_strategico", label: "Consigliere Strategico", desc: "Attutisce le conseguenze negative delle scelte più rischiose (-25%).", cost: 950, salary: 60 }
   ];
 
+  // Fino a 4 correnti per famiglia (non tutte vengono usate sempre: vedi formazioneCorrentiDossier).
+  // Le prime due di ogni elenco sono le "storiche" già presenti; le altre due aggiungono un'anima più
+  // radicale/periferica e una più moderata/distante, così che un partito con 3 o 4 correnti abbia
+  // davvero sfumature diverse tra loro, non solo doppioni.
   var CORRENTI_BY_FAMILY = {
-    sovranista:        [{ id: "identitaria", label: "Ala Identitaria" },         { id: "governista", label: "Ala Governista e Pragmatica" }],
-    liberale:          [{ id: "mercatista", label: "Ala Mercatista" },           { id: "moderata", label: "Ala Moderata e Istituzionale" }],
-    progressista:      [{ id: "ecologista", label: "Ala Ecologista Radicale" },  { id: "riformista", label: "Ala Riformista" }],
-    movimentista:      [{ id: "purista", label: "Ala Purista Anti-sistema" },    { id: "pragmatica", label: "Ala Pragmatica di Governo" }],
-    sinistra:          [{ id: "sindacale", label: "Ala Sindacale e Operaia" },   { id: "socialdem", label: "Ala Socialdemocratica" }],
-    cattolico:         [{ id: "sociale", label: "Ala Sociale e Solidarista" },   { id: "tradizionalista", label: "Ala Tradizionalista" }],
-    regionalista:      [{ id: "secessionista", label: "Ala Secessionista" },    { id: "federalista", label: "Ala Federalista Moderata" }],
-    comunista:         [{ id: "operaista", label: "Ala Operaista" },            { id: "internazionalista", label: "Ala Internazionalista" }],
-    nazionalpopolare:  [{ id: "dura", label: "Ala Dura e Intransigente" },      { id: "popolare", label: "Ala Popolare e Sociale" }],
-    europeista:        [{ id: "federalista_ue", label: "Ala Federalista Europea" }, { id: "atlantista", label: "Ala Atlantista" }],
-    libertario:        [{ id: "libertaria_pura", label: "Ala Libertaria Pura" }, { id: "conservatrice", label: "Ala Liberal-Conservatrice" }],
-    tecnoprogressista: [{ id: "innovatrice", label: "Ala dell'Innovazione" },   { id: "regolatrice", label: "Ala Regolatrice e Cauta" }],
-    meridionalista:    [{ id: "autonomista_sud", label: "Ala Autonomista del Sud" }, { id: "sviluppista", label: "Ala Sviluppista" }]
+    sovranista:        [{ id: "identitaria", label: "Ala Identitaria" },         { id: "governista", label: "Ala Governista e Pragmatica" },
+                         { id: "sociale_sov", label: "Ala Sociale e Popolare" },  { id: "radicale_sov", label: "Ala Radicale e Movimentista" }],
+    liberale:          [{ id: "mercatista", label: "Ala Mercatista" },           { id: "moderata", label: "Ala Moderata e Istituzionale" },
+                         { id: "libertaria_lib", label: "Ala Libertaria" },      { id: "cattolico_lib", label: "Ala Cattolico-Liberale" }],
+    progressista:      [{ id: "ecologista", label: "Ala Ecologista Radicale" },  { id: "riformista", label: "Ala Riformista" },
+                         { id: "movimentista_prog", label: "Ala Movimentista" }, { id: "socialdem_prog", label: "Ala Socialdemocratica Verde" }],
+    movimentista:      [{ id: "purista", label: "Ala Purista Anti-sistema" },    { id: "pragmatica", label: "Ala Pragmatica di Governo" },
+                         { id: "digitale_mov", label: "Ala Digitale e Tecnologica" }, { id: "sociale_mov", label: "Ala Sociale e Territoriale" }],
+    sinistra:          [{ id: "sindacale", label: "Ala Sindacale e Operaia" },   { id: "socialdem", label: "Ala Socialdemocratica" },
+                         { id: "ecosocialista", label: "Ala Ecosocialista" },    { id: "riformista_sin", label: "Ala Riformista Moderata" }],
+    cattolico:         [{ id: "sociale", label: "Ala Sociale e Solidarista" },   { id: "tradizionalista", label: "Ala Tradizionalista" },
+                         { id: "popolare_cat", label: "Ala Popolare e Democristiana" }, { id: "conciliarista", label: "Ala Conciliarista e Aperta" }],
+    regionalista:      [{ id: "secessionista", label: "Ala Secessionista" },    { id: "federalista", label: "Ala Federalista Moderata" },
+                         { id: "autonomista_reg", label: "Ala Autonomista Moderata" }, { id: "identitaria_reg", label: "Ala Identitaria Territoriale" }],
+    comunista:         [{ id: "operaista", label: "Ala Operaista" },            { id: "internazionalista", label: "Ala Internazionalista" },
+                         { id: "movimentista_com", label: "Ala Movimentista e Sociale" }, { id: "riformista_com", label: "Ala Riformista e Democratica" }],
+    nazionalpopolare:  [{ id: "dura", label: "Ala Dura e Intransigente" },      { id: "popolare", label: "Ala Popolare e Sociale" },
+                         { id: "istituzionale_naz", label: "Ala Istituzionale" }, { id: "identitaria_naz", label: "Ala Identitaria Radicale" }],
+    europeista:        [{ id: "federalista_ue", label: "Ala Federalista Europea" }, { id: "atlantista", label: "Ala Atlantista" },
+                         { id: "progressista_eu", label: "Ala Progressista Europea" }, { id: "liberale_eu", label: "Ala Liberale di Mercato" }],
+    libertario:        [{ id: "libertaria_pura", label: "Ala Libertaria Pura" }, { id: "conservatrice", label: "Ala Liberal-Conservatrice" },
+                         { id: "tecnolibertaria", label: "Ala Tecno-Libertaria" }, { id: "anarcocapitalista", label: "Ala Radicale Anarco-Capitalista" }],
+    tecnoprogressista: [{ id: "innovatrice", label: "Ala dell'Innovazione" },   { id: "regolatrice", label: "Ala Regolatrice e Cauta" },
+                         { id: "sociale_tech", label: "Ala Sociale e Digitale" }, { id: "ambientalista_tech", label: "Ala Ambientalista Tecnologica" }],
+    meridionalista:    [{ id: "autonomista_sud", label: "Ala Autonomista del Sud" }, { id: "sviluppista", label: "Ala Sviluppista" },
+                         { id: "sociale_sud", label: "Ala Sociale e Popolare del Sud" }, { id: "identitaria_sud", label: "Ala Identitaria Meridionale" }]
   };
 
   var COALITIONS = {
@@ -2516,6 +2593,48 @@
     }
   }
 
+  // ---------- Coalizioni spontanee tra partiti terzi ----------
+  // Oltre a centrodestra e campolargo, con il tempo può nascere una terza coalizione tra partiti reali
+  // vicini per famiglia ideologica ma oggi fuori dai due schieramenti storici (es. Italia Viva e Partito
+  // Liberal Democratico sull'area liberale, M5S e Ora! sull'area movimentista, Azione e +Europa
+  // sull'area europeista): un fenomeno raro, che poi pesa davvero nel conteggio dei voti alle elezioni.
+  function triggerDynamicCoalitionFormation() {
+    if (!state.dynamicCoalitions) state.dynamicCoalitions = [];
+    if (state.dynamicCoalitions.length >= 2) return;
+    if (Math.random() > 0.008) return;
+
+    var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
+    state.dynamicCoalitions.forEach(function (c) { takenIds = takenIds.concat(c.members); });
+    var existingFamilyIds = state.dynamicCoalitions.map(function (c) { return c.familyId; });
+
+    var freeByFamily = {};
+    activeParties().forEach(function (p) {
+      if (!p.familyId || takenIds.indexOf(p.id) !== -1 || state.parties[p.id] < 0.5) return;
+      if (!freeByFamily[p.familyId]) freeByFamily[p.familyId] = [];
+      freeByFamily[p.familyId].push(p);
+    });
+    var candidateFamilyIds = Object.keys(freeByFamily).filter(function (fid) {
+      return freeByFamily[fid].length >= 2 && existingFamilyIds.indexOf(fid) === -1;
+    });
+    if (!candidateFamilyIds.length) return;
+
+    var famId = candidateFamilyIds[Math.floor(Math.random() * candidateFamilyIds.length)];
+    var members = shuffleN(freeByFamily[famId], Math.min(freeByFamily[famId].length, 3));
+    var fam = familyById(famId);
+    var coalitionId = "dyn_coal_" + famId + "_" + state.turn;
+    var memberNames = members.map(function (m) { return m.name; });
+    var namesText = memberNames.length === 2 ? memberNames[0] + " e " + memberNames[1]
+      : memberNames.slice(0, -1).join(", ") + " e " + memberNames[memberNames.length - 1];
+
+    state.dynamicCoalitions.push({ id: coalitionId, label: "Alleanza " + fam.label, familyId: famId, members: members.map(function (m) { return m.id; }) });
+    state.log.unshift({
+      week: state.turn, title: "Nasce una nuova coalizione", choiceLabel: "Alleanza " + fam.label,
+      result: namesText + " annunciano la nascita di un'alleanza elettorale comune su base " + fam.label.toLowerCase() +
+        ", per superare insieme la soglia di sbarramento alle prossime elezioni politiche.",
+      headlines: [], type: "cronaca"
+    });
+  }
+
   // ---------- Successione dei leader ----------
   // Nel lungo periodo è realistico che anche i leader degli altri partiti cambino (congressi interni,
   // uscite di scena, correnti che prendono il sopravvento): un evento raro, indipendente dalle scelte
@@ -2819,6 +2938,7 @@
       partyArcs: {},
       dynamicParties: [],
       dissolvedPartyIds: [],
+      dynamicCoalitions: [],
       resultData: null,
       log: [],
       electionResults: [],
@@ -2842,9 +2962,12 @@
         if (!parsed.partyArcs) parsed.partyArcs = {};
         if (!parsed.dynamicParties) parsed.dynamicParties = [];
         if (!parsed.dissolvedPartyIds) parsed.dissolvedPartyIds = [];
+        if (!parsed.dynamicCoalitions) parsed.dynamicCoalitions = [];
         if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
         if (!parsed.nextEuropeanElectionTurn) parsed.nextEuropeanElectionTurn = parsed.turn + 40;
         if (!parsed.nextReferendumTurn) parsed.nextReferendumTurn = parsed.turn + 90 + Math.floor(Math.random() * 60);
+        if (!parsed.nextTrendCheckTurn) parsed.nextTrendCheckTurn = parsed.turn + 45 + Math.floor(Math.random() * 25);
+        if (!parsed.trackMilestonesFired) parsed.trackMilestonesFired = {};
         if (!parsed.europeanElectionResults) parsed.europeanElectionResults = [];
         if (!parsed.usedFamilySituations) parsed.usedFamilySituations = [];
         // Unione Popolare è stata sostituita da Potere al Popolo: le vecchie partite salvate hanno
@@ -2886,6 +3009,10 @@
           if (parsed.player.euGroup === undefined) parsed.player.euGroup = null;
           if (!parsed.player.eventCooldowns) parsed.player.eventCooldowns = {};
           if (!parsed.player.candidatePools) parsed.player.candidatePools = {};
+          if (parsed.player.currents && parsed.player.currents.length && !parsed.player.currents[0].id) {
+            var legacyCorrentiOptions = CORRENTI_BY_FAMILY[parsed.player.family] || CORRENTI_BY_FAMILY.sovranista;
+            parsed.player.currents.forEach(function (c, i) { c.id = legacyCorrentiOptions[i] ? legacyCorrentiOptions[i].id : legacyCorrentiOptions[0].id; });
+          }
           if (parsed.player.seggiEuropei > 0 && !parsed.player.euGroup && !parsed.euGroupPending) parsed.euGroupPending = true;
           if (!parsed.partyRelations) parsed.partyRelations = initPartyRelations(parsed.player);
         }
@@ -3069,6 +3196,7 @@
     if (!p) return;
     var style = leadershipById(p.leadership);
     driftCountryProfile();
+    checkLongTermTrackMilestones();
     driftPartyRelations();
     driftBilancioStato();
 
@@ -3177,54 +3305,91 @@
     };
   }
 
-  function correntiPair() {
+  function correntiOptions() {
     return CORRENTI_BY_FAMILY[state.player.family] || CORRENTI_BY_FAMILY.sovranista;
   }
+  function correnteLabel(id) {
+    var found = correntiOptions().filter(function (c) { return c.id === id; })[0];
+    return found ? found.label : "Corrente";
+  }
+  // Le correnti attive di un partito (2-4, non necessariamente le prime della famiglia): p.currents
+  // porta con sé solo {id, share}, l'etichetta si guarda sempre da CORRENTI_BY_FAMILY tramite l'id, così
+  // l'ordine e il numero possono variare liberamente da una partita all'altra.
+  function correntiActive(p) {
+    return (p.currents || []).map(function (c) { return { id: c.id, share: c.share, label: correnteLabel(c.id) }; });
+  }
 
+  // Quando le correnti nascono la prima volta, il numero (2, 3 o 4) non è fisso: è pesato a caso, con 2
+  // come esito più probabile — "non è obbligatorio che ogni partito abbia [tante] correnti".
   function formazioneCorrentiDossier() {
-    var pair = correntiPair();
+    var options = correntiOptions();
+    var n = pickWeighted([2, 3, 4], function (v) { return v === 2 ? 60 : v === 3 ? 30 : 10; });
+    var chosenOptions = shuffleN(options, Math.min(n, options.length));
+    var names = chosenOptions.map(function (c) { return c.label; });
+    var namesText = names.length === 2 ? names[0] + " e " + names[1]
+      : names.slice(0, -1).join(", ") + " e " + names[names.length - 1];
+    var choices = [];
+    var featured = shuffleN(chosenOptions, Math.min(chosenOptions.length, 3));
+    featured.forEach(function (fav) {
+      var rest = chosenOptions.filter(function (c) { return c.id !== fav.id; });
+      var favShare = 40 + Math.round(20 / chosenOptions.length) + 8;
+      var restShare = (100 - favShare) / rest.length;
+      var setup = [{ id: fav.id, share: favShare }].concat(rest.map(function (r) { return { id: r.id, share: restShare }; }));
+      choices.push({
+        label: "Affida la linea alla " + fav.label, hint: "Squilibrio a favore di una singola anima", effects: { reputazione: 1 },
+        currentsSetup: setup, result: "La " + fav.label + " prende in mano la linea del partito fin dall'inizio."
+      });
+    });
+    var evenShare = Math.round((100 / chosenOptions.length) * 10) / 10;
+    var evenSetup = chosenOptions.map(function (c, i) { return { id: c.id, share: i === chosenOptions.length - 1 ? 100 - evenShare * (chosenOptions.length - 1) : evenShare }; });
+    choices.push({
+      label: "Cerca un equilibrio tra tutte le anime", hint: "Nessuna prevale sulle altre", effects: { reputazione: 2 },
+      currentsSetup: evenSetup, result: "Il partito sceglie la via dell'equilibrio interno tra le sue diverse anime."
+    });
+    choices.push({
+      label: "Resta unito, senza formalizzare correnti vere e proprie", hint: "Nessuna corrente per ora, si potrà riparlarne più avanti", effects: { reputazione: 1 },
+      currentsSetup: null, result: "Il partito sceglie di restare formalmente unito, senza cristallizzare le sue anime interne in correnti riconosciute."
+    });
     return {
       id: "formazione_correnti", cat: "Correnti Interne", title: "Nascono le Prime Correnti Interne",
-      brief: "Con la crescita del partito emergono due anime distinte: la " + pair[0].label + " e la " + pair[1].label + ". Come imposti gli equilibri di partenza?",
-      choices: [
-        { label: "Affida la linea alla " + pair[0].label, hint: "Squilibrio a favore della prima anima", effects: { reputazione: 1 }, currentsInit: [68, 32],
-          result: "La " + pair[0].label + " prende in mano la linea del partito fin dall'inizio." },
-        { label: "Cerca un equilibrio tra le due anime", hint: "Nessuna delle due prevale", effects: { reputazione: 2 }, currentsInit: [50, 50],
-          result: "Il partito sceglie la via dell'equilibrio interno tra le sue due anime." },
-        { label: "Affida la linea alla " + pair[1].label, hint: "Squilibrio a favore della seconda anima", effects: { reputazione: 1 }, currentsInit: [32, 68],
-          result: "La " + pair[1].label + " prende in mano la linea del partito fin dall'inizio." }
-      ]
+      brief: chosenOptions.length === 2
+        ? "Con la crescita del partito emergono due anime distinte: la " + namesText + ". Come imposti gli equilibri di partenza?"
+        : "Con la crescita del partito emergono ben " + chosenOptions.length + " anime distinte: " + namesText + ". Come imposti gli equilibri di partenza?",
+      choices: choices
     };
   }
 
   function correntiTensionDossier(tpl) {
-    var pair = correntiPair();
+    var active = correntiActive(state.player);
+    var idxA = Math.floor(Math.random() * active.length);
+    var idxB = (idxA + 1 + Math.floor(Math.random() * (active.length - 1))) % active.length;
+    var a = active[idxA], b = active[idxB];
     return {
       id: tpl.id, cat: tpl.cat, title: tpl.titleT, brief: tpl.briefT,
       choices: [
-        { label: "Dai spazio alla " + pair[0].label, hint: "Rafforza la prima anima", effects: { iscritti: 10 }, currentShift: 13,
-          result: "La " + pair[0].label + " guadagna peso nella linea del partito." },
-        { label: "Dai spazio alla " + pair[1].label, hint: "Rafforza la seconda anima", effects: { iscritti: 10 }, currentShift: -13,
-          result: "La " + pair[1].label + " guadagna peso nella linea del partito." },
-        { label: "Media tra le due anime, senza sbilanciarti", hint: "Nessuno spostamento interno, meno tensione", effects: { reputazione: 2 }, currentShift: 0,
+        { label: "Dai spazio alla " + a.label, hint: "Rafforza questa anima", effects: { iscritti: 10 }, shiftFromId: b.id, shiftToId: a.id, shiftAmount: 13,
+          result: "La " + a.label + " guadagna peso nella linea del partito." },
+        { label: "Dai spazio alla " + b.label, hint: "Rafforza questa anima", effects: { iscritti: 10 }, shiftFromId: a.id, shiftToId: b.id, shiftAmount: 13,
+          result: "La " + b.label + " guadagna peso nella linea del partito." },
+        { label: "Media tra le due anime, senza sbilanciarti", hint: "Nessuno spostamento interno, meno tensione", effects: { reputazione: 2 },
           result: "La mediazione tra le due anime abbassa la tensione, senza spostare gli equilibri interni." },
-        { label: "Rimanda la resa dei conti a un altro momento", hint: "Prudente, il nodo resta comunque aperto", effects: { reputazione: -1 }, currentShift: 0,
+        { label: "Rimanda la resa dei conti a un altro momento", hint: "Prudente, il nodo resta comunque aperto", effects: { reputazione: -1 },
           result: "Il rinvio congela la tensione, ma il nodo resta lì, pronto a riemergere." }
       ]
     };
   }
 
   function rischioScissioneDossier() {
-    var pair = correntiPair();
-    var dominant = state.player.currents[0].share >= 50 ? pair[0] : pair[1];
-    var minority = state.player.currents[0].share >= 50 ? pair[1] : pair[0];
+    var active = correntiActive(state.player);
+    var sorted = active.slice().sort(function (x, y) { return y.share - x.share; });
+    var dominant = sorted[0], minority = sorted[sorted.length - 1];
     return {
       id: "rischio_scissione", cat: "Correnti Interne", title: "Rischio di Scissione Interna",
       brief: "Lo squilibrio a favore della " + dominant.label + " ha esasperato la " + minority.label + ": minacciano di lasciare il partito in blocco.",
       choices: [
-        { label: "Ricuci lo strappo con concessioni", hint: "Costa risorse, salva l'unità", effects: { fondi: -400, reputazione: 1 }, currentsRebalance: true,
+        { label: "Ricuci lo strappo con concessioni", hint: "Costa risorse, salva l'unità", effects: { fondi: -400, reputazione: 1 }, currentsRebalance: true, riskyCorrenteId: minority.id,
           result: "Le concessioni ricuciono lo strappo: la minoranza interna resta, gli equilibri si riavvicinano." },
-        { label: "Lascia che la corrente minoritaria se ne vada", hint: "Scissione dolorosa ma la crisi si chiude", effects: { reputazione: -3 }, currentsSplit: true,
+        { label: "Lascia che la corrente minoritaria se ne vada", hint: "Scissione dolorosa ma la crisi si chiude", effects: { reputazione: -3 }, currentsSplit: true, riskyCorrenteId: minority.id,
           result: "La " + minority.label + " lascia il partito in blocco: una scissione dolorosa, ma la tensione interna si chiude." }
       ]
     };
@@ -3244,7 +3409,15 @@
 
     entities.push({ id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes, members: cdMembers.concat(playerInCd ? ["player"] : []), isCoalition: true });
     entities.push({ id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes, members: clMembers.concat(playerInCl ? ["player"] : []), isCoalition: true });
-    var coalitionMemberIds = cdMembers.concat(clMembers);
+    var activeIds = activeParties().map(function (party) { return party.id; });
+    var dynamicCoalitions = (state.dynamicCoalitions || []).map(function (c) {
+      return { id: c.id, label: c.label, members: c.members.filter(function (id) { return activeIds.indexOf(id) !== -1; }) };
+    }).filter(function (c) { return c.members.length >= 2; });
+    dynamicCoalitions.forEach(function (c) {
+      var votes = c.members.reduce(function (s, id) { return s + state.parties[id]; }, 0);
+      entities.push({ id: c.id, label: c.label, votes: votes, members: c.members.slice(), isCoalition: true });
+    });
+    var coalitionMemberIds = cdMembers.concat(clMembers).concat(dynamicCoalitions.reduce(function (acc, c) { return acc.concat(c.members); }, []));
     activeParties().forEach(function (party) {
       if (coalitionMemberIds.indexOf(party.id) !== -1) return;
       entities.push({ id: party.id, label: party.name, votes: state.parties[party.id], members: [party.id], isCoalition: false });
@@ -3508,6 +3681,8 @@
       state.nextLocalElectionTurn = 35;
       state.nextEuropeanElectionTurn = 60;
       state.nextReferendumTurn = 90 + Math.floor(Math.random() * 60);
+      state.nextTrendCheckTurn = 45 + Math.floor(Math.random() * 25);
+      state.trackMilestonesFired = {};
       state.euGroupPending = false;
       state.phase = "building";
       state.currentDossierId = CONGRESSO_DOSSIER.id;
@@ -3531,11 +3706,12 @@
     html += '<div class="stat-tile"><div class="label">Fondi di cassa</div><div class="row"><span class="value" style="' + (p.fondi < 0 ? "color:var(--critical)" : "") + '">' + fmtEuro(p.fondi) + "</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Reputazione</div><div class="row"><span class="value">' + Math.round(p.reputazione) + '%</span></div>' +
       '<div class="gauge"><span style="width:' + p.reputazione + '%;background:' + (p.reputazione < 35 ? "var(--critical)" : p.reputazione < 55 ? "var(--warning)" : "var(--good)") + '"></span></div></div>';
-    if (p.currents) {
-      var pair = correntiPair();
-      html += '<div class="stat-tile"><div class="label">Equilibrio delle correnti</div>' +
-        '<div class="gauge split"><span style="width:' + p.currents[0].share + '%;background:var(--accent)"></span><span style="width:' + p.currents[1].share + '%;background:var(--warning)"></span></div>' +
-        '<div class="correnti-row"><span>' + pair[0].label + ' ' + Math.round(p.currents[0].share) + '%</span><span>' + pair[1].label + ' ' + Math.round(p.currents[1].share) + '%</span></div></div>';
+    if (p.currents && p.currents.length) {
+      var CORRENTI_GAUGE_COLORS = ["var(--accent)", "var(--warning)", "var(--good)", "var(--critical)"];
+      var active = correntiActive(p);
+      html += '<div class="stat-tile"><div class="label">Equilibrio delle correnti (' + active.length + ")</div>" +
+        '<div class="gauge split">' + active.map(function (c, i) { return '<span style="width:' + c.share + "%;background:" + CORRENTI_GAUGE_COLORS[i % 4] + '"></span>'; }).join("") + "</div>" +
+        '<div class="correnti-row">' + active.map(function (c) { return "<span>" + c.label + " " + Math.round(c.share) + "%</span>"; }).join("") + "</div></div>";
     }
     if (p.amministratoriLocali) {
       html += '<div class="stat-tile"><div class="label">Amministratori locali</div><div class="row"><span class="value">' + fmtInt(p.amministratoriLocali) + "</span></div></div>";
@@ -3655,10 +3831,17 @@
     var resultText = "Il partito cambia rotta ideologica: da \"" + oldFam.label + "\" a \"" + newFam.label + "\". " +
       (crossedCamp ? "Uno scossone che divide profondamente la base storica, e costa caro in reputazione e iscritti." : "Un cambiamento significativo, meno traumatico di quanto sarebbe stato in una direzione più lontana.");
     state.log.unshift({ week: state.turn, title: "Svolta ideologica", choiceLabel: newFam.label, result: resultText, headlines: [], type: "dossier", cat: "Organizzazione" });
-    if (p.currents) {
+    if (p.currents && p.currents.length) {
       var shiftMag = crossedCamp ? rand(15, 30) : rand(5, 15);
-      p.currents[0].share = clamp(p.currents[0].share + (Math.random() < 0.5 ? 1 : -1) * shiftMag, 5, 95);
-      p.currents[1].share = 100 - p.currents[0].share;
+      var pickIdx = Math.floor(Math.random() * p.currents.length);
+      var picked = p.currents[pickIdx];
+      var dir = Math.random() < 0.5 ? 1 : -1;
+      var newShare = clamp(picked.share + dir * shiftMag, 5, 95);
+      picked.share = newShare;
+      var others = p.currents.filter(function (c, i) { return i !== pickIdx; });
+      var othersSum = others.reduce(function (s, c) { return s + c.share; }, 0);
+      var targetOthersSum = 100 - newShare;
+      others.forEach(function (c) { c.share = othersSum > 0 ? (c.share / othersSum) * targetOthersSum : targetOthersSum / others.length; });
     }
     return resultText;
   }
@@ -3759,6 +3942,65 @@
       '<div class="stat-grid">' + items + "</div></details></section>";
   }
 
+  // ---------- Dossier di Partito: riepilogo compilato + dossier di coalizione ----------
+  var LOG_TYPE_LABELS = {
+    dossier: "Dossier politici affrontati", election: "Elezioni politiche nazionali",
+    cronaca: "Eventi di cronaca di partito", locale: "Elezioni locali affrontate",
+    referendum: "Referendum nazionali", europee: "Elezioni europee affrontate",
+    scissione: "Crisi interne di corrente gestite"
+  };
+  function coalitionDossierHtml() {
+    var p = state.player;
+    if (!p.allianceId) return '<p class="ci-hint">Il partito non fa parte, in questo momento, di nessuna coalizione elettorale.</p>';
+    var coal = COALITIONS[p.allianceId];
+    var partnerIds = coal.members;
+    var partners = partnerIds.map(function (id) {
+      var party = activeParties().filter(function (pt) { return pt.id === id; })[0];
+      var rel = state.partyRelations ? state.partyRelations[id] : undefined;
+      return party ? party.name + (rel !== undefined ? " (vicinanza: " + Math.round(rel) + "/100)" : "") : id;
+    }).join(", ");
+    var combinedVotes = partnerIds.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0) + p.sondaggi;
+    return '<p class="ci-hint"><strong>Coalizione attuale: ' + coal.label + '.</strong> Alleati: ' + partners +
+      '. Voti combinati stimati alle prossime politiche: ' + fmt1(combinedVotes) + '%.</p>';
+  }
+  function renderPartyDossier() {
+    var p = state.player;
+    var fam = familyById(p.family);
+    var log = state.log || [];
+    var counts = {};
+    log.forEach(function (e) { var t = e.type || "altro"; counts[t] = (counts[t] || 0) + 1; });
+    var weeksActive = Math.max(0, state.turn - 1);
+    var electionsContested = (state.electionResults || []).length;
+    var electionsQualified = (state.electionResults || []).filter(function (e) { return e.qualified; }).length;
+    var euElections = (state.europeanElectionResults || []).length;
+    var correntiText = p.currents && p.currents.length
+      ? "Il partito ha " + p.currents.length + " correnti interne riconosciute: " +
+        correntiActive(p).map(function (c) { return c.label + " (" + fmt1(c.share) + "%)"; }).join(", ") + "."
+      : "Il partito non ha, al momento, correnti interne formalizzate.";
+    var eventsText = Object.keys(counts).filter(function (k) { return LOG_TYPE_LABELS[k]; })
+      .map(function (k) { return LOG_TYPE_LABELS[k] + ": " + counts[k]; }).join(" · ");
+
+    var stats = '<div class="stat-grid">' +
+      '<div class="stat-tile"><div class="label">Settimane di vita del partito</div><div class="row"><span class="value">' + weeksActive + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Sondaggi attuali</div><div class="row"><span class="value">' + fmt1(p.sondaggi) + "%</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Iscritti</div><div class="row"><span class="value">' + fmtInt(p.iscritti) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Fondi di partito</div><div class="row"><span class="value">' + fmtEuro(p.fondi) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Reputazione</div><div class="row"><span class="value">' + Math.round(p.reputazione) + "/100</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Elezioni politiche affrontate</div><div class="row"><span class="value">' + electionsContested + " (" + electionsQualified + " superate)</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Elezioni europee affrontate</div><div class="row"><span class="value">' + euElections + "</span></div></div>" +
+      (p.inParliament ? '<div class="stat-tile"><div class="label">Seggi in Parlamento</div><div class="row"><span class="value">' + p.seatsCamera + " Camera / " + p.seatsSenato + " Senato</span></div></div>" : "") +
+      (p.seggiEuropei ? '<div class="stat-tile"><div class="label">Seggi al Parlamento Europeo</div><div class="row"><span class="value">' + p.seggiEuropei + "</span></div></div>" : "") +
+      "</div>";
+
+    return '<section aria-label="Dossier di Partito"><details class="log">' +
+      '<summary>Dossier di Partito<span>▾</span></summary>' +
+      '<p class="ci-hint"><strong>' + p.name + '</strong> — ' + (fam ? fam.label : "") + (p.motto ? ' — "' + p.motto + '"' : "") + "</p>" +
+      stats +
+      '<p class="ci-hint">' + correntiText + "</p>" +
+      (eventsText ? '<p class="ci-hint">Eventi registrati nel diario di partito — ' + eventsText + ".</p>" : "") +
+      coalitionDossierHtml() +
+      "</details></section>";
+  }
   function renderWorldNews() {
     if (!state.worldNews || !state.worldNews.length) return "";
     var items = state.worldNews.slice(0, 4).map(function (n) {
@@ -3767,21 +4009,29 @@
     return '<section aria-label="Sguardo sul mondo"><p class="eyebrow">Sguardo sul mondo</p><div class="news-list">' + items + "</div></section>";
   }
 
+  function coalitionLabelForPartyId(id) {
+    if (COALITIONS.centrodestra.members.indexOf(id) !== -1) return COALITIONS.centrodestra.label;
+    if (COALITIONS.campolargo.members.indexOf(id) !== -1) return COALITIONS.campolargo.label;
+    var dyn = (state.dynamicCoalitions || []).filter(function (c) { return c.members.indexOf(id) !== -1; })[0];
+    return dyn ? dyn.label : null;
+  }
   function renderPartyDirectory() {
     var p = state.player;
     var fam = familyById(p.family);
     var rows = activeParties().map(function (pt) {
-      return { name: pt.name, color: pt.color, value: state.parties[pt.id], famiglia: pt.famiglia, corrente: pt.corrente, leader: pt.leader, isPlayer: false };
+      return { name: pt.name, color: pt.color, value: state.parties[pt.id], famiglia: pt.famiglia, corrente: pt.corrente, leader: pt.leader, isPlayer: false, coalitionLabel: coalitionLabelForPartyId(pt.id) };
     });
     rows.push({
       name: p.name, color: p.color, value: p.sondaggi, isPlayer: true,
-      famiglia: fam ? fam.label : "", corrente: (p.ideologyText || (fam ? fam.desc : "")), leader: "Tu"
+      famiglia: fam ? fam.label : "", corrente: (p.ideologyText || (fam ? fam.desc : "")), leader: "Tu",
+      coalitionLabel: p.allianceId ? COALITIONS[p.allianceId].label : null
     });
     rows.sort(function (a, b) { return b.value - a.value; });
     var html = rows.map(function (r) {
       return '<div class="party-row' + (r.isPlayer ? " player-row" : "") + '"><span class="sw" style="background:' + r.color + '"></span>' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + (r.isPlayer ? ' <span class="chip accent">Tu</span>' : "") + '</strong><span class="value">' + fmt1(r.value) + '%</span></div>' +
-        '<div class="party-row-sub">' + r.famiglia + ' — ' + r.corrente + '<br>Leader: ' + r.leader + '</div></div></div>';
+        '<div class="party-row-sub">' + r.famiglia + ' — ' + r.corrente + '<br>Leader: ' + r.leader +
+        (r.coalitionLabel ? '<br><span class="chip">' + r.coalitionLabel + '</span>' : '') + '</div></div></div>';
     }).join("");
     return '<section aria-label="Partiti politici"><details class="log">' +
       '<summary>Partiti politici (' + rows.length + ")<span>▾</span></summary>" +
@@ -4028,6 +4278,7 @@
     body += renderPartyRelations();
     body += renderParliament();
     body += renderEuParliament();
+    body += renderPartyDossier();
     body += renderLog();
     app.innerHTML = body;
     bindInteractions();
@@ -4057,35 +4308,48 @@
           state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "dossier" });
           state.resultData = { resultText: choice.result, headlines: [] };
         } else if (dossier.id === "formazione_correnti") {
-          state.player.currents = [{ share: choice.currentsInit[0] }, { share: choice.currentsInit[1] }];
+          state.player.currents = choice.currentsSetup ? choice.currentsSetup.map(function (c) { return { id: c.id, share: c.share }; }) : null;
+          if (!choice.currentsSetup) state.correntiOfferedAgainTurn = state.turn + 40;
           if (choice.effects.reputazione) state.player.reputazione = clamp(state.player.reputazione + choice.effects.reputazione, 0, 100);
           state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "dossier" });
           state.resultData = { resultText: choice.result, headlines: [] };
         } else if (dossier.id === "rischio_scissione") {
           state.scissionePending = false;
-          if (choice.currentsRebalance) {
-            var c = state.player.currents;
-            var mid = (c[0].share + c[1].share) / 2;
-            c[0].share = c[0].share + (mid - c[0].share) * 0.6;
-            c[1].share = 100 - c[0].share;
+          var cur = state.player.currents;
+          var risky = cur.filter(function (c) { return c.id === choice.riskyCorrenteId; })[0];
+          if (choice.currentsRebalance && risky) {
+            var others = cur.filter(function (c) { return c.id !== risky.id; });
+            var othersSum = others.reduce(function (s, c) { return s + c.share; }, 0);
+            var othersMean = othersSum / others.length;
+            var delta = (othersMean - risky.share) * 0.6;
+            risky.share = risky.share + delta;
+            var remaining = 100 - risky.share;
+            var scaleFactor = othersSum > 0 ? remaining / othersSum : 0;
+            others.forEach(function (c) { c.share = othersSum > 0 ? c.share * scaleFactor : remaining / others.length; });
             state.player.fondi += choice.effects.fondi || 0;
             state.player.reputazione = clamp(state.player.reputazione + (choice.effects.reputazione || 0), 0, 100);
-          } else if (choice.currentsSplit) {
+          } else if (choice.currentsSplit && risky) {
             var lossFrac = 0.3;
             state.player.iscritti = Math.max(0, Math.round(state.player.iscritti * (1 - lossFrac)));
             if (state.player.sezioni > 1) state.player.sezioni -= 1;
-            var minorityIsFirst = state.player.currents[0].share < state.player.currents[1].share;
-            state.player.currents[0].share = minorityIsFirst ? 92 : 8;
-            state.player.currents[1].share = 100 - state.player.currents[0].share;
+            var othersS = cur.filter(function (c) { return c.id !== risky.id; });
+            var othersSumS = othersS.reduce(function (s, c) { return s + c.share; }, 0);
+            risky.share = 8;
+            othersS.forEach(function (c) { c.share = othersSumS > 0 ? (c.share / othersSumS) * 92 : 92 / othersS.length; });
             state.player.reputazione = clamp(state.player.reputazione + (choice.effects.reputazione || 0), 0, 100);
           }
           state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "scissione" });
           state.resultData = { resultText: choice.result, headlines: [] };
-        } else if (dossier.cat === "Correnti Interne" && choice.currentShift) {
-          var cur = state.player.currents;
-          var shiftMag = choice.currentShift * staffDamp("capo_segreteria", 0.3);
-          cur[0].share = clamp(cur[0].share + shiftMag, 5, 95);
-          cur[1].share = 100 - cur[0].share;
+        } else if (dossier.cat === "Correnti Interne" && choice.shiftToId) {
+          var curT = state.player.currents;
+          var fromC = curT.filter(function (c) { return c.id === choice.shiftFromId; })[0];
+          var toC = curT.filter(function (c) { return c.id === choice.shiftToId; })[0];
+          if (fromC && toC) {
+            var shiftMag = choice.shiftAmount * staffDamp("capo_segreteria", 0.3);
+            shiftMag = Math.min(shiftMag, Math.max(0, fromC.share - 5));
+            fromC.share -= shiftMag;
+            toC.share += shiftMag;
+          }
           var result = applyChoice(dossier, choice);
           state.resultData = result;
         } else if (dossier.id === "eu_group_choice") {
@@ -4206,6 +4470,7 @@
     recomputePeriodic();
     triggerRivalPartyEvent();
     triggerPartyLifecycleFollowup();
+    triggerDynamicCoalitionFormation();
     triggerLeaderSuccession();
     triggerWorldNews();
     triggerNucleoUpdate();
@@ -4218,22 +4483,26 @@
     }
 
     var p = state.player;
-    if (p.currents && !state.scissionePending) {
-      var share0 = p.currents[0].share;
+    if (p.currents && p.currents.length && !state.scissionePending) {
+      var shares = p.currents.map(function (c) { return c.share; });
+      var minShare = Math.min.apply(null, shares);
+      var maxShare = Math.max.apply(null, shares);
       var capoSegreteriaMember = staffMember("capo_segreteria");
       var capoSkill = capoSegreteriaMember ? (capoSegreteriaMember.skillMult !== undefined ? capoSegreteriaMember.skillMult : 1) : 0;
       var lo = 15 - 5 * capoSkill, hi = 85 + 5 * capoSkill;
-      if (share0 <= lo || share0 >= hi) {
+      if (minShare <= lo || maxShare >= hi) {
         state.scissionePending = true;
-        state.currentDossierId = "rischio_scissione";
+        state.aiDynamicDossier = rischioScissioneDossier();
+        state.currentDossierId = "ai_dynamic";
         state.phase = "building";
         return;
       }
     }
 
-    if (!p.currents && !state.correntiOffered && p.iscritti >= 400 && state.turn >= 26) {
+    if (!p.currents && (!state.correntiOffered || state.turn >= (state.correntiOfferedAgainTurn || 0)) && p.iscritti >= 400 && state.turn >= 26) {
       state.correntiOffered = true;
-      state.currentDossierId = "formazione_correnti";
+      state.aiDynamicDossier = formazioneCorrentiDossier();
+      state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
     }
@@ -4256,6 +4525,14 @@
     var referendumDossier = triggerReferendumIfDue();
     if (referendumDossier) {
       state.aiDynamicDossier = referendumDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var trendDossier = triggerTrendCheckIn();
+    if (trendDossier) {
+      state.aiDynamicDossier = trendDossier;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
@@ -4315,7 +4592,13 @@
     if (!available.length) { state.usedDossiers = []; available = pool; }
     var chosen = available[Math.floor(Math.random() * available.length)];
     state.usedDossiers.push(chosen.id);
-    state.currentDossierId = chosen.id;
+    if (chosen.kind === "correnti") {
+      var tensionTpl = CORRENTI_DOSSIER_TEMPLATES.filter(function (t) { return t.id === chosen.id; })[0];
+      state.aiDynamicDossier = correntiTensionDossier(tensionTpl);
+      state.currentDossierId = "ai_dynamic";
+    } else {
+      state.currentDossierId = chosen.id;
+    }
     state.phase = "building";
   }
 
