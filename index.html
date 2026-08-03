@@ -1327,78 +1327,104 @@
       required: ["narrativa", "titolo_giornale", "iscritti", "reputazione", "visibilita", "fondi_extra"]
     };
 
-    var res;
-    var timeoutController = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var timeoutId = timeoutController ? setTimeout(function () { timeoutController.abort(); }, 25000) : null;
-    try {
-      res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-        signal: timeoutController ? timeoutController.signal : undefined,
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: "user", parts: [{ text: userMessage }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: responseSchema,
-            // I modelli Flash più recenti (famiglia "3.x") non supportano lo spegnimento completo del
-            // ragionamento: thinkingBudget:0 viene ignorato su questi modelli e il ragionamento consuma
-            // comunque token dal budget di output. Usiamo "low" (il minimo disponibile) e un budget di
-            // output generoso, per evitare che il ragionamento tronchi la vera risposta JSON a metà.
-            thinkingConfig: { thinkingLevel: "low" },
-            maxOutputTokens: 4096
-          }
-        })
-      });
-    } catch (networkErr) {
-      if (networkErr && networkErr.name === "AbortError") {
+    // Un singolo tentativo di chiamata. Se la risposta arriva troncata o non interpretabile, lancia un
+    // errore marcato come "retryable": chi chiama questa funzione riprova da solo una seconda volta prima
+    // di arrendersi, così un troncamento occasionale non arriva quasi mai a vista del giocatore.
+    async function attemptOnce() {
+      var res;
+      var timeoutController = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      var timeoutId = timeoutController ? setTimeout(function () { timeoutController.abort(); }, 25000) : null;
+      try {
+        res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+          signal: timeoutController ? timeoutController.signal : undefined,
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: "user", parts: [{ text: userMessage }] }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema: responseSchema,
+              // I modelli Flash più recenti (famiglia "3.x") non supportano lo spegnimento completo del
+              // ragionamento: thinkingBudget:0 viene ignorato su questi modelli e il ragionamento consuma
+              // comunque token dal budget di output. Usiamo "low" (il minimo disponibile) e un budget di
+              // output molto ampio, per evitare che il ragionamento tronchi la vera risposta JSON a metà.
+              thinkingConfig: { thinkingLevel: "low" },
+              maxOutputTokens: 8192
+            }
+          })
+        });
+      } catch (networkErr) {
+        if (networkErr && networkErr.name === "AbortError") {
+          throw new Error(
+            "Google non ha risposto entro 25 secondi (rete lenta o servizio momentaneamente irraggiungibile). " +
+            "Nessun dato è stato inviato con successo: riprova, il testo scritto resta qui."
+          );
+        }
         throw new Error(
-          "Google non ha risposto entro 25 secondi (rete lenta o servizio momentaneamente irraggiungibile). " +
-          "Nessun dato è stato inviato con successo: riprova, il testo scritto resta qui."
+          "La chiamata al modello è stata bloccata dal browser prima ancora di arrivare a Google " +
+          "(probabile blocco di rete o CORS). Verifica la connessione e riprova. " +
+          "Nessun dato è stato inviato, il testo scritto resta qui."
+        );
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+
+      if (!res.ok) {
+        var errText = "";
+        try { errText = (await res.text()).slice(0, 200); } catch (e) {}
+        throw new Error("Errore dall'API Gemini (" + res.status + "): " + (errText || "nessun dettaglio disponibile"));
+      }
+      var data = await res.json();
+      if (data.promptFeedback && data.promptFeedback.blockReason) {
+        throw new Error(
+          "Google ha bloccato questa iniziativa per i suoi filtri di sicurezza (motivo: " + data.promptFeedback.blockReason + "). " +
+          "Riscrivila con toni meno violenti o espliciti e riprova: il testo scritto resta qui."
         );
       }
-      throw new Error(
-        "La chiamata al modello è stata bloccata dal browser prima ancora di arrivare a Google " +
-        "(probabile blocco di rete o CORS). Verifica la connessione e riprova. " +
-        "Nessun dato è stato inviato, il testo scritto resta qui."
-      );
-    } finally {
-      if (timeoutId) clearTimeout(timeoutId);
+      var candidate = (data.candidates || [])[0];
+      if (candidate && candidate.finishReason === "MAX_TOKENS") {
+        var truncErr = new Error("Risposta troncata (MAX_TOKENS).");
+        truncErr.retryable = true;
+        throw truncErr;
+      }
+      if (candidate && candidate.finishReason && candidate.finishReason !== "STOP") {
+        throw new Error(
+          "Google ha interrotto la valutazione di questa iniziativa (motivo: " + candidate.finishReason + "), probabilmente per i suoi filtri di sicurezza sui contenuti. " +
+          "Riscrivila in modo meno esplicito/violento e riprova: il testo scritto resta qui."
+        );
+      }
+      // Ignora eventuali parti di "ragionamento" (thought) e prende solo il testo della risposta vera,
+      // per non essere sorpreso se un modello futuro include comunque un riassunto del ragionamento.
+      var parts = (candidate && candidate.content && candidate.content.parts) || [];
+      var answerText = parts.filter(function (pt) { return pt && pt.text && !pt.thought; }).map(function (pt) { return pt.text; }).join("");
+      if (!answerText) {
+        var emptyErr = new Error("Nessuna risposta strutturata valida.");
+        emptyErr.retryable = true;
+        throw emptyErr;
+      }
+      try {
+        return JSON.parse(answerText);
+      } catch (e) {
+        var parseErr = new Error("Risposta non interpretabile come JSON.");
+        parseErr.retryable = true;
+        throw parseErr;
+      }
     }
 
-    if (!res.ok) {
-      var errText = "";
-      try { errText = (await res.text()).slice(0, 200); } catch (e) {}
-      throw new Error("Errore dall'API Gemini (" + res.status + "): " + (errText || "nessun dettaglio disponibile"));
+    try {
+      return await attemptOnce();
+    } catch (firstErr) {
+      if (!firstErr.retryable) throw firstErr;
+      try {
+        return await attemptOnce();
+      } catch (secondErr) {
+        throw new Error(
+          "Il modello ha dato una risposta incompleta due volte di fila (probabilmente sovraccarico momentaneo). " +
+          "Riprova tra qualche secondo: il testo scritto resta qui."
+        );
+      }
     }
-    var data = await res.json();
-    if (data.promptFeedback && data.promptFeedback.blockReason) {
-      throw new Error(
-        "Google ha bloccato questa iniziativa per i suoi filtri di sicurezza (motivo: " + data.promptFeedback.blockReason + "). " +
-        "Riscrivila con toni meno violenti o espliciti e riprova: il testo scritto resta qui."
-      );
-    }
-    var candidate = (data.candidates || [])[0];
-    if (candidate && candidate.finishReason === "MAX_TOKENS") {
-      throw new Error(
-        "La risposta del modello è stata tagliata a metà prima di finire (troppo lunga per il limite impostato). " +
-        "Non è un problema del testo che hai scritto: riprova, di solito la seconda volta va a buon fine."
-      );
-    }
-    if (candidate && candidate.finishReason && candidate.finishReason !== "STOP") {
-      throw new Error(
-        "Google ha interrotto la valutazione di questa iniziativa (motivo: " + candidate.finishReason + "), probabilmente per i suoi filtri di sicurezza sui contenuti. " +
-        "Riscrivila in modo meno esplicito/violento e riprova: il testo scritto resta qui."
-      );
-    }
-    // Ignora eventuali parti di "ragionamento" (thought) e prende solo il testo della risposta vera,
-    // per non essere sorpreso se un modello futuro include comunque un riassunto del ragionamento.
-    var parts = (candidate && candidate.content && candidate.content.parts) || [];
-    var answerText = parts.filter(function (pt) { return pt && pt.text && !pt.thought; }).map(function (pt) { return pt.text; }).join("");
-    if (!answerText) throw new Error("Il modello non ha restituito una valutazione strutturata valida. Riprova, magari riformulando il testo dell'iniziativa.");
-    var parsed;
-    try { parsed = JSON.parse(answerText); } catch (e) { throw new Error("Risposta del modello non interpretabile come JSON."); }
-    return parsed;
   }
 
   function applyAiInitiative(text, tierId, evalResult) {
