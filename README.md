@@ -8,9 +8,9 @@ Vesti i panni del fondatore di un nuovo partito politico italiano, partendo da z
 
 Basta aprire `index.html` in un browser (anche da mobile) — nessuna installazione richiesta. La partita si salva automaticamente nel browser (`localStorage`) e può anche essere esportata/importata come file JSON dal pannello di gioco, per portarla su un altro dispositivo o metterla al sicuro.
 
-### Intelligenza artificiale (opzionale)
+### Intelligenza artificiale locale (opzionale)
 
-Il gioco include una modalità "Iniziativa Libera" in cui puoi scrivere liberamente cosa vuole fare il tuo partito in una settimana. Per un impatto realistico generato da un modello linguistico, puoi collegare gratuitamente una chiave API di **Google Gemini** (ottenibile su [aistudio.google.com](https://aistudio.google.com/)) dal pannello impostazioni del gioco. La chiave resta **solo nel tuo browser** (mai su alcun server) e viene inviata direttamente all'API di Google. Senza chiave, il gioco usa comunque una risoluzione automatica delle iniziative libere, meno raffinata ma pienamente funzionante.
+Il gioco include una modalità "Iniziativa Libera" in cui puoi scrivere liberamente cosa vuole fare il tuo partito in una settimana. Per un impatto realistico generato da un vero modello linguistico, puoi attivare gratuitamente un **modello IA locale** (via [WebLLM](https://github.com/mlc-ai/web-llm)) dal pannello "Intelligenza artificiale locale" del gioco: si scarica una volta sola nel browser e gira interamente sul tuo dispositivo tramite WebGPU — nessuna chiave, nessun account, nessun server esterno, nessun limite di utilizzo. Richiede un browser con supporto WebGPU (non garantito su tutti i telefoni, specie su iPhone). Senza IA locale attivata, il gioco usa comunque una risoluzione automatica delle iniziative libere, meno raffinata ma pienamente funzionante.
 
 ## Hosting
 
@@ -23,5 +23,5 @@ Questo repository è pubblicato tramite **GitHub Pages** direttamente da questo 
 
 ## Note
 
-- Nessun dato di gioco o chiave API viene mai inviato a server propri: tutto vive nel browser dell'utente.
+- Nessun dato di gioco viene mai inviato a server propri: tutto vive nel browser dell'utente.
 - Il gioco è dichiaratamente uno scenario-planning ipotetico/fittizio e non rappresenta fatti reali o dichiarazioni reali di persone viventi.
