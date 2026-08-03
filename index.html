@@ -632,16 +632,37 @@
   }
   // Chiede al modello locale un JSON con la forma descritta a parole nel prompt (i modelli piccoli non
   // seguono sempre schemi rigidi come Gemini: il prompt deve descrivere chiaramente le chiavi attese).
+  // A differenza della chiamata a Gemini (che ha già un timeout tramite AbortController), la generazione
+  // locale non aveva alcun limite di tempo: su un telefono lento, o se il motore WebGPU si blocca, la
+  // promise poteva non risolversi mai, lasciando il gioco bloccato su "Preparazione della prossima
+  // settimana…" all'infinito. Il timeout qui sotto garantisce che, anche nel peggiore dei casi, il gioco
+  // rinunci e ricada sul sistema di riserva invece di restare bloccato per sempre.
+  var LOCAL_LLM_TIMEOUT_MS = 40000;
   async function callLocalLLMJSON(systemPrompt, userMessage) {
     if (LocalLLM.status !== "ready" || !LocalLLM.engine) throw new Error("Modello locale non pronto.");
-    var reply = await LocalLLM.engine.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt + " Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo, senza markdown." },
-        { role: "user", content: userMessage }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.7
+    var timeoutId;
+    var timeoutPromise = new Promise(function (_, reject) {
+      timeoutId = setTimeout(function () {
+        try { LocalLLM.engine && LocalLLM.engine.interruptGenerate && LocalLLM.engine.interruptGenerate(); } catch (eIgnored) {}
+        reject(new Error("Il modello locale non ha risposto in tempo."));
+      }, LOCAL_LLM_TIMEOUT_MS);
     });
+    var reply;
+    try {
+      reply = await Promise.race([
+        LocalLLM.engine.chat.completions.create({
+          messages: [
+            { role: "system", content: systemPrompt + " Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo, senza markdown." },
+            { role: "user", content: userMessage }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7
+        }),
+        timeoutPromise
+      ]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
     var text = reply && reply.choices && reply.choices[0] && reply.choices[0].message && reply.choices[0].message.content;
     if (!text) throw new Error("Il modello locale non ha restituito una risposta.");
     var jsonStart = text.indexOf("{");
