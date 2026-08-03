@@ -1340,6 +1340,24 @@
   var SEVERE_TEXT_FLAGS = ["uccid", "ammazz", "attentat", "bomba", "terroris", "strage", "sparare", "sparo", "picchi", "violenz", "incendi", "sequestr", "assassin"];
   var VAGUE_TEXT_FLAGS = ["boh", "cose", "non so", "qualcosa", "vabbe", "vabbè"];
   var CONCRETE_TEXT_FLAGS = ["organizzo", "apro", "presento", "incontro", "lancio", "costruisco", "propongo", "raccolgo", "visito", "inauguro", "denuncio", "pubblico"];
+  // Fonti di entrata realistiche per un partito, non solo il crowdfunding: raccolta fondi/donazioni,
+  // tesseramento/nuovi iscritti (spesso pagano una quota d'iscrizione), sponsorizzazioni e social,
+  // interviste/apparizioni pubbliche pagate, vendita di gadget. Resta un elenco di parole chiave, non
+  // una vera comprensione del testo, ma copre molte più situazioni reali di un'unica parola come "crowdfunding".
+  // Radici di parola, non forme fisse: "donazion" copre sia "donazione" che "donazioni", "intervist"
+  // copre "intervista"/"interviste"/"intervistato", ecc. — l'italiano coniuga troppo per elenchi rigidi.
+  var INCOME_TEXT_FLAGS = [
+    "raccolta fondi", "raccolgo fondi", "raccogliamo fondi", "crowdfunding", "donazion", "sottoscrizion",
+    "finanziator", "autofinanz", "cena di gala", "vendita di gadget", "merchandis", "quota di iscrizion",
+    "tesserament", "nuovi iscritt", "reclutament",
+    "sponsor", "monetizz",
+    "intervist", "ospitat", "apparizione televisiv", "conferenza a pagamento"
+  ];
+  // Approssimazione grezza, senza IA: famiglie/correnti già più radicali reggono meglio (in termini di
+  // iscritti, non di reputazione pubblica) un'iniziativa grave che è coerente con quella loro identità,
+  // rispetto a un partito moderato per cui la stessa iniziativa sarebbe un tradimento totale dei suoi valori.
+  var RADICAL_LEANING_FAMILIES = { sinistra: true, sovranista: true, movimentista: true };
+  var RADICAL_LEANING_CURRENTS = { identitaria: true, purista: true, sindacale: true };
   function analyzeInitiativeTextLocally(text) {
     var t = text.toLowerCase();
     var words = t.trim().split(/\s+/).filter(Boolean);
@@ -1350,7 +1368,19 @@
     if (VAGUE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score -= 1;
     if (CONCRETE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score += 0.6;
     var severe = SEVERE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; });
-    return { score: score, severe: severe };
+    var income = INCOME_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; });
+    return { score: score, severe: severe, income: income };
+  }
+
+  function ideologicalCoherenceMultiplier(p) {
+    var mult = 1;
+    if (RADICAL_LEANING_FAMILIES[p.family]) mult *= 0.5;
+    if (p.currents && p.currents.length === 2) {
+      var pair = correntiPair();
+      var dominant = p.currents[0].share >= p.currents[1].share ? pair[0] : pair[1];
+      if (RADICAL_LEANING_CURRENTS[dominant.id]) mult *= 0.7;
+    }
+    return mult;
   }
 
   function resolveCustomInitiative(text, tierId) {
@@ -1365,10 +1395,13 @@
       // Non passa dalla scala normale della fascia scelta (troppo piccola per rappresentare conseguenze
       // così gravi): stessa logica usata con l'IA, in versione fissa offline. Il tetto di spesa NON limita
       // la gravità: un'iniziativa a basso costo che descrive violenza può comunque travolgere il partito.
+      // La reputazione pubblica (opinione più ampia) prende comunque il colpo pieno; gli iscritti (la base
+      // del partito) reggono molto meglio se il partito è già di un'area radicale coerente col contenuto.
       twist = "grave";
+      var coherence = ideologicalCoherenceMultiplier(p);
       repDelta = -(35 + Math.random() * 35) * damp;
       visDelta = 20 + Math.random() * 30;
-      iscrittiDelta = -(p.iscritti * (0.3 + Math.random() * 0.4)) * damp;
+      iscrittiDelta = -(p.iscritti * (0.3 + Math.random() * 0.4)) * damp * coherence;
     } else {
       var roll = Math.random();
       var outcomeMult;
@@ -1384,7 +1417,18 @@
       if (outcomeMult < 0) { iscrittiDelta *= damp; repDelta *= damp; visDelta *= damp; }
     }
 
-    p.fondi += tier.fondi * style.fondiMult;
+    if (signal.income && twist !== "grave") {
+      // Un'iniziativa orientata a generare entrate (raccolta fondi, tesseramento, sponsor, interviste
+      // pagate, merchandising...) può far guadagnare davvero denaro al partito, non solo costargli:
+      // quanto si raccoglie dipende dalla fascia scelta, da quanto è specifica l'idea e da come va
+      // (un'iniziativa del genere andata male può comunque costare più di quanto rende).
+      var overhead = Math.abs(tier.fondi) * 0.25;
+      var raiseMult = twist === "positivo" ? 3.5 : twist === "negativo" ? 0.15 : 1.6;
+      var raised = Math.abs(tier.fondi) * raiseMult * (0.7 + clamp(signal.score, -1, 2) * 0.15);
+      p.fondi += (raised - overhead) * style.fondiMult;
+    } else {
+      p.fondi += tier.fondi * style.fondiMult;
+    }
     p.iscritti = Math.max(0, p.iscritti + iscrittiDelta);
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     p.visibilita = clamp(p.visibilita + visDelta, 0, 100);
@@ -1502,7 +1546,7 @@
         iscritti: { type: "NUMBER", description: "Variazione del numero di iscritti (può essere negativa)" },
         reputazione: { type: "NUMBER", description: "Variazione della reputazione su scala 0-100 (tipicamente tra -12 e 12)" },
         visibilita: { type: "NUMBER", description: "Variazione della visibilità mediatica su scala 0-100 (tipicamente tra -10 e 22)" },
-        fondi_extra: { type: "NUMBER", description: "Variazione aggiuntiva di fondi oltre al costo base già previsto dalla fascia scelta (es. per una raccolta fondi riuscita); normalmente 0" },
+        fondi_extra: { type: "NUMBER", description: "Variazione aggiuntiva di fondi oltre al costo base già previsto dalla fascia scelta: positiva se l'iniziativa genera davvero entrate (raccolta fondi, nuovi iscritti che pagano la quota, sponsorizzazioni, interviste/apparizioni pagate, vendita di gadget, ecc.), negativa se comporta spese impreviste oltre al costo base; normalmente 0 per iniziative che non hanno un chiaro impatto economico diretto" },
         partito_coinvolto: { type: "STRING", description: "Se l'iniziativa nomina, attacca, danneggia o coinvolge direttamente uno di questi partiti reali esistenti — " +
           PARTIES.map(function (pt) { return pt.name; }).join(", ") + " — scrivi qui esattamente uno di questi nomi. Altrimenti stringa vuota." },
         partito_delta: { type: "NUMBER", description: "Variazione nei sondaggi (punti percentuali, tipicamente tra -8 e +4) del partito indicato in partito_coinvolto, se presente; altrimenti 0. " +
