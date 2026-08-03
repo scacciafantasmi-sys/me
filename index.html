@@ -1279,6 +1279,9 @@
       "Il tetto di spesa della fascia scelta dal giocatore limita l'ampiezza degli effetti per iniziative politiche normali, ma NON per conseguenze " +
       "legali/reputazionali gravi legate a violenza o reati, che possono essere molto più ampie (anche 40-90 punti di reputazione o visibilità, " +
       "e fondi_extra fortemente negativo per spese legali) quando il contesto lo giustifica — mai per automatismo, sempre per coerenza col caso specifico. " +
+      "Se l'iniziativa nomina esplicitamente, attacca, danneggia, favorisce o coinvolge in modo diretto un partito politico italiano reale ed " +
+      "esistente (non il partito del giocatore), quel partito deve avere una conseguenza reale e proporzionata nei suoi sondaggi tramite " +
+      "partito_coinvolto/partito_delta — un evento che colpisce davvero un partito o una sua figura di spicco non può lasciarlo immobile nei numeri. " +
       "Rispondi sempre in italiano.";
 
     var correntiInfo = "";
@@ -1322,9 +1325,13 @@
         iscritti: { type: "NUMBER", description: "Variazione del numero di iscritti (può essere negativa)" },
         reputazione: { type: "NUMBER", description: "Variazione della reputazione su scala 0-100 (tipicamente tra -12 e 12)" },
         visibilita: { type: "NUMBER", description: "Variazione della visibilità mediatica su scala 0-100 (tipicamente tra -10 e 22)" },
-        fondi_extra: { type: "NUMBER", description: "Variazione aggiuntiva di fondi oltre al costo base già previsto dalla fascia scelta (es. per una raccolta fondi riuscita); normalmente 0" }
+        fondi_extra: { type: "NUMBER", description: "Variazione aggiuntiva di fondi oltre al costo base già previsto dalla fascia scelta (es. per una raccolta fondi riuscita); normalmente 0" },
+        partito_coinvolto: { type: "STRING", description: "Se l'iniziativa nomina, attacca, danneggia o coinvolge direttamente uno di questi partiti reali esistenti — " +
+          PARTIES.map(function (pt) { return pt.name; }).join(", ") + " — scrivi qui esattamente uno di questi nomi. Altrimenti stringa vuota." },
+        partito_delta: { type: "NUMBER", description: "Variazione nei sondaggi (punti percentuali, tipicamente tra -8 e +4) del partito indicato in partito_coinvolto, se presente; altrimenti 0. " +
+          "Un evento che colpisce davvero un partito reale o una sua figura di spicco (scandalo, attacco, exploit mediatico a favore o sfavore) deve avere qui una conseguenza reale e non restare a zero." }
       },
-      required: ["narrativa", "titolo_giornale", "iscritti", "reputazione", "visibilita", "fondi_extra"]
+      required: ["narrativa", "titolo_giornale", "iscritti", "reputazione", "visibilita", "fondi_extra", "partito_coinvolto", "partito_delta"]
     };
 
     // Un singolo tentativo di chiamata. Se la risposta arriva troncata o non interpretabile, lancia un
@@ -1445,6 +1452,17 @@
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     p.visibilita = clamp(p.visibilita + visDelta, 0, 100);
 
+    // Se l'iniziativa nomina/coinvolge davvero un partito reale, quel partito ne risente nei sondaggi
+    // (il rifinimento verrà poi renormalizzato nel prossimo recomputePeriodic).
+    var involvedName = (evalResult.partito_coinvolto || "").trim();
+    var involvedDelta = Number(evalResult.partito_delta) || 0;
+    if (involvedName && involvedDelta) {
+      var involvedParty = PARTIES.filter(function (pt) { return pt.name.toLowerCase() === involvedName.toLowerCase(); })[0];
+      if (involvedParty) {
+        state.parties[involvedParty.id] = Math.max(0.3, state.parties[involvedParty.id] + involvedDelta);
+      }
+    }
+
     var quoted = text.length > 100 ? text.slice(0, 100) + "…" : text;
     var otherOutlets = pickN(OUTLETS.filter(function (o) { return o !== "Il Domani d'Italia"; }), 2);
     var headlines = [{ outlet: "Il Domani d'Italia", text: evalResult.titolo_giornale || quoted }].concat(
@@ -1534,15 +1552,17 @@
       (0.15 + Math.sqrt(p.iscritti) * 0.035 + p.sezioni * 0.28 + p.visibilita * 0.13 + (p.reputazione - 50) * 0.025) * style.growthMult,
       0, 40
     );
-    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.15 + (Math.random() - 0.5) * 0.12, 0, 40);
+    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.15 + (Math.random() - 0.5) * 0.45, 0, 40);
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
 
-    // established parties: small random walk, then renormalize so total + player + indecisi = 100,
-    // pulling disproportionately from the player's ideological rival.
+    // established parties: random walk, then renormalize so total + player + indecisi = 100,
+    // pulling disproportionately from the player's ideological rival. L'ampiezza del movimento
+    // settimanale è moderata di proposito (non deve sembrare un sondaggio elettorale in tempo reale),
+    // ma abbastanza percepibile da rendere i partiti vivi settimana dopo settimana.
     var rivalId = familyById(p.family).rival;
     PARTIES.forEach(function (party) {
-      state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (Math.random() - 0.5) * 0.15);
+      state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (Math.random() - 0.5) * 0.55);
     });
     var totalOthers = PARTIES.reduce(function (s, party) { return s + state.parties[party.id]; }, 0);
     var targetOthers = clamp(100 - p.sondaggi - state.indecisi, 20, 99);
