@@ -1341,8 +1341,12 @@
           generationConfig: {
             responseMimeType: "application/json",
             responseSchema: responseSchema,
-            maxOutputTokens: 1200,
-            thinkingConfig: { thinkingBudget: 0 }
+            // I modelli Flash più recenti (famiglia "3.x") non supportano lo spegnimento completo del
+            // ragionamento: thinkingBudget:0 viene ignorato su questi modelli e il ragionamento consuma
+            // comunque token dal budget di output. Usiamo "low" (il minimo disponibile) e un budget di
+            // output generoso, per evitare che il ragionamento tronchi la vera risposta JSON a metà.
+            thinkingConfig: { thinkingLevel: "low" },
+            maxOutputTokens: 4096
           }
         })
       });
@@ -1375,7 +1379,13 @@
       );
     }
     var candidate = (data.candidates || [])[0];
-    if (candidate && candidate.finishReason && candidate.finishReason !== "STOP" && candidate.finishReason !== "MAX_TOKENS") {
+    if (candidate && candidate.finishReason === "MAX_TOKENS") {
+      throw new Error(
+        "La risposta del modello è stata tagliata a metà prima di finire (troppo lunga per il limite impostato). " +
+        "Non è un problema del testo che hai scritto: riprova, di solito la seconda volta va a buon fine."
+      );
+    }
+    if (candidate && candidate.finishReason && candidate.finishReason !== "STOP") {
       throw new Error(
         "Google ha interrotto la valutazione di questa iniziativa (motivo: " + candidate.finishReason + "), probabilmente per i suoi filtri di sicurezza sui contenuti. " +
         "Riscrivila in modo meno esplicito/violento e riprova: il testo scritto resta qui."
