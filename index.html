@@ -446,7 +446,7 @@
   </div>
 
   <details class="ai-settings" id="ai-settings">
-    <summary>Impostazioni IA (Google Gemini) <span class="chip neutral" id="ai-status-chip">Nessuna chiave</span><span>▾</span></summary>
+    <summary>Impostazioni IA <span class="chip neutral" id="ai-status-chip">Nessuna IA</span><span>▾</span></summary>
     <div class="ai-settings-body">
       <p class="ci-hint">Gemini ha un livello gratuito senza carta di credito. Prendi la tua chiave personale (gratis, si genera in un paio di minuti, non si "scarica" nulla) su <strong>aistudio.google.com</strong>: accedi con un account Google, cerca "Ottieni chiave API" / "Get API key", crea una nuova chiave e incollala qui sotto. Google sta passando dal vecchio formato (che iniziava con <code>AIza</code>) al nuovo formato <code>AQ.</code> — vanno bene entrambi. Resta solo in questo browser e viene inviata direttamente a Google — non passa da nessun altro server, e non finisce mai nei file di salvataggio che esporti. Senza chiave il gioco usa comunque gli effetti standard per fascia di impegno.</p>
       <div class="field">
@@ -457,6 +457,13 @@
       <div class="ai-settings-actions">
         <button class="save-bar-btn primary" id="save-api-key-btn" type="button">Salva chiave</button>
         <button class="save-bar-btn" id="remove-api-key-btn" type="button">Rimuovi chiave</button>
+      </div>
+
+      <div class="field local-llm-field">
+        <label class="field-label">Oppure: modello IA locale nel browser (senza chiave, senza quota)</label>
+        <p class="ci-hint">Scarica un piccolo modello linguistico (circa 900 MB, una volta sola, resta nella cache del browser) e lo fa girare direttamente sul tuo dispositivo: nessuna chiamata a Google, nessun limite di utilizzo. Richiede un browser con supporto WebGPU — non garantito su tutti i telefoni, specie su iPhone dove questa tecnologia è ancora recente. Se non funziona sul tuo dispositivo il gioco te lo dice chiaramente e puoi continuare a usare Gemini o il sistema di riserva.</p>
+        <div id="local-llm-status"></div>
+        <button class="save-bar-btn primary" id="init-local-llm-btn" type="button">Attiva modello IA locale</button>
       </div>
     </div>
   </details>
@@ -509,6 +516,76 @@
   // da solo al modello Flash gratuito corrente senza mai dover essere aggiornato manualmente.
   // Ripulisce anche un eventuale valore salvato in precedenza da versioni passate del gioco.
   try { localStorage.removeItem("politisit_api_model"); } catch (e) {}
+
+  // ---------- Motore IA locale nel browser (WebLLM), nessuna chiave o quota esterna ----------
+  // Scarica una volta sola (nella cache del browser) un piccolo modello linguistico e lo fa girare
+  // interamente sul dispositivo, tramite WebGPU: nessuna chiamata di rete dopo il primo download,
+  // quindi nessun limite/quota come con Gemini. Richiede però che il browser supporti WebGPU, cosa
+  // non garantita su ogni dispositivo (specie iPhone, dove il supporto è ancora recente): se non è
+  // disponibile, il gioco lo segnala chiaramente e resta comunque utilizzabile con Gemini o da solo.
+  var LOCAL_LLM_MODEL_ID = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+  var LOCAL_LLM_MODE_STORAGE = "politisit_ai_mode";
+  var LocalLLM = { status: "idle", progressPct: 0, progressText: "", engine: null, errorMessage: "" };
+  function localLlmSupported() {
+    return typeof navigator !== "undefined" && !!navigator.gpu;
+  }
+  function getAiMode() {
+    try { return localStorage.getItem(LOCAL_LLM_MODE_STORAGE) || "gemini"; } catch (e) { return "gemini"; }
+  }
+  function setAiMode(mode) {
+    try { localStorage.setItem(LOCAL_LLM_MODE_STORAGE, mode); } catch (e) {}
+  }
+  // Vero se un qualunque motore IA è pronto all'uso in questo momento (Gemini con chiave, oppure
+  // il modello locale già caricato) — usato per decidere se mostrare le funzioni "capite dall'IA".
+  function aiIsActive() {
+    return (getAiMode() === "local" && LocalLLM.status === "ready") || (getAiMode() !== "local" && !!getApiKey());
+  }
+  async function initLocalLLM(onProgress) {
+    if (!localLlmSupported()) { LocalLLM.status = "unsupported"; return false; }
+    if (LocalLLM.status === "ready") return true;
+    LocalLLM.status = "loading";
+    LocalLLM.progressPct = 0;
+    LocalLLM.progressText = "Avvio del modello locale…";
+    if (onProgress) onProgress();
+    try {
+      var webllm = await import(/* webpackIgnore: true */ "https://esm.run/@mlc-ai/web-llm");
+      LocalLLM.engine = await webllm.CreateMLCEngine(LOCAL_LLM_MODEL_ID, {
+        initProgressCallback: function (p) {
+          LocalLLM.progressPct = Math.round((p && p.progress || 0) * 100);
+          LocalLLM.progressText = (p && p.text) || "";
+          if (onProgress) onProgress();
+        }
+      });
+      LocalLLM.status = "ready";
+      setAiMode("local");
+      return true;
+    } catch (e) {
+      LocalLLM.status = "error";
+      LocalLLM.errorMessage = (e && e.message) || "Errore sconosciuto durante il caricamento del modello locale.";
+      if (onProgress) onProgress();
+      return false;
+    }
+  }
+  // Chiede al modello locale un JSON con la forma descritta a parole nel prompt (i modelli piccoli non
+  // seguono sempre schemi rigidi come Gemini: il prompt deve descrivere chiaramente le chiavi attese).
+  async function callLocalLLMJSON(systemPrompt, userMessage) {
+    if (LocalLLM.status !== "ready" || !LocalLLM.engine) throw new Error("Modello locale non pronto.");
+    var reply = await LocalLLM.engine.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt + " Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo, senza markdown." },
+        { role: "user", content: userMessage }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.7
+    });
+    var text = reply && reply.choices && reply.choices[0] && reply.choices[0].message && reply.choices[0].message.content;
+    if (!text) throw new Error("Il modello locale non ha restituito una risposta.");
+    var jsonStart = text.indexOf("{");
+    var jsonEnd = text.lastIndexOf("}");
+    if (jsonStart === -1 || jsonEnd === -1) throw new Error("Il modello locale non ha restituito JSON valido.");
+    return JSON.parse(text.slice(jsonStart, jsonEnd + 1));
+  }
+
   var SWATCHES = ["#d6455c", "#3fa9dc", "#e0a53a", "#4a8f5c", "#8a5fc2", "#2f8f8f", "#b0468a", "#6b7280"];
 
   var FAMILIES = [
@@ -1598,6 +1675,26 @@
 
     var userMessage = context + "\n\nEcco l'iniziativa scritta dal giocatore, testuale:\n\"" + text + "\"\n\nValutala.";
 
+    if (getAiMode() === "local") {
+      if (LocalLLM.status !== "ready") throw new Error("Il modello IA locale non è attivo. Attivalo dalle Impostazioni IA, oppure passa a Gemini.");
+      // I modelli locali piccoli non seguono uno schema rigido come Gemini: la forma del JSON atteso va
+      // descritta a parole nel prompt stesso, non imposta via API.
+      var localSchemaHint = "Rispondi SOLO con un oggetto JSON con esattamente queste chiavi: " +
+        "\"narrativa\" (stringa, 2-3 frasi in italiano), \"titolo_giornale\" (stringa breve), " +
+        "\"iscritti\" (numero, variazione iscritti, può essere negativo), " +
+        "\"reputazione\" (numero, variazione reputazione, tipicamente tra -12 e 12, molto più negativo per contenuti gravi/violenti), " +
+        "\"visibilita\" (numero, variazione visibilità, tipicamente tra -10 e 22), " +
+        "\"fondi_extra\" (numero, variazione fondi extra oltre al costo base, normalmente 0), " +
+        "\"partito_coinvolto\" (stringa, nome esatto di un partito reale coinvolto tra questi: " +
+        PARTIES.map(function (pt) { return pt.name; }).join(", ") + ", oppure stringa vuota), " +
+        "\"partito_delta\" (numero, variazione sondaggi di quel partito, normalmente 0).";
+      try {
+        return await callLocalLLMJSON(systemPrompt + " " + localSchemaHint, userMessage);
+      } catch (e1) {
+        return await callLocalLLMJSON(systemPrompt + " " + localSchemaHint, userMessage);
+      }
+    }
+
     // La chiave va nell'header x-goog-api-key (non più nella query string ?key=): più sicuro,
     // e necessario per le nuove chiavi "Auth key" in formato AQ. che Google sta introducendo al posto di AIza.
     var endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent";
@@ -1726,8 +1823,10 @@
   // invece di pescare da un elenco fisso. In caso di qualunque errore ritorna null in silenzio: chi chiama
   // questa funzione deve ricadere sul dossier statico, per non bloccare mai la partita.
   async function generateAiDossier() {
+    var aiMode = getAiMode();
     var apiKey = getApiKey();
-    if (!apiKey) return null;
+    if (aiMode === "local") { if (LocalLLM.status !== "ready") return null; }
+    else if (!apiKey) return null;
     var model = "gemini-flash-latest";
     var p = state.player;
     var fam = familyById(p.family);
@@ -1762,6 +1861,22 @@
       " Siamo alla settimana " + state.turn + " (" + weekLabel(state.turn) + ") dalla fondazione. Stato attuale: " + Math.round(p.iscritti) +
       " iscritti, reputazione " + Math.round(p.reputazione) + "/100, sondaggi al " + fmt1(p.sondaggi) + "%." + storyInfo +
       "\n\nGenera la situazione di questa settimana.";
+
+    if (aiMode === "local") {
+      var localSchemaHint = "Rispondi SOLO con un oggetto JSON con esattamente queste chiavi: \"categoria\" (stringa breve, 2-4 parole), " +
+        "\"titolo\" (stringa breve), \"descrizione\" (stringa, 2-4 frasi in italiano).";
+      try {
+        var parsedLocal = await callLocalLLMJSON(systemPrompt + " " + localSchemaHint, userMessage);
+        if (!parsedLocal || !parsedLocal.titolo || !parsedLocal.descrizione) return null;
+        return {
+          id: "ai_dynamic", kind: "azione", dynamic: true,
+          cat: parsedLocal.categoria || "Situazione della settimana",
+          title: parsedLocal.titolo, brief: parsedLocal.descrizione, choices: []
+        };
+      } catch (e) {
+        return null; // ricade sul sistema locale di continuità (generateLocalDynamicDossier) e poi sul pool statico
+      }
+    }
 
     var endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent";
     var responseSchema = {
@@ -2474,12 +2589,12 @@
       html += "</div>";
     }
     if (dossier.kind === "azione" || dossier.kind === "notizia" || state.forceInitiativeOnly) {
-      var aiOn = !!getApiKey();
+      var aiOn = aiIsActive();
       html += '<div class="custom-initiative">' +
         '<p class="ci-label">' + (showChoices ? "Oppure lancia un’iniziativa tutta tua questa settimana" : "Scrivi la tua iniziativa: è l'unico modo per affrontare questa settimana") + '</p>' +
         '<p class="ci-hint">' + (aiOn
-          ? "Scrivi cosa vuoi fare o dire: l'IA collegata (Gemini) valuterà davvero il contenuto e ne calcolerà l'impatto realistico."
-          : "Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Senza una chiave IA collegata (in “Impostazioni IA” qui sopra) il gioco legge comunque il testo con un sistema più semplice, non un vero modello linguistico — idee specifiche e curate vanno meglio di due parole vaghe, e contenuti che descrivono violenza o reati hanno conseguenze molto gravi.") +
+          ? "Scrivi cosa vuoi fare o dire: l'IA collegata (" + (getAiMode() === "local" ? "modello locale" : "Gemini") + ") valuterà davvero il contenuto e ne calcolerà l'impatto realistico."
+          : "Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Senza IA collegata (in “Impostazioni IA” qui sopra) il gioco legge comunque il testo con un sistema più semplice, non un vero modello linguistico — idee specifiche e curate vanno meglio di due parole vaghe, e contenuti che descrivono violenza o reati hanno conseguenze molto gravi.") +
         '</p>' +
         '<textarea id="custom-initiative-text" maxlength="220" placeholder="Es. Organizzo un presidio davanti all’ospedale per denunciare i tagli alla sanità locale..."></textarea>' +
         '<div class="ci-tiers">' +
@@ -2665,7 +2780,7 @@
     if (advance) {
       advance.addEventListener("click", async function () {
         advance.disabled = true;
-        advance.textContent = getApiKey() ? "Preparazione della prossima settimana…" : "Avanti…";
+        advance.textContent = aiIsActive() ? "Preparazione della prossima settimana…" : "Avanti…";
         state.turn++;
         try {
           await advanceTurnLogic();
@@ -2702,7 +2817,7 @@
           }
         }
 
-        if (!getApiKey()) {
+        if (!aiIsActive()) {
           state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
           state.resultData = safeFallbackResult();
           state.phase = "result";
@@ -2849,7 +2964,7 @@
     // settimana, nessuna storia ancora) si pesca dal pool statico casuale qui sotto.
     if (!p.inParliament && !correntiTensionAdded) {
       var dynamic = null;
-      if (getApiKey()) dynamic = await generateAiDossier();
+      if (aiIsActive()) dynamic = await generateAiDossier();
       if (!dynamic) dynamic = generateLocalDynamicDossier();
       if (dynamic) {
         state.aiDynamicDossier = dynamic;
@@ -2875,17 +2990,54 @@
   var aiStatusChip = document.getElementById("ai-status-chip");
   var apiKeyInput = document.getElementById("api-key-input");
   function refreshAiStatusChip() {
-    var hasKey = !!getApiKey();
-    aiStatusChip.textContent = hasKey ? "IA collegata" : "Nessuna chiave";
-    aiStatusChip.className = "chip " + (hasKey ? "good" : "neutral");
+    if (getAiMode() === "local" && LocalLLM.status === "ready") {
+      aiStatusChip.textContent = "IA locale attiva";
+      aiStatusChip.className = "chip good";
+    } else if (!!getApiKey()) {
+      aiStatusChip.textContent = "IA collegata (Gemini)";
+      aiStatusChip.className = "chip good";
+    } else {
+      aiStatusChip.textContent = "Nessuna IA";
+      aiStatusChip.className = "chip neutral";
+    }
   }
   apiKeyInput.value = getApiKey();
   refreshAiStatusChip();
+
+  function renderLocalLlmStatus() {
+    var el = document.getElementById("local-llm-status");
+    var btn = document.getElementById("init-local-llm-btn");
+    if (!el) return;
+    if (LocalLLM.status === "idle") {
+      el.innerHTML = "";
+    } else if (LocalLLM.status === "loading") {
+      el.innerHTML = '<p class="ci-hint">' + (LocalLLM.progressText || "Caricamento…") + " (" + LocalLLM.progressPct + "%)</p>";
+      if (btn) { btn.disabled = true; btn.textContent = "Caricamento in corso…"; }
+    } else if (LocalLLM.status === "ready") {
+      el.innerHTML = '<p class="ci-hint" style="color:var(--good)">Modello locale pronto e attivo: da ora le iniziative vengono valutate qui, sul dispositivo, senza alcuna chiamata esterna.</p>';
+      if (btn) { btn.disabled = false; btn.textContent = "Ricarica modello locale"; }
+    } else if (LocalLLM.status === "unsupported") {
+      el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">Questo browser non supporta WebGPU: il modello locale non può funzionare qui. Su iPhone prova ad aggiornare iOS/Safari all\'ultima versione; altrimenti usa Gemini o il sistema di riserva.</p>';
+      if (btn) { btn.disabled = true; btn.textContent = "Non disponibile su questo browser"; }
+    } else if (LocalLLM.status === "error") {
+      el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">Caricamento non riuscito: ' + LocalLLM.errorMessage + '</p>';
+      if (btn) { btn.disabled = false; btn.textContent = "Riprova"; }
+    }
+  }
+  renderLocalLlmStatus();
+  document.getElementById("init-local-llm-btn").addEventListener("click", function () {
+    initLocalLLM(renderLocalLlmStatus).then(function (ok) {
+      renderLocalLlmStatus();
+      refreshAiStatusChip();
+      if (ok) { save(); render(); }
+    });
+  });
 
   document.getElementById("save-api-key-btn").addEventListener("click", function () {
     var key = (apiKeyInput.value || "").trim();
     if (!key) { showSaveStatus("Inserisci una chiave prima di salvare.", true); return; }
     var persisted = setApiKey(key);
+    setAiMode("gemini");
     refreshAiStatusChip();
     if (persisted) {
       showSaveStatus("Chiave salvata in questo browser: resterà anche se chiudi e riapri la pagina.");
