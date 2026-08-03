@@ -354,6 +354,12 @@
   .party-row-head .value { font-family: var(--font-mono); color: var(--text-dim); flex-shrink: 0; }
   .party-row-sub { font-size: 0.76rem; color: var(--text-dim); margin-top: 0.15rem; line-height: 1.4; }
 
+  /* ---------- Mappa simbolica dell'Italia ---------- */
+  .italy-map-wrap { display: flex; justify-content: center; padding: 0.4rem 0 0.2rem; }
+  .italy-map { width: min(210px, 55%); height: auto; }
+  .italy-shape { fill: var(--panel-2); stroke: var(--border); stroke-width: 1.5; }
+  .italy-map-caption { text-align: center; font-size: 0.76rem; color: var(--text-dim); margin: 0.3rem 0 0; line-height: 1.5; }
+
   /* ---------- Footer ---------- */
   footer {
     margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border);
@@ -762,6 +768,76 @@
     if (!state.nucleiUpdates) state.nucleiUpdates = [];
     state.nucleiUpdates.unshift({ week: state.turn, text: text });
     if (state.nucleiUpdates.length > 6) state.nucleiUpdates.length = 6;
+  }
+
+  // ---------- Mappa simbolica dell'Italia ----------
+  // Sagoma semplificata (non cartograficamente precisa: è un simbolo, non una mappa GIS) con la
+  // penisola, la Sicilia e la Sardegna, più un elenco di città reali posizionate in modo approssimato
+  // secondo la loro vera collocazione geografica. Ogni sezione territoriale aperta dal giocatore
+  // "accende" la città successiva nell'elenco: nessuno stato aggiuntivo da salvare, si ricava sempre
+  // dal numero di sezioni attuali. Usata sia per la mappa sia per dare un nome di città reale alle
+  // elezioni locali (vedi triggerLocalElectionCycle).
+  var ITALY_MAP_PATHS = {
+    mainland: "M90,20 Q135,10 170,25 Q190,55 185,90 Q195,160 175,220 Q210,235 230,260 Q205,275 190,280 " +
+      "Q185,310 175,340 Q168,375 155,400 Q145,375 135,350 Q120,300 110,260 Q90,200 95,140 Q80,80 90,20 Z",
+    sicilia: "M155,415 Q175,405 197,414 Q192,434 165,435 Q150,425 155,415 Z",
+    sardegna: "M55,180 Q76,190 72,240 Q70,282 50,292 Q34,270 38,220 Q40,190 55,180 Z"
+  };
+  var ITALY_LOCATIONS = [
+    { name: "Roma", region: "Lazio", x: 120, y: 230 },
+    { name: "Milano", region: "Lombardia", x: 130, y: 60 },
+    { name: "Napoli", region: "Campania", x: 135, y: 275 },
+    { name: "Torino", region: "Piemonte", x: 100, y: 45 },
+    { name: "Bologna", region: "Emilia-Romagna", x: 140, y: 110 },
+    { name: "Firenze", region: "Toscana", x: 115, y: 150 },
+    { name: "Bari", region: "Puglia", x: 218, y: 258 },
+    { name: "Venezia", region: "Veneto", x: 165, y: 75 },
+    { name: "Genova", region: "Liguria", x: 100, y: 95 },
+    { name: "Palermo", region: "Sicilia", x: 165, y: 420 },
+    { name: "Cagliari", region: "Sardegna", x: 55, y: 270 },
+    { name: "Ancona", region: "Marche", x: 172, y: 170 },
+    { name: "Perugia", region: "Umbria", x: 135, y: 175 },
+    { name: "Pescara", region: "Abruzzo", x: 178, y: 215 },
+    { name: "Potenza", region: "Basilicata", x: 172, y: 300 },
+    { name: "Catanzaro", region: "Calabria", x: 160, y: 360 },
+    { name: "Trento", region: "Trentino-Alto Adige", x: 140, y: 32 },
+    { name: "Trieste", region: "Friuli-Venezia Giulia", x: 190, y: 62 },
+    { name: "Campobasso", region: "Molise", x: 172, y: 235 },
+    { name: "Aosta", region: "Valle d'Aosta", x: 75, y: 35 },
+    { name: "Reggio Calabria", region: "Calabria", x: 150, y: 395 },
+    { name: "Catania", region: "Sicilia", x: 188, y: 428 },
+    { name: "Sassari", region: "Sardegna", x: 48, y: 195 },
+    { name: "Brindisi", region: "Puglia", x: 245, y: 275 }
+  ];
+  function openNuclei() {
+    var p = state.player;
+    if (!p) return [];
+    return ITALY_LOCATIONS.slice(0, Math.min(Math.floor(p.sezioni), ITALY_LOCATIONS.length));
+  }
+  function renderItalyMap() {
+    var p = state.player;
+    if (!p) return "";
+    var open = openNuclei();
+    if (!open.length) {
+      return '<section aria-label="Mappa del partito"><p class="eyebrow">Presenza sul territorio</p>' +
+        '<p class="ci-hint">Apri la tua prima sezione territoriale per iniziare a comparire sulla mappa d\'Italia.</p></section>';
+    }
+    var dots = open.map(function (loc, i) {
+      var r = i === 0 ? 6 : 4.2;
+      return '<circle cx="' + loc.x + '" cy="' + loc.y + '" r="' + r + '" fill="' + p.color +
+        '" stroke="#0b0d13" stroke-width="1"><title>' + loc.name + ' (' + loc.region + ')' +
+        (i === 0 ? " — sede nazionale" : "") + '</title></circle>';
+    }).join("");
+    var extra = p.sezioni > ITALY_LOCATIONS.length
+      ? '<p class="ci-hint">+' + (Math.floor(p.sezioni) - ITALY_LOCATIONS.length) + ' altre sezioni minori diffuse sul territorio.</p>' : "";
+    var names = open.map(function (loc) { return loc.name; }).join(" · ");
+    return '<section aria-label="Mappa del partito"><p class="eyebrow">Presenza sul territorio (' + open.length + (p.sezioni > ITALY_LOCATIONS.length ? "+" : "") + ')</p>' +
+      '<div class="italy-map-wrap"><svg class="italy-map" viewBox="0 0 260 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mappa simbolica dell\'Italia con le sezioni del partito">' +
+      '<path d="' + ITALY_MAP_PATHS.mainland + '" class="italy-shape"></path>' +
+      '<path d="' + ITALY_MAP_PATHS.sicilia + '" class="italy-shape"></path>' +
+      '<path d="' + ITALY_MAP_PATHS.sardegna + '" class="italy-shape"></path>' +
+      dots + '</svg></div>' +
+      '<p class="italy-map-caption">' + names + '</p>' + extra + '</section>';
   }
 
   // ---------- Continuità locale, senza alcuna chiamata di rete o chiave IA ----------
@@ -1443,6 +1519,79 @@
     }
   }
 
+  // ---------- Elezioni locali: comunali, provinciali, regionali ----------
+  // Un evento leggero e periodico, indipendente dalle elezioni politiche nazionali: non blocca il
+  // gioco con una schermata dedicata, si limita a un esito narrato nel registro (come le cronache dei
+  // partiti rivali). L'esito è legato alla presenza reale sul territorio: più sezioni aperte (quindi più
+  // città "accese" sulla mappa), più probabile e più ampio il risultato — ed è proprio una di quelle
+  // città reali a comparire nel resoconto, non un luogo generico.
+  var LOCAL_ELECTION_KINDS = [
+    { id: "comunali", label: "Elezioni Comunali", unit: "consiglieri comunali" },
+    { id: "provinciali", label: "Elezioni Provinciali", unit: "consiglieri provinciali" },
+    { id: "regionali", label: "Elezioni Regionali", unit: "consiglieri regionali" }
+  ];
+  function triggerLocalElectionCycle() {
+    if (state.turn < state.nextLocalElectionTurn) return;
+    state.nextLocalElectionTurn = state.turn + 65 + Math.floor(Math.random() * 25);
+    var p = state.player;
+    var open = openNuclei();
+    if (!p || !open.length) return; // senza sezioni sul territorio non c'è nulla da votare localmente
+    var kind = LOCAL_ELECTION_KINDS[Math.floor(Math.random() * LOCAL_ELECTION_KINDS.length)];
+    var loc = open[Math.floor(Math.random() * open.length)];
+    var won = Math.round(clamp(p.sondaggi * 0.5, 0, 18) + Math.min(open.length, 10) * 0.4 + Math.random() * 2);
+    if (!p.amministratoriLocali) p.amministratoriLocali = 0;
+    var text;
+    if (won >= 1) {
+      p.amministratoriLocali += won;
+      p.iscritti = Math.max(0, p.iscritti + won * 6);
+      p.reputazione = clamp(p.reputazione + Math.min(3, won * 0.3), 0, 100);
+      p.visibilita = clamp(p.visibilita + Math.min(4, won * 0.4), 0, 100);
+      text = "A " + loc.name + " il partito elegge " + won + " " + kind.unit + ": un passo avanti concreto nel radicamento territoriale.";
+    } else {
+      text = "A " + loc.name + " il partito si presenta ma non riesce a eleggere " + kind.unit + " questa volta.";
+    }
+    state.log.unshift({
+      week: state.turn, title: kind.label + " — " + loc.name, choiceLabel: won >= 1 ? won + " eletti" : "Nessun eletto",
+      result: text, headlines: [], type: "locale"
+    });
+  }
+
+  // ---------- Elezioni europee ----------
+  // Ciclo indipendente da quello delle elezioni politiche nazionali (come nella realtà, dove il
+  // Parlamento Europeo ha un proprio mandato quinquennale fisso): usa la stessa ripartizione Hamilton
+  // già impiegata per la Camera e il Senato, sui 76 seggi assegnati all'Italia, con la soglia di
+  // sbarramento reale del 4% su base nazionale (senza coalizioni: alle europee ogni lista corre da sola).
+  var EU_SEATS_ITALY = 76;
+  var EU_THRESHOLD = 4;
+  function resolveEuropeanElection() {
+    if (state.turn < state.nextEuropeanElectionTurn) return;
+    state.nextEuropeanElectionTurn = state.turn + 260;
+    var p = state.player;
+    if (!p) return;
+    var entities = activeParties().map(function (party) {
+      return { id: party.id, label: party.name, votes: state.parties[party.id] };
+    });
+    entities.push({ id: "player", label: p.name, votes: p.sondaggi });
+    var qualified = entities.filter(function (e) { return e.votes >= EU_THRESHOLD; });
+    var weights = qualified.map(function (e) { return e.votes; });
+    var seatsArr = hamiltonApportion(weights, EU_SEATS_ITALY);
+    var seatsById = {};
+    qualified.forEach(function (e, i) { seatsById[e.id] = seatsArr[i]; });
+    var playerSeats = seatsById.player || 0;
+    p.seggiEuropei = playerSeats;
+    if (!state.europeanElectionResults) state.europeanElectionResults = [];
+    state.europeanElectionResults.unshift({ turn: state.turn, seats: playerSeats });
+    var text = playerSeats > 0
+      ? p.name + " supera la soglia di sbarramento del " + EU_THRESHOLD + "% ed elegge " + playerSeats +
+        " " + (playerSeats === 1 ? "eurodeputato" : "eurodeputati") + " al Parlamento Europeo."
+      : p.name + " non raggiunge la soglia di sbarramento del " + EU_THRESHOLD + "% e resta fuori dal Parlamento Europeo.";
+    if (playerSeats > 0) p.reputazione = clamp(p.reputazione + Math.min(4, playerSeats), 0, 100);
+    state.log.unshift({
+      week: state.turn, title: "Elezioni Europee", choiceLabel: playerSeats > 0 ? playerSeats + " seggi" : "Fuori soglia",
+      result: text, headlines: [], type: "europee"
+    });
+  }
+
   var HEADLINE_BANK = {
     "La Voce Libera": function (ev, ch) {
       return ch.effects.reputazione && ch.effects.reputazione < 0
@@ -1472,6 +1621,8 @@
       legislature: 1,
       lastElectionTurn: 0,
       nextElectionTurn: 90,
+      nextLocalElectionTurn: 35,
+      nextEuropeanElectionTurn: 60,
       allianceOffered: false,
       snapElectionPending: false,
       correntiOffered: false,
@@ -1501,6 +1652,7 @@
       resultData: null,
       log: [],
       electionResults: [],
+      europeanElectionResults: [],
       setupDraft: { name: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "" }
     };
   }
@@ -1520,6 +1672,13 @@
         if (!parsed.partyArcs) parsed.partyArcs = {};
         if (!parsed.dynamicParties) parsed.dynamicParties = [];
         if (!parsed.dissolvedPartyIds) parsed.dissolvedPartyIds = [];
+        if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
+        if (!parsed.nextEuropeanElectionTurn) parsed.nextEuropeanElectionTurn = parsed.turn + 40;
+        if (!parsed.europeanElectionResults) parsed.europeanElectionResults = [];
+        if (parsed.player) {
+          if (!parsed.player.amministratoriLocali) parsed.player.amministratoriLocali = 0;
+          if (!parsed.player.seggiEuropei) parsed.player.seggiEuropei = 0;
+        }
       }
       return parsed;
     } catch (e) { return null; }
@@ -2553,9 +2712,12 @@
         iscritti: 80, sezioni: 1, fondi: 6000, reputazione: 55, visibilita: 0,
         sondaggi: 0, sondaggiHistory: [0],
         allianceId: null, inParliament: false, everElected: false,
-        seatsCamera: 0, seatsSenato: 0, currents: null, staff: [], parliamentRole: null
+        seatsCamera: 0, seatsSenato: 0, currents: null, staff: [], parliamentRole: null,
+        amministratoriLocali: 0, seggiEuropei: 0
       };
       state.turn = 1;
+      state.nextLocalElectionTurn = 35;
+      state.nextEuropeanElectionTurn = 60;
       state.phase = "building";
       state.currentDossierId = CONGRESSO_DOSSIER.id;
       save();
@@ -2583,6 +2745,12 @@
       html += '<div class="stat-tile"><div class="label">Equilibrio delle correnti</div>' +
         '<div class="gauge split"><span style="width:' + p.currents[0].share + '%;background:var(--accent)"></span><span style="width:' + p.currents[1].share + '%;background:var(--warning)"></span></div>' +
         '<div class="correnti-row"><span>' + pair[0].label + ' ' + Math.round(p.currents[0].share) + '%</span><span>' + pair[1].label + ' ' + Math.round(p.currents[1].share) + '%</span></div></div>';
+    }
+    if (p.amministratoriLocali) {
+      html += '<div class="stat-tile"><div class="label">Amministratori locali</div><div class="row"><span class="value">' + fmtInt(p.amministratoriLocali) + "</span></div></div>";
+    }
+    if (p.seggiEuropei) {
+      html += '<div class="stat-tile"><div class="label">Seggi al Parlamento Europeo</div><div class="row"><span class="value">' + fmtInt(p.seggiEuropei) + "</span></div></div>";
     }
     html += "</div></section>";
     return html;
@@ -2789,7 +2957,8 @@
   function renderLog() {
     if (!state.log.length) return "";
     var items = state.log.slice(0, 16).map(function (e) {
-      var cls = e.type === "election" ? " election" : e.type === "scissione" ? " scissione" : e.type === "cronaca" ? " cronaca" : "";
+      var cls = (e.type === "election" || e.type === "locale" || e.type === "europee") ? " election"
+        : e.type === "scissione" ? " scissione" : e.type === "cronaca" ? " cronaca" : "";
       return '<div class="log-entry' + cls + '"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong> — " + e.choiceLabel + "<br>" + e.result + "</div>";
     }).join("");
     return '<section><details class="log"><summary>Registro delle decisioni (' + state.log.length + ")<span>▾</span></summary>" +
@@ -2869,6 +3038,7 @@
     }
 
     body += renderPlayerStats();
+    body += renderItalyMap();
     body += renderNucleiUpdates();
     body += renderStaffPanel();
     body += renderIdeologyProfile();
@@ -3074,6 +3244,8 @@
     triggerPartyLifecycleFollowup();
     triggerWorldNews();
     triggerNucleoUpdate();
+    triggerLocalElectionCycle();
+    resolveEuropeanElection();
     state.forceInitiativeOnly = false;
 
     if (state.turn >= state.nextElectionTurn) {
