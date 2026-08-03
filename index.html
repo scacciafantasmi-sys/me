@@ -647,6 +647,69 @@
     if (state.nucleiUpdates.length > 6) state.nucleiUpdates.length = 6;
   }
 
+  // ---------- Continuità locale, senza alcuna chiamata di rete o chiave IA ----------
+  // Usa lo storico reale del partito (state.log, che si accumula da sola partita dopo partita) per far
+  // sì che la situazione della settimana segua davvero quello che il giocatore ha appena fatto, anche
+  // senza IA collegata o quando la chiave non è disponibile/ha esaurito la quota. Funziona sempre.
+  var LOCAL_FOLLOWUP_TEMPLATES = [
+    { title: "Un giornalista chiede conto della scorsa settimana", brief: function (q) { return "Un cronista locale ti contatta per un commento su questo: “" + q + "”. Cosa rispondi, e come proseguite da lì?"; } },
+    { title: "Le conseguenze si fanno ancora sentire", brief: function (q) { return "Il dibattito sulla tua iniziativa recente (“" + q + "”) non si è ancora spento. Come decidi di seguire la cosa questa settimana?"; } },
+    { title: "Un rivale politico commenta la tua mossa", brief: function (q) { return "Un esponente di un altro partito interviene pubblicamente su “" + q + "”. Come rispondi tu?"; } },
+    { title: "Il tema resta caldo", brief: function (q) { return "L'argomento sollevato con “" + q + "” è ancora nel dibattito pubblico di questa settimana. Cosa fai per continuare a occupartene?"; } },
+    { title: "Militanti e simpatizzanti chiedono un seguito", brief: function (q) { return "Diversi iscritti ti scrivono per sapere come proseguirà quanto avviato con “" + q + "”. Come rispondi alla base del partito?"; } }
+  ];
+  var THEME_KEYWORD_TO_CATEGORY = [
+    { re: /sanit|ospedal|medic|infermier/, cat: "Politica — Sanità" },
+    { re: /scuol|insegnant|istruzion/, cat: "Politica — Scuola" },
+    { re: /sicurezz|polizia|criminalit|reato|reati/, cat: "Politica — Sicurezza" },
+    { re: /\bcasa\b|affitt|sfratt|abitazion/, cat: "Politica — Casa" },
+    { re: /lavoro|disoccup|sindacat|stipend/, cat: "Politica — Lavoro" },
+    { re: /ambiente|clima|inquinament|energi/, cat: "Politica — Ambiente" },
+    { re: /giovan|universit/, cat: "Politica — Giovani" },
+    { re: /pension|anzian/, cat: "Politica — Pensioni" },
+    { re: /immigra|migrant|frontier/, cat: "Politica — Immigrazione" },
+    { re: /giustizia|process[oi]|magistrat/, cat: "Politica — Giustizia" },
+    { re: /digital|internet|tecnologi/, cat: "Politica — Digitale" },
+    { re: /trasport|mobilit|treno|autobus/, cat: "Politica — Trasporti" },
+    { re: /cultura|arte|museo|spettacol/, cat: "Politica — Cultura" },
+    { re: /europ|bruxelles/, cat: "Politica — Europa" }
+  ];
+  function detectThemeCategory(text) {
+    var t = (text || "").toLowerCase();
+    for (var i = 0; i < THEME_KEYWORD_TO_CATEGORY.length; i++) {
+      if (THEME_KEYWORD_TO_CATEGORY[i].re.test(t)) return THEME_KEYWORD_TO_CATEGORY[i].cat;
+    }
+    return null;
+  }
+  function findLastPlayerInitiative() {
+    // state.log[0] non è per forza l'ultima azione del giocatore: eventi autonomi di altri partiti
+    // ("Cronaca politica") o altre voci possono essere state aggiunte dopo. Cerca specificamente
+    // l'ultima "Iniziativa Libera" scritta davvero dal giocatore.
+    for (var i = 0; i < state.log.length; i++) {
+      var e = state.log[i];
+      if (e.type === "dossier" && e.title && e.title.indexOf("Iniziativa Libera") === 0) return e;
+    }
+    return null;
+  }
+  function generateLocalDynamicDossier() {
+    var lastEntry = findLastPlayerInitiative();
+    if (!lastEntry || !lastEntry.choiceLabel) return null;
+    var quoted = lastEntry.choiceLabel;
+    if (Math.random() < 0.55) {
+      var tpl = LOCAL_FOLLOWUP_TEMPLATES[Math.floor(Math.random() * LOCAL_FOLLOWUP_TEMPLATES.length)];
+      return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: "Seguito", title: tpl.title, brief: tpl.brief(quoted), choices: [] };
+    }
+    var cat = detectThemeCategory(quoted);
+    if (cat) {
+      var matching = DOSSIERS.filter(function (d) { return d.cat === cat; });
+      if (matching.length) {
+        var chosen = matching[Math.floor(Math.random() * matching.length)];
+        return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: [] };
+      }
+    }
+    return null;
+  }
+
   // ---------- Dossier pool ----------
   var DOSSIERS = [
     { id: "az_tesseramento", kind: "azione", cat: "Organizzazione", title: "Campagna di Tesseramento",
@@ -2397,7 +2460,9 @@
   function renderDossierCard(dossier) {
     var showChoices = dossier.choices && dossier.choices.length && !state.forceInitiativeOnly;
     var html = '<section aria-label="Dossier della settimana"><p class="eyebrow">' +
-      (dossier.dynamic ? "Situazione della settimana — generata dall'IA in base alla tua storia" : "Dossier della settimana") + '</p>' +
+      (dossier.dynamic ? "Situazione della settimana — generata dall'IA in base alla tua storia"
+        : dossier.localDynamic ? "Situazione della settimana — collegata alla tua ultima iniziativa"
+        : "Dossier della settimana") + '</p>' +
       '<div class="dossier"><span class="chip neutral cat">' + dossier.cat + '</span>' +
       "<h2>" + dossier.title + '</h2><p class="brief">' + dossier.brief + "</p>";
     if (showChoices) {
@@ -2736,11 +2801,16 @@
       pool = pool.concat(p.parliamentRole === "governo" ? GOVERNO_DOSSIERS : OPPOSIZIONE_DOSSIERS);
     }
 
-    // Nelle settimane "normali" (non parlamento, non tensione tra correnti), se è collegata una chiave
-    // IA prova a generare la situazione della settimana in base alla storia del partito, invece di pescare
-    // dall'elenco fisso. Qualunque errore fa ricadere silenziosamente sul pool statico qui sotto.
-    if (!!getApiKey() && !p.inParliament && !correntiTensionAdded) {
-      var dynamic = await generateAiDossier();
+    // Nelle settimane "normali" (non parlamento, non tensione tra correnti): prima prova l'IA (se
+    // collegata e disponibile) per la massima qualità narrativa; se non c'è, o fallisce per qualunque
+    // motivo (quota Google esaurita compresa), prova il sistema locale di continuità — funziona sempre,
+    // zero chiamate di rete, zero dipendenza da Gemini — che comunque fa seguire la situazione della
+    // settimana a quello che hai appena fatto. Solo se nessuno dei due si applica (es. primissima
+    // settimana, nessuna storia ancora) si pesca dal pool statico casuale qui sotto.
+    if (!p.inParliament && !correntiTensionAdded) {
+      var dynamic = null;
+      if (getApiKey()) dynamic = await generateAiDossier();
+      if (!dynamic) dynamic = generateLocalDynamicDossier();
       if (dynamic) {
         state.aiDynamicDossier = dynamic;
         state.currentDossierId = "ai_dynamic";
