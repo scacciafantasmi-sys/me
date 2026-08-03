@@ -1333,22 +1333,55 @@
     alta: { label: "Impegno ambizioso", fondi: -1800, iscritti: 70, reputazione: 3, visibilita: 9 }
   };
 
+  // Lettura locale del testo, senza IA: non capisce il significato come un modello linguistico, ma
+  // legge davvero lunghezza/specificità e alcune parole chiave, così anche il sistema di riserva (usato
+  // senza chiave, o quando l'IA non è disponibile) reagisce in modo diverso a idee curate, idee vaghe, o
+  // contenuti che descrivono violenza/reati — non è più un dado del tutto cieco al contenuto.
+  var SEVERE_TEXT_FLAGS = ["uccid", "ammazz", "attentat", "bomba", "terroris", "strage", "sparare", "sparo", "picchi", "violenz", "incendi", "sequestr", "assassin"];
+  var VAGUE_TEXT_FLAGS = ["boh", "cose", "non so", "qualcosa", "vabbe", "vabbè"];
+  var CONCRETE_TEXT_FLAGS = ["organizzo", "apro", "presento", "incontro", "lancio", "costruisco", "propongo", "raccolgo", "visito", "inauguro", "denuncio", "pubblico"];
+  function analyzeInitiativeTextLocally(text) {
+    var t = text.toLowerCase();
+    var words = t.trim().split(/\s+/).filter(Boolean);
+    var score = 0;
+    if (words.length >= 14) score += 1.2;
+    else if (words.length >= 8) score += 0.5;
+    else if (words.length <= 3) score -= 1;
+    if (VAGUE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score -= 1;
+    if (CONCRETE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score += 0.6;
+    var severe = SEVERE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; });
+    return { score: score, severe: severe };
+  }
+
   function resolveCustomInitiative(text, tierId) {
     var tier = INITIATIVE_TIERS[tierId];
     var p = state.player;
     var style = leadershipById(p.leadership);
-    var roll = Math.random();
-    var outcomeMult, twist;
-    if (roll < 0.12) { outcomeMult = -0.6; twist = "negativo"; }
-    else if (roll < 0.22) { outcomeMult = 1.8; twist = "positivo"; }
-    else { outcomeMult = 0.7 + Math.random() * 0.6; twist = "normale"; }
+    var signal = analyzeInitiativeTextLocally(text);
+    var damp = staffHas("consigliere_strategico") ? 0.75 : 1;
+    var iscrittiDelta, repDelta, visDelta, twist;
 
-    var iscrittiDelta = tier.iscritti * outcomeMult * style.iscrittiMult * (staffHas("organizzatore") ? 1.2 : 1);
-    var repDelta = tier.reputazione * outcomeMult * style.repVolatility * (staffHas("responsabile_formazione") && outcomeMult > 0 ? 1.2 : 1);
-    var visDelta = tier.visibilita * outcomeMult * style.visMult * (staffHas("portavoce") ? 1.2 : 1);
-    if (outcomeMult < 0) {
-      var damp = staffHas("consigliere_strategico") ? 0.75 : 1;
-      iscrittiDelta *= damp; repDelta *= damp; visDelta *= damp;
+    if (signal.severe) {
+      // Non passa dalla scala normale della fascia scelta (troppo piccola per rappresentare conseguenze
+      // così gravi): stessa logica usata con l'IA, in versione fissa offline. Il tetto di spesa NON limita
+      // la gravità: un'iniziativa a basso costo che descrive violenza può comunque travolgere il partito.
+      twist = "grave";
+      repDelta = -(35 + Math.random() * 35) * damp;
+      visDelta = 20 + Math.random() * 30;
+      iscrittiDelta = -(p.iscritti * (0.3 + Math.random() * 0.4)) * damp;
+    } else {
+      var roll = Math.random();
+      var outcomeMult;
+      var negativeThreshold = clamp(0.12 - signal.score * 0.035, 0.03, 0.3);
+      var positiveThreshold = clamp(0.78 + signal.score * 0.035, 0.6, 0.95);
+      if (roll < negativeThreshold) { outcomeMult = -0.6; twist = "negativo"; }
+      else if (roll > positiveThreshold) { outcomeMult = 1.8; twist = "positivo"; }
+      else { outcomeMult = 0.7 + clamp(signal.score, -1.5, 1.5) * 0.12 + Math.random() * 0.6; twist = "normale"; }
+
+      iscrittiDelta = tier.iscritti * outcomeMult * style.iscrittiMult * (staffHas("organizzatore") ? 1.2 : 1);
+      repDelta = tier.reputazione * outcomeMult * style.repVolatility * (staffHas("responsabile_formazione") && outcomeMult > 0 ? 1.2 : 1);
+      visDelta = tier.visibilita * outcomeMult * style.visMult * (staffHas("portavoce") ? 1.2 : 1);
+      if (outcomeMult < 0) { iscrittiDelta *= damp; repDelta *= damp; visDelta *= damp; }
     }
 
     p.fondi += tier.fondi * style.fondiMult;
@@ -1356,7 +1389,9 @@
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     p.visibilita = clamp(p.visibilita + visDelta, 0, 100);
 
-    var outcomeText = twist === "negativo"
+    var outcomeText = twist === "grave"
+      ? "L'iniziativa travolge il partito: la reazione pubblica è durissima e le conseguenze sono molto gravi."
+      : twist === "negativo"
       ? "L'iniziativa non va come sperato: l'accoglienza è più fredda del previsto."
       : twist === "positivo"
         ? "L'iniziativa sorprende tutti: l'accoglienza è molto più calda del previsto."
@@ -2335,7 +2370,7 @@
         '<p class="ci-label">' + (showChoices ? "Oppure lancia un’iniziativa tutta tua questa settimana" : "Scrivi la tua iniziativa: è l'unico modo per affrontare questa settimana") + '</p>' +
         '<p class="ci-hint">' + (aiOn
           ? "Scrivi cosa vuoi fare o dire: l'IA collegata (Gemini) valuterà davvero il contenuto e ne calcolerà l'impatto realistico."
-          : "Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Senza una chiave IA collegata (in “Impostazioni IA” qui sopra) il gioco non legge il contenuto del testo — l’effetto dipende dalla fascia di impegno che scegli sotto.") +
+          : "Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Senza una chiave IA collegata (in “Impostazioni IA” qui sopra) il gioco legge comunque il testo con un sistema più semplice, non un vero modello linguistico — idee specifiche e curate vanno meglio di due parole vaghe, e contenuti che descrivono violenza o reati hanno conseguenze molto gravi.") +
         '</p>' +
         '<textarea id="custom-initiative-text" maxlength="220" placeholder="Es. Organizzo un presidio davanti all’ospedale per denunciare i tagli alla sanità locale..."></textarea>' +
         '<div class="ci-tiers">' +
