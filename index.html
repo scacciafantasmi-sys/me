@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Fonda il Tuo Partito — Politis-IT</title>
 <style>
@@ -1335,14 +1336,111 @@
 
   function triggerRivalPartyEvent() {
     if (Math.random() > 0.4) return;
-    var party = PARTIES[Math.floor(Math.random() * PARTIES.length)];
+    var pool = activeParties();
+    var party = pool[Math.floor(Math.random() * pool.length)];
     var tpl = RIVAL_EVENTS[Math.floor(Math.random() * RIVAL_EVENTS.length)];
     var delta = tpl.delta[0] + Math.random() * (tpl.delta[1] - tpl.delta[0]);
     state.parties[party.id] = Math.max(0.3, state.parties[party.id] + delta);
+    var text = tpl.text(party.name);
     state.log.unshift({
       week: state.turn, title: "Cronaca politica", choiceLabel: party.short,
-      result: tpl.text(party.name), headlines: [], type: "cronaca"
+      result: text, headlines: [], type: "cronaca"
     });
+    // Tiene traccia di quante buone/cattive notizie di fila ha avuto ogni partito: è questa
+    // striscia reale, visibile nel log settimana dopo settimana, a decidere se e quale partito
+    // arriverà a un momento di svolta (scioglimento o scissione) — vedi triggerPartyLifecycleFollowup.
+    if (!state.partyArcs) state.partyArcs = {};
+    var arc = state.partyArcs[party.id] || { positiveStreak: 0, negativeStreak: 0 };
+    if (delta >= 0) { arc.positiveStreak++; arc.negativeStreak = 0; }
+    else { arc.negativeStreak++; arc.positiveStreak = 0; }
+    arc.lastEventText = text;
+    state.partyArcs[party.id] = arc;
+  }
+
+  // ---------- Nascita e scioglimento dei partiti: solo come seguito di una storia già iniziata ----------
+  // Non è un sistema a probabilità fisse scollegato dal resto: un partito nasce o si scioglie solo come
+  // prosecuzione narrativa di una serie di eventi reali già accaduti a QUEL partito specifico (la sua
+  // striscia di cronache positive/negative sopra). Quale partito nasce o muore, e quando, non è mai deciso
+  // in anticipo: dipende da come è andata la sua storia in quella particolare partita.
+  var SPLINTER_LABELS = ["Movimento", "Alleanza", "Fronte", "Lista", "Unione", "Coalizione Civica", "Patto"];
+  var SPLINTER_THEMES = [
+    ["Sovrana", "Nazionale", "Popolare"],
+    ["Riformista", "Libera", "Civica"],
+    ["Progressista", "Sociale", "Democratica"],
+    ["Autonoma", "Territoriale", "Regionale"],
+    ["Radicale", "Alternativa", "Indipendente"],
+    ["Repubblicana", "Costituente", "Nuova"]
+  ];
+  function shiftColor(hex) {
+    var n = parseInt(hex.replace("#", ""), 16);
+    var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    function jit(c) { return Math.max(25, Math.min(230, c + Math.floor((Math.random() - 0.5) * 100))); }
+    return "#" + [jit(r), jit(g), jit(b)].map(function (c) { return c.toString(16).padStart(2, "0"); }).join("");
+  }
+  function generateSplinterParty(parent, week) {
+    var label = SPLINTER_LABELS[Math.floor(Math.random() * SPLINTER_LABELS.length)];
+    var theme = SPLINTER_THEMES[Math.floor(Math.random() * SPLINTER_THEMES.length)];
+    var word = theme[Math.floor(Math.random() * theme.length)];
+    var name = label + " " + word;
+    var id = "dyn_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "") + "_" + week;
+    var short = name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase();
+    return {
+      id: id, name: name, short: short, color: shiftColor(parent.color),
+      coalition: "opposizione", dynamic: true, parentId: parent.id,
+      leader: "Un gruppo di ex dirigenti di " + parent.name,
+      famiglia: parent.famiglia,
+      corrente: "Nata da una scissione interna a " + parent.name + " (" + weekLabel(week) + ")"
+    };
+  }
+  function triggerPartyLifecycleFollowup() {
+    if (!state.partyArcs) state.partyArcs = {};
+    if (!state.dynamicParties) state.dynamicParties = [];
+    if (!state.dissolvedPartyIds) state.dissolvedPartyIds = [];
+    // Resta un fenomeno raro nell'arco di una partita: non deve affollare la scena politica.
+    if (state.dynamicParties.length > 3) return;
+
+    var candidates = activeParties();
+
+    var deathCandidates = candidates.filter(function (p) {
+      var arc = state.partyArcs[p.id];
+      return arc && arc.negativeStreak >= 3 && state.parties[p.id] < 2.2;
+    });
+    if (deathCandidates.length && Math.random() < 0.22) {
+      deathCandidates.sort(function (a, b) { return state.partyArcs[b.id].negativeStreak - state.partyArcs[a.id].negativeStreak; });
+      var dying = deathCandidates[0];
+      var lastEvent = state.partyArcs[dying.id].lastEventText || (dying.name + " attraversa una lunga crisi interna.");
+      state.parties[dying.id] = 0.3;
+      state.dissolvedPartyIds.push(dying.id);
+      delete state.partyArcs[dying.id];
+      state.log.unshift({
+        week: state.turn, title: "Scioglimento di un partito", choiceLabel: dying.short,
+        result: "Dopo l'ultimo episodio (\"" + lastEvent + "\") e mesi di difficoltà, i vertici di " + dying.name +
+          " annunciano lo scioglimento del partito. La base residua si disperde tra astensione e altre forze politiche.",
+        headlines: [], type: "cronaca"
+      });
+      return;
+    }
+
+    var birthCandidates = candidates.filter(function (p) {
+      var arc = state.partyArcs[p.id];
+      return arc && arc.positiveStreak >= 3 && state.parties[p.id] > 4;
+    });
+    if (birthCandidates.length && Math.random() < 0.15) {
+      birthCandidates.sort(function (a, b) { return state.partyArcs[b.id].positiveStreak - state.partyArcs[a.id].positiveStreak; });
+      var parent = birthCandidates[0];
+      var carve = Math.min(state.parties[parent.id] * 0.3, 2.5 + Math.random() * 1.5);
+      var born = generateSplinterParty(parent, state.turn);
+      state.parties[parent.id] = Math.max(0.5, state.parties[parent.id] - carve);
+      state.parties[born.id] = Math.max(0.5, carve);
+      state.dynamicParties.push(born);
+      delete state.partyArcs[parent.id];
+      state.log.unshift({
+        week: state.turn, title: "Nasce un nuovo soggetto politico", choiceLabel: born.short,
+        result: "Forte del momento favorevole delle ultime settimane, una componente interna a " + parent.name +
+          " annuncia la scissione e la nascita di " + born.name + ", guidata da " + born.leader + ".",
+        headlines: [], type: "cronaca"
+      });
+    }
   }
 
   var HEADLINE_BANK = {
@@ -1397,6 +1495,9 @@
       forceInitiativeOnly: false,
       worldNews: [],
       nucleiUpdates: [],
+      partyArcs: {},
+      dynamicParties: [],
+      dissolvedPartyIds: [],
       resultData: null,
       log: [],
       electionResults: [],
@@ -1415,6 +1516,11 @@
       if (!raw) return null;
       var parsed = JSON.parse(raw);
       if (parsed && parsed.player) normalizeStaff(parsed.player);
+      if (parsed) {
+        if (!parsed.partyArcs) parsed.partyArcs = {};
+        if (!parsed.dynamicParties) parsed.dynamicParties = [];
+        if (!parsed.dissolvedPartyIds) parsed.dissolvedPartyIds = [];
+      }
       return parsed;
     } catch (e) { return null; }
   }
@@ -1460,8 +1566,16 @@
     });
   }
   function partyById(id) {
-    for (var i = 0; i < PARTIES.length; i++) if (PARTIES[i].id === id) return PARTIES[i];
+    var all = PARTIES.concat(state.dynamicParties || []);
+    for (var i = 0; i < all.length; i++) if (all[i].id === id) return all[i];
     return null;
+  }
+  // Partiti realmente in gioco ora: i 14 di partenza più eventuali nuovi nati per scissione,
+  // meno quelli nel frattempo sciolti. Usata ovunque si debba elencare "i partiti", così
+  // nascite/scioglimenti si riflettono automaticamente in sondaggi, elezioni e rendering.
+  function activeParties() {
+    var dissolved = state.dissolvedPartyIds || [];
+    return PARTIES.concat(state.dynamicParties || []).filter(function (p) { return dissolved.indexOf(p.id) === -1; });
   }
   function weekLabel(turn) {
     var start = new Date(2026, 6, 20); // 20 luglio 2026 = settimana 1
@@ -1486,8 +1600,8 @@
   }
 
   function projectSeats(total) {
-    var ids = PARTIES.map(function (p) { return p.id; });
-    var weights = PARTIES.map(function (p) {
+    var ids = activeParties().map(function (p) { return p.id; });
+    var weights = activeParties().map(function (p) {
       return state.parties[p.id] * (p.coalition === "governo" ? 1.12 : 0.95);
     });
     if (state.player) { ids.push("player"); weights.push(state.player.sondaggi); }
@@ -1728,7 +1842,7 @@
         "\"visibilita\" (numero, variazione visibilità, tipicamente tra -10 e 22), " +
         "\"fondi_extra\" (numero, variazione fondi extra oltre al costo base, normalmente 0), " +
         "\"partito_coinvolto\" (stringa, nome esatto di un partito reale coinvolto tra questi: " +
-        PARTIES.map(function (pt) { return pt.name; }).join(", ") + ", oppure stringa vuota), " +
+        activeParties().map(function (pt) { return pt.name; }).join(", ") + ", oppure stringa vuota), " +
         "\"partito_delta\" (numero, variazione sondaggi di quel partito, normalmente 0).";
       try {
         return await callLocalLLMJSON(systemPrompt + " " + localSchemaHint, userMessage);
@@ -1750,7 +1864,7 @@
         visibilita: { type: "NUMBER", description: "Variazione della visibilità mediatica su scala 0-100 (tipicamente tra -10 e 22)" },
         fondi_extra: { type: "NUMBER", description: "Variazione aggiuntiva di fondi oltre al costo base già previsto dalla fascia scelta: positiva se l'iniziativa genera davvero entrate (raccolta fondi, nuovi iscritti che pagano la quota, sponsorizzazioni, interviste/apparizioni pagate, vendita di gadget, ecc.), negativa se comporta spese impreviste oltre al costo base; normalmente 0 per iniziative che non hanno un chiaro impatto economico diretto" },
         partito_coinvolto: { type: "STRING", description: "Se l'iniziativa nomina, attacca, danneggia o coinvolge direttamente uno di questi partiti reali esistenti — " +
-          PARTIES.map(function (pt) { return pt.name; }).join(", ") + " — scrivi qui esattamente uno di questi nomi. Altrimenti stringa vuota." },
+          activeParties().map(function (pt) { return pt.name; }).join(", ") + " — scrivi qui esattamente uno di questi nomi. Altrimenti stringa vuota." },
         partito_delta: { type: "NUMBER", description: "Variazione nei sondaggi (punti percentuali, tipicamente tra -8 e +4) del partito indicato in partito_coinvolto, se presente; altrimenti 0. " +
           "Un evento che colpisce davvero un partito reale o una sua figura di spicco (scandalo, attacco, exploit mediatico a favore o sfavore) deve avere qui una conseguenza reale e non restare a zero." }
       },
@@ -1998,7 +2112,7 @@
     var involvedName = (evalResult.partito_coinvolto || "").trim();
     var involvedDelta = Number(evalResult.partito_delta) || 0;
     if (involvedName && involvedDelta) {
-      var involvedParty = PARTIES.filter(function (pt) { return pt.name.toLowerCase() === involvedName.toLowerCase(); })[0];
+      var involvedParty = activeParties().filter(function (pt) { return pt.name.toLowerCase() === involvedName.toLowerCase(); })[0];
       if (involvedParty) {
         state.parties[involvedParty.id] = Math.max(0.3, state.parties[involvedParty.id] + involvedDelta);
       }
@@ -2108,10 +2222,11 @@
     // settimanale è moderata di proposito (non deve sembrare un sondaggio elettorale in tempo reale),
     // ma abbastanza percepibile da rendere i partiti vivi settimana dopo settimana.
     var rivalId = familyById(p.family).rival;
-    PARTIES.forEach(function (party) {
+    var others = activeParties();
+    others.forEach(function (party) {
       state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (Math.random() - 0.5) * 0.55);
     });
-    var totalOthers = PARTIES.reduce(function (s, party) { return s + state.parties[party.id]; }, 0);
+    var totalOthers = others.reduce(function (s, party) { return s + state.parties[party.id]; }, 0);
     var targetOthers = clamp(100 - p.sondaggi - state.indecisi, 20, 99);
     var deficit = totalOthers - targetOthers;
     if (deficit !== 0) {
@@ -2122,7 +2237,7 @@
       // adding back rivalShare recovers the rival's pre-decrement value, isolating the rest-of-field total
       var restTotal = totalOthers - (state.parties[rivalId] + rivalShare);
       var scale2 = restTotal > 0 ? (restTotal - remaining) / restTotal : 1;
-      PARTIES.forEach(function (party) {
+      others.forEach(function (party) {
         if (party.id !== rivalId) state.parties[party.id] = Math.max(0.3, state.parties[party.id] * scale2);
       });
     }
@@ -2239,8 +2354,10 @@
 
     entities.push({ id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes, members: cdMembers.concat(playerInCd ? ["player"] : []), isCoalition: true });
     entities.push({ id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes, members: clMembers.concat(playerInCl ? ["player"] : []), isCoalition: true });
-    ["m5s", "fn", "noimoderati", "azione", "italiaviva", "piueuropa", "unionepopolare", "svp", "sudchiamanord"].forEach(function (id) {
-      entities.push({ id: id, label: partyById(id).name, votes: state.parties[id], members: [id], isCoalition: false });
+    var coalitionMemberIds = cdMembers.concat(clMembers);
+    activeParties().forEach(function (party) {
+      if (coalitionMemberIds.indexOf(party.id) !== -1) return;
+      entities.push({ id: party.id, label: party.name, votes: state.parties[party.id], members: [party.id], isCoalition: false });
     });
     if (!p.allianceId) {
       entities.push({ id: "player", label: p.name, votes: p.sondaggi, members: ["player"], isCoalition: false });
@@ -2253,7 +2370,7 @@
     var senSeats = hamiltonApportion(weights, 200);
 
     var seatsById = {};
-    PARTIES.forEach(function (party) { seatsById[party.id] = { camera: 0, senato: 0 }; });
+    activeParties().forEach(function (party) { seatsById[party.id] = { camera: 0, senato: 0 }; });
     seatsById.player = { camera: 0, senato: 0 };
 
     qualified.forEach(function (e, i) {
@@ -2521,7 +2638,7 @@
     html += '<div class="poll-tile player-tile"><div class="name"><span class="swatch" style="background:' + p.color + '"></span>' + p.name + ' <span class="chip accent">Tu</span></div>' +
       playerDisplay + deltaLabel(playerBefore, p.sondaggi, "pt") + "</div>";
 
-    PARTIES.forEach(function (party) {
+    activeParties().forEach(function (party) {
       var val = state.parties[party.id];
       var before = prevSnapshot ? prevSnapshot.parties[party.id] : val;
       html += '<div class="poll-tile"><div class="name"><span class="swatch" style="background:' + party.color + '"></span>' + party.short + "</div>" +
@@ -2550,13 +2667,13 @@
   }
 
   function renderPartyDirectory() {
-    var rows = PARTIES.slice().sort(function (a, b) { return state.parties[b.id] - state.parties[a.id]; }).map(function (pt) {
+    var rows = activeParties().slice().sort(function (a, b) { return state.parties[b.id] - state.parties[a.id]; }).map(function (pt) {
       return '<div class="party-row"><span class="sw" style="background:' + pt.color + '"></span>' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + pt.name + '</strong><span class="value">' + fmt1(state.parties[pt.id]) + '%</span></div>' +
         '<div class="party-row-sub">' + pt.famiglia + ' — ' + pt.corrente + '<br>Leader: ' + pt.leader + '</div></div></div>';
     }).join("");
     return '<section aria-label="Partiti politici"><details class="log">' +
-      '<summary>Partiti politici (' + PARTIES.length + ')<span>▾</span></summary>' +
+      '<summary>Partiti politici (' + activeParties().length + ')<span>▾</span></summary>' +
       '<div class="party-directory">' + rows + '</div></details></section>';
   }
 
@@ -2569,7 +2686,7 @@
   }
 
   function renderChamber(name, total, threshold, seats, govSeats, playerSeats) {
-    var allIds = PARTIES.map(function (p2) { return p2.id; }).concat(["player"]);
+    var allIds = activeParties().map(function (p2) { return p2.id; }).concat(["player"]);
     var segs = allIds.map(function (id) {
       var w = (seats[id] / total) * 100;
       if (w <= 0) return "";
@@ -2578,7 +2695,7 @@
       return '<div class="seg" style="width:' + w + '%;background:' + color + '" title="' + label + ': ' + seats[id] + '"></div>';
     }).join("");
     var majority = govSeats >= threshold;
-    var legend = PARTIES.map(function (p2) {
+    var legend = activeParties().map(function (p2) {
       return '<span><span class="sw" style="background:' + p2.color + '"></span>' + p2.short + " " + seats[p2.id] + "</span>";
     }).join("");
     if (playerSeats > 0) {
@@ -2682,8 +2799,8 @@
   function renderElectionResult() {
     var p = state.player;
     var success = p.inParliament;
-    var maxVal = Math.max(p.sondaggi, Math.max.apply(null, PARTIES.map(function (pt) { return state.parties[pt.id]; })));
-    var rows = PARTIES.map(function (pt) { return { label: pt.short, val: state.parties[pt.id], color: pt.color }; });
+    var maxVal = Math.max(p.sondaggi, Math.max.apply(null, activeParties().map(function (pt) { return state.parties[pt.id]; })));
+    var rows = activeParties().map(function (pt) { return { label: pt.short, val: state.parties[pt.id], color: pt.color }; });
     rows.push({ label: p.name, val: p.sondaggi, color: p.color });
     rows.sort(function (a, b) { return b.val - a.val; });
     var bars = '<div class="final-bars">' + rows.map(function (r) {
@@ -2954,6 +3071,7 @@
   async function advanceTurnLogic() {
     recomputePeriodic();
     triggerRivalPartyEvent();
+    triggerPartyLifecycleFollowup();
     triggerWorldNews();
     triggerNucleoUpdate();
     state.forceInitiativeOnly = false;
