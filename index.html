@@ -563,6 +563,16 @@
   function localLlmSupported() {
     return typeof navigator !== "undefined" && !!navigator.gpu;
   }
+  // Il modello locale pesa centinaia di MB: senza la Cache Storage API il browser dovrebbe
+  // riscaricarlo per intero a ogni utilizzo, cosa che WebLLM non fa proprio, fallendo invece. Questa
+  // API richiede un'origine http/https "vera" — è quasi sempre assente (o disabilitata) quando la
+  // pagina viene aperta come file locale (file://) invece che tramite un indirizzo web, che è
+  // esattamente lo scenario di "apri il file HTML scaricato": in quel caso l'IA locale non può
+  // funzionare per niente, indipendentemente da qualunque altra cosa, ed è meglio dirlo subito e
+  // chiaramente piuttosto che lasciare che il download parta e fallisca in un punto non ovvio.
+  function cacheStorageAvailable() {
+    return typeof window !== "undefined" && "caches" in window;
+  }
   // navigator.gpu può esistere (l'oggetto è presente) anche su browser dove WebGPU in pratica non
   // funziona (implementazione parziale, nessuna GPU compatibile, driver non supportato): richiedere
   // davvero un adattatore prima di lanciarsi nel download pesante del modello evita di far percorrere
@@ -599,6 +609,15 @@
     LocalLLM.progressPct = 0;
     LocalLLM.progressText = "Verifica del supporto WebGPU…";
     if (onProgress) onProgress();
+
+    if (!cacheStorageAvailable()) {
+      LocalLLM.status = "unsupported";
+      LocalLLM.errorMessage = "Il browser non mette a disposizione la memoria cache necessaria per salvare il modello. " +
+        "Questo succede quasi sempre quando il gioco viene aperto come file scaricato invece che tramite un indirizzo web: " +
+        "usa il link (https://scacciafantasmi-sys.github.io/me/) invece del file HTML per l'IA locale.";
+      if (onProgress) onProgress();
+      return false;
+    }
 
     var adapterOk = await webGpuAdapterAvailable();
     if (!adapterOk) {
