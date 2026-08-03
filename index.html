@@ -481,7 +481,8 @@
 
       <div class="field local-llm-field">
         <label class="field-label">Oppure: modello IA locale nel browser (senza chiave, senza quota)</label>
-        <p class="ci-hint">Scarica un piccolo modello linguistico (circa 900 MB, una volta sola, resta nella cache del browser) e lo fa girare direttamente sul tuo dispositivo: nessuna chiamata a Google, nessun limite di utilizzo. Richiede un browser con supporto WebGPU — non garantito su tutti i telefoni, specie su iPhone dove questa tecnologia è ancora recente. Se non funziona sul tuo dispositivo il gioco te lo dice chiaramente e puoi continuare a usare Gemini o il sistema di riserva.</p>
+        <p class="ci-hint">Scarica un piccolo modello linguistico (una volta sola, resta nella cache del browser) e lo fa girare direttamente sul tuo dispositivo: nessuna chiamata a Google, nessun limite di utilizzo. Richiede un browser con supporto WebGPU — non garantito su tutti i telefoni, specie su iPhone dove questa tecnologia è ancora recente. Se non funziona sul tuo dispositivo il gioco te lo dice chiaramente e puoi continuare a usare Gemini o il sistema di riserva.</p>
+        <div class="option-grid" id="local-llm-model-picker"></div>
         <div id="local-llm-status"></div>
         <button class="save-bar-btn primary" id="init-local-llm-btn" type="button">Attiva modello IA locale</button>
       </div>
@@ -569,9 +570,24 @@
   // quindi nessun limite/quota come con Gemini. Richiede però che il browser supporti WebGPU, cosa
   // non garantita su ogni dispositivo (specie iPhone, dove il supporto è ancora recente): se non è
   // disponibile, il gioco lo segnala chiaramente e resta comunque utilizzabile con Gemini o da solo.
-  var LOCAL_LLM_MODEL_ID = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+  // Tre livelli tra cui scegliere, dal più leggero (avvio rapidissimo anche su telefoni modesti,
+  // risposte più semplici) al più pesante (comprensione più ricca, ma download e avvio più lenti):
+  // così chi ha un telefono meno potente può comunque avere l'IA locale attiva in fretta, e chi vuole
+  // di più può scegliere consapevolmente di aspettare un download più corposo la prima volta.
+  var LOCAL_LLM_MODELS = [
+    { id: "SmolLM2-360M-Instruct-q4f16_1-MLC", label: "Veloce", sizeLabel: "~250 MB", desc: "Download e avvio rapidi anche su telefoni meno potenti. Risposte più semplici." },
+    { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC", label: "Equilibrato", sizeLabel: "~900 MB", desc: "Buon compromesso tra velocità di avvio e qualità delle risposte." },
+    { id: "Llama-3.2-3B-Instruct-q4f16_1-MLC", label: "Più capace", sizeLabel: "~2,3 GB", desc: "La comprensione più ricca dei tre, ma download più lungo e serve un dispositivo più potente." }
+  ];
+  var LOCAL_LLM_MODEL_STORAGE = "politisit_local_model_id";
   var LOCAL_LLM_MODE_STORAGE = "politisit_ai_mode";
-  var LocalLLM = { status: "idle", progressPct: 0, progressText: "", engine: null, errorMessage: "" };
+  var LocalLLM = { status: "idle", progressPct: 0, progressText: "", engine: null, errorMessage: "", loadedModelId: "" };
+  function getLocalLlmModelId() {
+    try { return localStorage.getItem(LOCAL_LLM_MODEL_STORAGE) || LOCAL_LLM_MODELS[0].id; } catch (e) { return LOCAL_LLM_MODELS[0].id; }
+  }
+  function setLocalLlmModelId(id) {
+    try { localStorage.setItem(LOCAL_LLM_MODEL_STORAGE, id); } catch (e) {}
+  }
   function localLlmSupported() {
     return typeof navigator !== "undefined" && !!navigator.gpu;
   }
@@ -588,14 +604,15 @@
   }
   async function initLocalLLM(onProgress) {
     if (!localLlmSupported()) { LocalLLM.status = "unsupported"; return false; }
-    if (LocalLLM.status === "ready") return true;
+    var targetId = getLocalLlmModelId();
+    if (LocalLLM.status === "ready" && LocalLLM.loadedModelId === targetId) return true;
     LocalLLM.status = "loading";
     LocalLLM.progressPct = 0;
     LocalLLM.progressText = "Avvio del modello locale…";
     if (onProgress) onProgress();
     try {
       var webllm = await import(/* webpackIgnore: true */ "https://esm.run/@mlc-ai/web-llm");
-      LocalLLM.engine = await webllm.CreateMLCEngine(LOCAL_LLM_MODEL_ID, {
+      LocalLLM.engine = await webllm.CreateMLCEngine(targetId, {
         initProgressCallback: function (p) {
           LocalLLM.progressPct = Math.round((p && p.progress || 0) * 100);
           LocalLLM.progressText = (p && p.text) || "";
@@ -603,6 +620,7 @@
         }
       });
       LocalLLM.status = "ready";
+      LocalLLM.loadedModelId = targetId;
       setAiMode("local");
       return true;
     } catch (e) {
@@ -3348,17 +3366,38 @@
   apiKeyInput.value = getApiKey();
   refreshAiStatusChip();
 
+  function renderLocalLlmPicker() {
+    var picker = document.getElementById("local-llm-model-picker");
+    if (!picker) return;
+    var selectedId = getLocalLlmModelId();
+    picker.innerHTML = LOCAL_LLM_MODELS.map(function (m) {
+      return '<button type="button" class="option-card' + (m.id === selectedId ? " selected" : "") + '" data-local-model="' + m.id + '">' +
+        '<span class="olabel">' + m.label + ' <span class="chip neutral">' + m.sizeLabel + '</span></span>' +
+        '<span class="odesc">' + m.desc + '</span></button>';
+    }).join("");
+    picker.querySelectorAll("[data-local-model]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        setLocalLlmModelId(btn.getAttribute("data-local-model"));
+        renderLocalLlmPicker();
+        renderLocalLlmStatus();
+      });
+    });
+  }
   function renderLocalLlmStatus() {
     var el = document.getElementById("local-llm-status");
     var btn = document.getElementById("init-local-llm-btn");
     if (!el) return;
-    if (LocalLLM.status === "idle") {
-      el.innerHTML = "";
+    var selected = LOCAL_LLM_MODELS.filter(function (m) { return m.id === getLocalLlmModelId(); })[0] || LOCAL_LLM_MODELS[0];
+    var modelChanged = LocalLLM.status === "ready" && LocalLLM.loadedModelId !== selected.id;
+    if (LocalLLM.status === "idle" || modelChanged) {
+      el.innerHTML = modelChanged
+        ? '<p class="ci-hint">Hai scelto "' + selected.label + '": attivalo per scaricarlo e passare a questo modello.</p>' : "";
+      if (btn) { btn.disabled = false; btn.textContent = "Attiva modello IA locale"; }
     } else if (LocalLLM.status === "loading") {
       el.innerHTML = '<p class="ci-hint">' + (LocalLLM.progressText || "Caricamento…") + " (" + LocalLLM.progressPct + "%)</p>";
       if (btn) { btn.disabled = true; btn.textContent = "Caricamento in corso…"; }
     } else if (LocalLLM.status === "ready") {
-      el.innerHTML = '<p class="ci-hint" style="color:var(--good)">Modello locale pronto e attivo: da ora le iniziative vengono valutate qui, sul dispositivo, senza alcuna chiamata esterna.</p>';
+      el.innerHTML = '<p class="ci-hint" style="color:var(--good)">Modello "' + selected.label + '" pronto e attivo: da ora le iniziative vengono valutate qui, sul dispositivo, senza alcuna chiamata esterna.</p>';
       if (btn) { btn.disabled = false; btn.textContent = "Ricarica modello locale"; }
     } else if (LocalLLM.status === "unsupported") {
       el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">Questo browser non supporta WebGPU: il modello locale non può funzionare qui. Su iPhone prova ad aggiornare iOS/Safari all\'ultima versione; altrimenti usa Gemini o il sistema di riserva.</p>';
@@ -3368,9 +3407,11 @@
       if (btn) { btn.disabled = false; btn.textContent = "Riprova"; }
     }
   }
+  renderLocalLlmPicker();
   renderLocalLlmStatus();
   document.getElementById("init-local-llm-btn").addEventListener("click", function () {
     initLocalLLM(renderLocalLlmStatus).then(function (ok) {
+      renderLocalLlmPicker();
       renderLocalLlmStatus();
       refreshAiStatusChip();
       if (ok) { save(); render(); }
