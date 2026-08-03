@@ -563,6 +563,19 @@
   function localLlmSupported() {
     return typeof navigator !== "undefined" && !!navigator.gpu;
   }
+  // navigator.gpu può esistere (l'oggetto è presente) anche su browser dove WebGPU in pratica non
+  // funziona (implementazione parziale, nessuna GPU compatibile, driver non supportato): richiedere
+  // davvero un adattatore prima di lanciarsi nel download pesante del modello evita di far percorrere
+  // a un dispositivo non davvero compatibile tutta la strada fino a un crash a metà caricamento.
+  async function webGpuAdapterAvailable() {
+    if (!localLlmSupported() || !navigator.gpu.requestAdapter) return false;
+    try {
+      var adapter = await navigator.gpu.requestAdapter();
+      return !!adapter;
+    } catch (e) {
+      return false;
+    }
+  }
   // Vero se il modello locale è caricato e pronto — usato per decidere se mostrare le funzioni "capite dall'IA".
   function aiIsActive() {
     return LocalLLM.status === "ready";
@@ -584,6 +597,16 @@
 
     LocalLLM.status = "loading";
     LocalLLM.progressPct = 0;
+    LocalLLM.progressText = "Verifica del supporto WebGPU…";
+    if (onProgress) onProgress();
+
+    var adapterOk = await webGpuAdapterAvailable();
+    if (!adapterOk) {
+      LocalLLM.status = "unsupported";
+      LocalLLM.errorMessage = "Il browser espone l'API WebGPU ma non è riuscito a ottenere un adattatore grafico funzionante su questo dispositivo.";
+      if (onProgress) onProgress();
+      return false;
+    }
     LocalLLM.progressText = "Avvio del modello locale…";
     if (onProgress) onProgress();
 
@@ -620,6 +643,26 @@
       if (onProgress) onProgress();
       return false;
     }
+  }
+  // Rete di sicurezza a livello di pagina: se qualcosa durante il caricamento del modello locale
+  // sfugge al try/catch di initLocalLLM (es. un errore lanciato in modo asincrono da dentro WebLLM
+  // stesso, fuori dalla promise che stiamo osservando — plausibile causa di un'intera pagina che va
+  // in errore e si ricarica su dispositivi con poca memoria durante il caricamento del modello),
+  // questi listener globali intercettano comunque l'errore e riportano lo stato a "error" invece di
+  // lasciare che la pagina si blocchi o si comporti in modo imprevedibile. Non possono impedire un
+  // crash della scheda per esaurimento memoria deciso dal sistema operativo/browser (nessun codice
+  // JavaScript può farlo), ma coprono ogni altro caso in cui l'errore avviene comunque dentro il motore JS.
+  function handleUnexpectedLocalLlmError(err) {
+    if (LocalLLM.status !== "loading") return;
+    LocalLLM.status = "error";
+    LocalLLM.errorMessage = "Errore imprevisto durante il caricamento (" + ((err && (err.message || String(err))) || "sconosciuto") +
+      "). Il browser potrebbe aver esaurito la memoria disponibile: prova il livello \"Veloce\", chiudi altre schede/app e riprova.";
+    if (window.console && console.error) console.error("Errore imprevisto durante il caricamento dell'IA locale:", err);
+    if (typeof renderLocalLlmStatus === "function") renderLocalLlmStatus();
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("error", function (ev) { handleUnexpectedLocalLlmError(ev && ev.error); });
+    window.addEventListener("unhandledrejection", function (ev) { handleUnexpectedLocalLlmError(ev && ev.reason); });
   }
   // Chiede al modello locale un JSON con la forma descritta a parole nel prompt (i modelli piccoli non
   // seguono sempre uno schema rigido: il prompt deve descrivere chiaramente le chiavi attese). Essendo
@@ -3229,7 +3272,9 @@
       el.innerHTML = '<p class="ci-hint" style="color:var(--good)">Modello "' + selected.label + '" pronto e attivo: da ora le iniziative vengono valutate qui, sul dispositivo, senza alcuna chiamata esterna.</p>';
       if (btn) { btn.disabled = false; btn.textContent = "Ricarica modello locale"; }
     } else if (LocalLLM.status === "unsupported") {
-      el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">Questo browser non supporta WebGPU: il modello locale non può funzionare qui. Su iPhone prova ad aggiornare iOS/Safari all\'ultima versione, o riprova da un browser desktop con supporto WebGPU (es. Chrome/Edge aggiornati).</p>';
+      el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">Questo browser non supporta WebGPU in modo funzionante: il modello locale non può girare qui' +
+        (LocalLLM.errorMessage ? " (" + LocalLLM.errorMessage + ")" : "") +
+        '. Su iPhone prova ad aggiornare iOS/Safari all\'ultima versione, o riprova da un browser desktop con supporto WebGPU (es. Chrome/Edge aggiornati).</p>';
       if (btn) { btn.disabled = true; btn.textContent = "Non disponibile su questo browser"; }
     } else if (LocalLLM.status === "error") {
       el.innerHTML = '<p class="ci-hint" style="color:var(--critical)">Caricamento non riuscito: ' + LocalLLM.errorMessage + '</p>';
