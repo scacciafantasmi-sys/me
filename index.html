@@ -1522,6 +1522,8 @@
       if (!res.ok) {
         var errText = "";
         try { errText = (await res.text()).slice(0, 200); } catch (e) {}
+        // Il 429 (quota/limite di richieste superato) non viene ritentato qui: un secondo tentativo
+        // immediato non risolverebbe nulla. Chi chiama questa funzione ricade sul sistema di riserva.
         throw new Error("Errore dall'API Gemini (" + res.status + "): " + (errText || "nessun dettaglio disponibile"));
       }
       var data = await res.json();
@@ -2522,19 +2524,29 @@
           return;
         }
 
-        var originalLabel = btn.innerHTML;
         ciTierBtns.forEach(function (b) { b.disabled = true; });
         btn.innerHTML = "<span>Valutazione dell'IA in corso…</span>";
+        state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
         callAiForInitiative(text, tierId).then(function (evalResult) {
-          state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
           state.resultData = applyAiInitiative(text, tierId, evalResult);
           state.phase = "result";
           save();
           render();
         }).catch(function (err) {
-          showSaveStatus((err && err.message) || "Errore nella chiamata al modello.", true);
-          ciTierBtns.forEach(function (b) { b.disabled = false; });
-          btn.innerHTML = originalLabel;
+          // L'IA può non essere disponibile per tanti motivi (quota Google esaurita, rete, timeout):
+          // qualunque sia la causa, la partita non deve mai restare bloccata. Si ricade sul sistema di
+          // riserva integrato (basato sulla fascia di impegno scelta), che produce comunque un esito
+          // reale e permette di continuare subito a giocare.
+          showSaveStatus(
+            "IA non disponibile in questo momento (" + ((err && err.message) || "errore sconosciuto") +
+            "): uso il sistema di riserva per non fermare la partita.", true
+          );
+          var fallbackResult = resolveCustomInitiative(text, tierId);
+          fallbackResult.resultText = "(Valutata con il sistema di riserva: l'IA non era disponibile in questo momento.) " + fallbackResult.resultText;
+          state.resultData = fallbackResult;
+          state.phase = "result";
+          save();
+          render();
         });
       });
     });
