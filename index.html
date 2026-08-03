@@ -259,24 +259,8 @@
   .choice-btn .clabel { font-weight: 600; display: block; margin-bottom: 0.15rem; }
   .choice-btn .chint { font-size: 0.78rem; color: var(--text-dim); }
 
-  /* ---------- Iniziativa Libera ---------- */
-  .custom-initiative { margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--border); }
-  .ci-label { font-weight: 600; font-size: 0.9rem; margin: 0 0 0.3rem; }
   .ci-hint { font-size: 0.78rem; color: var(--text-dim); line-height: 1.45; margin: 0 0 0.65rem; max-width: 62ch; }
   .ci-hint code { font-family: var(--font-mono); background: var(--panel-2); padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.92em; }
-  .custom-initiative textarea {
-    width: 100%; min-height: 5.5rem; padding: 0.65rem 0.75rem; border-radius: 8px;
-    border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-    font-family: inherit; font-size: 0.92rem; resize: vertical; margin-bottom: 0.65rem;
-  }
-  .ci-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; }
-  .ci-tier-btn {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 0.2rem;
-    border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
-    border-radius: 8px; padding: 0.6rem 0.75rem; font-size: 0.85rem; font-weight: 600; min-height: 44px;
-  }
-  .ci-tier-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
-  .ci-tier-btn .ci-cost { font-size: 0.74rem; color: var(--text-dim); font-weight: 500; font-family: var(--font-mono); }
 
   .result-panel p.outcome { line-height: 1.6; max-width: 62ch; margin: 0 0 1rem; }
   .advance-btn, .primary-btn {
@@ -834,9 +818,9 @@
     }
     return null;
   }
-  // Una voce di registro conta come "presa di posizione del giocatore" sia che arrivi da un'Iniziativa
-  // Libera scritta a testo, sia che arrivi da una scelta multipla su una situazione generata (che ormai
-  // è il caso più comune) — la riconosciamo dal titolo "Iniziativa Libera" o dalla categoria "Politica — ...".
+  // Una voce di registro conta come "presa di posizione del giocatore" quando arriva da una scelta
+  // multipla su una situazione a tema (categoria "Politica — ..."); il controllo sul titolo resta solo
+  // per riconoscere le vecchie partite salvate prima che l'iniziativa a testo libero fosse rimossa.
   function isPlayerStanceEntry(e) {
     return e.type === "dossier" && ((e.title && e.title.indexOf("Iniziativa Libera") === 0) || (e.cat && e.cat.indexOf("Politica") === 0));
   }
@@ -890,7 +874,8 @@
     { id: "infrastrutture", label: "Politica — Infrastrutture", nouns: ["un'opera pubblica bloccata da anni", "la manutenzione di ponti e strade", "il collegamento con le aree interne", "un cantiere fermo nel territorio"] }
   ];
   var SITUATION_THEME_BY_LABEL = {};
-  SITUATION_THEMES.forEach(function (t) { SITUATION_THEME_BY_LABEL[t.label] = t; });
+  var SITUATION_THEME_BY_ID = {};
+  SITUATION_THEMES.forEach(function (t) { SITUATION_THEME_BY_LABEL[t.label] = t; SITUATION_THEME_BY_ID[t.id] = t; });
   var SITUATION_SHAPES = [
     { kind: "Inchiesta", brief: function (noun, ctx) { return "Un'inchiesta giornalistica accende i riflettori su " + noun + " a " + ctx.city + "."; } },
     { kind: "Protesta", brief: function (noun, ctx) { return "Un comitato di cittadini organizza una protesta su " + noun + ", proprio nella tua zona di riferimento."; } },
@@ -903,7 +888,10 @@
     { kind: "Question time", brief: function (noun, ctx) { return "Il Parlamento discute un provvedimento legato a " + noun + ", e i cronisti ti chiedono una posizione."; } },
     { kind: "Confronto sul territorio", brief: function (noun, ctx) { return "Un giovane amministratore locale di " + ctx.city + " ti scrive per un confronto diretto su " + noun + "."; } },
     { kind: "Servizio TV", brief: function (noun, ctx) { return "Una trasmissione televisiva dedica un servizio a " + noun + ", citando anche il tuo partito."; } },
-    { kind: "Scontro politico", brief: function (noun, ctx) { return ctx.rivalName + " attacca pubblicamente chi, come te, si occupa di " + noun + "."; } }
+    { kind: "Scontro politico", brief: function (noun, ctx) { return ctx.rivalName + " attacca pubblicamente chi, come te, si occupa di " + noun + "."; } },
+    { kind: "Petizione online", brief: function (noun, ctx) { return "Una petizione online su " + noun + " supera in poche ore centomila firme."; } },
+    { kind: "Editoriale critico", brief: function (noun, ctx) { return "Un editoriale di un grande quotidiano critica duramente la gestione di " + noun + "."; } },
+    { kind: "Radio locale", brief: function (noun, ctx) { return "Una radio locale di " + ctx.city + " ti invita per parlare di " + noun + "."; } }
   ];
   var SITUATION_INTROS = [
     "Prima di tutto: come reagisci?", "Cosa decidi di fare o dire questa settimana?", "Come pensi di rispondere?",
@@ -923,6 +911,78 @@
     libertario: ["economia", "digitale", "lavoro"],
     tecnoprogressista: ["digitale", "giovani", "energia"],
     meridionalista: ["infrastrutture", "lavoro", "agricoltura"]
+  };
+  // Per ciascuna famiglia, e per ciascuno dei suoi 3 temi identitari sopra, un piccolo elenco di
+  // "angolazioni" scritte apposta per quella ideologia (non il sostantivo neutro di SITUATION_THEMES,
+  // ma la stessa materia vista con il linguaggio e le priorità specifiche di quel partito). Incrociate
+  // con le 15 "forme" narrative di SITUATION_SHAPES, bastano pochi elementi per generare per ogni
+  // famiglia molte più di 300/13 situazioni distinte, tutte davvero specifiche di quella ideologia.
+  var FAMILY_ANGLE_NOUNS = {
+    sovranista: {
+      sicurezza: ["il pattugliamento dei confini nazionali", "la sicurezza nelle periferie delle grandi città", "il numero di agenti nelle forze dell'ordine", "la sicurezza durante le grandi manifestazioni pubbliche"],
+      immigrazione: ["il blocco navale alle partenze", "i rimpatri dei migranti irregolari", "le quote di ingresso regolare per lavoro", "la gestione dei centri per il rimpatrio"],
+      famiglia: ["il sostegno alle famiglie tradizionali numerose", "la crisi della natalità nazionale", "gli asili nido a sostegno delle madri lavoratrici", "la tutela della famiglia nella scuola pubblica"]
+    },
+    liberale: {
+      economia: ["la pressione fiscale sulle piccole imprese", "la riforma della giustizia civile per gli investimenti", "il costo del lavoro per le assunzioni", "la concorrenza nei mercati regolamentati"],
+      lavoro: ["la rigidità dei contratti a tempo indeterminato", "gli incentivi alle assunzioni per i giovani", "la libertà di licenziamento per le piccole imprese", "la formazione professionale finanziata dai privati"],
+      digitale: ["la burocrazia digitale per aprire un'impresa", "gli investimenti privati nell'intelligenza artificiale", "la regolamentazione delle piattaforme digitali", "la banda larga per le zone industriali"]
+    },
+    progressista: {
+      ambiente: ["la transizione ecologica dell'industria pesante", "il consumo di suolo nelle periferie", "gli incentivi alla mobilità sostenibile", "la crisi climatica e le ondate di calore"],
+      giovani: ["il precariato dei giovani laureati", "gli affitti fuori sede per gli studenti universitari", "il diritto allo studio per i redditi più bassi", "la salute mentale dei giovani"],
+      cultura: ["i finanziamenti pubblici alla cultura indipendente", "la censura di un'opera artistica contestata", "l'accesso gratuito ai musei per gli studenti", "la tutela dei lavoratori dello spettacolo"]
+    },
+    movimentista: {
+      giustizia: ["i tempi lunghissimi della giustizia civile", "la trasparenza delle nomine nella pubblica amministrazione", "il conflitto di interessi di un politico locale", "l'accesso agli atti pubblici per i cittadini"],
+      digitale: ["una piattaforma di democrazia diretta per gli iscritti", "il voto elettronico per le consultazioni interne", "la trasparenza dei finanziamenti ai partiti online", "un algoritmo pubblico usato da un ente locale"],
+      trasporti: ["i disservizi cronici del trasporto pubblico locale", "il costo crescente dei biglietti dei mezzi pubblici", "la mobilità nelle periferie dimenticate dai piani urbani", "gli scioperi dei trasporti pubblici"]
+    },
+    sinistra: {
+      lavoro: ["i salari fermi da anni nonostante l'inflazione", "il ricorso eccessivo ai contratti precari", "le morti sul lavoro in un cantiere", "la vertenza sindacale in un grande magazzino"],
+      pensioni: ["le pensioni minime sotto la soglia di povertà", "i lavori usuranti e l'età pensionabile", "il calcolo contributivo penalizzante per i redditi bassi", "l'adeguamento delle pensioni all'inflazione"],
+      casa: ["il caro-affitti nei grandi centri urbani", "l'edilizia popolare abbandonata e da ristrutturare", "la speculazione immobiliare sui quartieri popolari", "gli sfratti per morosità incolpevole"]
+    },
+    cattolico: {
+      famiglia: ["il sostegno economico alle famiglie numerose", "i congedi parentali per i neogenitori", "la conciliazione tra lavoro e cura dei figli", "l'assegno unico per le famiglie a basso reddito"],
+      casa: ["l'accoglienza abitativa per le famiglie sfrattate", "il sostegno della comunità parrocchiale ai senzatetto", "l'edilizia sociale gestita dal terzo settore", "l'housing sociale per le famiglie in difficoltà"],
+      sanita: ["le cure palliative per i malati terminali", "il sostegno psicologico alle famiglie in difficoltà", "le liste d'attesa per le visite specialistiche", "l'assistenza agli anziani soli sul territorio"]
+    },
+    regionalista: {
+      infrastrutture: ["il collegamento ferroviario tra la regione e il resto del paese", "un'opera pubblica bloccata da anni sul territorio", "la manutenzione delle strade provinciali", "il divario infrastrutturale con le altre regioni"],
+      agricoltura: ["i prezzi dei prodotti agricoli tipici del territorio", "la tutela delle denominazioni d'origine regionali", "la siccità che colpisce le coltivazioni locali", "il sostegno alle piccole aziende agricole familiari"],
+      trasporti: ["i collegamenti insufficienti con le aree interne", "il trasporto pubblico nelle zone montane", "la chiusura di una linea ferroviaria locale", "i pendolari penalizzati dai ritardi cronici"]
+    },
+    comunista: {
+      lavoro: ["lo sfruttamento dei lavoratori nella logistica", "i turni massacranti in un grande magazzino", "il caporalato nei campi agricoli", "la repressione sindacale in una fabbrica"],
+      casa: ["la vendita del patrimonio pubblico di edilizia popolare", "la speculazione dei grandi fondi immobiliari", "l'occupazione di case sfitte da parte di famiglie senza casa", "il diritto alla casa negato ai redditi più bassi"],
+      economia: ["i profitti record di un grande gruppo industriale", "la delocalizzazione della produzione per abbattere i costi", "la tassazione degli extraprofitti energetici", "il potere contrattuale eroso dei lavoratori"]
+    },
+    nazionalpopolare: {
+      sicurezza: ["la microcriminalità in un quartiere popolare", "le baby gang nelle periferie urbane", "la sicurezza percepita nelle stazioni ferroviarie", "l'inasprimento delle pene per i reati violenti"],
+      immigrazione: ["gli sbarchi non autorizzati sulle coste", "i centri di accoglienza sovraffollati", "l'ordine pubblico durante le manifestazioni sull'immigrazione", "i rimpatri mai eseguiti dei migranti irregolari"],
+      giustizia: ["la certezza della pena per i recidivi", "il sovraffollamento delle carceri", "i tempi troppo lunghi dei processi penali", "la sicurezza dei cittadini nei processi di giustizia riparativa"]
+    },
+    europeista: {
+      europa: ["i fondi europei non ancora spesi dal paese", "le nuove regole di bilancio decise a Bruxelles", "un nuovo trattato europeo in discussione", "il ruolo dell'Italia nei negoziati europei"],
+      economia: ["l'adesione dell'Italia all'euro rimessa in discussione", "l'integrazione dei mercati finanziari europei", "il debito pubblico italiano visto da Bruxelles", "gli investimenti comuni europei per la crescita"],
+      digitale: ["le nuove regole europee sull'intelligenza artificiale", "la sovranità digitale europea di fronte alle big tech", "la protezione dei dati dei cittadini europei", "gli investimenti comuni nella cybersicurezza europea"]
+    },
+    libertario: {
+      economia: ["l'ennesimo obbligo burocratico per le piccole imprese", "l'aumento della pressione fiscale sui redditi", "un nuovo balzello introdotto dal governo", "la libertà di scelta economica dei cittadini"],
+      digitale: ["la censura di contenuti online da parte di una piattaforma", "la sorveglianza digitale dei cittadini da parte dello stato", "la regolamentazione eccessiva delle criptovalute", "la libertà di impresa nel settore tecnologico"],
+      lavoro: ["la burocrazia che blocca un piccolo imprenditore", "i vincoli contrattuali per le nuove assunzioni", "la libertà di orario per i lavoratori autonomi", "il peso fiscale sul lavoro indipendente"]
+    },
+    tecnoprogressista: {
+      digitale: ["la regolamentazione stringente dell'intelligenza artificiale", "la fuga dei talenti digitali italiani all'estero", "l'accesso equo alla connessione a banda larga", "la trasformazione digitale della pubblica amministrazione"],
+      giovani: ["le competenze digitali insegnate nelle scuole", "il lavoro giovanile nel settore tecnologico", "le startup innovative fondate da under 30", "l'accesso dei giovani a percorsi di formazione tecnica"],
+      energia: ["gli investimenti in energie rinnovabili di nuova generazione", "una startup dell'energia pulita che rischia di emigrare", "la rete elettrica da ammodernare per la transizione", "l'indipendenza energetica del paese dalle fonti fossili"]
+    },
+    meridionalista: {
+      infrastrutture: ["il divario infrastrutturale tra Nord e Sud", "un'opera attesa da decenni nel Mezzogiorno", "il collegamento ferroviario tra le regioni meridionali", "la rete idrica colabrodo in molte città del Sud"],
+      lavoro: ["la disoccupazione giovanile nel Mezzogiorno", "l'emigrazione dei giovani meridionali verso il Nord", "gli incentivi alle imprese che assumono al Sud", "il lavoro sommerso diffuso in alcune aree del Sud"],
+      agricoltura: ["la crisi idrica che colpisce l'agricoltura meridionale", "le importazioni che danneggiano i prodotti agricoli del Sud", "il sostegno alle filiere agroalimentari meridionali", "lo spopolamento delle aree rurali del Mezzogiorno"]
+    }
   };
   var LEADERSHIP_FRAMING_HINTS = {
     carismatico: "Tutti si aspettano da te una dichiarazione forte, come sempre.",
@@ -1053,8 +1113,8 @@
       }
     }
   ];
-  function buildSituationChoices(ctx) {
-    var picked = shuffleN(RESPONSE_ARCHETYPES, 4);
+  function buildSituationChoices(ctx, n) {
+    var picked = shuffleN(RESPONSE_ARCHETYPES, n || 5);
     return picked.map(function (arch) {
       var c = arch.make(ctx);
       return { label: c.label, hint: c.hint, effects: c.effects, result: c.result };
@@ -1417,16 +1477,49 @@
     }
     var chosen = available[Math.floor(Math.random() * available.length)];
     state.usedFamilySituations.push(chosen.id);
-    return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: chosen.choices };
+    // I 4 scelte scritte a mano bastano per il taglio specifico della situazione, ma per restare a 5
+    // risposte come nel resto del gioco aggiungiamo una quinta opzione "jolly", pescata da un archetipo
+    // che non dipende dal tema specifico (nessun riferimento a noun/città/rivale) e quindi va sempre bene.
+    var extraId = Math.random() < 0.5 ? "dichiarazione_istituzionale" : "basso_profilo";
+    var extraArch = RESPONSE_ARCHETYPES.filter(function (a) { return a.id === extraId; })[0];
+    var extra = extraArch.make({});
+    var choices = chosen.choices.concat([{ label: extra.label, hint: extra.hint, effects: extra.effects, result: extra.result }]);
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: choices };
   }
+  // Motore combinatorio per le situazioni legate all'ideologia specifica del partito: stessa meccanica
+  // di generateCombinatorialSituation qui sotto, ma pesca il "noun" da FAMILY_ANGLE_NOUNS invece che dal
+  // sostantivo neutro di SITUATION_THEMES — così ogni situazione parla davvero il linguaggio di quella
+  // famiglia politica, non solo un tema generico che le somiglia. Sempre coerente per costruzione,
+  // perché il tema è sempre uno dei 3 temi identitari della famiglia del giocatore.
+  function generateFamilySpecificSituation(p) {
+    var themeIds = FAMILY_SIGNATURE_THEMES[p.family];
+    var angles = FAMILY_ANGLE_NOUNS[p.family];
+    if (!themeIds || !themeIds.length || !angles) return null;
+    var themeId = themeIds[Math.floor(Math.random() * themeIds.length)];
+    var nouns = angles[themeId];
+    if (!nouns || !nouns.length) return null;
+    var noun = nouns[Math.floor(Math.random() * nouns.length)];
+    var themeObj = SITUATION_THEME_BY_ID[themeId];
+    var shape = SITUATION_SHAPES[Math.floor(Math.random() * SITUATION_SHAPES.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var sentence = shape.brief(noun, { city: city, rivalName: rival.name });
+    var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
+    var brief = sentence + (framing ? " " + framing : "");
+    var title = shape.kind + " — " + themeObj.label.replace("Politica — ", "");
+    var choices = buildSituationChoices({ noun: noun, city: city, rivalName: rival.name, coherent: true }, 5);
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: themeObj.label, title: title, brief: brief, choices: choices };
+  }
+  // Pool "generale": pesca tra tutti i 20 temi senza favorire quelli dell'ideologia del giocatore (di
+  // quello si occupa il generatore per famiglia sopra) — solo lo slancio tematico recente (memoria) pesa
+  // di più, per continuità. 20 temi x 15 forme narrative = 300 combinazioni generali distinte.
   function generateCombinatorialSituation() {
     var p = state.player;
     var signature = FAMILY_SIGNATURE_THEMES[p.family] || [];
     var momentumCat = computeThemeMomentum();
     var theme = pickWeighted(SITUATION_THEMES, function (th) {
-      var w = signature.indexOf(th.id) !== -1 ? 3 : 1;
-      if (momentumCat && th.label === momentumCat) w *= 4;
-      return w;
+      return (momentumCat && th.label === momentumCat) ? 4 : 1;
     });
     var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
     var shape = SITUATION_SHAPES[Math.floor(Math.random() * SITUATION_SHAPES.length)];
@@ -1438,18 +1531,21 @@
     var brief = sentence + (framing ? " " + framing : "");
     var title = shape.kind + " — " + theme.label.replace("Politica — ", "");
     var coherent = signature.indexOf(theme.id) !== -1;
-    var choices = buildSituationChoices({ noun: noun, city: city, rivalName: rival.name, coherent: coherent });
+    var choices = buildSituationChoices({ noun: noun, city: city, rivalName: rival.name, coherent: coherent }, 5);
     return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: theme.label, title: title, brief: brief, choices: choices };
   }
-  // Punto d'ingresso unico per la situazione della settimana: prova prima il "seguito" diretto se
-  // c'è un'iniziativa recente da cui ripartire (memoria forte, cita alla lettera quanto scritto dal
-  // giocatore), altrimenti compone una situazione nuova col generatore combinatorio qui sopra
-  // (memoria più debole ma comunque presente, tramite lo slancio tematico). Ritorna sempre qualcosa:
-  // nessuna dipendenza esterna, nessuna possibilità che la partita resti bloccata in attesa di nulla.
+  // Punto d'ingresso unico per la situazione della settimana, sempre a scelta multipla (5 opzioni),
+  // mai a testo libero. Tre fonti, in ordine di priorità:
+  // 1) seguito diretto della tua ultima presa di posizione, se ce n'è una recente (memoria forte);
+  // 2) situazione legata all'ideologia specifica del partito (banco scritto a mano + motore
+  //    combinatorio per famiglia: centinaia di combinazioni distinte per ciascuna delle 13 famiglie);
+  // 3) situazione generale, senza legame con una particolare ideologia (300 combinazioni distinte).
+  // Ritorna sempre qualcosa: nessuna dipendenza esterna, nessuna possibilità che la partita resti
+  // bloccata in attesa di nulla.
   function generateWeeklySituation() {
     var p = state.player;
     var lastEntry = findLastPlayerInitiative();
-    if (lastEntry && lastEntry.choiceLabel && Math.random() < 0.45) {
+    if (lastEntry && lastEntry.choiceLabel && Math.random() < 0.3) {
       var tpl = LOCAL_FOLLOWUP_TEMPLATES[Math.floor(Math.random() * LOCAL_FOLLOWUP_TEMPLATES.length)];
       var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
       var brief = tpl.brief(lastEntry.choiceLabel) + (framing ? " " + framing : "");
@@ -1460,15 +1556,18 @@
       var fuCity = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
       var fuRivalPool = activeParties();
       var fuRival = fuRivalPool[Math.floor(Math.random() * fuRivalPool.length)];
-      var choices = buildSituationChoices({ noun: "quanto hai fatto la scorsa settimana", city: fuCity, rivalName: fuRival.name, coherent: coherent });
+      var choices = buildSituationChoices({ noun: "quanto hai fatto la scorsa settimana", city: fuCity, rivalName: fuRival.name, coherent: coherent }, 5);
       return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: cat, title: tpl.title, brief: brief, choices: choices };
     }
-    // Se non è un seguito diretto, dai la priorità a episodi scritti apposta per l'ideologia del
-    // partito (più specifici e riconoscibili) rispetto al tema generico ripescato dal generatore
-    // combinatorio: ecco perché il peso è più alto per le situazioni di famiglia.
-    if (FAMILY_SITUATIONS[p.family] && Math.random() < 0.55) {
-      var famSituation = pickFamilySituation(p);
-      if (famSituation) return famSituation;
+    if (FAMILY_ANGLE_NOUNS[p.family] && Math.random() < 0.55) {
+      // Piccola parte al banco scritto a mano (13x3 situazioni con scelte curate ad hoc), il resto al
+      // motore combinatorio per famiglia (centinaia di combinazioni per ciascuna ideologia).
+      if (Math.random() < 0.15) {
+        var famSituation = pickFamilySituation(p);
+        if (famSituation) return famSituation;
+      }
+      var generated = generateFamilySpecificSituation(p);
+      if (generated) return generated;
     }
     return generateCombinatorialSituation();
   }
@@ -2222,7 +2321,6 @@
       usedFamilySituations: [],
       currentDossierId: null,
       aiDynamicDossier: null,
-      forceInitiativeOnly: false,
       worldNews: [],
       nucleiUpdates: [],
       partyArcs: {},
@@ -2356,147 +2454,6 @@
     else state.ratingOutlook = "Stabile";
     if (state.spreadBps > 250 && state.ratingIdx > 0) { state.ratingIdx--; state.ratingOutlook = "Stabile"; }
     else if (state.spreadBps < 85 && state.deficitPil < 2.8 && state.ratingIdx < RATINGS.length - 1) { state.ratingIdx++; state.ratingOutlook = "Stabile"; }
-  }
-
-  // ---------- Iniziativa Libera: azione a testo libero ----------
-  // Il testo scritto dal giocatore viene sempre letto da resolveCustomInitiative con un'analisi
-  // euristica delle parole (vago/specifico/grave/entrate): nessuna intelligenza artificiale, nessuna
-  // chiamata di rete, risultato immediato. Il testo resta comunque nel registro e in prima pagina.
-  var INITIATIVE_TIERS = {
-    bassa: { label: "Impegno contenuto", fondi: -300, iscritti: 15, reputazione: 1, visibilita: 2 },
-    media: { label: "Impegno medio", fondi: -800, iscritti: 35, reputazione: 2, visibilita: 5 },
-    alta: { label: "Impegno ambizioso", fondi: -1800, iscritti: 70, reputazione: 3, visibilita: 9 }
-  };
-
-  // Lettura euristica del testo: non capisce il significato come un modello linguistico, ma legge
-  // davvero lunghezza/specificità, alcune parole chiave e il vocabolario dell'ideologia specifica
-  // scritta dal fondatore, così il risultato reagisce in modo diverso a idee curate, idee vaghe, o
-  // contenuti che descrivono violenza/reati — non è un dado cieco al contenuto scritto.
-  var SEVERE_TEXT_FLAGS = ["uccid", "ammazz", "attentat", "bomba", "terroris", "strage", "sparare", "sparo", "picchi", "violenz", "incendi", "sequestr", "assassin"];
-  var VAGUE_TEXT_FLAGS = ["boh", "cose", "non so", "qualcosa", "vabbe", "vabbè"];
-  var CONCRETE_TEXT_FLAGS = ["organizzo", "apro", "presento", "incontro", "lancio", "costruisco", "propongo", "raccolgo", "visito", "inauguro", "denuncio", "pubblico"];
-  // Fonti di entrata realistiche per un partito, non solo il crowdfunding: raccolta fondi/donazioni,
-  // tesseramento/nuovi iscritti (spesso pagano una quota d'iscrizione), sponsorizzazioni e social,
-  // interviste/apparizioni pubbliche pagate, vendita di gadget. Resta un elenco di parole chiave, non
-  // una vera comprensione del testo, ma copre molte più situazioni reali di un'unica parola come "crowdfunding".
-  // Radici di parola, non forme fisse: "donazion" copre sia "donazione" che "donazioni", "intervist"
-  // copre "intervista"/"interviste"/"intervistato", ecc. — l'italiano coniuga troppo per elenchi rigidi.
-  var INCOME_TEXT_FLAGS = [
-    "raccolta fondi", "raccolgo fondi", "raccogliamo fondi", "crowdfunding", "donazion", "sottoscrizion",
-    "finanziator", "autofinanz", "cena di gala", "vendita di gadget", "merchandis", "quota di iscrizion",
-    "tesserament", "nuovi iscritt", "reclutament",
-    "sponsor", "monetizz",
-    "intervist", "ospitat", "apparizione televisiv", "conferenza a pagamento"
-  ];
-  // Approssimazione grezza: famiglie/correnti già più radicali reggono meglio (in termini di iscritti,
-  // non di reputazione pubblica) un'iniziativa grave che è coerente con quella loro identità, rispetto
-  // a un partito moderato per cui la stessa iniziativa sarebbe un tradimento totale dei suoi valori.
-  var RADICAL_LEANING_FAMILIES = { sinistra: true, sovranista: true, movimentista: true, comunista: true, nazionalpopolare: true };
-  var RADICAL_LEANING_CURRENTS = { identitaria: true, purista: true, sindacale: true, operaista: true, internazionalista: true, dura: true, secessionista: true };
-  function analyzeInitiativeTextLocally(text, p) {
-    var t = text.toLowerCase();
-    var words = t.trim().split(/\s+/).filter(Boolean);
-    var score = 0;
-    if (words.length >= 14) score += 1.2;
-    else if (words.length >= 8) score += 0.5;
-    else if (words.length <= 3) score -= 1;
-    if (VAGUE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score -= 1;
-    if (CONCRETE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; })) score += 0.6;
-    // Se il fondatore ha scritto un'ideologia specifica a parole sue, un'iniziativa che ne riprende
-    // davvero il vocabolario (non solo l'area politica generale scelta a inizio partita) viene premiata:
-    // è così che quel testo, letto senza alcuna IA, ha comunque un effetto meccanico reale sul gioco.
-    if (p && p.ideologyText) {
-      var ideologyWords = p.ideologyText.toLowerCase().split(/[^a-zàèéìòù]+/).filter(function (w) { return w.length >= 5; });
-      if (ideologyWords.some(function (w) { return t.indexOf(w) !== -1; })) score += 0.8;
-    }
-    var severe = SEVERE_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; });
-    var income = INCOME_TEXT_FLAGS.some(function (f) { return t.indexOf(f) !== -1; });
-    return { score: score, severe: severe, income: income };
-  }
-
-  function ideologicalCoherenceMultiplier(p) {
-    var mult = 1;
-    if (RADICAL_LEANING_FAMILIES[p.family]) mult *= 0.5;
-    if (p.currents && p.currents.length === 2) {
-      var pair = correntiPair();
-      var dominant = p.currents[0].share >= p.currents[1].share ? pair[0] : pair[1];
-      if (RADICAL_LEANING_CURRENTS[dominant.id]) mult *= 0.7;
-    }
-    return mult;
-  }
-
-  function resolveCustomInitiative(text, tierId) {
-    var tier = INITIATIVE_TIERS[tierId];
-    var p = state.player;
-    var style = leadershipById(p.leadership);
-    var signal = analyzeInitiativeTextLocally(text, p);
-    var damp = staffHas("consigliere_strategico") ? 0.75 : 1;
-    var iscrittiDelta, repDelta, visDelta, twist;
-
-    if (signal.severe) {
-      // Non passa dalla scala normale della fascia scelta (troppo piccola per rappresentare conseguenze
-      // così gravi): usa una scala fissa a parte. Il tetto di spesa NON limita
-      // la gravità: un'iniziativa a basso costo che descrive violenza può comunque travolgere il partito.
-      // La reputazione pubblica (opinione più ampia) prende comunque il colpo pieno; gli iscritti (la base
-      // del partito) reggono molto meglio se il partito è già di un'area radicale coerente col contenuto.
-      twist = "grave";
-      var coherence = ideologicalCoherenceMultiplier(p);
-      repDelta = -(35 + Math.random() * 35) * damp;
-      visDelta = 20 + Math.random() * 30;
-      iscrittiDelta = -(p.iscritti * (0.3 + Math.random() * 0.4)) * damp * coherence;
-    } else {
-      var roll = Math.random();
-      var outcomeMult;
-      var negativeThreshold = clamp(0.12 - signal.score * 0.035, 0.03, 0.3);
-      var positiveThreshold = clamp(0.78 + signal.score * 0.035, 0.6, 0.95);
-      if (roll < negativeThreshold) { outcomeMult = -0.6; twist = "negativo"; }
-      else if (roll > positiveThreshold) { outcomeMult = 1.8; twist = "positivo"; }
-      else { outcomeMult = 0.7 + clamp(signal.score, -1.5, 1.5) * 0.12 + Math.random() * 0.6; twist = "normale"; }
-
-      iscrittiDelta = tier.iscritti * outcomeMult * style.iscrittiMult * (staffHas("organizzatore") ? 1.2 : 1);
-      repDelta = tier.reputazione * outcomeMult * style.repVolatility * (staffHas("responsabile_formazione") && outcomeMult > 0 ? 1.2 : 1);
-      visDelta = tier.visibilita * outcomeMult * style.visMult * (staffHas("portavoce") ? 1.2 : 1);
-      if (outcomeMult < 0) { iscrittiDelta *= damp; repDelta *= damp; visDelta *= damp; }
-    }
-
-    if (signal.income && twist !== "grave") {
-      // Un'iniziativa orientata a generare entrate (raccolta fondi, tesseramento, sponsor, interviste
-      // pagate, merchandising...) può far guadagnare davvero denaro al partito, non solo costargli:
-      // quanto si raccoglie dipende dalla fascia scelta, da quanto è specifica l'idea e da come va
-      // (un'iniziativa del genere andata male può comunque costare più di quanto rende).
-      var overhead = Math.abs(tier.fondi) * 0.25;
-      var raiseMult = twist === "positivo" ? 3.5 : twist === "negativo" ? 0.15 : 1.6;
-      var raised = Math.abs(tier.fondi) * raiseMult * (0.7 + clamp(signal.score, -1, 2) * 0.15);
-      p.fondi += (raised - overhead) * style.fondiMult;
-    } else {
-      p.fondi += tier.fondi * style.fondiMult;
-    }
-    p.iscritti = Math.max(0, p.iscritti + iscrittiDelta);
-    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
-    p.visibilita = clamp(p.visibilita + visDelta, 0, 100);
-
-    var outcomeText = twist === "grave"
-      ? "L'iniziativa travolge il partito: la reazione pubblica è durissima e le conseguenze sono molto gravi."
-      : twist === "negativo"
-      ? "L'iniziativa non va come sperato: l'accoglienza è più fredda del previsto."
-      : twist === "positivo"
-        ? "L'iniziativa sorprende tutti: l'accoglienza è molto più calda del previsto."
-        : "L'iniziativa si svolge come programmato, con un riscontro nella media.";
-
-    var quoted = text.length > 100 ? text.slice(0, 100) + "…" : text;
-    var otherOutlets = pickN(OUTLETS.filter(function (o) { return o !== "Il Domani d'Italia"; }), 2);
-    var headlines = [{ outlet: "Il Domani d'Italia", text: quoted }].concat(
-      otherOutlets.map(function (o) {
-        return { outlet: o, text: HEADLINE_BANK[o]({ title: "questa iniziativa" }, { label: "L'iniziativa personale", effects: { reputazione: repDelta } }, p.motto) };
-      })
-    );
-
-    state.log.unshift({
-      week: state.turn, title: "Iniziativa Libera (" + tier.label + ")", choiceLabel: quoted,
-      result: outcomeText, headlines: headlines, type: "dossier"
-    });
-
-    return { resultText: outcomeText, headlines: headlines };
   }
 
   // ---------- Apply a dossier choice's immediate effects ----------
@@ -2685,7 +2642,11 @@
         { label: "Dai spazio alla " + pair[0].label, hint: "Rafforza la prima anima", effects: { iscritti: 10 }, currentShift: 13,
           result: "La " + pair[0].label + " guadagna peso nella linea del partito." },
         { label: "Dai spazio alla " + pair[1].label, hint: "Rafforza la seconda anima", effects: { iscritti: 10 }, currentShift: -13,
-          result: "La " + pair[1].label + " guadagna peso nella linea del partito." }
+          result: "La " + pair[1].label + " guadagna peso nella linea del partito." },
+        { label: "Media tra le due anime, senza sbilanciarti", hint: "Nessuno spostamento interno, meno tensione", effects: { reputazione: 2 }, currentShift: 0,
+          result: "La mediazione tra le due anime abbassa la tensione, senza spostare gli equilibri interni." },
+        { label: "Rimanda la resa dei conti a un altro momento", hint: "Prudente, il nodo resta comunque aperto", effects: { reputazione: -1 }, currentShift: 0,
+          result: "Il rinvio congela la tensione, ma il nodo resta lì, pronto a riemergere." }
       ]
     };
   }
@@ -2858,7 +2819,7 @@
       '<div class="field"><label class="field-label" for="ideology-text-input">Ideologia specifica del partito (facoltativo)</label>' +
       '<textarea id="ideology-text-input" maxlength="300" placeholder="Es. Sovranista ma su base ambientalista, vicino ai piccoli agricoltori, molto ostile alle grandi multinazionali">' +
       (d.ideologyText || "").replace(/</g, "&lt;") + '</textarea>' +
-      '<p class="field-hint">Oltre all\'area politica sopra: descrivi con parole tue le sfumature specifiche. Le tue iniziative che ne riprendono il vocabolario avranno davvero un piccolo bonus nella valutazione.</p></div>' +
+      '<p class="field-hint">Oltre all\'area politica sopra: descrivi con parole tue le sfumature specifiche. Resta una nota di ruolo, senza un effetto meccanico diretto.</p></div>' +
       '<div class="field"><label class="field-label">Stile di leadership</label><div class="option-grid">' +
       LEADERSHIP_STYLES.map(function (l) {
         return '<button type="button" class="option-card' + (d.leadership === l.id ? " selected" : "") + '" data-leadership="' + l.id + '">' +
@@ -2867,7 +2828,7 @@
       '<div class="field"><label class="field-label" for="leader-character-input">Carattere del leader (facoltativo)</label>' +
       '<textarea id="leader-character-input" maxlength="250" placeholder="Es. Cauto, parla poco ma pesa le parole, evita gli scontri diretti in TV">' +
       (d.leaderCharacter || "").replace(/</g, "&lt;") + '</textarea>' +
-      '<p class="field-hint">Resta nel profilo del partito come nota di ruolo: non ha un effetto meccanico diretto, ma ti aiuta a restare coerente scrivendo le iniziative.</p></div>' +
+      '<p class="field-hint">Resta nel profilo del partito come nota di ruolo, senza un effetto meccanico diretto.</p></div>' +
       '<button class="primary-btn" id="found-btn" type="button">Fonda il partito</button>' +
       "</div>";
     app.innerHTML = html;
@@ -3118,31 +3079,18 @@
   }
 
   function renderDossierCard(dossier) {
-    var showChoices = dossier.choices && dossier.choices.length && !state.forceInitiativeOnly;
     var html = '<section aria-label="Dossier della settimana"><p class="eyebrow">' +
       (dossier.localDynamic ? "Situazione della settimana — generata in base alla tua storia"
         : "Dossier della settimana") + '</p>' +
       '<div class="dossier"><span class="chip neutral cat">' + dossier.cat + '</span>' +
       "<h2>" + dossier.title + '</h2><p class="brief">' + dossier.brief + "</p>";
-    if (showChoices) {
+    if (dossier.choices && dossier.choices.length) {
       html += '<div class="choices">';
       dossier.choices.forEach(function (c, i) {
         html += '<button class="choice-btn" data-choice="' + i + '">' +
           '<span class="clabel">' + c.label + '</span><span class="chint">' + c.hint + "</span></button>";
       });
       html += "</div>";
-    }
-    if (dossier.kind === "azione" || dossier.kind === "notizia" || state.forceInitiativeOnly) {
-      html += '<div class="custom-initiative">' +
-        '<p class="ci-label">' + (showChoices ? "Oppure lancia un’iniziativa tutta tua questa settimana" : "Scrivi la tua iniziativa: è l'unico modo per affrontare questa settimana") + '</p>' +
-        '<p class="ci-hint">Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Idee specifiche e curate vanno meglio di due parole vaghe, e contenuti che descrivono violenza o reati hanno conseguenze molto gravi.</p>' +
-        '<textarea id="custom-initiative-text" maxlength="220" placeholder="Es. Organizzo un presidio davanti all’ospedale per denunciare i tagli alla sanità locale..."></textarea>' +
-        '<div class="ci-tiers">' +
-        Object.keys(INITIATIVE_TIERS).map(function (tid) {
-          var t = INITIATIVE_TIERS[tid];
-          return '<button class="ci-tier-btn" data-tier="' + tid + '" type="button"><span>' + t.label + '</span><span class="ci-cost">' + fmtEuro(Math.abs(t.fondi)) + ' circa</span></button>';
-        }).join("") +
-        "</div></div>";
     }
     html += "</div></section>";
     return html;
@@ -3218,7 +3166,6 @@
           if (window.console && console.error) console.error("advanceTurnLogic ha lanciato un errore imprevisto:", e);
           var fallbackChosen = DOSSIERS[Math.floor(Math.random() * DOSSIERS.length)];
           state.currentDossierId = fallbackChosen.id;
-          state.forceInitiativeOnly = false;
           state.phase = "building";
         }
         save();
@@ -3333,36 +3280,12 @@
           if (window.console && console.error) console.error("advanceTurnLogic ha lanciato un errore imprevisto:", e);
           var fallbackChosen = DOSSIERS[Math.floor(Math.random() * DOSSIERS.length)];
           state.currentDossierId = fallbackChosen.id;
-          state.forceInitiativeOnly = false;
           state.phase = "building";
         }
         save();
         render();
       });
     }
-
-    var ciTierBtns = app.querySelectorAll(".ci-tier-btn");
-    ciTierBtns.forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var tierId = btn.getAttribute("data-tier");
-        var textEl = document.getElementById("custom-initiative-text");
-        var text = (textEl.value || "").trim();
-        if (!text) { showSaveStatus("Scrivi prima una breve descrizione della tua iniziativa.", true); return; }
-
-        state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
-        // Rete di sicurezza: anche se resolveCustomInitiative dovesse fallire per un motivo imprevisto,
-        // il turno si chiude comunque con un esito minimo, mai con un blocco.
-        try {
-          state.resultData = resolveCustomInitiative(text, tierId);
-        } catch (e2) {
-          if (window.console && console.error) console.error("Errore imprevisto nella valutazione dell'iniziativa:", e2);
-          state.resultData = { resultText: "L'iniziativa viene registrata nel programma del partito.", headlines: [] };
-        }
-        state.phase = "result";
-        save();
-        render();
-      });
-    });
 
     app.querySelectorAll("[data-hire]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -3419,7 +3342,6 @@
     triggerNucleoUpdate();
     triggerLocalElectionCycle();
     resolveEuropeanElection();
-    state.forceInitiativeOnly = false;
 
     if (state.turn >= state.nextElectionTurn) {
       resolveElection();
@@ -3491,11 +3413,6 @@
     var chosen = available[Math.floor(Math.random() * available.length)];
     state.usedDossiers.push(chosen.id);
     state.currentDossierId = chosen.id;
-    // Le scelte multiple restano solo per i dossier con vere conseguenze meccaniche (correnti interne,
-    // Parlamento). Per un dossier "normale" (generato dal generatore combinatorio o pescato dal pool
-    // statico) l'unico modo di rispondere è comunque l'iniziativa a testo libero.
-    var isParliamentDossier = chosen.id.indexOf("gov_") === 0 || chosen.id.indexOf("opp_") === 0;
-    state.forceInitiativeOnly = chosen.kind !== "correnti" && !isParliamentDossier;
     state.phase = "building";
   }
 
