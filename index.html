@@ -1300,10 +1300,13 @@
     };
 
     var res;
+    var timeoutController = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timeoutId = timeoutController ? setTimeout(function () { timeoutController.abort(); }, 25000) : null;
     try {
       res = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        signal: timeoutController ? timeoutController.signal : undefined,
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: [{ role: "user", parts: [{ text: userMessage }] }],
@@ -1315,12 +1318,19 @@
         })
       });
     } catch (networkErr) {
+      if (networkErr && networkErr.name === "AbortError") {
+        throw new Error(
+          "Google non ha risposto entro 25 secondi (rete lenta o servizio momentaneamente irraggiungibile). " +
+          "Nessun dato è stato inviato con successo: riprova, il testo scritto resta qui."
+        );
+      }
       throw new Error(
         "La chiamata al modello è stata bloccata dal browser prima ancora di arrivare a Google " +
-        "(probabile blocco di rete o CORS legato all'apertura del file in locale). Prova ad aprire il gioco " +
-        "dal link pubblicato invece che dal file scaricato, oppure verifica la connessione. " +
+        "(probabile blocco di rete o CORS). Verifica la connessione e riprova. " +
         "Nessun dato è stato inviato, il testo scritto resta qui."
       );
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
 
     if (!res.ok) {
