@@ -1121,6 +1121,7 @@
       consensoGoverno: 46,
       usedDossiers: [],
       currentDossierId: null,
+      aiDynamicDossier: null,
       resultData: null,
       log: [],
       electionResults: [],
@@ -1482,6 +1483,101 @@
     }
   }
 
+  // ---------- Dossier settimanale dinamico, generato dall'IA in base alla storia del partito ----------
+  // Usato solo quando è collegata una chiave: genera la situazione della settimana come conseguenza
+  // (a volte diretta, a volte indiretta) di quello che il partito ha fatto nelle settimane precedenti,
+  // invece di pescare da un elenco fisso. In caso di qualunque errore ritorna null in silenzio: chi chiama
+  // questa funzione deve ricadere sul dossier statico, per non bloccare mai la partita.
+  async function generateAiDossier() {
+    var apiKey = getApiKey();
+    if (!apiKey) return null;
+    var model = "gemini-flash-latest";
+    var p = state.player;
+    var fam = familyById(p.family);
+    var style = leadershipById(p.leadership);
+
+    var systemPrompt = "Sei il motore narrativo di Politis-IT, un gioco di simulazione realistico sulla fondazione di un partito " +
+      "politico italiano da zero. Il tuo compito è generare la situazione/notizia che il partito deve affrontare questa settimana, " +
+      "in coerenza con l'ideologia del partito e con la cronaca recente: cosa ha fatto il partito nelle settimane precedenti (le sue " +
+      "iniziative) e come sono andate. Varia il tipo di situazione: a volte deve essere una conseguenza diretta e concreta di " +
+      "un'iniziativa recente del giocatore (un giornalista che chiede conto di quell'episodio, un dibattito nato proprio da lì, una " +
+      "reazione di un partito rivale), altre volte un evento nuovo dal più ampio contesto politico, sociale o economico italiano, " +
+      "scollegato dalle iniziative recenti. Non generare mai scelte multiple: il giocatore risponderà sempre scrivendo una propria " +
+      "iniziativa a testo libero, quindi la situazione deve essere descritta in modo che sia chiaro a cosa il giocatore può reagire. " +
+      "Resta un ipotetico scenario di gioco, dichiaratamente fittizio. Rispondi sempre in italiano.";
+
+    var fam_desc = fam.label + " — " + fam.desc;
+    var customInfo = "";
+    if (p.ideologyText) customInfo += " Ideologia specifica scritta dal fondatore: \"" + p.ideologyText + "\".";
+    if (p.leaderCharacter) customInfo += " Carattere del leader: \"" + p.leaderCharacter + "\".";
+
+    var recentLog = state.log.slice(0, 7);
+    var storyInfo = recentLog.length
+      ? " Cronaca recente del partito, dalla più recente: " + recentLog.map(function (e) {
+          return "(settimana " + e.week + ") " + e.title + (e.choiceLabel ? " — " + e.choiceLabel : "") + ": " + (e.result || "").slice(0, 140);
+        }).join(" | ") + "."
+      : " Il partito è stato appena fondato, non ha ancora una storia: genera una situazione d'esordio plausibile.";
+
+    var userMessage = "Partito: " + p.name + " (area politica: " + fam_desc + "; stile di leadership: " + style.label + ")." + customInfo +
+      " Siamo alla settimana " + state.turn + " (" + weekLabel(state.turn) + ") dalla fondazione. Stato attuale: " + Math.round(p.iscritti) +
+      " iscritti, reputazione " + Math.round(p.reputazione) + "/100, sondaggi al " + fmt1(p.sondaggi) + "%." + storyInfo +
+      "\n\nGenera la situazione di questa settimana.";
+
+    var endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent";
+    var responseSchema = {
+      type: "OBJECT",
+      properties: {
+        categoria: { type: "STRING", description: "Etichetta breve della categoria (2-4 parole), es. \"Comunicazione\", \"Cronaca politica\", \"Politica economica\"" },
+        titolo: { type: "STRING", description: "Titolo breve della situazione della settimana, in italiano" },
+        descrizione: { type: "STRING", description: "2-4 frasi in italiano che descrivono la situazione e cosa ci si aspetta che il partito faccia o dica in risposta" }
+      },
+      required: ["categoria", "titolo", "descrizione"]
+    };
+
+    async function attempt() {
+      var timeoutController = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      var timeoutId = timeoutController ? setTimeout(function () { timeoutController.abort(); }, 20000) : null;
+      var res;
+      try {
+        res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+          signal: timeoutController ? timeoutController.signal : undefined,
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: "user", parts: [{ text: userMessage }] }],
+            generationConfig: {
+              responseMimeType: "application/json", responseSchema: responseSchema,
+              thinkingConfig: { thinkingLevel: "low" }, maxOutputTokens: 4096
+            }
+          })
+        });
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
+      if (!res.ok) throw new Error("http " + res.status);
+      var data = await res.json();
+      var candidate = (data.candidates || [])[0];
+      if (!candidate || candidate.finishReason === "MAX_TOKENS") throw new Error("troncato");
+      var parts = (candidate.content && candidate.content.parts) || [];
+      var answerText = parts.filter(function (pt) { return pt && pt.text && !pt.thought; }).map(function (pt) { return pt.text; }).join("");
+      return JSON.parse(answerText);
+    }
+
+    try {
+      var parsed;
+      try { parsed = await attempt(); } catch (e1) { parsed = await attempt(); }
+      if (!parsed || !parsed.titolo || !parsed.descrizione) return null;
+      return {
+        id: "ai_dynamic", kind: "azione", dynamic: true,
+        cat: parsed.categoria || "Situazione della settimana",
+        title: parsed.titolo, brief: parsed.descrizione, choices: []
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
   function applyAiInitiative(text, tierId, evalResult) {
     var tier = INITIATIVE_TIERS[tierId];
     var p = state.player;
@@ -1640,6 +1736,7 @@
   }
 
   function currentDossier() {
+    if (state.currentDossierId === "ai_dynamic" && state.aiDynamicDossier) return state.aiDynamicDossier;
     if (state.currentDossierId === CONGRESSO_DOSSIER.id) return CONGRESSO_DOSSIER;
     if (state.currentDossierId === "alleanza_negoziato") return allianceDossier();
     if (state.currentDossierId === SNAP_NOTICE.id) return SNAP_NOTICE;
@@ -2099,18 +2196,22 @@
   }
 
   function renderDossierCard(dossier) {
-    var html = '<section aria-label="Dossier della settimana"><p class="eyebrow">Dossier della settimana</p>' +
+    var html = '<section aria-label="Dossier della settimana"><p class="eyebrow">' +
+      (dossier.dynamic ? "Situazione della settimana — generata dall'IA in base alla tua storia" : "Dossier della settimana") + '</p>' +
       '<div class="dossier"><span class="chip neutral cat">' + dossier.cat + '</span>' +
-      "<h2>" + dossier.title + '</h2><p class="brief">' + dossier.brief + '</p><div class="choices">';
-    dossier.choices.forEach(function (c, i) {
-      html += '<button class="choice-btn" data-choice="' + i + '">' +
-        '<span class="clabel">' + c.label + '</span><span class="chint">' + c.hint + "</span></button>";
-    });
-    html += "</div>";
+      "<h2>" + dossier.title + '</h2><p class="brief">' + dossier.brief + "</p>";
+    if (dossier.choices && dossier.choices.length) {
+      html += '<div class="choices">';
+      dossier.choices.forEach(function (c, i) {
+        html += '<button class="choice-btn" data-choice="' + i + '">' +
+          '<span class="clabel">' + c.label + '</span><span class="chint">' + c.hint + "</span></button>";
+      });
+      html += "</div>";
+    }
     if (dossier.kind === "azione" || dossier.kind === "notizia") {
       var aiOn = !!getApiKey();
       html += '<div class="custom-initiative">' +
-        '<p class="ci-label">Oppure lancia un’iniziativa tutta tua questa settimana</p>' +
+        '<p class="ci-label">' + (dossier.dynamic ? "Rispondi con la tua iniziativa: è l'unico modo per affrontare questa settimana" : "Oppure lancia un’iniziativa tutta tua questa settimana") + '</p>' +
         '<p class="ci-hint">' + (aiOn
           ? "Scrivi cosa vuoi fare o dire: l'IA collegata (Gemini) valuterà davvero il contenuto e ne calcolerà l'impatto realistico."
           : "Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Senza una chiave IA collegata (in “Impostazioni IA” qui sopra) il gioco non legge il contenuto del testo — l’effetto dipende dalla fascia di impegno che scegli sotto.") +
@@ -2182,10 +2283,13 @@
 
     if (state.phase === "election_result") {
       app.innerHTML = renderElectionResult();
-      document.getElementById("election-continue-btn").addEventListener("click", function () {
+      var continueBtn = document.getElementById("election-continue-btn");
+      continueBtn.addEventListener("click", async function () {
+        continueBtn.disabled = true;
+        continueBtn.textContent = "Preparazione della prossima settimana…";
         state.turn++;
         state.phase = "building";
-        advanceTurnLogic();
+        await advanceTurnLogic();
         save();
         render();
       });
@@ -2270,9 +2374,11 @@
 
     var advance = document.getElementById("advance-btn");
     if (advance) {
-      advance.addEventListener("click", function () {
+      advance.addEventListener("click", async function () {
+        advance.disabled = true;
+        advance.textContent = getApiKey() ? "Preparazione della prossima settimana…" : "Avanti…";
         state.turn++;
-        advanceTurnLogic();
+        await advanceTurnLogic();
         save();
         render();
       });
@@ -2359,7 +2465,7 @@
     }
   }
 
-  function advanceTurnLogic() {
+  async function advanceTurnLogic() {
     recomputePeriodic();
     triggerRivalPartyEvent();
 
@@ -2405,14 +2511,29 @@
     }
 
     var pool = DOSSIERS.slice();
+    var correntiTensionAdded = false;
     if (p.currents) {
       CORRENTI_DOSSIER_TEMPLATES.forEach(function (tpl) {
-        if (Math.random() < 0.35) pool.push({ id: tpl.id, kind: "correnti", cat: tpl.cat });
+        if (Math.random() < 0.35) { pool.push({ id: tpl.id, kind: "correnti", cat: tpl.cat }); correntiTensionAdded = true; }
       });
     }
     if (p.inParliament) {
       pool = pool.concat(p.parliamentRole === "governo" ? GOVERNO_DOSSIERS : OPPOSIZIONE_DOSSIERS);
     }
+
+    // Nelle settimane "normali" (non parlamento, non tensione tra correnti), se è collegata una chiave
+    // IA prova a generare la situazione della settimana in base alla storia del partito, invece di pescare
+    // dall'elenco fisso. Qualunque errore fa ricadere silenziosamente sul pool statico qui sotto.
+    if (!!getApiKey() && !p.inParliament && !correntiTensionAdded) {
+      var dynamic = await generateAiDossier();
+      if (dynamic) {
+        state.aiDynamicDossier = dynamic;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
+    }
+
     var available = pool.filter(function (d) { return state.usedDossiers.indexOf(d.id) === -1; });
     if (!available.length) { state.usedDossiers = []; available = pool; }
     var chosen = available[Math.floor(Math.random() * available.length)];
