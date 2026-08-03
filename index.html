@@ -1122,6 +1122,7 @@
       usedDossiers: [],
       currentDossierId: null,
       aiDynamicDossier: null,
+      forceInitiativeOnly: false,
       resultData: null,
       log: [],
       electionResults: [],
@@ -1499,10 +1500,13 @@
     var systemPrompt = "Sei il motore narrativo di Politis-IT, un gioco di simulazione realistico sulla fondazione di un partito " +
       "politico italiano da zero. Il tuo compito è generare la situazione/notizia che il partito deve affrontare questa settimana, " +
       "in coerenza con l'ideologia del partito e con la cronaca recente: cosa ha fatto il partito nelle settimane precedenti (le sue " +
-      "iniziative) e come sono andate. Varia il tipo di situazione: a volte deve essere una conseguenza diretta e concreta di " +
-      "un'iniziativa recente del giocatore (un giornalista che chiede conto di quell'episodio, un dibattito nato proprio da lì, una " +
-      "reazione di un partito rivale), altre volte un evento nuovo dal più ampio contesto politico, sociale o economico italiano, " +
-      "scollegato dalle iniziative recenti. Non generare mai scelte multiple: il giocatore risponderà sempre scrivendo una propria " +
+      "iniziative) e come sono andate. Presta particolare attenzione alla CONTINUITÀ TEMATICA: se le iniziative recenti del giocatore " +
+      "si concentrano ripetutamente su uno stesso tema o settore (es. sanità, sicurezza, lavoro, ambiente), la situazione di QUESTA " +
+      "settimana deve nella maggior parte dei casi continuare o rispondere direttamente a quello stesso tema — un giornalista che " +
+      "chiede conto di quell'episodio specifico, uno sviluppo diretto di quell'iniziativa, una reazione di un rivale sullo stesso " +
+      "fronte — invece di introdurre ogni volta un argomento nuovo e scollegato. Solo occasionalmente, per varietà, genera un evento " +
+      "nuovo dal più ampio contesto politico, sociale o economico italiano non collegato al filone tematico recente. Non generare mai " +
+      "scelte multiple: il giocatore risponderà sempre scrivendo una propria " +
       "iniziativa a testo libero, quindi la situazione deve essere descritta in modo che sia chiaro a cosa il giocatore può reagire. " +
       "Resta un ipotetico scenario di gioco, dichiaratamente fittizio. Rispondi sempre in italiano.";
 
@@ -1692,8 +1696,14 @@
     // dissesto finanziario: i debiti prolungati logorano la credibilità del partito
     if (p.fondi < 0) p.reputazione = clamp(p.reputazione - Math.min(2, Math.abs(p.fondi) / 6000), 0, 100);
 
+    // La reputazione ora agisce da vero TETTO moltiplicativo, non solo da piccolo bonus/malus additivo:
+    // un partito con base ristretta ma coerente può restare con iscritti/visibilità alti anche facendo
+    // cose gravi (es. violenza), ma senza legittimità pubblica quell'entusiasmo di nicchia non si traduce
+    // in consenso elettorale reale. Sotto reputazione ~15 la crescita crolla quasi a zero; sopra ~60 non
+    // c'è più penalità.
+    var repCeiling = clamp((p.reputazione - 15) / 45, 0.03, 1);
     var target = clamp(
-      (0.15 + Math.sqrt(p.iscritti) * 0.035 + p.sezioni * 0.28 + p.visibilita * 0.13 + (p.reputazione - 50) * 0.025) * style.growthMult,
+      (0.12 + Math.sqrt(p.iscritti) * 0.028 + p.sezioni * 0.24 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.02) * style.growthMult * repCeiling,
       0, 40
     );
     p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.15 + (Math.random() - 0.5) * 0.45, 0, 40);
@@ -2196,11 +2206,12 @@
   }
 
   function renderDossierCard(dossier) {
+    var showChoices = dossier.choices && dossier.choices.length && !state.forceInitiativeOnly;
     var html = '<section aria-label="Dossier della settimana"><p class="eyebrow">' +
       (dossier.dynamic ? "Situazione della settimana — generata dall'IA in base alla tua storia" : "Dossier della settimana") + '</p>' +
       '<div class="dossier"><span class="chip neutral cat">' + dossier.cat + '</span>' +
       "<h2>" + dossier.title + '</h2><p class="brief">' + dossier.brief + "</p>";
-    if (dossier.choices && dossier.choices.length) {
+    if (showChoices) {
       html += '<div class="choices">';
       dossier.choices.forEach(function (c, i) {
         html += '<button class="choice-btn" data-choice="' + i + '">' +
@@ -2208,10 +2219,10 @@
       });
       html += "</div>";
     }
-    if (dossier.kind === "azione" || dossier.kind === "notizia") {
+    if (dossier.kind === "azione" || dossier.kind === "notizia" || state.forceInitiativeOnly) {
       var aiOn = !!getApiKey();
       html += '<div class="custom-initiative">' +
-        '<p class="ci-label">' + (dossier.dynamic ? "Rispondi con la tua iniziativa: è l'unico modo per affrontare questa settimana" : "Oppure lancia un’iniziativa tutta tua questa settimana") + '</p>' +
+        '<p class="ci-label">' + (showChoices ? "Oppure lancia un’iniziativa tutta tua questa settimana" : "Scrivi la tua iniziativa: è l'unico modo per affrontare questa settimana") + '</p>' +
         '<p class="ci-hint">' + (aiOn
           ? "Scrivi cosa vuoi fare o dire: l'IA collegata (Gemini) valuterà davvero il contenuto e ne calcolerà l'impatto realistico."
           : "Scrivi cosa vuoi fare o dire: resta nel registro del partito e in una prima pagina. Senza una chiave IA collegata (in “Impostazioni IA” qui sopra) il gioco non legge il contenuto del testo — l’effetto dipende dalla fascia di impegno che scegli sotto.") +
@@ -2468,6 +2479,7 @@
   async function advanceTurnLogic() {
     recomputePeriodic();
     triggerRivalPartyEvent();
+    state.forceInitiativeOnly = false;
 
     if (state.turn >= state.nextElectionTurn) {
       resolveElection();
@@ -2539,6 +2551,11 @@
     var chosen = available[Math.floor(Math.random() * available.length)];
     state.usedDossiers.push(chosen.id);
     state.currentDossierId = chosen.id;
+    // Le scelte multiple restano solo per i dossier con vere conseguenze meccaniche (correnti interne,
+    // Parlamento). Per un dossier "normale" del pool statico (usato quando manca la chiave IA, o la
+    // generazione dinamica fallisce) l'unico modo di rispondere è comunque l'iniziativa a testo libero.
+    var isParliamentDossier = chosen.id.indexOf("gov_") === 0 || chosen.id.indexOf("opp_") === 0;
+    state.forceInitiativeOnly = chosen.kind !== "correnti" && !isParliamentDossier;
     state.phase = "building";
   }
 
