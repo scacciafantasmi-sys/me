@@ -354,11 +354,15 @@
   .party-row-head .value { font-family: var(--font-mono); color: var(--text-dim); flex-shrink: 0; }
   .party-row-sub { font-size: 0.76rem; color: var(--text-dim); margin-top: 0.15rem; line-height: 1.4; }
 
-  /* ---------- Mappa simbolica dell'Italia ---------- */
-  .italy-map-wrap { display: flex; justify-content: center; padding: 0.4rem 0 0.2rem; }
-  .italy-map { width: min(210px, 55%); height: auto; }
-  .italy-shape { fill: var(--panel-2); stroke: var(--border); stroke-width: 1.5; }
-  .italy-map-caption { text-align: center; font-size: 0.76rem; color: var(--text-dim); margin: 0.3rem 0 0; line-height: 1.5; }
+  /* ---------- Presenza sul territorio: città con una sezione aperta ---------- */
+  .nuclei-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.2rem 0; }
+  .nucleo-pill {
+    display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.7rem 0.4rem 0.55rem;
+    border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); font-size: 0.82rem;
+  }
+  .nucleo-pill.capital { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .nucleo-pill .sw { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .nucleo-pill .region { color: var(--text-dim); font-size: 0.74rem; }
 
   /* ---------- Footer ---------- */
   footer {
@@ -563,27 +567,54 @@
   function aiIsActive() {
     return LocalLLM.status === "ready";
   }
+  // Se il download/inizializzazione non fa alcun progresso per più di questo tempo, si presume
+  // bloccato (connessione caduta, contesto WebGPU perso) invece di lasciare il pulsante su
+  // "Caricamento in corso…" per sempre. Volutamente generoso: la compilazione degli shader su un
+  // dispositivo lento può restare ferma per decine di secondi tra un progresso e l'altro anche
+  // quando sta funzionando normalmente.
+  var LOCAL_LLM_DOWNLOAD_STALL_MS = 120000;
   async function initLocalLLM(onProgress) {
     if (!localLlmSupported()) { LocalLLM.status = "unsupported"; return false; }
     var targetId = getLocalLlmModelId();
     if (LocalLLM.status === "ready" && LocalLLM.loadedModelId === targetId) return true;
+    // Un download è già in corso: non avviarne un secondo in parallelo (es. un doppio tap sul
+    // pulsante prima che si disabiliti). Due inizializzazioni WebGPU in gara possono esaurire la
+    // memoria video o lasciare lo stato a metà tra un tentativo e l'altro.
+    if (LocalLLM.status === "loading") return false;
+
     LocalLLM.status = "loading";
     LocalLLM.progressPct = 0;
     LocalLLM.progressText = "Avvio del modello locale…";
     if (onProgress) onProgress();
+
+    var stallTimeoutId;
+    var rejectStall;
+    var stallPromise = new Promise(function (_, reject) { rejectStall = reject; });
+    function armStallTimer() {
+      if (stallTimeoutId) clearTimeout(stallTimeoutId);
+      stallTimeoutId = setTimeout(function () {
+        rejectStall(new Error("Il download del modello si è fermato (nessun progresso da oltre due minuti): probabile connessione interrotta o problema con il browser. Riprova."));
+      }, LOCAL_LLM_DOWNLOAD_STALL_MS);
+    }
+    armStallTimer();
+
     try {
       var webllm = await import(/* webpackIgnore: true */ "https://esm.run/@mlc-ai/web-llm");
-      LocalLLM.engine = await webllm.CreateMLCEngine(targetId, {
+      var enginePromise = webllm.CreateMLCEngine(targetId, {
         initProgressCallback: function (p) {
           LocalLLM.progressPct = Math.round((p && p.progress || 0) * 100);
           LocalLLM.progressText = (p && p.text) || "";
+          armStallTimer();
           if (onProgress) onProgress();
         }
       });
+      LocalLLM.engine = await Promise.race([enginePromise, stallPromise]);
+      clearTimeout(stallTimeoutId);
       LocalLLM.status = "ready";
       LocalLLM.loadedModelId = targetId;
       return true;
     } catch (e) {
+      clearTimeout(stallTimeoutId);
       LocalLLM.status = "error";
       LocalLLM.errorMessage = (e && e.message) || "Errore sconosciuto durante il caricamento del modello locale.";
       if (onProgress) onProgress();
@@ -789,44 +820,38 @@
     if (state.nucleiUpdates.length > 6) state.nucleiUpdates.length = 6;
   }
 
-  // ---------- Mappa simbolica dell'Italia ----------
-  // Sagoma semplificata (non cartograficamente precisa: è un simbolo, non una mappa GIS) con la
-  // penisola, la Sicilia e la Sardegna, più un elenco di città reali posizionate in modo approssimato
-  // secondo la loro vera collocazione geografica. Ogni sezione territoriale aperta dal giocatore
-  // "accende" la città successiva nell'elenco: nessuno stato aggiuntivo da salvare, si ricava sempre
-  // dal numero di sezioni attuali. Usata sia per la mappa sia per dare un nome di città reale alle
-  // elezioni locali (vedi triggerLocalElectionCycle).
-  var ITALY_MAP_PATHS = {
-    mainland: "M90,20 Q135,10 170,25 Q190,55 185,90 Q195,160 175,220 Q210,235 230,260 Q205,275 190,280 " +
-      "Q185,310 175,340 Q168,375 155,400 Q145,375 135,350 Q120,300 110,260 Q90,200 95,140 Q80,80 90,20 Z",
-    sicilia: "M155,415 Q175,405 197,414 Q192,434 165,435 Q150,425 155,415 Z",
-    sardegna: "M55,180 Q76,190 72,240 Q70,282 50,292 Q34,270 38,220 Q40,190 55,180 Z"
-  };
+  // ---------- Presenza territoriale del partito ----------
+  // Elenco di città reali, in ordine di apertura: ogni sezione territoriale aperta dal giocatore
+  // "accende" la città successiva nell'elenco. Nessuno stato aggiuntivo da salvare, si ricava sempre
+  // dal numero di sezioni attuali. Usato sia per la mappa sia per dare un nome di città reale alle
+  // elezioni locali (vedi triggerLocalElectionCycle). Un tentativo precedente disegnava anche una
+  // sagoma stilizzata dell'Italia attorno a questi punti: rimossa perché non era riconoscibile come
+  // tale — un elenco di città chiaro vale più di una forma sbagliata.
   var ITALY_LOCATIONS = [
-    { name: "Roma", region: "Lazio", x: 120, y: 230 },
-    { name: "Milano", region: "Lombardia", x: 130, y: 60 },
-    { name: "Napoli", region: "Campania", x: 135, y: 275 },
-    { name: "Torino", region: "Piemonte", x: 100, y: 45 },
-    { name: "Bologna", region: "Emilia-Romagna", x: 140, y: 110 },
-    { name: "Firenze", region: "Toscana", x: 115, y: 150 },
-    { name: "Bari", region: "Puglia", x: 218, y: 258 },
-    { name: "Venezia", region: "Veneto", x: 165, y: 75 },
-    { name: "Genova", region: "Liguria", x: 100, y: 95 },
-    { name: "Palermo", region: "Sicilia", x: 165, y: 420 },
-    { name: "Cagliari", region: "Sardegna", x: 55, y: 270 },
-    { name: "Ancona", region: "Marche", x: 172, y: 170 },
-    { name: "Perugia", region: "Umbria", x: 135, y: 175 },
-    { name: "Pescara", region: "Abruzzo", x: 178, y: 215 },
-    { name: "Potenza", region: "Basilicata", x: 172, y: 300 },
-    { name: "Catanzaro", region: "Calabria", x: 160, y: 360 },
-    { name: "Trento", region: "Trentino-Alto Adige", x: 140, y: 32 },
-    { name: "Trieste", region: "Friuli-Venezia Giulia", x: 190, y: 62 },
-    { name: "Campobasso", region: "Molise", x: 172, y: 235 },
-    { name: "Aosta", region: "Valle d'Aosta", x: 75, y: 35 },
-    { name: "Reggio Calabria", region: "Calabria", x: 150, y: 395 },
-    { name: "Catania", region: "Sicilia", x: 188, y: 428 },
-    { name: "Sassari", region: "Sardegna", x: 48, y: 195 },
-    { name: "Brindisi", region: "Puglia", x: 245, y: 275 }
+    { name: "Roma", region: "Lazio" },
+    { name: "Milano", region: "Lombardia" },
+    { name: "Napoli", region: "Campania" },
+    { name: "Torino", region: "Piemonte" },
+    { name: "Bologna", region: "Emilia-Romagna" },
+    { name: "Firenze", region: "Toscana" },
+    { name: "Bari", region: "Puglia" },
+    { name: "Venezia", region: "Veneto" },
+    { name: "Genova", region: "Liguria" },
+    { name: "Palermo", region: "Sicilia" },
+    { name: "Cagliari", region: "Sardegna" },
+    { name: "Ancona", region: "Marche" },
+    { name: "Perugia", region: "Umbria" },
+    { name: "Pescara", region: "Abruzzo" },
+    { name: "Potenza", region: "Basilicata" },
+    { name: "Catanzaro", region: "Calabria" },
+    { name: "Trento", region: "Trentino-Alto Adige" },
+    { name: "Trieste", region: "Friuli-Venezia Giulia" },
+    { name: "Campobasso", region: "Molise" },
+    { name: "Aosta", region: "Valle d'Aosta" },
+    { name: "Reggio Calabria", region: "Calabria" },
+    { name: "Catania", region: "Sicilia" },
+    { name: "Sassari", region: "Sardegna" },
+    { name: "Brindisi", region: "Puglia" }
   ];
   function openNuclei() {
     var p = state.player;
@@ -838,25 +863,18 @@
     if (!p) return "";
     var open = openNuclei();
     if (!open.length) {
-      return '<section aria-label="Mappa del partito"><p class="eyebrow">Presenza sul territorio</p>' +
-        '<p class="ci-hint">Apri la tua prima sezione territoriale per iniziare a comparire sulla mappa d\'Italia.</p></section>';
+      return '<section aria-label="Presenza sul territorio"><p class="eyebrow">Presenza sul territorio</p>' +
+        '<p class="ci-hint">Apri la tua prima sezione territoriale per iniziare a comparire su questo elenco.</p></section>';
     }
-    var dots = open.map(function (loc, i) {
-      var r = i === 0 ? 6 : 4.2;
-      return '<circle cx="' + loc.x + '" cy="' + loc.y + '" r="' + r + '" fill="' + p.color +
-        '" stroke="#0b0d13" stroke-width="1"><title>' + loc.name + ' (' + loc.region + ')' +
-        (i === 0 ? " — sede nazionale" : "") + '</title></circle>';
+    var pills = open.map(function (loc, i) {
+      return '<span class="nucleo-pill' + (i === 0 ? " capital" : "") + '">' +
+        '<span class="sw" style="background:' + p.color + '"></span>' + loc.name +
+        '<span class="region">' + (i === 0 ? "sede nazionale" : loc.region) + '</span></span>';
     }).join("");
     var extra = p.sezioni > ITALY_LOCATIONS.length
       ? '<p class="ci-hint">+' + (Math.floor(p.sezioni) - ITALY_LOCATIONS.length) + ' altre sezioni minori diffuse sul territorio.</p>' : "";
-    var names = open.map(function (loc) { return loc.name; }).join(" · ");
-    return '<section aria-label="Mappa del partito"><p class="eyebrow">Presenza sul territorio (' + open.length + (p.sezioni > ITALY_LOCATIONS.length ? "+" : "") + ')</p>' +
-      '<div class="italy-map-wrap"><svg class="italy-map" viewBox="0 0 260 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mappa simbolica dell\'Italia con le sezioni del partito">' +
-      '<path d="' + ITALY_MAP_PATHS.mainland + '" class="italy-shape"></path>' +
-      '<path d="' + ITALY_MAP_PATHS.sicilia + '" class="italy-shape"></path>' +
-      '<path d="' + ITALY_MAP_PATHS.sardegna + '" class="italy-shape"></path>' +
-      dots + '</svg></div>' +
-      '<p class="italy-map-caption">' + names + '</p>' + extra + '</section>';
+    return '<section aria-label="Presenza sul territorio"><p class="eyebrow">Presenza sul territorio (' + open.length + (p.sezioni > ITALY_LOCATIONS.length ? "+" : "") + ')</p>' +
+      '<div class="nuclei-grid">' + pills + '</div>' + extra + '</section>';
   }
 
   // ---------- Continuità locale, senza alcuna chiamata di rete ----------
@@ -3220,7 +3238,12 @@
   }
   renderLocalLlmPicker();
   renderLocalLlmStatus();
-  document.getElementById("init-local-llm-btn").addEventListener("click", function () {
+  var initLocalLlmBtn = document.getElementById("init-local-llm-btn");
+  initLocalLlmBtn.addEventListener("click", function () {
+    // Disabilita subito, in modo sincrono, prima ancora che parta la chiamata asincrona: senza
+    // questo un doppio tap veloce (facile su telefono, mentre l'interfaccia sembra non rispondere
+    // subito) potrebbe avviare due caricamenti del modello in parallelo.
+    initLocalLlmBtn.disabled = true;
     initLocalLLM(renderLocalLlmStatus).then(function (ok) {
       renderLocalLlmPicker();
       renderLocalLlmStatus();
