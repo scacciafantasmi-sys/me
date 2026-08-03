@@ -2554,22 +2554,28 @@
         continueBtn.textContent = "Preparazione della prossima settimana…";
         state.turn++;
         state.phase = "building";
-        await advanceTurnLogic();
+        try {
+          await advanceTurnLogic();
+        } catch (e) {
+          // Rete di sicurezza: qualunque cosa vada storta qui dentro, il pulsante non deve MAI restare
+          // bloccato. Sceglie un dossier statico garantito valido, invece di restare fermi in silenzio.
+          if (window.console && console.error) console.error("advanceTurnLogic ha lanciato un errore imprevisto:", e);
+          var fallbackChosen = DOSSIERS[Math.floor(Math.random() * DOSSIERS.length)];
+          state.currentDossierId = fallbackChosen.id;
+          state.forceInitiativeOnly = false;
+          state.phase = "building";
+        }
         save();
         render();
       });
       return;
     }
 
-    var body = renderPlayerStats();
-    body += renderNucleiUpdates();
-    body += renderStaffPanel();
-    body += renderIdeologyProfile();
-    body += renderPollGrid(state.prevSnapshot);
-    body += renderNationalStrip();
-    body += renderWorldNews();
-    body += renderParliament();
-
+    // Il dossier/risultato va SEMPRE per primo, subito dopo la testata: è l'unica cosa che richiede
+    // un'azione, e con tutti i pannelli informativi qui sotto (nuclei, sondaggi, mondo, parlamento) la
+    // pagina è diventata lunga — se il pulsante "Avanti" finisse in fondo, su un telefono resterebbe
+    // fuori schermo anche tornando in cima, e sembrerebbe che il gioco si sia bloccato quando non è così.
+    var body = "";
     if (state.phase === "building") {
       body += renderDossierCard(currentDossier());
     } else if (state.phase === "result") {
@@ -2577,9 +2583,25 @@
       body += renderHeadlines(state.resultData.headlines);
     }
 
+    body += renderPlayerStats();
+    body += renderNucleiUpdates();
+    body += renderStaffPanel();
+    body += renderIdeologyProfile();
+    body += renderPollGrid(state.prevSnapshot);
+    body += renderNationalStrip();
+    body += renderWorldNews();
+    body += renderParliament();
     body += renderLog();
     app.innerHTML = body;
     bindInteractions();
+
+    // Dopo aver risolto un'iniziativa (via IA o sistema di riserva) l'utente resta spesso con lo
+    // scroll in basso, dov'era la casella di testo: senza questo, il pulsante "Avanti alla settimana
+    // successiva" (che compare in cima al nuovo contenuto) può restare fuori dallo schermo e sembrare
+    // che il gioco si sia bloccato, quando in realtà ha già prodotto un esito ed è pronto a proseguire.
+    if (state.phase === "result" && typeof window !== "undefined" && window.scrollTo) {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
   }
 
   function bindInteractions() {
@@ -2645,7 +2667,17 @@
         advance.disabled = true;
         advance.textContent = getApiKey() ? "Preparazione della prossima settimana…" : "Avanti…";
         state.turn++;
-        await advanceTurnLogic();
+        try {
+          await advanceTurnLogic();
+        } catch (e) {
+          // Rete di sicurezza: qualunque cosa vada storta qui dentro, il pulsante non deve MAI restare
+          // bloccato. Sceglie un dossier statico garantito valido, invece di restare fermi in silenzio.
+          if (window.console && console.error) console.error("advanceTurnLogic ha lanciato un errore imprevisto:", e);
+          var fallbackChosen = DOSSIERS[Math.floor(Math.random() * DOSSIERS.length)];
+          state.currentDossierId = fallbackChosen.id;
+          state.forceInitiativeOnly = false;
+          state.phase = "building";
+        }
         save();
         render();
       });
@@ -2659,9 +2691,20 @@
         var text = (textEl.value || "").trim();
         if (!text) { showSaveStatus("Scrivi prima una breve descrizione della tua iniziativa.", true); return; }
 
+        // Esito di riserva a prova di errore: anche se resolveCustomInitiative dovesse a sua volta fallire
+        // per un motivo imprevisto, il turno si chiude comunque con un esito minimo, mai con un blocco.
+        function safeFallbackResult() {
+          try {
+            return resolveCustomInitiative(text, tierId);
+          } catch (e2) {
+            if (window.console && console.error) console.error("Anche il sistema di riserva ha lanciato un errore:", e2);
+            return { resultText: "L'iniziativa viene registrata nel programma del partito.", headlines: [] };
+          }
+        }
+
         if (!getApiKey()) {
           state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
-          state.resultData = resolveCustomInitiative(text, tierId);
+          state.resultData = safeFallbackResult();
           state.phase = "result";
           save();
           render();
@@ -2678,16 +2721,13 @@
           render();
         }).catch(function (err) {
           // L'IA può non essere disponibile per tanti motivi (quota Google esaurita, rete, timeout):
-          // qualunque sia la causa, la partita non deve mai restare bloccata. Si ricade sul sistema di
-          // riserva integrato (basato sulla fascia di impegno scelta), che produce comunque un esito
-          // reale e permette di continuare subito a giocare.
-          showSaveStatus(
-            "IA non disponibile in questo momento (" + ((err && err.message) || "errore sconosciuto") +
-            "): uso il sistema di riserva per non fermare la partita.", true
-          );
-          var fallbackResult = resolveCustomInitiative(text, tierId);
-          fallbackResult.resultText = "(Valutata con il sistema di riserva: l'IA non era disponibile in questo momento.) " + fallbackResult.resultText;
-          state.resultData = fallbackResult;
+          // qualunque sia la causa, la partita non deve mai restare bloccata, e questo NON è un errore
+          // per il giocatore: il turno si risolve comunque, con successo, tramite il sistema di riserva.
+          // Il dettaglio tecnico va in console per il debug, non nell'avviso mostrato (che altrimenti,
+          // pur non bloccando nulla, sembra uno stato di errore/crash quando invece ha funzionato).
+          if (window.console && console.warn) console.warn("Iniziativa valutata con il sistema di riserva:", err);
+          showSaveStatus("IA non raggiungibile in questo momento: iniziativa valutata con il sistema di riserva, la partita continua normalmente.", false);
+          state.resultData = safeFallbackResult();
           state.phase = "result";
           save();
           render();
@@ -2852,6 +2892,10 @@
     } else {
       showSaveStatus("Chiave attiva solo per questa sessione: il browser blocca il salvataggio permanente qui (es. modalità privata, o restrizioni su file aperti in locale). Funziona finché non ricarichi o chiudi la pagina.", true);
     }
+    // Richiude il pannello dopo il salvataggio: se resta aperto occupa spazio in cima alla pagina e può
+    // spingere fuori schermo il pulsante "Avanti" più in basso, specie su telefono.
+    var aiSettingsPanel = document.getElementById("ai-settings");
+    if (aiSettingsPanel) aiSettingsPanel.open = false;
     render();
   });
   document.getElementById("remove-api-key-btn").addEventListener("click", function () {
