@@ -322,6 +322,7 @@
   .log-entry:last-child { border-bottom: none; }
   .log-entry.election { background: var(--accent-soft); }
   .log-entry.scissione { background: var(--critical-soft); }
+  .log-entry.cronaca { border-left: 3px solid var(--text-dim); }
   .log-entry .lw { font-family: var(--font-mono); color: var(--text-dim); margin-right: 0.5rem; }
 
   /* ---------- Footer ---------- */
@@ -1038,6 +1039,37 @@
   };
 
   var OUTLETS = ["Il Domani d'Italia", "La Voce Libera", "Cronaca Aperta", "Il Dossier"];
+
+  // ---------- Vita autonoma dei partiti rivali ----------
+  // Ogni settimana, indipendentemente da quello che fa il giocatore, c'è una probabilità che uno degli
+  // altri partiti reali abbia un proprio evento (proposta, gaffe, scandalo, tensione interna...) con un
+  // effetto reale sui suoi sondaggi. Nessuna chiamata IA richiesta: sempre attivo, anche senza chiave.
+  var RIVAL_EVENTS = [
+    { text: function (n) { return n + " presenta una proposta che raccoglie consensi trasversali."; }, delta: [0.3, 1.1] },
+    { text: function (n) { return n + " incassa un endorsement inatteso da una figura pubblica di rilievo."; }, delta: [0.2, 0.9] },
+    { text: function (n) { return "Il leader di " + n + " convince nel confronto televisivo della settimana."; }, delta: [0.2, 0.8] },
+    { text: function (n) { return n + " presenta un piano economico che piace all'elettorato indeciso."; }, delta: [0.2, 1] },
+    { text: function (n) { return n + " ottiene una vittoria simbolica in Parlamento su un tema identitario."; }, delta: [0.15, 0.7] },
+    { text: function (n) { return "Una gaffe di un dirigente di " + n + " finisce sui social e sui talk show."; }, delta: [-1.2, -0.3] },
+    { text: function (n) { return "Scintille interne in " + n + ": due correnti si scontrano pubblicamente."; }, delta: [-1, -0.2] },
+    { text: function (n) { return "Un'inchiesta giornalistica coinvolge esponenti locali di " + n + "."; }, delta: [-1.5, -0.4] },
+    { text: function (n) { return n + " perde un big che passa a un altro partito."; }, delta: [-0.8, -0.2] },
+    { text: function (n) { return "Un sondaggio interno agita i vertici di " + n + "."; }, delta: [-0.4, 0.2] },
+    { text: function (n) { return n + " apre il congresso di partito, tra applausi e qualche fischio."; }, delta: [-0.3, 0.3] },
+    { text: function (n) { return "Il gruppo parlamentare di " + n + " si spacca su un voto chiave."; }, delta: [-0.9, -0.15] }
+  ];
+
+  function triggerRivalPartyEvent() {
+    if (Math.random() > 0.4) return;
+    var party = PARTIES[Math.floor(Math.random() * PARTIES.length)];
+    var tpl = RIVAL_EVENTS[Math.floor(Math.random() * RIVAL_EVENTS.length)];
+    var delta = tpl.delta[0] + Math.random() * (tpl.delta[1] - tpl.delta[0]);
+    state.parties[party.id] = Math.max(0.3, state.parties[party.id] + delta);
+    state.log.unshift({
+      week: state.turn, title: "Cronaca politica", choiceLabel: party.short,
+      result: tpl.text(party.name), headlines: [], type: "cronaca"
+    });
+  }
 
   var HEADLINE_BANK = {
     "La Voce Libera": function (ev, ch) {
@@ -2061,7 +2093,7 @@
   function renderLog() {
     if (!state.log.length) return "";
     var items = state.log.slice(0, 16).map(function (e) {
-      var cls = e.type === "election" ? " election" : e.type === "scissione" ? " scissione" : "";
+      var cls = e.type === "election" ? " election" : e.type === "scissione" ? " scissione" : e.type === "cronaca" ? " cronaca" : "";
       return '<div class="log-entry' + cls + '"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong> — " + e.choiceLabel + "<br>" + e.result + "</div>";
     }).join("");
     return '<section><details class="log"><summary>Registro delle decisioni (' + state.log.length + ")<span>▾</span></summary>" +
@@ -2271,6 +2303,7 @@
 
   function advanceTurnLogic() {
     recomputePeriodic();
+    triggerRivalPartyEvent();
 
     if (state.turn >= state.nextElectionTurn) {
       resolveElection();
