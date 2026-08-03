@@ -834,28 +834,32 @@
     }
     return null;
   }
+  // Una voce di registro conta come "presa di posizione del giocatore" sia che arrivi da un'Iniziativa
+  // Libera scritta a testo, sia che arrivi da una scelta multipla su una situazione generata (che ormai
+  // è il caso più comune) — la riconosciamo dal titolo "Iniziativa Libera" o dalla categoria "Politica — ...".
+  function isPlayerStanceEntry(e) {
+    return e.type === "dossier" && ((e.title && e.title.indexOf("Iniziativa Libera") === 0) || (e.cat && e.cat.indexOf("Politica") === 0));
+  }
   function findLastPlayerInitiative() {
     // state.log[0] non è per forza l'ultima azione del giocatore: eventi autonomi di altri partiti
     // ("Cronaca politica") o altre voci possono essere state aggiunte dopo. Cerca specificamente
-    // l'ultima "Iniziativa Libera" scritta davvero dal giocatore.
+    // l'ultima vera presa di posizione del giocatore (iniziativa libera o scelta multipla su una situazione).
     for (var i = 0; i < state.log.length; i++) {
-      var e = state.log[i];
-      if (e.type === "dossier" && e.title && e.title.indexOf("Iniziativa Libera") === 0) return e;
+      if (isPlayerStanceEntry(state.log[i])) return state.log[i];
     }
     return null;
   }
-  // Guarda le ultime iniziative scritte davvero dal giocatore (non le cronache di altri) e, se almeno
+  // Guarda le ultime prese di posizione vere del giocatore (non le cronache di altri) e, se almeno
   // due delle ultime quattro riguardano lo stesso tema, lo considera un filone attivo — la vera
   // "memoria" del gioco: non serve nessuno stato salvato apposta, si ricava sempre dal registro reale.
   function computeThemeMomentum() {
     var recent = [];
     for (var i = 0; i < state.log.length && recent.length < 4; i++) {
-      var e = state.log[i];
-      if (e.type === "dossier" && e.title && e.title.indexOf("Iniziativa Libera") === 0) recent.push(e);
+      if (isPlayerStanceEntry(state.log[i])) recent.push(state.log[i]);
     }
     var counts = {};
     recent.forEach(function (e) {
-      var cat = detectThemeCategory(e.choiceLabel || "");
+      var cat = (e.cat && e.cat.indexOf("Politica") === 0) ? e.cat : detectThemeCategory(e.choiceLabel || "");
       if (cat) counts[cat] = (counts[cat] || 0) + 1;
     });
     var best = null, bestCount = 0;
@@ -885,6 +889,8 @@
     { id: "sport", label: "Politica — Sport", nouns: ["gli impianti sportivi comunali fatiscenti", "lo sport di base nelle scuole", "una squadra locale in difficoltà", "gli eventi sportivi cittadini"] },
     { id: "infrastrutture", label: "Politica — Infrastrutture", nouns: ["un'opera pubblica bloccata da anni", "la manutenzione di ponti e strade", "il collegamento con le aree interne", "un cantiere fermo nel territorio"] }
   ];
+  var SITUATION_THEME_BY_LABEL = {};
+  SITUATION_THEMES.forEach(function (t) { SITUATION_THEME_BY_LABEL[t.label] = t; });
   var SITUATION_SHAPES = [
     { kind: "Inchiesta", brief: function (noun, ctx) { return "Un'inchiesta giornalistica accende i riflettori su " + noun + " a " + ctx.city + "."; } },
     { kind: "Protesta", brief: function (noun, ctx) { return "Un comitato di cittadini organizza una protesta su " + noun + ", proprio nella tua zona di riferimento."; } },
@@ -942,6 +948,477 @@
     }
     return items[items.length - 1];
   }
+  function shuffleN(arr, n) {
+    var pool = arr.slice(), out = [];
+    while (out.length < n && pool.length) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    return out;
+  }
+  function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
+  // Otto "archetipi di risposta" riutilizzabili: non sono testi fissi, ma funzioni che generano
+  // un'etichetta, un effetto e un esito concreti al momento, sul tema/città/rivale/coerenza specifici
+  // di quella situazione — così le stesse otto impostazioni di fondo producono scelte sempre diverse
+  // nei numeri e nel testo. Combinate con 20 temi x 12 angolazioni x 24 città x partiti rivali reali,
+  // il numero di combinazioni (situazione + set di scelte) possibili è enorme.
+  var RESPONSE_ARCHETYPES = [
+    {
+      id: "linea_dura",
+      make: function (ctx) {
+        var rep = ctx.coherent ? rand(1, 4) : -rand(2, 6);
+        var isc = ctx.coherent ? rand(15, 35) : -rand(5, 20);
+        return {
+          label: "Prendi una posizione netta e senza compromessi su " + ctx.noun,
+          hint: ctx.coherent ? "Coerente con la tua linea: rischioso ma può pagare" : "Rischioso: non è proprio il tuo terreno abituale",
+          effects: { visibilita: rand(5, 11), reputazione: rep, iscritti: isc },
+          result: ctx.coherent
+            ? "La linea dura convince la tua base e fa parlare di te."
+            : "La linea dura divide anche i tuoi, ma se ne parla parecchio."
+        };
+      }
+    },
+    {
+      id: "proposta_concreta",
+      make: function (ctx) {
+        return {
+          label: "Presenta una proposta concreta su " + ctx.noun,
+          hint: "Costa risorse, costruisce credibilità",
+          effects: { fondi: -rand(200, 600), reputazione: rand(1, 3), iscritti: rand(10, 25) },
+          result: "La proposta viene presa sul serio: qualche titolo di giornale e un po' di credibilità in più."
+        };
+      }
+    },
+    {
+      id: "mobilitazione_territorio",
+      make: function (ctx) {
+        return {
+          label: "Mobilita i militanti sul territorio a " + ctx.city,
+          hint: "Coinvolge la base, meno riflettori nazionali",
+          effects: { fondi: -rand(100, 300), iscritti: rand(20, 45), visibilita: rand(1, 4) },
+          result: "La mobilitazione sul territorio paga soprattutto in consenso diretto, non in prima pagina."
+        };
+      }
+    },
+    {
+      id: "basso_profilo",
+      make: function (ctx) {
+        return {
+          label: "Lascia correre, non è la priorità di questa settimana",
+          hint: "Nessun rischio, nessun guadagno",
+          effects: { reputazione: rand(-1, 0.5) },
+          result: "Il partito resta defilato su questo: nessun contraccolpo, ma nemmeno un guadagno."
+        };
+      }
+    },
+    {
+      id: "attacco_rivale",
+      make: function (ctx) {
+        return {
+          label: "Attacca duramente " + ctx.rivalName + " sul tema",
+          hint: "Scontro diretto: molto rumore, un po' di rischio",
+          effects: { visibilita: rand(6, 12), reputazione: -rand(1, 4), rivalExtra: -rand(0.1, 0.4) },
+          result: "Lo scontro con " + ctx.rivalName + " domina i titoli del giorno, nel bene e nel male."
+        };
+      }
+    },
+    {
+      id: "campagna_social",
+      make: function (ctx) {
+        return {
+          label: "Lancia una campagna sui social su " + ctx.noun,
+          hint: "Costo basso, esito imprevedibile",
+          effects: { fondi: -rand(30, 120), visibilita: rand(-2, 9) },
+          result: "La campagna social prende una vita propria, in un modo non sempre prevedibile."
+        };
+      }
+    },
+    {
+      id: "coinvolgi_esperti",
+      make: function (ctx) {
+        return {
+          label: "Coinvolgi esperti e associazioni di categoria su " + ctx.noun,
+          hint: "Costruisce credibilità tecnica",
+          effects: { fondi: -rand(150, 400), reputazione: rand(2, 4) },
+          result: "Il coinvolgimento di esperti e categorie dà spessore tecnico alla posizione del partito."
+        };
+      }
+    },
+    {
+      id: "dichiarazione_istituzionale",
+      make: function (ctx) {
+        return {
+          label: "Rilascia una dichiarazione istituzionale misurata",
+          hint: "Prudente, credibilità solida",
+          effects: { reputazione: rand(1, 3), visibilita: rand(1, 3) },
+          result: "Il tono misurato non fa notizia, ma rafforza l'immagine istituzionale del partito."
+        };
+      }
+    }
+  ];
+  function buildSituationChoices(ctx) {
+    var picked = shuffleN(RESPONSE_ARCHETYPES, 4);
+    return picked.map(function (arch) {
+      var c = arch.make(ctx);
+      return { label: c.label, hint: c.hint, effects: c.effects, result: c.result };
+    });
+  }
+  // Banca di situazioni scritte apposta per ciascuna delle 13 famiglie politiche: non sono il tema
+  // generico ripesato verso l'identità del partito (quello lo fa già generateCombinatorialSituation),
+  // ma episodi specifici che parlano davvero il linguaggio di quella particolare ideologia, con scelte
+  // pensate apposta e non gli 8 archetipi generici riusati per tutti.
+  var FAMILY_SITUATIONS = {
+    sovranista: [
+      { id: "fam_sovranista_1", cat: "Politica — Immigrazione", title: "Nuovi sbarchi sulle coste",
+        brief: "Un aumento improvviso degli sbarchi riaccende il dibattito nazionale sull'immigrazione, e i cronisti ti cercano per una posizione chiara.",
+        choices: [
+          { label: "Chiedi il blocco navale e controlli più rigidi alle frontiere", hint: "Linea dura: mobilita la tua base, divide il resto", effects: { visibilita: 9, reputazione: -2, iscritti: 30 }, result: "La linea dura fa discutere ovunque: la tua base si compatta, il resto del dibattito si infiamma." },
+          { label: "Proponi accordi bilaterali con i paesi di partenza", hint: "Più concreto, meno immediato", effects: { fondi: -300, reputazione: 3, visibilita: 4 }, result: "La proposta di accordi bilaterali viene presa sul serio anche da chi non condivide la tua linea." },
+          { label: "Attacca l'Unione Europea per l'assenza di sostegno", hint: "Scontro con Bruxelles, molto rumore", effects: { visibilita: 8, reputazione: -1, rivalExtra: -0.1 }, result: "L'affondo contro Bruxelles fa notizia e mette in imbarazzo chi difende la linea europea." },
+          { label: "Lascia parlare i dati, evita toni sopra le righe", hint: "Prudente, meno cavalcata mediatica", effects: { reputazione: 2, visibilita: 1 }, result: "Il tono misurato non fa titoli, ma qualcuno lo apprezza come segno di serietà." }
+        ] },
+      { id: "fam_sovranista_2", cat: "Politica — Lavoro", title: "Una fabbrica delocalizza all'estero",
+        brief: "Uno storico stabilimento annuncia il trasferimento della produzione fuori dall'Italia, lasciando a casa centinaia di lavoratori.",
+        choices: [
+          { label: "Lancia una campagna per il 'Made in Italy' e incentivi a chi resta", hint: "Coerente con la tua linea, costa risorse", effects: { fondi: -400, reputazione: 3, iscritti: 25 }, result: "La campagna sul Made in Italy intercetta la rabbia dei lavoratori coinvolti." },
+          { label: "Chiedi dazi e barriere per proteggere la produzione nazionale", hint: "Posizione netta, divide gli economisti", effects: { visibilita: 7, reputazione: -1, iscritti: 15 }, result: "La proposta protezionista scalda la base ma divide gli osservatori economici." },
+          { label: "Vai di persona a incontrare gli operai davanti ai cancelli", hint: "Presenza fisica, meno costoso", effects: { fondi: -150, visibilita: 5, iscritti: 20 }, result: "La presenza ai cancelli viene notata: sei lì, e si vede." },
+          { label: "Non intervenire, non è terreno tuo da presidiare ora", hint: "Nessun rischio, nessuna occasione colta", effects: { reputazione: -2 }, result: "Il silenzio su un caso così sentito viene notato, e non in senso positivo." }
+        ] },
+      { id: "fam_sovranista_3", cat: "Politica — Famiglia", title: "Il Parlamento discute la crisi della natalità",
+        brief: "Una commissione parlamentare presenta dati allarmanti sul crollo delle nascite e chiede alle forze politiche di dire la loro.",
+        choices: [
+          { label: "Proponi un grande piano di sostegno alle famiglie numerose", hint: "Coerente, costoso da mantenere", effects: { fondi: -350, reputazione: 3, iscritti: 20 }, result: "Il piano per le famiglie numerose intercetta un tema sentito e poco presidiato dagli altri." },
+          { label: "Lega il tema della natalità anche a quello dell'immigrazione regolare", hint: "Posizione più netta, più divisiva", effects: { visibilita: 6, reputazione: -2 }, result: "Il collegamento tra i due temi accende il dibattito, ma qualcuno lo trova strumentale." },
+          { label: "Chiedi congedi parentali più lunghi e asili gratuiti", hint: "Proposta concreta, trasversale", effects: { fondi: -250, reputazione: 2, visibilita: 3 }, result: "La proposta su congedi e asili raccoglie consensi anche fuori dal tuo elettorato naturale." },
+          { label: "Rimanda: il tema non è la priorità di questa settimana", hint: "Nessun costo, occasione persa", effects: { reputazione: -1 }, result: "Il rinvio passa quasi inosservato, ma il tema resta scoperto per un'altra settimana." }
+        ] }
+    ],
+    liberale: [
+      { id: "fam_liberale_1", cat: "Politica — Economia", title: "Il governo vara nuove tasse sulle imprese",
+        brief: "Una manovra economica introduce un inasprimento fiscale per le imprese, giustificato con esigenze di bilancio.",
+        choices: [
+          { label: "Denuncia il rischio di fuga di capitali e imprese", hint: "Linea liberale netta", effects: { visibilita: 7, reputazione: 2, iscritti: 15 }, result: "La denuncia sulla fuga di capitali trova eco tra imprenditori e partite IVA." },
+          { label: "Proponi una riduzione della spesa pubblica come alternativa", hint: "Proposta tecnica, costruisce credibilità", effects: { fondi: -300, reputazione: 3 }, result: "La proposta alternativa viene presa sul serio da chi segue davvero i conti pubblici." },
+          { label: "Organizza un incontro con le associazioni di categoria", hint: "Costruisce rete, costa risorse", effects: { fondi: -400, reputazione: 2, iscritti: 18 }, result: "L'incontro con le categorie rafforza i legami con il mondo produttivo." },
+          { label: "Lascia correre: non è una battaglia che puoi vincere ora", hint: "Nessun rischio, nessuna occasione colta", effects: { reputazione: -1 }, result: "Il silenzio sul tema fiscale non passa inosservato tra i tuoi elettori naturali." }
+        ] },
+      { id: "fam_liberale_2", cat: "Politica — Digitale", title: "Una startup italiana minaccia di trasferirsi all'estero",
+        brief: "I fondatori di una startup innovativa denunciano pubblicamente la burocrazia italiana e valutano di spostare la sede.",
+        choices: [
+          { label: "Proponi una authority a burocrazia zero per le startup", hint: "Coerente, tema tecnico", effects: { fondi: -250, reputazione: 3, visibilita: 4 }, result: "La proposta di semplificazione trova sponda tra gli imprenditori digitali." },
+          { label: "Vai a incontrare i fondatori e ne fai un caso mediatico", hint: "Alta visibilità, poco strutturale", effects: { visibilita: 8, iscritti: 15 }, result: "L'incontro pubblico fa notizia, ma resta più simbolico che risolutivo." },
+          { label: "Chiedi sgravi fiscali mirati per l'innovazione", hint: "Proposta concreta, costosa da sostenere", effects: { fondi: -350, reputazione: 2, iscritti: 12 }, result: "La proposta di sgravi viene accolta bene, anche se richiederà tempo per essere valutata." },
+          { label: "Non intervenire, è un caso isolato", hint: "Nessun costo, occasione persa", effects: { reputazione: -2 }, result: "Il caso diventa virale comunque, e la tua assenza dal dibattito si nota." }
+        ] },
+      { id: "fam_liberale_3", cat: "Politica — Lavoro", title: "I sindacati proclamano uno sciopero generale",
+        brief: "I sindacati indicono uno sciopero generale contro una riforma del mercato del lavoro, paralizzando diversi settori.",
+        choices: [
+          { label: "Difendi la riforma come necessaria per la competitività", hint: "Coerente, rischioso col mondo del lavoro", effects: { visibilita: 6, reputazione: -2, iscritti: 10 }, result: "La difesa della riforma ti allontana dai sindacati ma convince la tua base." },
+          { label: "Proponi correttivi mirati senza stravolgere la riforma", hint: "Posizione mediana, meno netta", effects: { fondi: -200, reputazione: 3 }, result: "I correttivi proposti aprono un dialogo, senza soddisfare pienamente nessuno." },
+          { label: "Critica lo sciopero come dannoso per l'economia", hint: "Linea dura, molto rumore", effects: { visibilita: 8, reputazione: -3, rivalExtra: -0.1 }, result: "La critica allo sciopero scatena polemiche furiose sui social." },
+          { label: "Osserva senza esporti troppo", hint: "Prudente", effects: { reputazione: -1 }, result: "Il basso profilo non convince chi si aspettava una linea più netta da te." }
+        ] }
+    ],
+    progressista: [
+      { id: "fam_progressista_1", cat: "Politica — Ambiente", title: "Un'ondata di calore record colpisce il paese",
+        brief: "Temperature mai viste mettono in crisi ospedali, agricoltura e città, riaprendo il dibattito sulla crisi climatica.",
+        choices: [
+          { label: "Chiedi un piano nazionale d'emergenza climatica", hint: "Coerente, ambizioso", effects: { fondi: -300, reputazione: 3, visibilita: 6 }, result: "Il piano d'emergenza climatica ti posiziona con chiarezza sul tema del momento." },
+          { label: "Organizza una mobilitazione pubblica sul clima", hint: "Coinvolge la base, visibile", effects: { fondi: -150, iscritti: 30, visibilita: 5 }, result: "La mobilitazione porta in piazza soprattutto i più giovani, ed è molto fotografata." },
+          { label: "Proponi incentivi per il verde urbano nelle città", hint: "Proposta concreta e locale", effects: { fondi: -250, reputazione: 2, iscritti: 15 }, result: "La proposta sul verde urbano piace agli amministratori locali più sensibili al tema." },
+          { label: "Evita di cavalcare l'emergenza del momento", hint: "Prudente, rischia di sembrare assente", effects: { reputazione: -2 }, result: "L'assenza dal dibattito sul clima, proprio ora, viene notata dai tuoi elettori più convinti." }
+        ] },
+      { id: "fam_progressista_2", cat: "Politica — Giovani", title: "Un'inchiesta racconta la fuga dei giovani all'estero",
+        brief: "Un reportage nazionale documenta quanti giovani italiani lasciano il paese in cerca di opportunità migliori.",
+        choices: [
+          { label: "Proponi un piano per il lavoro giovanile di qualità", hint: "Coerente, costruisce credibilità", effects: { fondi: -300, reputazione: 3, iscritti: 25 }, result: "Il piano per il lavoro giovanile intercetta la rabbia di chi si sente senza futuro qui." },
+          { label: "Lancia una campagna social diretta ai giovani italiani all'estero", hint: "Costo basso, esito variabile", effects: { fondi: -100, visibilita: 6 }, result: "La campagna social raccoglie molte condivisioni da chi vive fuori dall'Italia." },
+          { label: "Organizza assemblee nelle università", hint: "Coinvolge la base sul territorio", effects: { fondi: -150, iscritti: 30, visibilita: 3 }, result: "Le assemblee universitarie portano nuove adesioni tra gli studenti." },
+          { label: "Non è un tema su cui puoi incidere ora", hint: "Nessun rischio, nessuna occasione colta", effects: { reputazione: -1 }, result: "Il silenzio sul tema, proprio nella settimana del reportage, non passa inosservato." }
+        ] },
+      { id: "fam_progressista_3", cat: "Politica — Cultura", title: "Una polemica esplode su un caso di discriminazione",
+        brief: "Un episodio di discriminazione diventa virale e divide l'opinione pubblica sul tema dei diritti civili.",
+        choices: [
+          { label: "Prendi posizione netta a difesa dei diritti civili", hint: "Coerente, rischioso col resto del dibattito", effects: { visibilita: 8, reputazione: 2, iscritti: 20 }, result: "La presa di posizione netta ti allinea con la tua base più convinta." },
+          { label: "Proponi una legge specifica contro la discriminazione", hint: "Proposta concreta, più lenta", effects: { fondi: -250, reputazione: 3 }, result: "La proposta di legge viene presa sul serio, anche se richiederà tempo per avanzare." },
+          { label: "Organizza un confronto pubblico sul tema", hint: "Costruisce dialogo, meno immediato", effects: { fondi: -150, reputazione: 2, visibilita: 3 }, result: "Il confronto pubblico abbassa i toni e costruisce credibilità sul tema." },
+          { label: "Resta fuori dalla polemica, rischia di essere strumentalizzata", hint: "Prudente", effects: { reputazione: -2 }, result: "Restare fuori dalla polemica delude chi si aspettava una parola chiara da te." }
+        ] }
+    ],
+    movimentista: [
+      { id: "fam_movimentista_1", cat: "Politica — Giustizia", title: "Un caso di malagestione pubblica scuote la fiducia nelle istituzioni",
+        brief: "Un'inchiesta rivela sprechi e favoritismi in un ente pubblico, alimentando la sfiducia verso la politica tradizionale.",
+        choices: [
+          { label: "Lancia una petizione popolare per la trasparenza totale degli enti", hint: "Coerente con lo stile movimentista", effects: { fondi: -100, iscritti: 35, visibilita: 6 }, result: "La petizione raccoglie firme rapidamente, cavalcando la rabbia diffusa." },
+          { label: "Chiedi le dimissioni immediate dei responsabili", hint: "Linea dura, molto rumore", effects: { visibilita: 9, reputazione: -1, rivalExtra: -0.1 }, result: "La richiesta di dimissioni fa notizia e mette pressione sugli altri partiti." },
+          { label: "Proponi uno strumento di controllo civico permanente", hint: "Proposta strutturale, più lenta", effects: { fondi: -200, reputazione: 3 }, result: "La proposta di controllo civico viene vista come seria e non solo di protesta." },
+          { label: "Non cavalcare, rischia di sembrare opportunismo", hint: "Prudente", effects: { reputazione: -1 }, result: "Restare in silenzio su un caso così sentito stride con la tua immagine di movimento." }
+        ] },
+      { id: "fam_movimentista_2", cat: "Politica — Digitale", title: "Un comitato di cittadini ti chiede di sostenere un referendum locale",
+        brief: "Un comitato spontaneo raccoglie firme per un referendum su un tema molto sentito nella tua zona di riferimento e ti chiede supporto.",
+        choices: [
+          { label: "Sostieni apertamente il comitato e la raccolta firme", hint: "Coerente con lo stile movimentista", effects: { fondi: -100, iscritti: 30, visibilita: 5 }, result: "Il sostegno al comitato rafforza il legame con la cittadinanza attiva." },
+          { label: "Metti a disposizione una piattaforma digitale per la raccolta firme", hint: "Investe in strumenti digitali", effects: { fondi: -300, iscritti: 20, visibilita: 4 }, result: "La piattaforma digitale accelera la raccolta firme e lascia uno strumento riutilizzabile." },
+          { label: "Resta neutrale mentre gli iscritti scelgono da soli", hint: "Coerente con la democrazia interna, meno visibile", effects: { reputazione: 2 }, result: "La neutralità viene letta come coerenza con i valori partecipativi del partito." },
+          { label: "Declina, il tema è troppo divisivo", hint: "Prudente", effects: { reputazione: -2 }, result: "Il rifiuto delude proprio chi si aspettava di più da un partito che si dice movimento." }
+        ] },
+      { id: "fam_movimentista_3", cat: "Politica — Trasporti", title: "La stampa ti accusa di essere 'un partito senza struttura'",
+        brief: "Un editoriale mette in dubbio la solidità organizzativa del tuo movimento, definendolo inconsistente sul territorio.",
+        choices: [
+          { label: "Rispondi mostrando i dati reali delle sezioni territoriali", hint: "Prova concreta, costruisce credibilità", effects: { reputazione: 3, visibilita: 3 }, result: "I dati sulle sezioni territoriali smentiscono l'accusa e rafforzano l'immagine del movimento." },
+          { label: "Lancia un tour nelle periferie per dimostrare radicamento", hint: "Costoso ma visibile", effects: { fondi: -400, iscritti: 25, visibilita: 5 }, result: "Il tour nelle periferie porta prove concrete di radicamento, e nuove adesioni." },
+          { label: "Ignora l'accusa, non merita risposta", hint: "Prudente, rischia di sembrare debolezza", effects: { reputazione: -2 }, result: "Il silenzio viene letto come una conferma implicita dell'accusa." },
+          { label: "Attacca la testata come parte dell'establishment", hint: "Scontro diretto, molto rumore", effects: { visibilita: 7, reputazione: -1 }, result: "L'attacco alla testata infiamma il dibattito, ma qualcuno lo trova fuori bersaglio." }
+        ] }
+    ],
+    sinistra: [
+      { id: "fam_sinistra_1", cat: "Politica — Lavoro", title: "Un'azienda annuncia licenziamenti di massa",
+        brief: "Una grande azienda del territorio annuncia centinaia di licenziamenti, nonostante utili in crescita.",
+        choices: [
+          { label: "Organizza un presidio davanti ai cancelli con i lavoratori", hint: "Coerente, presenza diretta", effects: { fondi: -200, iscritti: 35, visibilita: 5 }, result: "Il presidio ai cancelli rafforza il legame con i lavoratori coinvolti." },
+          { label: "Chiedi una legge contro i licenziamenti a fronte di utili", hint: "Proposta strutturale, più lenta", effects: { fondi: -250, reputazione: 3 }, result: "La proposta di legge apre un dibattito serio, oltre l'emergenza del caso singolo." },
+          { label: "Attacca duramente la dirigenza dell'azienda", hint: "Molto rumore, rischio di eccesso", effects: { visibilita: 8, reputazione: -2, rivalExtra: -0.1 }, result: "L'attacco alla dirigenza fa titoli, ma qualcuno lo trova sopra le righe." },
+          { label: "Segui la vicenda da lontano, senza esporti troppo", hint: "Prudente, rischia di deludere", effects: { reputazione: -3 }, result: "La distanza dal caso delude proprio i lavoratori che si aspettavano il tuo sostegno." }
+        ] },
+      { id: "fam_sinistra_2", cat: "Politica — Pensioni", title: "Il governo propone di alzare l'età pensionabile",
+        brief: "Una riforma previdenziale in discussione prevede un innalzamento dell'età per andare in pensione.",
+        choices: [
+          { label: "Guida una mobilitazione contro la riforma", hint: "Coerente, molto rumore", effects: { fondi: -150, iscritti: 30, visibilita: 6 }, result: "La mobilitazione contro la riforma raccoglie ampio consenso tra i lavoratori più anziani." },
+          { label: "Proponi flessibilità in uscita per i lavori più usuranti", hint: "Proposta tecnica, mediana", effects: { fondi: -250, reputazione: 3 }, result: "La proposta sui lavori usuranti viene presa sul serio anche da chi non ti vota di solito." },
+          { label: "Chiedi un tavolo di trattativa con i sindacati", hint: "Costruisce alleanze", effects: { fondi: -100, reputazione: 2, visibilita: 2 }, result: "Il tavolo con i sindacati rafforza il tuo ruolo di interlocutore riconosciuto." },
+          { label: "Non prendere posizione netta per ora", hint: "Prudente", effects: { reputazione: -2 }, result: "L'assenza di una posizione chiara delude chi si aspettava una linea netta." }
+        ] },
+      { id: "fam_sinistra_3", cat: "Politica — Casa", title: "Aumentano vertiginosamente gli sfratti in una grande città",
+        brief: "I dati mostrano un forte aumento degli sfratti per morosità in una grande città italiana, complice il caro-affitti.",
+        choices: [
+          { label: "Chiedi una moratoria sugli sfratti e un fondo per gli affitti", hint: "Coerente, costoso", effects: { fondi: -350, reputazione: 3, iscritti: 25 }, result: "La moratoria sugli sfratti intercetta un'emergenza sociale reale e molto sentita." },
+          { label: "Organizza uno sportello di sostegno per le famiglie a rischio", hint: "Presenza diretta sul territorio", effects: { fondi: -200, iscritti: 30, visibilita: 3 }, result: "Lo sportello di sostegno costruisce un legame concreto con chi è in difficoltà." },
+          { label: "Denuncia la speculazione immobiliare in Parlamento", hint: "Visibilità nazionale", effects: { visibilita: 7, reputazione: 2 }, result: "La denuncia in Parlamento porta il tema al centro del dibattito nazionale." },
+          { label: "Lascia che se ne occupino gli enti locali", hint: "Prudente, rischia di sembrare disinteresse", effects: { reputazione: -2 }, result: "Delegare agli enti locali, su un tema così sentito, viene letto come un passo indietro." }
+        ] }
+    ],
+    cattolico: [
+      { id: "fam_cattolico_1", cat: "Politica — Famiglia", title: "La Chiesa locale lancia un appello sulla povertà educativa",
+        brief: "Una diocesi denuncia pubblicamente l'aumento della povertà educativa tra i minori del territorio e chiede un impegno politico.",
+        choices: [
+          { label: "Rispondi con un piano di sostegno alle famiglie in difficoltà", hint: "Coerente, costruisce credibilità", effects: { fondi: -300, reputazione: 3, iscritti: 20 }, result: "Il piano di sostegno viene accolto con favore anche dal mondo del volontariato cattolico." },
+          { label: "Vai di persona a incontrare la comunità coinvolta", hint: "Presenza diretta, meno costosa", effects: { fondi: -100, visibilita: 4, reputazione: 2 }, result: "L'incontro diretto con la comunità rafforza un legame di lunga data." },
+          { label: "Proponi più fondi per il terzo settore e le realtà educative locali", hint: "Proposta concreta", effects: { fondi: -250, reputazione: 2, iscritti: 15 }, result: "La proposta sul terzo settore trova sponda tra le realtà associative del territorio." },
+          { label: "Non intervenire, non è terreno per la politica", hint: "Prudente, rischia di deludere", effects: { reputazione: -2 }, result: "Il silenzio su un appello così diretto delude una parte importante della tua base." }
+        ] },
+      { id: "fam_cattolico_2", cat: "Politica — Sanità", title: "Il Parlamento discute una legge sul fine vita",
+        brief: "Una proposta di legge sul fine vita arriva in discussione parlamentare, riaprendo un dibattito etico molto sentito.",
+        choices: [
+          { label: "Prendi posizione a difesa della vita e delle cure palliative", hint: "Coerente con la tua identità", effects: { reputazione: 3, visibilita: 5, iscritti: 15 }, result: "La posizione netta consolida il sostegno della tua base valoriale." },
+          { label: "Chiedi più investimenti in cure palliative come priorità", hint: "Proposta concreta, meno divisiva", effects: { fondi: -250, reputazione: 3 }, result: "La proposta sulle cure palliative viene apprezzata anche da chi ha posizioni diverse sul tema." },
+          { label: "Lascia libertà di coscienza ai tuoi parlamentari", hint: "Coerente con il rispetto interno, meno netta", effects: { reputazione: 1 }, result: "La libertà di coscienza viene letta come rispetto, anche se qualcuno chiedeva una linea più chiara." },
+          { label: "Evita di esporti sul tema, troppo divisivo", hint: "Prudente", effects: { reputazione: -2 }, result: "Evitare un tema così sentito dalla tua base viene notato e non piace." }
+        ] },
+      { id: "fam_cattolico_3", cat: "Politica — Casa", title: "Una parrocchia apre le porte a famiglie senza casa",
+        brief: "Una parrocchia del territorio accoglie diverse famiglie sfrattate, chiedendo un sostegno concreto anche alla politica.",
+        choices: [
+          { label: "Sostieni l'iniziativa con fondi e visibilità politica", hint: "Coerente, costruisce legami territoriali", effects: { fondi: -300, reputazione: 3, iscritti: 20 }, result: "Il sostegno all'iniziativa rafforza un legame prezioso con il mondo parrocchiale." },
+          { label: "Proponi una collaborazione strutturale tra comune e realtà religiose", hint: "Proposta più ampia, più lenta", effects: { fondi: -150, reputazione: 2, visibilita: 2 }, result: "La proposta di collaborazione apre un canale duraturo con le realtà del territorio." },
+          { label: "Vai a fare volontariato di persona", hint: "Presenza autentica, poco costosa", effects: { fondi: -50, visibilita: 3, reputazione: 2 }, result: "La presenza diretta, senza troppi annunci, viene notata e apprezzata." },
+          { label: "Resta a distanza, non è un tema politico", hint: "Prudente, rischia di sembrare distante", effects: { reputazione: -2 }, result: "La distanza da un gesto così concreto stride con l'immagine che vuoi dare del partito." }
+        ] }
+    ],
+    regionalista: [
+      { id: "fam_regionalista_1", cat: "Politica — Infrastrutture", title: "Il governo centrale taglia i trasferimenti alla tua regione",
+        brief: "Una manovra di bilancio riduce sensibilmente i trasferimenti statali verso la tua regione di riferimento.",
+        choices: [
+          { label: "Guida una protesta istituzionale contro il taglio", hint: "Coerente, visibile", effects: { visibilita: 7, reputazione: 2, iscritti: 20 }, result: "La protesta istituzionale porta il caso della tua regione sui giornali nazionali." },
+          { label: "Chiedi maggiore autonomia fiscale per la regione", hint: "Proposta strutturale, più radicale", effects: { fondi: -200, reputazione: 1, visibilita: 6 }, result: "La richiesta di autonomia fiscale divide, ma rilancia il tema con forza." },
+          { label: "Apri un tavolo tecnico con la Regione per quantificare i danni", hint: "Approccio tecnico, meno immediato", effects: { fondi: -150, reputazione: 3 }, result: "Il tavolo tecnico costruisce un dossier solido da usare nella trattativa con Roma." },
+          { label: "Accetta il taglio senza fare troppo rumore", hint: "Prudente, rischia di deludere il territorio", effects: { reputazione: -3 }, result: "L'accettazione silenziosa del taglio delude chi si aspettava una difesa più decisa." }
+        ] },
+      { id: "fam_regionalista_2", cat: "Politica — Trasporti", title: "Si discute una riforma sull'autonomia regionale",
+        brief: "Il Parlamento discute una riforma che potrebbe ampliare le competenze delle Regioni su sanità, scuola e infrastrutture.",
+        choices: [
+          { label: "Sostieni con forza la riforma autonomista", hint: "Coerente con la tua identità", effects: { visibilita: 8, reputazione: 3, iscritti: 25 }, result: "Il sostegno alla riforma ti posiziona come protagonista naturale del dibattito." },
+          { label: "Chiedi garanzie per le regioni più deboli nel nuovo assetto", hint: "Posizione più equilibrata", effects: { fondi: -150, reputazione: 2 }, result: "Le garanzie richieste ammorbidiscono le critiche di chi teme nuovi squilibri territoriali." },
+          { label: "Organizza un'assemblea pubblica sul territorio per discuterne", hint: "Coinvolge la base locale", effects: { fondi: -200, iscritti: 20, visibilita: 3 }, result: "L'assemblea pubblica porta il dibattito nazionale dentro il tuo territorio." },
+          { label: "Resta cauto, il tema è più complesso di come sembra", hint: "Prudente", effects: { reputazione: -1 }, result: "La cautela delude chi si aspettava di più da un partito che fa dell'autonomia una bandiera." }
+        ] },
+      { id: "fam_regionalista_3", cat: "Politica — Agricoltura", title: "Un'opera infrastrutturale attesa da decenni resta bloccata",
+        brief: "Un'opera pubblica cruciale per il territorio, promessa da anni, si arena di nuovo per ricorsi e mancanza di fondi.",
+        choices: [
+          { label: "Lancia una campagna territoriale per sbloccare l'opera", hint: "Coerente, mobilita il territorio", effects: { fondi: -250, iscritti: 25, visibilita: 5 }, result: "La campagna territoriale riporta l'attenzione nazionale su un'opera dimenticata a Roma." },
+          { label: "Chiedi un commissario straordinario per l'opera", hint: "Proposta tecnica, concreta", effects: { fondi: -150, reputazione: 3 }, result: "La richiesta di un commissario viene vista come una soluzione seria, non solo propaganda." },
+          { label: "Denuncia pubblicamente i responsabili del blocco", hint: "Molto rumore, rischio di scontro", effects: { visibilita: 7, reputazione: -1, rivalExtra: -0.1 }, result: "La denuncia pubblica accende il dibattito, ma qualcuno la trova poco costruttiva." },
+          { label: "Rimanda, la questione è complicata da gestire ora", hint: "Prudente, rischia di deludere il territorio", effects: { reputazione: -2 }, result: "Il rinvio su un'opera così attesa non passa inosservato tra chi la aspetta da anni." }
+        ] }
+    ],
+    comunista: [
+      { id: "fam_comunista_1", cat: "Politica — Lavoro", title: "Gli operai occupano una fabbrica a rischio chiusura",
+        brief: "I lavoratori di una fabbrica minacciata di chiusura decidono di occupare lo stabilimento per impedirne lo smantellamento.",
+        choices: [
+          { label: "Sostieni apertamente l'occupazione e vai in fabbrica", hint: "Coerente, presenza diretta", effects: { fondi: -150, iscritti: 40, visibilita: 6 }, result: "Il sostegno all'occupazione consolida il legame con la classe operaia del territorio." },
+          { label: "Chiedi la nazionalizzazione dello stabilimento", hint: "Proposta radicale, molto divisiva", effects: { visibilita: 9, reputazione: -1, iscritti: 20 }, result: "La richiesta di nazionalizzazione fa discutere tutto il paese, nel bene e nel male." },
+          { label: "Organizza una rete di solidarietà economica per i lavoratori", hint: "Costruisce comunità, meno eclatante", effects: { fondi: -300, iscritti: 25 }, result: "La rete di solidarietà porta aiuto concreto, anche se non fa grandi titoli." },
+          { label: "Osserva senza intervenire direttamente", hint: "Prudente, rischia di deludere", effects: { reputazione: -3 }, result: "L'assenza dai cancelli, proprio ora, viene letta come un tradimento della tua base." }
+        ] },
+      { id: "fam_comunista_2", cat: "Politica — Economia", title: "Un grande gruppo industriale annuncia profitti record e tagli al personale",
+        brief: "Mentre distribuisce dividendi record agli azionisti, una grande azienda annuncia contemporaneamente un piano di tagli al personale.",
+        choices: [
+          { label: "Denuncia pubblicamente la contraddizione tra profitti e licenziamenti", hint: "Coerente, molto rumore", effects: { visibilita: 8, reputazione: 2, iscritti: 25 }, result: "La denuncia sui profitti record trova un'eco enorme tra i lavoratori del settore." },
+          { label: "Proponi una tassa sugli extraprofitti per finanziare la cassa integrazione", hint: "Proposta concreta, tecnica", effects: { fondi: -200, reputazione: 3 }, result: "La proposta sugli extraprofitti apre un dibattito serio anche fuori dalla tua area politica." },
+          { label: "Organizza un boicottaggio simbolico dell'azienda", hint: "Iniziativa dal basso, rischiosa", effects: { fondi: -100, visibilita: 6, reputazione: -1 }, result: "Il boicottaggio simbolico divide l'opinione pubblica, ma tiene il tema sui giornali." },
+          { label: "Lascia che i sindacati gestiscano la vicenda", hint: "Prudente", effects: { reputazione: -2 }, result: "Delegare tutto ai sindacati, su un caso così esemplare, delude parte della tua base." }
+        ] },
+      { id: "fam_comunista_3", cat: "Politica — Casa", title: "Si discute la vendita di un grande patrimonio immobiliare pubblico",
+        brief: "Il governo valuta la vendita a privati di un consistente patrimonio di edilizia popolare per fare cassa.",
+        choices: [
+          { label: "Guida una mobilitazione contro la svendita del patrimonio pubblico", hint: "Coerente, molto rumore", effects: { fondi: -150, iscritti: 30, visibilita: 6 }, result: "La mobilitazione contro la vendita raccoglie ampio sostegno tra gli inquilini popolari." },
+          { label: "Proponi un piano pubblico di ristrutturazione dell'edilizia popolare", hint: "Proposta costruttiva, costosa", effects: { fondi: -350, reputazione: 3 }, result: "Il piano di ristrutturazione viene visto come un'alternativa seria alla vendita." },
+          { label: "Organizza un'assemblea con gli inquilini coinvolti", hint: "Presenza diretta sul territorio", effects: { fondi: -100, iscritti: 25, visibilita: 3 }, result: "L'assemblea con gli inquilini rafforza il legame diretto con chi rischia di più." },
+          { label: "Non prendere posizione netta", hint: "Prudente, rischia di deludere", effects: { reputazione: -2 }, result: "L'assenza di una linea chiara, su un tema così identitario, delude la tua base." }
+        ] }
+    ],
+    nazionalpopolare: [
+      { id: "fam_nazionalpopolare_1", cat: "Politica — Sicurezza", title: "Un grave episodio di criminalità scuote un quartiere",
+        brief: "Un episodio violento in un quartiere periferico finisce sulle prime pagine e riaccende il dibattito sulla sicurezza urbana.",
+        choices: [
+          { label: "Chiedi più forze dell'ordine e telecamere nel quartiere", hint: "Coerente, linea dura", effects: { visibilita: 8, reputazione: 2, iscritti: 25 }, result: "La richiesta di più sicurezza intercetta la paura diffusa tra i residenti." },
+          { label: "Proponi il pugno duro con pene più severe", hint: "Posizione radicale, molto divisiva", effects: { visibilita: 9, reputazione: -2, iscritti: 20 }, result: "La linea del pugno duro infiamma il dibattito e compatta la tua base più radicale." },
+          { label: "Vai di persona nel quartiere a incontrare i residenti", hint: "Presenza diretta, meno costosa", effects: { fondi: -100, visibilita: 5, reputazione: 2 }, result: "La visita al quartiere viene apprezzata come segno di vicinanza concreta." },
+          { label: "Evita di strumentalizzare un singolo episodio", hint: "Prudente, rischia di deludere la tua base", effects: { reputazione: -2 }, result: "La cautela su un episodio così sentito delude chi si aspettava una reazione più netta." }
+        ] },
+      { id: "fam_nazionalpopolare_2", cat: "Politica — Giustizia", title: "Si discute un inasprimento delle pene per alcuni reati",
+        brief: "Il Parlamento discute una proposta per inasprire le pene per alcuni reati, tra molte polemiche sull'efficacia reale della misura.",
+        choices: [
+          { label: "Sostieni con forza l'inasprimento delle pene", hint: "Coerente, linea dura", effects: { visibilita: 7, reputazione: 1, iscritti: 20 }, result: "Il sostegno all'inasprimento delle pene consolida il consenso della tua base." },
+          { label: "Chiedi anche più certezza della pena, non solo pene più dure", hint: "Posizione più articolata", effects: { fondi: -150, reputazione: 3 }, result: "La proposta sulla certezza della pena convince anche chi è scettico sull'inasprimento puro." },
+          { label: "Attacca chi si oppone come garantista a ogni costo", hint: "Scontro diretto, molto rumore", effects: { visibilita: 8, reputazione: -2, rivalExtra: -0.1 }, result: "L'attacco ai garantisti infiamma il dibattito, ma divide anche parte della tua area." },
+          { label: "Non esporti troppo su un tema tecnico", hint: "Prudente", effects: { reputazione: -1 }, result: "La cautela su un tema identitario come questo lascia spazio ad altri di occuparsene." }
+        ] },
+      { id: "fam_nazionalpopolare_3", cat: "Politica — Immigrazione", title: "Una manifestazione contro l'immigrazione degenera in scontri",
+        brief: "Una manifestazione a cui alcuni tuoi simpatizzanti hanno partecipato degenera in scontri con le forze dell'ordine.",
+        choices: [
+          { label: "Condanna gli scontri ma ribadisci le ragioni della protesta", hint: "Posizione bilanciata, difficile da calibrare", effects: { reputazione: 1, visibilita: 5 }, result: "La condanna degli scontri, unita alla difesa delle ragioni di fondo, regge alla prova dei fatti." },
+          { label: "Prendi le distanze nette dalla violenza, senza sconti", hint: "Più prudente, rassicura i moderati", effects: { reputazione: 3, iscritti: -10 }, result: "Le distanze nette dalla violenza rassicurano gli osservatori esterni, ma deludono i più radicali." },
+          { label: "Difendi comunque i manifestanti, accusando le forze dell'ordine", hint: "Linea dura, molto rischiosa", effects: { visibilita: 7, reputazione: -4, iscritti: 15 }, result: "La difesa dei manifestanti scatena polemiche durissime sulla stampa nazionale." },
+          { label: "Evita ogni dichiarazione fino a chiarimenti", hint: "Prudente, guadagna tempo", effects: { reputazione: -1 }, result: "Il silenzio in attesa di chiarimenti viene letto come imbarazzo più che come prudenza." }
+        ] }
+    ],
+    europeista: [
+      { id: "fam_europeista_1", cat: "Politica — Europa", title: "Il paese rischia di perdere fondi europei per ritardi nei progetti",
+        brief: "Un rapporto della Commissione Europea segnala forti ritardi italiani nell'attuazione dei progetti finanziati con fondi UE.",
+        choices: [
+          { label: "Chiedi una task force nazionale per accelerare i progetti", hint: "Coerente, proposta concreta", effects: { fondi: -250, reputazione: 3, visibilita: 4 }, result: "La proposta della task force viene presa sul serio anche a Bruxelles." },
+          { label: "Denuncia l'inefficienza della burocrazia italiana", hint: "Posizione critica verso il governo", effects: { visibilita: 7, reputazione: 1, rivalExtra: -0.1 }, result: "La denuncia sull'inefficienza fa discutere, ma mette in imbarazzo la maggioranza." },
+          { label: "Proponi di andare tu stesso a Bruxelles per rappresentare il territorio", hint: "Alta visibilità, simbolica", effects: { fondi: -150, visibilita: 6 }, result: "Il viaggio a Bruxelles ti dà una vetrina internazionale, anche se il gesto resta simbolico." },
+          { label: "Non è una battaglia che puoi vincere da solo", hint: "Prudente", effects: { reputazione: -1 }, result: "L'assenza dal dibattito su un tema così europeista, per un partito come il tuo, si nota." }
+        ] },
+      { id: "fam_europeista_2", cat: "Politica — Economia", title: "Un dibattito nazionale mette in dubbio l'adesione all'euro",
+        brief: "Un editorialista di rilievo rilancia il dibattito sull'uscita dall'euro, trovando eco in diversi ambienti politici.",
+        choices: [
+          { label: "Difendi con forza l'euro e l'integrazione europea", hint: "Coerente, netto", effects: { visibilita: 8, reputazione: 3, iscritti: 15 }, result: "La difesa netta dell'euro consolida la tua identità europeista agli occhi di tutti." },
+          { label: "Spiega con dati concreti i vantaggi dell'euro per l'economia italiana", hint: "Approccio tecnico, costruisce credibilità", effects: { fondi: -200, reputazione: 3 }, result: "La spiegazione basata sui dati convince anche parte del pubblico più scettico." },
+          { label: "Organizza un dibattito pubblico sul tema con esperti", hint: "Costruisce dialogo, meno immediato", effects: { fondi: -250, reputazione: 2, visibilita: 3 }, result: "Il dibattito pubblico eleva il livello della discussione, spesso troppo urlata altrove." },
+          { label: "Ignora la provocazione, non merita risposta", hint: "Prudente, rischia di sembrare debolezza", effects: { reputazione: -2 }, result: "Il silenzio viene interpretato come un'occasione persa per difendere le tue idee." }
+        ] },
+      { id: "fam_europeista_3", cat: "Politica — Digitale", title: "L'UE propone una nuova regola comune che divide la politica italiana",
+        brief: "Una nuova proposta di regolamento europeo divide il dibattito politico italiano tra favorevoli e contrari.",
+        choices: [
+          { label: "Sostieni la proposta come passo avanti per l'integrazione europea", hint: "Coerente con la tua identità", effects: { visibilita: 6, reputazione: 3, iscritti: 15 }, result: "Il sostegno alla proposta europea ti conferma come punto di riferimento su questi temi." },
+          { label: "Chiedi modifiche mirate per tutelare gli interessi italiani", hint: "Posizione più equilibrata", effects: { fondi: -150, reputazione: 2 }, result: "Le modifiche richieste mostrano un europeismo critico, non acritico, apprezzato da molti." },
+          { label: "Organizza un confronto con eurodeputati italiani sul tema", hint: "Costruisce rete istituzionale", effects: { fondi: -200, reputazione: 2, visibilita: 3 }, result: "Il confronto con gli eurodeputati rafforza i tuoi legami a Bruxelles." },
+          { label: "Resta cauto, il tema è tecnico e divisivo", hint: "Prudente", effects: { reputazione: -1 }, result: "La cautela su un tema europeo, per un partito come il tuo, lascia un vuoto che altri riempiono." }
+        ] }
+    ],
+    libertario: [
+      { id: "fam_libertario_1", cat: "Politica — Economia", title: "Il governo propone un nuovo obbligo per le attività private",
+        brief: "Una nuova norma impone alle piccole imprese ulteriori adempimenti burocratici, giustificati con finalità di controllo.",
+        choices: [
+          { label: "Denuncia l'ennesima invasione dello stato nella vita privata", hint: "Coerente, netto", effects: { visibilita: 7, reputazione: 2, iscritti: 20 }, result: "La denuncia sull'invadenza dello stato trova ampio consenso tra i piccoli imprenditori." },
+          { label: "Proponi l'abolizione di tre norme vecchie per ognuna nuova introdotta", hint: "Proposta concreta e provocatoria", effects: { fondi: -150, reputazione: 3, visibilita: 4 }, result: "La proposta 'tre norme abolite per una nuova' diventa uno slogan ripreso da molti." },
+          { label: "Organizza un incontro con le associazioni di piccoli imprenditori", hint: "Costruisce rete, costoso", effects: { fondi: -300, iscritti: 25 }, result: "L'incontro con i piccoli imprenditori rafforza il tuo radicamento in quel mondo." },
+          { label: "Non intervenire su un tema tecnico come questo", hint: "Prudente", effects: { reputazione: -1 }, result: "Il silenzio su un tema così identitario per te viene notato dai tuoi elettori naturali." }
+        ] },
+      { id: "fam_libertario_2", cat: "Politica — Lavoro", title: "Un caso di eccessiva burocrazia blocca un piccolo imprenditore",
+        brief: "Un piccolo imprenditore racconta pubblicamente come mesi di burocrazia gli abbiano impedito di aprire la sua attività.",
+        choices: [
+          { label: "Fanne un simbolo della battaglia contro la burocrazia", hint: "Coerente, alta visibilità", effects: { visibilita: 8, reputazione: 3, iscritti: 20 }, result: "Il caso diventa un simbolo nazionale della battaglia contro la burocrazia eccessiva." },
+          { label: "Proponi uno sportello unico digitale per le nuove attività", hint: "Proposta tecnica concreta", effects: { fondi: -250, reputazione: 3 }, result: "La proposta dello sportello unico viene vista come una soluzione seria, non solo uno slogan." },
+          { label: "Aiuta direttamente l'imprenditore a sbloccare la pratica", hint: "Azione concreta, meno strutturale", effects: { fondi: -100, reputazione: 2, visibilita: 3 }, result: "L'aiuto diretto risolve il caso singolo e costruisce un buon esempio da raccontare." },
+          { label: "Non è compito tuo risolvere casi singoli", hint: "Prudente, rischia di sembrare distante", effects: { reputazione: -2 }, result: "La distanza dal caso, proprio ora, stride con la tua immagine di paladino dei piccoli imprenditori." }
+        ] },
+      { id: "fam_libertario_3", cat: "Politica — Digitale", title: "Si discute un aumento della pressione fiscale per finanziare la spesa pubblica",
+        brief: "Il governo valuta un aumento della pressione fiscale per finanziare nuova spesa pubblica, tra le proteste dei contribuenti.",
+        choices: [
+          { label: "Guida l'opposizione netta a qualsiasi nuova tassa", hint: "Coerente, molto netto", effects: { visibilita: 8, reputazione: 2, iscritti: 25 }, result: "L'opposizione netta alle nuove tasse consolida il tuo elettorato più fedele." },
+          { label: "Proponi un taglio della spesa pubblica come alternativa", hint: "Proposta tecnica, costruisce credibilità", effects: { fondi: -200, reputazione: 3 }, result: "La proposta alternativa di taglio della spesa viene presa sul serio da chi segue i conti pubblici." },
+          { label: "Organizza una raccolta firme contro l'aumento fiscale", hint: "Coinvolge la base, costo basso", effects: { fondi: -100, iscritti: 30, visibilita: 4 }, result: "La raccolta firme intercetta la rabbia diffusa tra i contribuenti." },
+          { label: "Accetta l'aumento come necessario per i servizi pubblici", hint: "Posizione atipica per te, rischiosa", effects: { reputazione: -3, iscritti: -15 }, result: "L'apertura all'aumento fiscale spiazza e delude buona parte della tua base." }
+        ] }
+    ],
+    tecnoprogressista: [
+      { id: "fam_tecnoprogressista_1", cat: "Politica — Digitale", title: "Si discute una regolamentazione stringente sull'intelligenza artificiale",
+        brief: "Il Parlamento discute una proposta di legge per regolamentare in modo stringente l'uso dell'intelligenza artificiale nel paese.",
+        choices: [
+          { label: "Sostieni regole chiare ma che non frenino l'innovazione", hint: "Coerente, posizione equilibrata", effects: { fondi: -200, reputazione: 3, visibilita: 4 }, result: "La posizione equilibrata ti fa apparire come un interlocutore serio sul tema." },
+          { label: "Proponi un polo pubblico di ricerca sull'IA", hint: "Proposta ambiziosa, costosa", effects: { fondi: -400, reputazione: 3, iscritti: 20 }, result: "La proposta del polo pubblico di ricerca intercetta l'interesse di ricercatori e startup." },
+          { label: "Organizza un forum con esperti e imprese tecnologiche", hint: "Costruisce rete, meno immediato", effects: { fondi: -250, reputazione: 2, visibilita: 3 }, result: "Il forum con esperti e imprese rafforza la tua credibilità tecnica sul tema." },
+          { label: "Lascia che se ne occupi l'Unione Europea", hint: "Prudente, rischia di sembrare disimpegno", effects: { reputazione: -2 }, result: "Delegare tutto all'UE, su un tema così tuo, viene letto come un passo indietro." }
+        ] },
+      { id: "fam_tecnoprogressista_2", cat: "Politica — Giovani", title: "Un'azienda tech taglia posti di lavoro sostituiti dall'automazione",
+        brief: "Una grande azienda tecnologica annuncia tagli al personale, motivandoli con l'introduzione di sistemi automatizzati.",
+        choices: [
+          { label: "Proponi un fondo di riqualificazione digitale per i lavoratori", hint: "Coerente, costruisce credibilità", effects: { fondi: -350, reputazione: 3, iscritti: 25 }, result: "Il fondo di riqualificazione digitale viene visto come una risposta seria, non solo di protesta." },
+          { label: "Chiedi trasparenza sugli algoritmi usati per decidere i tagli", hint: "Proposta tecnica, specifica", effects: { fondi: -150, reputazione: 3 }, result: "La richiesta di trasparenza sugli algoritmi apre un dibattito nuovo e specifico." },
+          { label: "Organizza un incontro con i lavoratori coinvolti", hint: "Presenza diretta", effects: { fondi: -100, iscritti: 20, visibilita: 3 }, result: "L'incontro con i lavoratori rafforza il legame con chi rischia di più dall'automazione." },
+          { label: "Non intervenire, è il prezzo del progresso", hint: "Posizione atipica, rischiosa", effects: { reputazione: -3, iscritti: -10 }, result: "La freddezza verso i lavoratori coinvolti spiazza parte della tua stessa base." }
+        ] },
+      { id: "fam_tecnoprogressista_3", cat: "Politica — Energia", title: "Una startup italiana dell'energia pulita chiede sostegno pubblico per non emigrare",
+        brief: "I fondatori di una startup nel settore delle energie rinnovabili chiedono sostegno pubblico per non trasferire l'azienda all'estero.",
+        choices: [
+          { label: "Proponi un fondo pubblico per le startup dell'energia pulita", hint: "Coerente, ambizioso", effects: { fondi: -400, reputazione: 3, iscritti: 20 }, result: "Il fondo per le startup dell'energia pulita ti posiziona con chiarezza sul tema." },
+          { label: "Organizza un incontro tra la startup e investitori privati", hint: "Costruisce rete, meno costoso", effects: { fondi: -150, visibilita: 4, reputazione: 2 }, result: "L'incontro con investitori privati apre una strada concreta per trattenere la startup." },
+          { label: "Fanne un caso simbolico della fuga di innovazione dall'Italia", hint: "Alta visibilità, simbolico", effects: { visibilita: 7, reputazione: 1 }, result: "Il caso diventa simbolo della fuga di innovazione, e se ne parla ovunque." },
+          { label: "Non è compito della politica sostenere singole aziende", hint: "Posizione atipica per te, rischiosa", effects: { reputazione: -2, iscritti: -10 }, result: "La freddezza verso l'innovazione, per un partito come il tuo, spiazza la tua base." }
+        ] }
+    ],
+    meridionalista: [
+      { id: "fam_meridionalista_1", cat: "Politica — Infrastrutture", title: "Il divario Nord-Sud negli investimenti pubblici torna sulle prime pagine",
+        brief: "Un rapporto documenta un divario crescente negli investimenti pubblici tra Nord e Sud del paese.",
+        choices: [
+          { label: "Chiedi una clausola vincolante di spesa proporzionata al Sud", hint: "Coerente, proposta strutturale", effects: { fondi: -250, reputazione: 3, iscritti: 25 }, result: "La clausola di spesa proporzionata diventa un punto di riferimento nel dibattito sul divario." },
+          { label: "Organizza una mobilitazione simbolica nelle regioni meridionali", hint: "Coinvolge la base, visibile", effects: { fondi: -150, iscritti: 30, visibilita: 5 }, result: "La mobilitazione nel Sud riporta il tema al centro dell'agenda nazionale." },
+          { label: "Denuncia il divario con dati precisi in Parlamento", hint: "Approccio tecnico, costruisce credibilità", effects: { reputazione: 3, visibilita: 4 }, result: "La denuncia basata sui dati viene presa sul serio anche da chi non è del Sud." },
+          { label: "Non è un tema che puoi affrontare da solo", hint: "Prudente, rischia di deludere", effects: { reputazione: -2 }, result: "Il silenzio su un tema così identitario per te delude proprio chi ti segue di più." }
+        ] },
+      { id: "fam_meridionalista_2", cat: "Politica — Lavoro", title: "Giovani del Sud continuano a emigrare al Nord per lavoro",
+        brief: "Nuovi dati confermano un forte flusso migratorio di giovani meridionali verso il Nord Italia in cerca di lavoro.",
+        choices: [
+          { label: "Proponi un piano straordinario per il lavoro nel Mezzogiorno", hint: "Coerente, ambizioso", effects: { fondi: -400, reputazione: 3, iscritti: 25 }, result: "Il piano straordinario per il Mezzogiorno intercetta un tema sentitissimo al Sud." },
+          { label: "Chiedi incentivi fiscali per le imprese che assumono al Sud", hint: "Proposta tecnica concreta", effects: { fondi: -250, reputazione: 3 }, result: "Gli incentivi fiscali per il Sud vengono accolti con favore dal mondo produttivo locale." },
+          { label: "Organizza assemblee con i giovani nelle università del Sud", hint: "Coinvolge la base sul territorio", effects: { fondi: -150, iscritti: 30, visibilita: 3 }, result: "Le assemblee universitarie al Sud portano nuove adesioni tra i più giovani." },
+          { label: "Il fenomeno è troppo grande per essere affrontato ora", hint: "Prudente, rischia di deludere", effects: { reputazione: -2 }, result: "La rassegnazione verso un tema così centrale per te viene notata e non piace." }
+        ] },
+      { id: "fam_meridionalista_3", cat: "Politica — Agricoltura", title: "La crisi idrica colpisce duramente l'agricoltura del Sud",
+        brief: "Una grave siccità mette in ginocchio l'agricoltura in diverse regioni meridionali, con raccolti compromessi e aziende a rischio.",
+        choices: [
+          { label: "Chiedi lo stato di emergenza e fondi straordinari per gli agricoltori", hint: "Coerente, concreto", effects: { fondi: -300, reputazione: 3, iscritti: 25 }, result: "La richiesta di stato di emergenza intercetta l'urgenza vissuta dagli agricoltori del Sud." },
+          { label: "Proponi un grande piano di invasi e infrastrutture idriche", hint: "Proposta strutturale, ambiziosa", effects: { fondi: -400, reputazione: 3 }, result: "Il piano sugli invasi viene visto come una risposta di lungo periodo, non solo emergenziale." },
+          { label: "Vai sul territorio a incontrare le aziende agricole colpite", hint: "Presenza diretta", effects: { fondi: -100, visibilita: 4, iscritti: 15 }, result: "La visita alle aziende agricole colpite rafforza il legame diretto con il territorio." },
+          { label: "Lascia che se ne occupi il governo nazionale", hint: "Prudente, rischia di sembrare assente", effects: { reputazione: -2 }, result: "Delegare tutto al governo nazionale, su un'emergenza così locale, delude il tuo elettorato." }
+        ] }
+    ]
+  };
+  function pickFamilySituation(p) {
+    var pool = FAMILY_SITUATIONS[p.family];
+    if (!pool || !pool.length) return null;
+    var available = pool.filter(function (s) { return state.usedFamilySituations.indexOf(s.id) === -1; });
+    if (!available.length) {
+      pool.forEach(function (s) {
+        var idx = state.usedFamilySituations.indexOf(s.id);
+        if (idx !== -1) state.usedFamilySituations.splice(idx, 1);
+      });
+      available = pool.slice();
+    }
+    var chosen = available[Math.floor(Math.random() * available.length)];
+    state.usedFamilySituations.push(chosen.id);
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: chosen.choices };
+  }
   function generateCombinatorialSituation() {
     var p = state.player;
     var signature = FAMILY_SIGNATURE_THEMES[p.family] || [];
@@ -958,10 +1435,11 @@
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
     var sentence = shape.brief(noun, { city: city, rivalName: rival.name });
     var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
-    var intro = SITUATION_INTROS[Math.floor(Math.random() * SITUATION_INTROS.length)];
-    var brief = sentence + (framing ? " " + framing : "") + " " + intro;
+    var brief = sentence + (framing ? " " + framing : "");
     var title = shape.kind + " — " + theme.label.replace("Politica — ", "");
-    return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: theme.label, title: title, brief: brief, choices: [] };
+    var coherent = signature.indexOf(theme.id) !== -1;
+    var choices = buildSituationChoices({ noun: noun, city: city, rivalName: rival.name, coherent: coherent });
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: theme.label, title: title, brief: brief, choices: choices };
   }
   // Punto d'ingresso unico per la situazione della settimana: prova prima il "seguito" diretto se
   // c'è un'iniziativa recente da cui ripartire (memoria forte, cita alla lettera quanto scritto dal
@@ -975,7 +1453,22 @@
       var tpl = LOCAL_FOLLOWUP_TEMPLATES[Math.floor(Math.random() * LOCAL_FOLLOWUP_TEMPLATES.length)];
       var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
       var brief = tpl.brief(lastEntry.choiceLabel) + (framing ? " " + framing : "");
-      return { id: "ai_dynamic", kind: "azione", localDynamic: true, cat: "Seguito", title: tpl.title, brief: brief, choices: [] };
+      var cat = (lastEntry.cat && lastEntry.cat.indexOf("Politica") === 0) ? lastEntry.cat : (detectThemeCategory(lastEntry.choiceLabel) || "Seguito");
+      var signature = FAMILY_SIGNATURE_THEMES[p.family] || [];
+      var themeObj = SITUATION_THEME_BY_LABEL[cat];
+      var coherent = !!(themeObj && signature.indexOf(themeObj.id) !== -1);
+      var fuCity = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+      var fuRivalPool = activeParties();
+      var fuRival = fuRivalPool[Math.floor(Math.random() * fuRivalPool.length)];
+      var choices = buildSituationChoices({ noun: "quanto hai fatto la scorsa settimana", city: fuCity, rivalName: fuRival.name, coherent: coherent });
+      return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: cat, title: tpl.title, brief: brief, choices: choices };
+    }
+    // Se non è un seguito diretto, dai la priorità a episodi scritti apposta per l'ideologia del
+    // partito (più specifici e riconoscibili) rispetto al tema generico ripescato dal generatore
+    // combinatorio: ecco perché il peso è più alto per le situazioni di famiglia.
+    if (FAMILY_SITUATIONS[p.family] && Math.random() < 0.55) {
+      var famSituation = pickFamilySituation(p);
+      if (famSituation) return famSituation;
     }
     return generateCombinatorialSituation();
   }
@@ -1726,6 +2219,7 @@
       ratingOutlook: "Positivo",
       consensoGoverno: 46,
       usedDossiers: [],
+      usedFamilySituations: [],
       currentDossierId: null,
       aiDynamicDossier: null,
       forceInitiativeOnly: false,
@@ -1760,6 +2254,7 @@
         if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
         if (!parsed.nextEuropeanElectionTurn) parsed.nextEuropeanElectionTurn = parsed.turn + 40;
         if (!parsed.europeanElectionResults) parsed.europeanElectionResults = [];
+        if (!parsed.usedFamilySituations) parsed.usedFamilySituations = [];
         if (parsed.player) {
           if (!parsed.player.amministratoriLocali) parsed.player.amministratoriLocali = 0;
           if (!parsed.player.seggiEuropei) parsed.player.seggiEuropei = 0;
@@ -2045,7 +2540,7 @@
 
     state.log.unshift({
       week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result,
-      headlines: headlines, type: "dossier"
+      headlines: headlines, type: "dossier", cat: dossier.cat
     });
 
     return { resultText: choice.result, headlines: headlines };
