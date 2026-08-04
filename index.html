@@ -4277,7 +4277,8 @@
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, candidatePools: {},
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
-    coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {}
+    coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {},
+    fundraisingCooldowns: {}
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -5422,6 +5423,84 @@
     var choice = { label: ev.label, effects: partyEventEffects(eventId), result: partyEventFlavor(eventId) };
     return applyChoice(dossier, choice);
   }
+
+  // ---------- Raccolta Fondi: scheda dedicata solo ai modi per far entrare risorse, separata dagli
+  // eventi generici di partito — ognuno utilizzabile una volta ogni tot settimane (cooldown proprio). ----------
+  var FUNDRAISING_ACTIONS = {
+    cena_gala: { label: "Cena di gala con i grandi donatori", cost: 0, cooldown: 8,
+      desc: "Una cena esclusiva per i sostenitori più facoltosi del partito." },
+    crowdfunding: { label: "Campagna di crowdfunding online", cost: 0, cooldown: 5,
+      desc: "Una raccolta fondi online aperta a iscritti e simpatizzanti, con obiettivi condivisi sui social." },
+    merchandising: { label: "Vendita di gadget di partito", cost: 300, cooldown: 4,
+      desc: "Magliette, spille e gadget con il simbolo del partito, venduti a sezioni e militanti." },
+    sottoscrizione: { label: "Sottoscrizione popolare tra i militanti", cost: 0, cooldown: 5,
+      desc: "Una raccolta capillare tra gli iscritti sul territorio: rende di più quanto più il partito è grande." },
+    imprenditori: { label: "Evento con imprenditori e categorie economiche", cost: 0, cooldown: 8,
+      desc: "Un incontro riservato con imprenditori e associazioni di categoria vicine alla linea del partito." },
+    spazi_pubblicitari: { label: "Vendita di spazi pubblicitari", cost: 0, cooldown: 4,
+      desc: "Spazi pubblicitari sul giornale e sul sito del partito ceduti a inserzionisti." },
+    asta_benefica: { label: "Asta di beneficenza", cost: 150, cooldown: 6,
+      desc: "Un'asta di cimeli e oggetti simbolici legati alla storia del partito." },
+    fondi_gruppo: { label: "Fondi del gruppo parlamentare", cost: 0, cooldown: 10, requiresParliament: true,
+      desc: "La quota di fondi pubblici destinata ai gruppi parlamentari, disponibile solo se il partito siede in Aula." }
+  };
+  function fundraisingEffects(actionId, p) {
+    if (actionId === "cena_gala") return { fondi: rand(1200, 2200), reputazione: rand(-1.5, 0.5) };
+    if (actionId === "crowdfunding") return { fondi: rand(600, 1400), iscritti: rand(5, 15) };
+    if (actionId === "merchandising") return { fondi: rand(300, 700) };
+    if (actionId === "sottoscrizione") return { fondi: Math.round(clamp(p.iscritti * 0.4, 200, 3000)) };
+    if (actionId === "imprenditori") return { fondi: rand(1500, 3000), reputazione: rand(-2, 0) };
+    if (actionId === "spazi_pubblicitari") return { fondi: rand(400, 900) };
+    if (actionId === "asta_benefica") return { fondi: rand(500, 1100), visibilita: rand(1, 3) };
+    if (actionId === "fondi_gruppo") return { fondi: rand(2000, 4000) };
+    return {};
+  }
+  function fundraisingFlavor(actionId, gain) {
+    var euro = fmtEuro(Math.max(0, gain || 0));
+    if (actionId === "cena_gala") return "La cena di gala con i grandi donatori porta " + euro + " nelle casse del partito, anche se qualcuno critica l'esclusività dell'evento.";
+    if (actionId === "crowdfunding") return "La campagna di crowdfunding online raccoglie " + euro + " e avvicina nuovi simpatizzanti al progetto.";
+    if (actionId === "merchandising") return "La vendita di gadget di partito frutta " + euro + ", tra militanti orgogliosi di indossare il simbolo.";
+    if (actionId === "sottoscrizione") return "La sottoscrizione tra i militanti raccoglie " + euro + ", segno di una base radicata sul territorio.";
+    if (actionId === "imprenditori") return "L'incontro con imprenditori e categorie economiche porta " + euro + ", ma espone il partito a critiche di eccessiva vicinanza al mondo delle imprese.";
+    if (actionId === "spazi_pubblicitari") return "La vendita di spazi pubblicitari sul giornale e sul sito di partito rende " + euro + ".";
+    if (actionId === "asta_benefica") return "L'asta di beneficenza sui cimeli storici del partito raccoglie " + euro + " e fa parlare di sé.";
+    if (actionId === "fondi_gruppo") return "La quota di fondi pubblici del gruppo parlamentare porta " + euro + " nelle casse del partito.";
+    return FUNDRAISING_ACTIONS[actionId].label + " porta " + euro + " nelle casse del partito.";
+  }
+  function resolveFundraisingAction(actionId) {
+    var a = FUNDRAISING_ACTIONS[actionId];
+    var p = state.player;
+    if (!p.fundraisingCooldowns) p.fundraisingCooldowns = {};
+    if (a.requiresParliament && !p.inParliament) return null;
+    if (state.turn < (p.fundraisingCooldowns[actionId] || 0)) return null;
+    if (p.fondi < a.cost) return null;
+    p.fondi -= a.cost;
+    p.fundraisingCooldowns[actionId] = state.turn + a.cooldown;
+    var effects = fundraisingEffects(actionId, p);
+    var dossier = { title: a.label, cat: "Raccolta Fondi" };
+    var choice = { label: a.label, effects: effects, result: fundraisingFlavor(actionId, effects.fondi) };
+    return applyChoice(dossier, choice);
+  }
+  function renderFundraisingPanel() {
+    var p = state.player;
+    if (!p.fundraisingCooldowns) p.fundraisingCooldowns = {};
+    var html = '<section aria-label="Raccolta Fondi"><details class="log"><summary>Raccolta Fondi<span>▾</span></summary>' +
+      '<p class="ci-hint">Modi diversi per far entrare risorse nelle casse del partito, ciascuno utilizzabile ogni tot settimane, oltre alle quote di tesseramento ordinarie.</p><div class="option-grid">';
+    Object.keys(FUNDRAISING_ACTIONS).forEach(function (id) {
+      var a = FUNDRAISING_ACTIONS[id];
+      if (a.requiresParliament && !p.inParliament) return;
+      var cd = p.fundraisingCooldowns[id] || 0;
+      var weeksLeft = cd - state.turn;
+      var disabled = weeksLeft > 0 || p.fondi < a.cost;
+      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+        : p.fondi < a.cost ? "Fondi insufficienti (" + fmtEuro(a.cost) + ")" : (a.cost ? "Costo: " + fmtEuro(a.cost) : "Nessun costo");
+      html += '<button type="button" class="option-card" data-fundraising="' + id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
+    });
+    html += "</div></details></section>";
+    return html;
+  }
+
   function renderPartyEvents() {
     var p = state.player;
     var html = '<section aria-label="Eventi di partito"><p class="eyebrow">Organizza un evento di partito</p>' +
@@ -6275,6 +6354,7 @@
     body += renderPollGrid(state.prevSnapshot);
     body += renderNationalStrip();
     body += renderPartyEvents();
+    body += renderFundraisingPanel();
     body += renderGovernmentReforms();
     body += renderEuInitiatives();
     body += renderGeopolitica();
@@ -6490,6 +6570,16 @@
         var id = btn.getAttribute("data-party-event");
         var res = resolvePartyEvent(id);
         if (!res) { showSaveStatus("Non puoi ancora organizzare questo evento (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-fundraising]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-fundraising");
+        var res = resolveFundraisingAction(id);
+        if (!res) { showSaveStatus("Non puoi ancora usare questa fonte di finanziamento (fondi o tempo di recupero insufficienti).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
