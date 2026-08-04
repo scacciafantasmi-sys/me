@@ -366,6 +366,13 @@
   .log-entries { border-top: 1px solid var(--border); }
   .section-group-body { border-top: 1px solid var(--border); padding: 0.75rem 0.9rem; display: flex; flex-direction: column; gap: 0.9rem; }
   .section-group-body section { padding: 0; border: 0; background: none; }
+
+  /* ---------- Impatto delle scelte: chip colorati, nella schermata di esito e nel registro ---------- */
+  .impact-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.7rem; }
+  .impact-chip { font-size: 0.74rem; font-weight: 700; padding: 0.22rem 0.6rem; border-radius: 999px; white-space: nowrap; }
+  .impact-chip.up { background: var(--good-soft); color: var(--good); }
+  .impact-chip.down { background: var(--critical-soft); color: var(--critical); }
+  .log-entry .impact-chips { margin-top: 0.45rem; }
   .log-entry { padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
   .log-entry:last-child { border-bottom: none; }
   .log-entry.election { background: var(--accent-soft); }
@@ -3969,6 +3976,7 @@
   function applyChoice(dossier, choice) {
     var eff = choice.effects || {};
     var p = state.player;
+    var before = { iscritti: p.iscritti, fondi: p.fondi, reputazione: p.reputazione, visibilita: p.visibilita };
     var style = leadershipById(p.leadership);
     var isPolicy = dossier.cat && dossier.cat.indexOf("Politica") === 0;
     var entiBoost = isPolicy ? staffBonus("responsabile_enti_locali", 0.2) : 1;
@@ -4011,12 +4019,22 @@
     var outlets = pickN(OUTLETS, 3);
     var headlines = outlets.map(function (o) { return { outlet: o, text: HEADLINE_BANK[o](dossier, choice, p.motto) }; });
 
+    // Impatto numerico reale della scelta (dopo tutti i moltiplicatori di stile/staff sopra), catturato
+    // per dare un riscontro visivo immediato e per restare visibile nel registro nel tempo — vedi
+    // renderDeltaChips più sotto, usato sia nella schermata di esito sia in ogni voce del registro.
+    var deltas = {
+      iscritti: Math.round(p.iscritti - before.iscritti),
+      fondi: Math.round(p.fondi - before.fondi),
+      reputazione: Math.round((p.reputazione - before.reputazione) * 10) / 10,
+      visibilita: Math.round((p.visibilita - before.visibilita) * 10) / 10
+    };
+
     state.log.unshift({
       week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result,
-      headlines: headlines, type: "dossier", cat: dossier.cat
+      headlines: headlines, type: "dossier", cat: dossier.cat, deltas: deltas
     });
 
-    return { resultText: choice.result, headlines: headlines };
+    return { resultText: choice.result, headlines: headlines, deltas: deltas };
   }
 
   // ---------- Weekly recomputation: polling, drift, decay, upkeep ----------
@@ -5414,10 +5432,30 @@
     return html;
   }
 
+  // Traduce l'impatto numerico reale di una scelta (già calcolato in applyChoice, dopo tutti i
+  // moltiplicatori di stile/staff) in piccoli chip colorati — verde se il numero è salito, rosso se è
+  // sceso. Usato sia nella schermata di esito subito dopo la scelta, sia in ogni voce del registro, così
+  // l'impatto delle decisioni passate resta visibile anche a distanza di settimane, non solo nel testo.
+  var IMPACT_CHIP_LABELS = { iscritti: "Iscritti", fondi: "Fondi", reputazione: "Reputazione", visibilita: "Visibilità" };
+  function renderDeltaChips(deltas) {
+    if (!deltas) return "";
+    var chips = Object.keys(IMPACT_CHIP_LABELS).map(function (k) {
+      var v = deltas[k];
+      var threshold = k === "iscritti" || k === "fondi" ? 1 : 0.05;
+      if (!v || Math.abs(v) < threshold) return "";
+      var cls = v > 0 ? "up" : "down";
+      var sign = v > 0 ? "+" : "−";
+      var display = k === "fondi" ? sign + "€" + Math.round(Math.abs(v)) : sign + Math.abs(v).toFixed(k === "iscritti" ? 0 : 1);
+      return '<span class="impact-chip ' + cls + '">' + IMPACT_CHIP_LABELS[k] + " " + display + "</span>";
+    }).join("");
+    if (!chips) return "";
+    return '<div class="impact-chips">' + chips + "</div>";
+  }
   function renderResultCard(result) {
     return '<section aria-label="Esito della decisione"><p class="eyebrow">Esito</p>' +
       '<div class="dossier result-panel"><h2>Settimana ' + state.turn + " archiviata</h2>" +
       '<p class="outcome">' + result.resultText + "</p>" +
+      renderDeltaChips(result.deltas) +
       '<button class="advance-btn" id="advance-btn" type="button">Avanti alla settimana successiva</button>' +
       "</div></section>";
   }
@@ -5427,7 +5465,7 @@
     var items = state.log.slice(0, 16).map(function (e) {
       var cls = (e.type === "election" || e.type === "locale" || e.type === "europee" || e.type === "referendum") ? " election"
         : e.type === "scissione" ? " scissione" : e.type === "cronaca" ? " cronaca" : "";
-      return '<div class="log-entry' + cls + '"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong> — " + e.choiceLabel + "<br>" + e.result + "</div>";
+      return '<div class="log-entry' + cls + '"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong> — " + e.choiceLabel + "<br>" + e.result + renderDeltaChips(e.deltas) + "</div>";
     }).join("");
     return '<section><details class="log"><summary>Registro delle decisioni (' + state.log.length + ")<span>▾</span></summary>" +
       '<div class="log-entries">' + items + "</div></details></section>";
