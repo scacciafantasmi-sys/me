@@ -3194,22 +3194,25 @@
   }
 
   // ---------- Elezioni locali: comunali, provinciali, regionali ----------
-  // Un evento leggero e periodico, indipendente dalle elezioni politiche nazionali: non blocca il
-  // gioco con una schermata dedicata, si limita a un esito narrato nel registro (come le cronache dei
-  // partiti rivali). L'esito è legato alla presenza reale sul territorio: più sezioni aperte (quindi più
-  // città "accese" sulla mappa), più probabile e più ampio il risultato — ed è proprio una di quelle
-  // città reali a comparire nel resoconto, non un luogo generico.
+  // Evento periodico, indipendente dalle elezioni politiche nazionali. L'esito è legato alla presenza
+  // reale sul territorio: più sezioni aperte (quindi più città "accese" sulla mappa), più probabile e
+  // più ampio il risultato — ed è proprio una di quelle città reali a comparire nel resoconto, non un
+  // luogo generico. Un buon risultato (3+ eletti) diventa il dossier della settimana invece di restare
+  // una riga persa nel registro — vedi il valore di ritorno usato in advanceTurnLogic.
   var LOCAL_ELECTION_KINDS = [
     { id: "comunali", label: "Elezioni Comunali", unit: "consiglieri comunali" },
     { id: "provinciali", label: "Elezioni Provinciali", unit: "consiglieri provinciali" },
     { id: "regionali", label: "Elezioni Regionali", unit: "consiglieri regionali" }
   ];
+  // Le elezioni locali non devono più essere una riga persa nel registro: un buon risultato diventa il
+  // dossier della settimana, con effetti più marcati (anche sulla Scheda Paese, pesati come ogni altra
+  // scelta dal peso istituzionale del partito) e scelte reali su come usare politicamente il risultato.
   function triggerLocalElectionCycle() {
-    if (state.turn < state.nextLocalElectionTurn) return;
+    if (state.turn < state.nextLocalElectionTurn) return null;
     state.nextLocalElectionTurn = state.turn + 30 + Math.floor(Math.random() * 20);
     var p = state.player;
     var open = openNuclei();
-    if (!p || !open.length) return; // senza sezioni sul territorio non c'è nulla da votare localmente
+    if (!p || !open.length) return null; // senza sezioni sul territorio non c'è nulla da votare localmente
     var kind = LOCAL_ELECTION_KINDS[Math.floor(Math.random() * LOCAL_ELECTION_KINDS.length)];
     var loc = open[Math.floor(Math.random() * open.length)];
     var won = Math.round(clamp(p.sondaggi * 0.6, 0, 22) + Math.min(open.length, 10) * 0.5 + Math.random() * 3);
@@ -3217,9 +3220,11 @@
     var text;
     if (won >= 1) {
       p.amministratoriLocali += won;
-      p.iscritti = Math.max(0, p.iscritti + won * 9);
-      p.reputazione = clamp(p.reputazione + Math.min(4, won * 0.4), 0, 100);
-      p.visibilita = clamp(p.visibilita + Math.min(6, won * 0.6), 0, 100);
+      p.iscritti = Math.max(0, p.iscritti + won * 12);
+      p.reputazione = clamp(p.reputazione + Math.min(6, won * 0.55), 0, 100);
+      p.visibilita = clamp(p.visibilita + Math.min(9, won * 0.8), 0, 100);
+      var mult = institutionalPowerMultiplier(p);
+      state.countryProfile.corruzione = clamp(state.countryProfile.corruzione + Math.min(0.4, won * 0.03) * mult, 1, 10);
       text = "A " + loc.name + " il partito elegge " + won + " " + kind.unit + ": un passo avanti concreto nel radicamento territoriale.";
     } else {
       text = "A " + loc.name + " il partito si presenta ma non riesce a eleggere " + kind.unit + " questa volta.";
@@ -3229,6 +3234,15 @@
       result: text, headlines: [], type: "locale"
     });
     state.worldNews.unshift({ cat: kind.label, text: text });
+    if (won < 3) return null;
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var choices = buildSituationChoices({ noun: "il risultato ottenuto a " + loc.name, city: loc.name, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "corruzione" }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: kind.label + " — risultato",
+      cat: kind.label, title: "Vittoria locale a " + loc.name, brief: text + " Come usi politicamente questo risultato?",
+      choices: choices
+    };
   }
 
   // ---------- Referendum nazionali ----------
@@ -5846,11 +5860,18 @@
     triggerLeaderSuccession();
     triggerWorldNews();
     triggerNucleoUpdate();
-    triggerLocalElectionCycle();
+    var localElectionSpotlight = triggerLocalElectionCycle();
     resolveEuropeanElection();
 
     if (!state.regime && state.turn >= state.nextElectionTurn) {
       resolveElection();
+      return;
+    }
+
+    if (localElectionSpotlight) {
+      state.aiDynamicDossier = localElectionSpotlight;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
       return;
     }
 
