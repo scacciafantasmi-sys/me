@@ -272,6 +272,15 @@
   .option-card.selected { border-color: var(--accent); background: var(--accent-soft); }
   .option-card .olabel { font-weight: 600; display: block; margin-bottom: 0.2rem; font-size: 0.92rem; }
   .option-card .odesc { font-size: 0.78rem; color: var(--text-dim); line-height: 1.4; }
+  /* Espansione inline di una presa di posizione (Geopolitica / Iniziative UE): appare direttamente
+     sotto la scheda cliccata, dentro la stessa griglia, invece di sostituire il dossier in cima alla
+     pagina — vedi grid-column:1/-1 inline nel markup per farla occupare tutta la riga. */
+  .inline-topic-expand {
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+    padding: 0.85rem 0.9rem; margin: -0.15rem 0 0.1rem;
+  }
+  .inline-topic-expand > p.brief { margin: 0 0 0.7rem; font-size: 0.86rem; line-height: 1.45; color: var(--text); }
+  .inline-topic-expand .choices { display: flex; flex-direction: column; gap: 0.5rem; }
 
   /* ---------- Player / stat tiles ---------- */
   .poll-grid {
@@ -4126,19 +4135,34 @@
       ]
     };
   }
+  // Espande le scelte di una presa di posizione (Geopolitica o Iniziative UE) direttamente sotto la
+  // scheda cliccata, dentro la stessa griglia — non più sostituendo il dossier in cima alla pagina.
+  // grid-column:1/-1 le fa occupare l'intera riga della griglia a prescindere da dove cade la scheda.
+  function renderInlineTopicChoices(topic) {
+    var d = topic.dossier;
+    var html = '<div class="inline-topic-expand" style="grid-column:1/-1"><p class="brief">' + d.brief + '</p><div class="choices">';
+    d.choices.forEach(function (c, i) {
+      html += '<button type="button" class="choice-btn" data-inline-choice="' + i + '"><span class="clabel">' + c.label + '</span><span class="chint">' + c.hint + '</span></button>';
+    });
+    html += "</div></div>";
+    return html;
+  }
   function renderEuInitiatives() {
     var p = state.player;
     if (!p || !p.seggiEuropei) return "";
     if (!p.euInitiativeCooldowns) p.euInitiativeCooldowns = {};
+    var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "eu_initiative" ? state.inlineExpandedTopic : null;
     var html = '<section aria-label="Iniziative al Parlamento Europeo"><details class="log"><summary>Iniziative al Parlamento Europeo<span>▾</span></summary>' +
-      '<p class="ci-hint">Con i tuoi eurodeputati eletti, puoi far pesare la loro voce su una di queste votazioni in qualsiasi momento.</p>' +
+      '<p class="ci-hint">Con i tuoi eurodeputati eletti, puoi far pesare la loro voce su una di queste votazioni in qualsiasi momento: scegli un tema per aprire le opzioni PRO/CONTRO/NEUTRALE direttamente qui sotto.</p>' +
       '<div class="option-grid">';
     EU_INITIATIVE_DOMAINS.forEach(function (d) {
       var cd = p.euInitiativeCooldowns[d.id] || 0;
       var weeksLeft = cd - state.turn;
       var disabled = weeksLeft > 0;
-      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Proponi ora";
-      html += '<button type="button" class="option-card" data-eu-initiative="' + d.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+      var isOpen = expanded && expanded.domainId === d.id;
+      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Proponi ora");
+      html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-eu-initiative="' + d.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+      if (isOpen) html += renderInlineTopicChoices(expanded);
     });
     html += "</div></details></section>";
     return html;
@@ -4189,14 +4213,17 @@
     if (!p.geopoliticaCooldowns) p.geopoliticaCooldowns = {};
     var weight = institutionalPowerMultiplier(p);
     var pesoText = weight >= 3 ? "Il tuo peso internazionale è alto." : weight >= 1.2 ? "Il tuo peso internazionale è medio." : "Il tuo peso internazionale è ancora basso: servono più seggi (in Parlamento o in Europarlamento) o un partito più grande.";
+    var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "geopolitica" ? state.inlineExpandedTopic : null;
     var html = '<section aria-label="Geopolitica"><p class="eyebrow">Geopolitica — Europa e mondo</p>' +
-      '<p class="ci-hint">Le condizioni geopolitiche europee e mondiali chiamano il partito a prendere posizione, PRO o CONTRO — sempre disponibile, qualunque sia la dimensione del partito. L\'impatto reale delle tue scelte dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito. ' + pesoText + '</p><div class="option-grid">';
+      '<p class="ci-hint">Le condizioni geopolitiche europee e mondiali chiamano il partito a prendere posizione, PRO o CONTRO — sempre disponibile, qualunque sia la dimensione del partito. Scegli un tema per aprire le opzioni direttamente qui sotto. L\'impatto reale delle tue scelte dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito. ' + pesoText + '</p><div class="option-grid">';
     GEOPOLITICA_DOMAINS.forEach(function (d) {
       var cd = p.geopoliticaCooldowns[d.id] || 0;
       var weeksLeft = cd - state.turn;
       var disabled = weeksLeft > 0;
-      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Prendi posizione";
-      html += '<button type="button" class="option-card" data-geopolitica="' + d.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+      var isOpen = expanded && expanded.domainId === d.id;
+      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Prendi posizione");
+      html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-geopolitica="' + d.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+      if (isOpen) html += renderInlineTopicChoices(expanded);
     });
     html += "</div></section>";
     return html;
@@ -4243,7 +4270,7 @@
     bilancioStato: { entrate: 920, uscite: 979 },
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
-    trackMilestonesFired: {}, coalitionTrust: {}
+    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -6264,7 +6291,18 @@
     body += renderPartyRelations();
     body += renderPartyDossier();
     body += renderLog();
+    // Ogni render() ricostruisce l'intero DOM da zero (innerHTML), quindi lo stato open/closed di ogni
+    // <details> richiudibile andrebbe perso a ogni singolo click che causa un re-render — anche solo
+    // aprire una presa di posizione dentro "Iniziative al Parlamento Europeo" richiuderebbe l'intero
+    // pannello sotto i piedi dell'utente. Qui si ricorda quali erano aperti (per testo del sommario,
+    // ragionevolmente stabile) e li si riapre subito dopo aver rigenerato il markup.
+    var openSummaries = Array.prototype.map.call(app.querySelectorAll("details[open] > summary"), function (s) { return s.textContent; });
     app.innerHTML = body;
+    if (openSummaries.length) {
+      app.querySelectorAll("details > summary").forEach(function (s) {
+        if (openSummaries.indexOf(s.textContent) !== -1) s.parentElement.open = true;
+      });
+    }
     bindInteractions();
 
     // Dopo aver risolto un'iniziativa l'utente resta spesso con lo scroll in basso, dov'era la
@@ -6277,7 +6315,7 @@
   }
 
   function bindInteractions() {
-    var btns = app.querySelectorAll(".choice-btn");
+    var btns = app.querySelectorAll(".choice-btn[data-choice]");
     btns.forEach(function (btn) {
       btn.addEventListener("click", function () {
         var dossier = currentDossier();
@@ -6591,12 +6629,33 @@
         var p = state.player;
         if (!p.euInitiativeCooldowns) p.euInitiativeCooldowns = {};
         if (state.turn < (p.euInitiativeCooldowns[domainId] || 0)) return;
-        var dossier = generateEuInitiativeDossier(domainId);
-        if (!dossier) return;
-        p.euInitiativeCooldowns[domainId] = state.turn + 12;
-        state.aiDynamicDossier = dossier;
-        state.currentDossierId = "ai_dynamic";
-        state.phase = "building";
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "eu_initiative" && current.domainId === domainId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          var dossier = generateEuInitiativeDossier(domainId);
+          if (!dossier) return;
+          state.inlineExpandedTopic = { kind: "eu_initiative", domainId: domainId, dossier: dossier };
+        }
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-inline-choice]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var topic = state.inlineExpandedTopic;
+        if (!topic) return;
+        var idx = parseInt(btn.getAttribute("data-inline-choice"), 10);
+        var choice = topic.dossier.choices[idx];
+        if (!choice) return;
+        var p = state.player;
+        var cooldowns = topic.kind === "geopolitica"
+          ? (p.geopoliticaCooldowns || (p.geopoliticaCooldowns = {}))
+          : (p.euInitiativeCooldowns || (p.euInitiativeCooldowns = {}));
+        cooldowns[topic.domainId] = state.turn + 12;
+        var outcome = applyChoice(topic.dossier, choice);
+        state.inlineExpandedTopic = null;
+        showSaveStatus(outcome.resultText, false);
         save();
         render();
       });
@@ -6607,12 +6666,14 @@
         var p = state.player;
         if (!p.geopoliticaCooldowns) p.geopoliticaCooldowns = {};
         if (state.turn < (p.geopoliticaCooldowns[domainId] || 0)) return;
-        var dossier = generateGeopoliticaDossier(domainId);
-        if (!dossier) return;
-        p.geopoliticaCooldowns[domainId] = state.turn + 12;
-        state.aiDynamicDossier = dossier;
-        state.currentDossierId = "ai_dynamic";
-        state.phase = "building";
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "geopolitica" && current.domainId === domainId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          var dossier = generateGeopoliticaDossier(domainId);
+          if (!dossier) return;
+          state.inlineExpandedTopic = { kind: "geopolitica", domainId: domainId, dossier: dossier };
+        }
         save();
         render();
       });
@@ -6647,6 +6708,7 @@
   }
 
   async function advanceTurnLogic() {
+    state.inlineExpandedTopic = null;
     recomputePeriodic();
     updateCoalitionTrust();
     triggerRivalPartyEvent();
