@@ -2880,20 +2880,17 @@
           result: "L'assenza di una posizione chiara, su un tema così enorme, delude sia i favorevoli che i contrari." }
       ] },
     { id: "gov_uscita_ue", kind: "notizia", cat: "Governo", title: "Il Governo Discute l'Uscita dall'Unione Europea",
-      brief: "Una componente della maggioranza rilancia la proposta di un referendum sull'uscita dall'Unione Europea, riaprendo il dibattito più divisivo di tutti.",
+      brief: "Forte della sua ampia delegazione a Bruxelles, una componente della maggioranza rilancia la proposta di un referendum vincolante sull'uscita dall'Unione Europea: il dibattito più divisivo di tutti.",
       choices: [
-        { label: "Guida l'uscita del paese dall'Unione Europea", hint: "Svolta storica: entusiasma la tua base, sconvolge economia e mercati", exitEu: true,
-          effects: { visibilita: 15, iscritti: 55, reputazione: -3, spreadDelta: 90, national: { economia: -2.5, commercio: -2.8, relazioniDiplomatiche: -3, inflazione: -1.5, pil: -1.8 } },
-          result: "L'uscita dall'Unione Europea viene approvata: è la svolta più radicale della storia recente del paese, con conseguenze enormi su economia, commercio e mercati." },
+        { label: "Proponi un referendum vincolante sull'uscita dall'Unione Europea", hint: "Nessuna garanzia di successo: un passo storico, non un click", startEuExitReferendum: true,
+          effects: { visibilita: 10, fondi: -800, reputazione: -1 },
+          result: "Il referendum vincolante sull'uscita dall'Unione Europea viene indetto: l'esito arriverà tra qualche settimana e non è affatto scontato." },
         { label: "Resta nell'UE ma chiedi una revisione dei trattati", hint: "Posizione mediana, negoziale", exitEu: false,
           effects: { reputazione: 3, visibilita: 4, national: { relazioniDiplomatiche: 0.4 } },
           result: "La richiesta di revisione dei trattati apre un negoziato lungo, ma senza strappi immediati con Bruxelles." },
         { label: "Difendi con forza la permanenza nell'Unione Europea", hint: "Rassicura mercati e alleati, delude l'ala più radicale", exitEu: false,
           effects: { reputazione: 5, iscritti: -20, national: { relazioniDiplomatiche: 0.8, economia: 0.4 } },
           result: "La difesa netta dell'Unione Europea rassicura mercati e alleati, ma delude una parte consistente della base più radicale." },
-        { label: "Indici un referendum consultivo sul tema", hint: "Scarica la decisione sui cittadini", exitEu: false,
-          effects: { reputazione: 1, visibilita: 6, fondi: -600 },
-          result: "Il referendum consultivo conferma la permanenza nell'Unione Europea: il tema resta chiuso per ora." },
         { label: "Non prendere una posizione netta", hint: "Prudente, rischia di deludere tutti", exitEu: false,
           effects: { reputazione: -3 },
           result: "L'assenza di una posizione chiara, sul tema più divisivo di tutti, delude sia i favorevoli che i contrari." }
@@ -3355,13 +3352,23 @@
     if (state.turn < p.pendingReferendum.resolveTurn) return null;
     var topic = p.pendingReferendum;
     p.pendingReferendum = null;
-    var passProb = clamp(0.35 + p.reputazione / 400 + p.visibilita / 500, 0.15, 0.85);
+    var isEuExit = topic.specialOutcome === "eu_exit";
+    var passProb = isEuExit ? euExitReferendumPassProb(p) : clamp(0.35 + p.reputazione / 400 + p.visibilita / 500, 0.15, 0.85);
     var passed = Math.random() < passProb;
     var mult = institutionalPowerMultiplier(p);
     var delta = passed ? rand(0.3, 0.6) : -rand(0.1, 0.3);
-    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+    if (isEuExit) {
+      if (passed) applyEuExitConsequences();
+      else state.euExitCooldownTurn = state.turn + 80;
+    } else if (topic.metric) {
+      state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+    }
     p.reputazione = clamp(p.reputazione + (passed ? rand(2, 5) : -rand(1, 4)), 0, 100);
-    var esito = passed
+    var esito = isEuExit
+      ? (passed
+        ? "Il referendum vincolante sull'uscita dall'Unione Europea passa: è la svolta più radicale della storia recente del paese, con conseguenze enormi su economia, commercio e mercati."
+        : "Il referendum vincolante sull'uscita dall'Unione Europea non passa: il paese resta nell'Unione Europea, almeno per ora.")
+      : passed
       ? "Il referendum promosso dal tuo partito passa: " + topic.noun + " cambia nella direzione che avevi chiesto."
       : "Il referendum promosso dal tuo partito non passa: gli elettori non seguono la proposta su " + topic.noun + ".";
     state.log.unshift({
@@ -3603,7 +3610,7 @@
   var STATE_FIELD_DEFAULTS = {
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
-    natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false,
+    natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
@@ -4242,6 +4249,31 @@
     var chosen = available[Math.floor(Math.random() * available.length)];
     state.usedRegimeSituations.push(chosen.id);
     return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: chosen.choices };
+  }
+
+  // ---------- Uscita dall'Unione Europea ----------
+  // Non deve essere un click: serve una delegazione europea davvero grande (EU_EXIT_MIN_SEATS su 76
+  // seggi italiani), essere al governo, e un referendum vincolante che può anche fallire — con
+  // probabilità di successo tenuta volutamente bassa. Solo se il referendum passa scattano le
+  // conseguenze reali; se fallisce, il tema resta chiuso per molte settimane (state.euExitCooldownTurn).
+  var EU_EXIT_MIN_SEATS = 25;
+  function euExitReferendumPassProb(p) {
+    return clamp(0.12 + p.reputazione / 500 + (p.seggiEuropei || 0) / 220, 0.05, 0.4);
+  }
+  function applyEuExitConsequences() {
+    var cp = state.countryProfile;
+    cp.economia = Math.max(1, cp.economia - 2.5);
+    cp.commercio = Math.max(1, cp.commercio - 2.8);
+    cp.relazioniDiplomatiche = Math.max(1, cp.relazioniDiplomatiche - 3);
+    cp.inflazione = Math.max(1, cp.inflazione - 1.5);
+    cp.pil = Math.max(1, cp.pil - 1.8);
+    state.spreadBps += 250;
+    state.ratingIdx = Math.max(0, state.ratingIdx - 2);
+    state.ratingOutlook = "Negativo";
+    state.spreadHistory.push(state.spreadBps);
+    if (state.spreadHistory.length > 12) state.spreadHistory.shift();
+    state.leftEu = true;
+    state.euExitDecided = true;
   }
 
   function resolveElection() {
@@ -5485,8 +5517,15 @@
           if (choice.exitNato) state.leftNato = true;
           state.resultData = applyChoice(dossier, choice);
         } else if (dossier.id === "gov_uscita_ue") {
-          state.euExitDecided = true;
-          if (choice.exitEu) state.leftEu = true;
+          if (choice.startEuExitReferendum) {
+            state.player.pendingReferendum = {
+              title: "Referendum sull'uscita dall'Unione Europea", noun: "l'uscita dall'Unione Europea",
+              metric: "relazioniDiplomatiche", resolveTurn: state.turn + 10 + Math.floor(Math.random() * 6),
+              specialOutcome: "eu_exit"
+            };
+          } else {
+            state.euExitCooldownTurn = state.turn + 20;
+          }
           state.resultData = applyChoice(dossier, choice);
         } else {
           var res = applyChoice(dossier, choice);
@@ -5802,7 +5841,11 @@
       var parlPool = p.parliamentRole === "governo" ? GOVERNO_DOSSIERS : OPPOSIZIONE_DOSSIERS;
       pool = pool.concat(parlPool.filter(function (d) {
         if (d.id === "gov_uscita_nato") return !state.natoDecided;
-        if (d.id === "gov_uscita_ue") return !state.euExitDecided;
+        if (d.id === "gov_uscita_ue") {
+          if (state.euExitDecided || state.leftEu || p.pendingReferendum) return false;
+          if (state.euExitCooldownTurn && state.turn < state.euExitCooldownTurn) return false;
+          return (p.seggiEuropei || 0) >= EU_EXIT_MIN_SEATS;
+        }
         return true;
       }));
     }
