@@ -364,6 +364,8 @@
   }
   .log summary::-webkit-details-marker { display: none; }
   .log-entries { border-top: 1px solid var(--border); }
+  .section-group-body { border-top: 1px solid var(--border); padding: 0.75rem 0.9rem; display: flex; flex-direction: column; gap: 0.9rem; }
+  .section-group-body section { padding: 0; border: 0; background: none; }
   .log-entry { padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
   .log-entry:last-child { border-bottom: none; }
   .log-entry.election { background: var(--accent-soft); }
@@ -3603,6 +3605,67 @@
     return html;
   }
 
+  // ---------- Geopolitica: condizioni europee e mondiali ----------
+  // A differenza delle Iniziative al Parlamento Europeo (che richiedono seggi europei), questa scheda è
+  // sempre visibile: ogni partito ha un'opinione sulla scena internazionale. Ma il PESO reale della
+  // presa di posizione — quanto sposta davvero la Scheda Paese — dipende da quanto seggi europei hai
+  // (voce istituzionale a Bruxelles) e da quanto sono solide le relazioni diplomatiche del paese in
+  // quel momento (un paese isolato ha meno credibilità internazionale, chiunque parli a nome suo).
+  var GEOPOLITICA_DOMAINS = [
+    { id: "usa", label: "Relazioni con gli Stati Uniti", noun: "i rapporti commerciali e diplomatici con gli Stati Uniti", metric: "relazioniDiplomatiche" },
+    { id: "cina", label: "Relazioni con la Cina", noun: "gli investimenti cinesi in infrastrutture strategiche italiane", metric: "commercio" },
+    { id: "nato_ruolo", label: "Il Ruolo dell'Italia nella NATO", noun: "il livello di spesa militare richiesto dalla NATO", metric: "relazioniDiplomatiche" },
+    { id: "medioriente", label: "Crisi in Medio Oriente", noun: "la posizione italiana sulla crisi in corso in Medio Oriente", metric: "relazioniDiplomatiche" },
+    { id: "africa", label: "Rapporti con l'Africa e Flussi Migratori", noun: "gli accordi di cooperazione con i paesi di transito africani", metric: "relazioniDiplomatiche" },
+    { id: "clima_globale", label: "Cambiamento Climatico Globale", noun: "gli impegni internazionali sulla riduzione delle emissioni", metric: "ambientalismo" },
+    { id: "commercio_internazionale", label: "Commercio Internazionale e Dazi", noun: "i nuovi dazi doganali in discussione a livello internazionale", metric: "commercio" },
+    { id: "cyber", label: "Sicurezza Cibernetica Internazionale", noun: "la cooperazione internazionale sulla sicurezza cibernetica", metric: "ricercaSviluppo" }
+  ];
+  function geoPoliticaPowerMultiplier(p) {
+    var euPart = clamp(1 + (p.seggiEuropei || 0) / 15, 1, 3);
+    var relPart = clamp((state.countryProfile.relazioniDiplomatiche || 5) / 5.5, 0.4, 2);
+    return euPart * relPart;
+  }
+  function generateGeopoliticaDossier(domainId) {
+    var domain = GEOPOLITICA_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
+    if (!domain) return null;
+    var p = state.player;
+    var mult = geoPoliticaPowerMultiplier(p);
+    var weightNote = mult >= 2
+      ? " Con la tua voce a Bruxelles e la credibilità internazionale del paese, la tua posizione pesa davvero."
+      : " Senza molti seggi europei o con relazioni diplomatiche fragili, la tua voce conta ancora poco sulla scena internazionale.";
+    return {
+      id: "geopolitica", kind: "situazione", cat: "Geopolitica",
+      eyebrow: "Geopolitica — " + domain.label,
+      title: "Posizione internazionale: " + domain.label,
+      brief: "Il partito è chiamato a prendere posizione su " + domain.noun + "." + weightNote,
+      choices: [
+        { label: "Prendi una posizione assertiva e netta", hint: "Massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.25, 0.45) * mult) }, result: "La posizione assertiva su " + domain.noun + " fa notizia e pesa davvero, in proporzione alla forza internazionale del partito." },
+        { label: "Cerca una posizione equilibrata e negoziale", hint: "Meno esposta, ma comunque un contributo reale", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.2) * mult) }, result: "L'equilibrio cercato su " + domain.noun + " convince i moderati, con un impatto più contenuto." },
+        { label: "Assumi una posizione critica e di rottura", hint: "Coerente con una linea dura, isola il partito a livello internazionale", effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.15, 0.3) * mult) }, result: "La rottura su " + domain.noun + " scontenta i partner internazionali, ma premia chi in patria voleva un segnale netto." },
+        { label: "Non prendere posizione, resta ai margini del dibattito", hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza di posizione su " + domain.noun + " passa quasi inosservata all'estero, ma qualcuno in patria la nota." }
+      ]
+    };
+  }
+  function renderGeopolitica() {
+    var p = state.player;
+    if (!p) return "";
+    if (!p.geopoliticaCooldowns) p.geopoliticaCooldowns = {};
+    var mult = geoPoliticaPowerMultiplier(p);
+    var pesoText = mult >= 2.2 ? "Il tuo peso internazionale è alto." : mult >= 1.3 ? "Il tuo peso internazionale è medio." : "Il tuo peso internazionale è ancora basso: servono più seggi europei o relazioni diplomatiche più solide.";
+    var html = '<section aria-label="Geopolitica"><p class="eyebrow">Geopolitica — Europa e mondo</p>' +
+      '<p class="ci-hint">Le condizioni geopolitiche europee e mondiali chiamano il partito a prendere posizione. L\'impatto reale delle tue scelte dipende dai tuoi seggi al Parlamento Europeo e dal livello delle relazioni diplomatiche del paese. ' + pesoText + '</p><div class="option-grid">';
+    GEOPOLITICA_DOMAINS.forEach(function (d) {
+      var cd = p.geopoliticaCooldowns[d.id] || 0;
+      var weeksLeft = cd - state.turn;
+      var disabled = weeksLeft > 0;
+      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Prendi posizione";
+      html += '<button type="button" class="option-card" data-geopolitica="' + d.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+    });
+    html += "</div></section>";
+    return html;
+  }
+
   var HEADLINE_BANK = {
     "La Voce Libera": function (ev, ch) {
       return ch.effects.reputazione && ch.effects.reputazione < 0
@@ -3651,7 +3714,7 @@
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, candidatePools: {},
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
-    coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}
+    coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {}
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -5289,6 +5352,12 @@
     return html;
   }
 
+  // Raccoglie più sezioni di sola consultazione (non azioni della settimana) in un unico blocco
+  // richiudibile, chiuso di default, per accorciare la lunghezza abituale della pagina.
+  function wrapCollapsed(title, innerHtml) {
+    if (!innerHtml) return "";
+    return '<details class="log section-group"><summary>' + title + '<span>▾</span></summary><div class="section-group-body">' + innerHtml + '</div></details>';
+  }
   function renderHeadlines(headlines) {
     if (!headlines || !headlines.length) return "";
     return '<section aria-label="Prima pagina"><p class="eyebrow">Prima pagina della settimana</p><div class="headline-row">' +
@@ -5469,26 +5538,28 @@
       body += renderHeadlines(state.resultData.headlines);
     }
 
+    // Ordine pensato per la settimana tipo: prima i numeri chiave e le azioni che si usano spesso
+    // (statistiche, sondaggi, eventi, riforme, referendum, alleanze, parlamento), poi tutto ciò che è
+    // più di consultazione occasionale — raccolto in blocchi richiudibili per non allungare la pagina
+    // di default (vedi wrapCollapsed).
     body += renderPlayerStats();
+    body += renderPollGrid(state.prevSnapshot);
+    body += renderNationalStrip();
     body += renderPartyEvents();
     body += renderGovernmentReforms();
     body += renderEuInitiatives();
+    body += renderGeopolitica();
     body += renderReferendumProposal();
-    body += renderItalyMap();
-    body += renderNucleiUpdates();
-    body += renderStaffPanel();
-    body += renderIdeologyProfile();
-    body += renderPollGrid(state.prevSnapshot);
-    body += renderNationalStrip();
-    body += renderBilancioStato();
-    body += renderCountryProfile();
-    body += renderWorldNews();
-    body += renderPartyDirectory();
-    body += renderPartyRelations();
     body += renderReunificationPanel();
     body += renderCoalitionPanel();
     body += renderParliament();
     body += renderEuParliament();
+    body += renderStaffPanel();
+    body += renderIdeologyProfile();
+    body += wrapCollapsed("Territorio e cronaca", renderItalyMap() + renderNucleiUpdates() + renderWorldNews() + renderBilancioStato());
+    body += renderCountryProfile();
+    body += renderPartyDirectory();
+    body += renderPartyRelations();
     body += renderPartyDossier();
     body += renderLog();
     app.innerHTML = body;
@@ -5816,6 +5887,22 @@
         var dossier = generateEuInitiativeDossier(domainId);
         if (!dossier) return;
         p.euInitiativeCooldowns[domainId] = state.turn + 12;
+        state.aiDynamicDossier = dossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-geopolitica]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var domainId = btn.getAttribute("data-geopolitica");
+        var p = state.player;
+        if (!p.geopoliticaCooldowns) p.geopoliticaCooldowns = {};
+        if (state.turn < (p.geopoliticaCooldowns[domainId] || 0)) return;
+        var dossier = generateGeopoliticaDossier(domainId);
+        if (!dossier) return;
+        p.geopoliticaCooldowns[domainId] = state.turn + 12;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
         state.phase = "building";
