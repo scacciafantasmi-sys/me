@@ -73,12 +73,13 @@
   ::selection { background: var(--accent-soft); }
 
   /* ---------- Tema visivo dinamico ----------
-     Lo sfondo dell'intera pagina cambia colore in base alla situazione politica del momento: nero
-     senza seggi in Parlamento, marroncino chiaro con seggi, blu con le stelline UE quando si discute
-     di Unione Europea, blu con stelline UE E urne insieme nella settimana delle elezioni europee,
-     tricolore quando si è al governo, bianco con le urne nella settimana delle elezioni politiche/
-     locali. Un cambio di regime (fascista, comunista, monarchico) sovrasta tutto il resto in modo
-     permanente. */
+     Lo sfondo dell'intera pagina cambia colore in base alla situazione politica del momento: bianco
+     senza seggi né in Parlamento né in Europarlamento e senza essere al governo, marroncino chiaro
+     con raffigurazioni del Parlamento quando si hanno seggi in Parlamento italiano, blu con le
+     stelline UE quando si hanno seggi europei e si discute di Unione Europea, blu con stelline UE E
+     urne insieme nella settimana delle elezioni europee, tricolore quando si è al governo (da soli o
+     in coalizione), bianco con le urne nella settimana delle elezioni politiche/locali. Un cambio di
+     regime (fascista, comunista, monarchico) sovrasta tutto il resto in modo permanente. */
   body { transition: background 0.6s ease; position: relative; }
   body::before {
     content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
@@ -86,8 +87,10 @@
   }
   .wrap { position: relative; z-index: 1; }
 
-  body.gt-noseats { background: #050505; }
-  body.gt-noseats .masthead { border-bottom-color: #242424; }
+  body.gt-noseats { background: #ffffff; }
+  body.gt-noseats .masthead { border-bottom-color: #e4e4e0; }
+  body.gt-noseats .masthead h1, body.gt-noseats .masthead .tagline,
+  body.gt-noseats .masthead-meta .week, body.gt-noseats .masthead-meta .date { color: #1a1a1a; }
 
   body.gt-parliament { background: #cdae82; }
   body.gt-parliament .masthead { border-bottom-color: #a8865a; }
@@ -618,11 +621,16 @@
     { key: "ricercaSviluppo", label: "Ricerca e sviluppo" },
     { key: "inflazione", label: "Stabilità dei prezzi (inflazione)" }
   ];
+  // Quanto pesa davvero una presa di posizione del partito sulla Scheda Paese: non solo "hai seggi
+  // sì/no", ma quanti seggi hai alla Camera+Senato, quanti seggi europei, e quanto è grande il
+  // partito in generale (sondaggi) — così lo stesso tipo di scelta ha un impatto piccolo per un
+  // partito appena nato e uno grande, spesso enorme, per un partito di governo affermato.
   function institutionalPowerMultiplier(p) {
-    if (p.parliamentRole === "governo") return 6;
-    if (p.inParliament) return 2.2;
-    if (p.seggiEuropei) return 1.3;
-    return 0.35;
+    var base = p.parliamentRole === "governo" ? 3 : p.inParliament ? 1.2 : (p.seggiEuropei ? 0.6 : 0.25);
+    var seatWeight = clamp(((p.seatsCamera || 0) + (p.seatsSenato || 0)) / 150, 0, 3);
+    var euWeight = clamp((p.seggiEuropei || 0) / 25, 0, 2);
+    var sizeWeight = clamp((p.sondaggi || 0) / 20, 0, 2);
+    return clamp(base + seatWeight + euWeight + sizeWeight, 0.25, 8);
   }
   function applyNationalEffects(national, mult) {
     if (!national) return;
@@ -2913,7 +2921,7 @@
     var p = state.player;
     if (!p || p.parliamentRole !== "governo") return "";
     if (!p.reformCooldowns) p.reformCooldowns = {};
-    var html = '<section aria-label="Riforme di Governo"><p class="eyebrow">Riforme di Governo</p>' +
+    var html = '<section aria-label="Riforme di Governo"><details class="log"><summary>Riforme di Governo<span>▾</span></summary>' +
       '<p class="ci-hint">Da governo puoi proporre una riforma vera su ciascuna di queste materie, in qualsiasi momento: sostituisce il dossier della settimana con una scelta reale sull\'intensità dell\'intervento.</p>' +
       '<div class="option-grid">';
     REFORM_DOMAINS.forEach(function (d) {
@@ -2924,7 +2932,7 @@
       html += '<button type="button" class="option-card" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
     });
-    html += "</div></section>";
+    html += "</div></details></section>";
     return html;
   }
 
@@ -3654,25 +3662,21 @@
     { id: "sicurezza", label: "Difesa Comune Europea", noun: "il progetto di difesa comune europea", metric: "relazioniDiplomatiche" },
     { id: "giustizia", label: "Stato di Diritto nell'Unione", noun: "il meccanismo di condizionalità sullo stato di diritto", metric: "corruzione" }
   ];
-  function euPowerMultiplier(p) {
-    return clamp(1 + (p.seggiEuropei || 0) / 12, 1, 4);
-  }
   function generateEuInitiativeDossier(domainId) {
     var domain = EU_INITIATIVE_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
     if (!domain) return null;
     var p = state.player;
-    var mult = euPowerMultiplier(p);
     var groupNote = p.euGroup ? " I tuoi alleati di gruppo si aspettano una linea coerente con la loro." : " Senza un gruppo, voti in piena libertà ma con meno peso reale sull'esito.";
     return {
       id: "eu_initiative", kind: "situazione", cat: "Parlamento Europeo",
       eyebrow: "Parlamento Europeo — " + domain.label,
       title: "Voto in Aula: " + domain.label,
-      brief: "Il Parlamento Europeo vota su " + domain.noun + "." + groupNote,
+      brief: "Il Parlamento Europeo vota, PRO o CONTRO, su " + domain.noun + ". L'impatto reale del tuo voto dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito." + groupNote,
       choices: [
-        { label: "Sostieni con convinzione la linea più ambiziosa", hint: "Massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.25, 0.45) * mult) }, result: "Il voto convinto su " + domain.noun + " pesa davvero nell'esito finale della votazione." },
-        { label: "Sostieni con alcune riserve", hint: "Posizione mediana, meno esposta", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.2) * mult) }, result: "Il sostegno con riserve pesa un po' meno, ma resta un contributo reale su " + domain.noun + "." },
-        { label: "Vota contro, in dissenso", hint: "Coerente con una linea critica, isola il partito a Bruxelles", effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.15, 0.3) * mult) }, result: "Il voto contrario su " + domain.noun + " scontenta gli alleati europei, ma premia chi in patria voleva un no netto." },
-        { label: "Non partecipare al voto", hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza dal voto su " + domain.noun + " passa quasi inosservata a Bruxelles, ma qualcuno in patria la nota." }
+        { label: "PRO — Sostieni con convinzione la linea più ambiziosa", hint: "Posizione PRO netta, massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.3, 0.5)) }, result: "Il voto PRO convinto su " + domain.noun + " pesa nell'esito finale della votazione, in proporzione alla forza reale del partito." },
+        { label: "PRO — Sostieni con alcune riserve", hint: "Posizione PRO moderata, meno esposta", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.25)) }, result: "Il sostegno con riserve pesa un po' meno, ma resta un contributo PRO reale su " + domain.noun + "." },
+        { label: "CONTRO — Vota apertamente contro, in dissenso", hint: "Posizione CONTRO netta, isola il partito a Bruxelles", effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.2, 0.4)) }, result: "Il voto CONTRO su " + domain.noun + " scontenta gli alleati europei, ma premia chi in patria voleva un no netto." },
+        { label: "NEUTRALE — Non partecipare al voto", hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza dal voto su " + domain.noun + " passa quasi inosservata a Bruxelles, ma qualcuno in patria la nota." }
       ]
     };
   }
@@ -3680,7 +3684,7 @@
     var p = state.player;
     if (!p || !p.seggiEuropei) return "";
     if (!p.euInitiativeCooldowns) p.euInitiativeCooldowns = {};
-    var html = '<section aria-label="Iniziative al Parlamento Europeo"><p class="eyebrow">Iniziative al Parlamento Europeo</p>' +
+    var html = '<section aria-label="Iniziative al Parlamento Europeo"><details class="log"><summary>Iniziative al Parlamento Europeo<span>▾</span></summary>' +
       '<p class="ci-hint">Con i tuoi eurodeputati eletti, puoi far pesare la loro voce su una di queste votazioni in qualsiasi momento.</p>' +
       '<div class="option-grid">';
     EU_INITIATIVE_DOMAINS.forEach(function (d) {
@@ -3690,7 +3694,7 @@
       var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Proponi ora";
       html += '<button type="button" class="option-card" data-eu-initiative="' + d.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
     });
-    html += "</div></section>";
+    html += "</div></details></section>";
     return html;
   }
 
@@ -3710,29 +3714,26 @@
     { id: "commercio_internazionale", label: "Commercio Internazionale e Dazi", noun: "i nuovi dazi doganali in discussione a livello internazionale", metric: "commercio" },
     { id: "cyber", label: "Sicurezza Cibernetica Internazionale", noun: "la cooperazione internazionale sulla sicurezza cibernetica", metric: "ricercaSviluppo" }
   ];
-  function geoPoliticaPowerMultiplier(p) {
-    var euPart = clamp(1 + (p.seggiEuropei || 0) / 15, 1, 3);
-    var relPart = clamp((state.countryProfile.relazioniDiplomatiche || 5) / 5.5, 0.4, 2);
-    return euPart * relPart;
-  }
   function generateGeopoliticaDossier(domainId) {
     var domain = GEOPOLITICA_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
     if (!domain) return null;
     var p = state.player;
-    var mult = geoPoliticaPowerMultiplier(p);
-    var weightNote = mult >= 2
-      ? " Con la tua voce a Bruxelles e la credibilità internazionale del paese, la tua posizione pesa davvero."
-      : " Senza molti seggi europei o con relazioni diplomatiche fragili, la tua voce conta ancora poco sulla scena internazionale.";
+    var weight = institutionalPowerMultiplier(p);
+    var weightNote = weight >= 3
+      ? " Con la tua forza in Parlamento e sulla scena internazionale, la tua posizione pesa davvero."
+      : weight >= 1.2
+      ? " Hai una voce che si fa sentire, anche se non decisiva."
+      : " Senza molti seggi o con un partito ancora piccolo, la tua voce conta ancora poco sulla scena internazionale.";
     return {
       id: "geopolitica", kind: "situazione", cat: "Geopolitica",
       eyebrow: "Geopolitica — " + domain.label,
       title: "Posizione internazionale: " + domain.label,
-      brief: "Il partito è chiamato a prendere posizione su " + domain.noun + "." + weightNote,
+      brief: "Il partito è chiamato a prendere posizione, PRO o CONTRO, su " + domain.noun + ". L'impatto reale dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito." + weightNote,
       choices: [
-        { label: "Prendi una posizione assertiva e netta", hint: "Massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.25, 0.45) * mult) }, result: "La posizione assertiva su " + domain.noun + " fa notizia e pesa davvero, in proporzione alla forza internazionale del partito." },
-        { label: "Cerca una posizione equilibrata e negoziale", hint: "Meno esposta, ma comunque un contributo reale", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.2) * mult) }, result: "L'equilibrio cercato su " + domain.noun + " convince i moderati, con un impatto più contenuto." },
-        { label: "Assumi una posizione critica e di rottura", hint: "Coerente con una linea dura, isola il partito a livello internazionale", effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.15, 0.3) * mult) }, result: "La rottura su " + domain.noun + " scontenta i partner internazionali, ma premia chi in patria voleva un segnale netto." },
-        { label: "Non prendere posizione, resta ai margini del dibattito", hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza di posizione su " + domain.noun + " passa quasi inosservata all'estero, ma qualcuno in patria la nota." }
+        { label: "PRO — Prendi una posizione assertiva e netta", hint: "Posizione PRO netta, massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.3, 0.5)) }, result: "La posizione PRO netta su " + domain.noun + " fa notizia e pesa, in proporzione alla forza reale del partito." },
+        { label: "PRO — Cerca una posizione equilibrata e negoziale", hint: "Posizione PRO moderata, meno esposta", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.25)) }, result: "L'equilibrio cercato su " + domain.noun + " convince i moderati, con un impatto più contenuto." },
+        { label: "CONTRO — Assumi una posizione critica e di rottura", hint: "Posizione CONTRO netta, isola il partito a livello internazionale", effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.2, 0.4)) }, result: "La rottura su " + domain.noun + " scontenta i partner internazionali, ma premia chi in patria voleva un segnale netto." },
+        { label: "NEUTRALE — Non prendere posizione, resta ai margini del dibattito", hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza di posizione su " + domain.noun + " passa quasi inosservata all'estero, ma qualcuno in patria la nota." }
       ]
     };
   }
@@ -3740,10 +3741,10 @@
     var p = state.player;
     if (!p) return "";
     if (!p.geopoliticaCooldowns) p.geopoliticaCooldowns = {};
-    var mult = geoPoliticaPowerMultiplier(p);
-    var pesoText = mult >= 2.2 ? "Il tuo peso internazionale è alto." : mult >= 1.3 ? "Il tuo peso internazionale è medio." : "Il tuo peso internazionale è ancora basso: servono più seggi europei o relazioni diplomatiche più solide.";
-    var html = '<section aria-label="Geopolitica"><p class="eyebrow">Geopolitica — Europa e mondo</p>' +
-      '<p class="ci-hint">Le condizioni geopolitiche europee e mondiali chiamano il partito a prendere posizione. L\'impatto reale delle tue scelte dipende dai tuoi seggi al Parlamento Europeo e dal livello delle relazioni diplomatiche del paese. ' + pesoText + '</p><div class="option-grid">';
+    var weight = institutionalPowerMultiplier(p);
+    var pesoText = weight >= 3 ? "Il tuo peso internazionale è alto." : weight >= 1.2 ? "Il tuo peso internazionale è medio." : "Il tuo peso internazionale è ancora basso: servono più seggi (in Parlamento o in Europarlamento) o un partito più grande.";
+    var html = '<section aria-label="Geopolitica"><details class="log"><summary>Geopolitica — Europa e mondo<span>▾</span></summary>' +
+      '<p class="ci-hint">Le condizioni geopolitiche europee e mondiali chiamano il partito a prendere posizione, PRO o CONTRO. L\'impatto reale delle tue scelte dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito. ' + pesoText + '</p><div class="option-grid">';
     GEOPOLITICA_DOMAINS.forEach(function (d) {
       var cd = p.geopoliticaCooldowns[d.id] || 0;
       var weeksLeft = cd - state.turn;
@@ -3751,7 +3752,7 @@
       var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Prendi posizione";
       html += '<button type="button" class="option-card" data-geopolitica="' + d.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
     });
-    html += "</div></section>";
+    html += "</div></details></section>";
     return html;
   }
 
@@ -4060,7 +4061,17 @@
       var rival = familyById(p.family).rival;
       state.parties[rival] = Math.max(0.3, state.parties[rival] + eff.rivalExtra);
     }
-    if (eff.national) applyNationalEffects(eff.national, institutionalPowerMultiplier(p));
+    var nationalDeltas = null;
+    if (eff.national) {
+      var beforeNational = {};
+      Object.keys(eff.national).forEach(function (k) { beforeNational[k] = state.countryProfile[k]; });
+      applyNationalEffects(eff.national, institutionalPowerMultiplier(p));
+      nationalDeltas = {};
+      Object.keys(eff.national).forEach(function (k) {
+        if (beforeNational[k] === undefined) return;
+        nationalDeltas[k] = Math.round((state.countryProfile[k] - beforeNational[k]) * 100) / 100;
+      });
+    }
     if (eff.relationDelta && eff.relationDelta.id) {
       if (!state.partyRelations) state.partyRelations = {};
       var curRel = state.partyRelations[eff.relationDelta.id];
@@ -4078,7 +4089,8 @@
       iscritti: Math.round(p.iscritti - before.iscritti),
       fondi: Math.round(p.fondi - before.fondi),
       reputazione: Math.round((p.reputazione - before.reputazione) * 10) / 10,
-      visibilita: Math.round((p.visibilita - before.visibilita) * 10) / 10
+      visibilita: Math.round((p.visibilita - before.visibilita) * 10) / 10,
+      national: nationalDeltas
     };
 
     state.log.unshift({
@@ -4785,6 +4797,13 @@
         state.player.sezioni = Math.max(3, Math.round(pollNow / 1.5));
         state.player.reputazione = 60;
         state.player.visibilita = Math.min(70, pollNow * 2.2);
+        // Un partito reale già esistente ha già seggi in Parlamento oggi: prenderne il comando significa
+        // ereditare anche quello, non ripartire come un movimento appena nato senza rappresentanza.
+        state.player.inParliament = true;
+        state.player.everElected = true;
+        state.player.seatsCamera = Math.max(1, Math.round(400 * pollNow / 100));
+        state.player.seatsSenato = Math.max(1, Math.round(200 * pollNow / 100));
+        state.player.parliamentRole = takeoverParty.coalition === "governo" ? "governo" : "opposizione";
         state.dissolvedPartyIds = (state.dissolvedPartyIds || []).concat([takeoverParty.id]);
         delete state.parties[takeoverParty.id];
       }
@@ -5566,6 +5585,10 @@
   // sceso. Usato sia nella schermata di esito subito dopo la scelta, sia in ogni voce del registro, così
   // l'impatto delle decisioni passate resta visibile anche a distanza di settimane, non solo nel testo.
   var IMPACT_CHIP_LABELS = { iscritti: "Iscritti", fondi: "Fondi", reputazione: "Reputazione", visibilita: "Visibilità" };
+  function countryMetricLabel(key) {
+    for (var i = 0; i < COUNTRY_PROFILE_METRICS.length; i++) if (COUNTRY_PROFILE_METRICS[i].key === key) return COUNTRY_PROFILE_METRICS[i].label;
+    return key;
+  }
   function renderDeltaChips(deltas) {
     if (!deltas) return "";
     var chips = Object.keys(IMPACT_CHIP_LABELS).map(function (k) {
@@ -5577,6 +5600,18 @@
       var display = k === "fondi" ? sign + "€" + Math.round(Math.abs(v)) : sign + Math.abs(v).toFixed(k === "iscritti" ? 0 : 1);
       return '<span class="impact-chip ' + cls + '">' + IMPACT_CHIP_LABELS[k] + " " + display + "</span>";
     }).join("");
+    // Le voci "national" (Scheda Paese, es. relazioni diplomatiche, ambientalismo) toccate da prese di
+    // posizione geopolitiche/europee: prima restavano invisibili, dando l'impressione che la scelta non
+    // avesse alcun effetto — ora compaiono come chip esattamente come le altre.
+    if (deltas.national) {
+      chips += Object.keys(deltas.national).map(function (k) {
+        var v = deltas.national[k];
+        if (!v || Math.abs(v) < 0.05) return "";
+        var cls = v > 0 ? "up" : "down";
+        var sign = v > 0 ? "+" : "−";
+        return '<span class="impact-chip ' + cls + '">' + countryMetricLabel(k) + " " + sign + Math.abs(v).toFixed(1) + "</span>";
+      }).join("");
+    }
     if (!chips) return "";
     return '<div class="impact-chips">' + chips + "</div>";
   }
