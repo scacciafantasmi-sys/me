@@ -3319,8 +3319,51 @@
   };
 
   // ---------- State ----------
-  function freshState() {
+  // Fonte unica di verità per i campi "strutturali" opzionali dello stato e del giocatore: usata sia per
+  // costruire una partita nuova sia per completare automaticamente un salvataggio di una versione
+  // precedente che non ha ancora questi campi (vedi mergeDefaults in load()). Aggiungere qui un campo
+  // nuovo basta a renderlo disponibile ovunque, sia in una nuova partita sia in una vecchia importata,
+  // senza dover scrivere una riga di migrazione dedicata a mano ogni volta.
+  function freshCountryProfile() {
     return {
+      salari: 4, trasporti: 5, welfare: 5, sanita: 5, corruzione: 4, aziende: 5, economia: 5,
+      pil: 4, felicita: 6, scuola: 5, ambientalismo: 5, commercio: 6, relazioniDiplomatiche: 6,
+      ricercaSviluppo: 4, inflazione: 6
+    };
+  }
+  var STATE_FIELD_DEFAULTS = {
+    allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
+    countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
+    natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false,
+    bilancioStato: { entrate: 920, uscite: 979 },
+    usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
+    dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
+    trackMilestonesFired: {}
+  };
+  var PLAYER_FIELD_DEFAULTS = {
+    allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
+    currents: null, staff: [], parliamentRole: null,
+    amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, candidatePools: {},
+    reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
+    coalitionInviteCooldowns: {}
+  };
+  // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
+  // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
+  // nuovo aggiunto in futuro viene completato, non solo l'intero blocco se mancasse del tutto.
+  function mergeDefaults(target, defaults) {
+    if (!target || typeof target !== "object") return target;
+    Object.keys(defaults).forEach(function (key) {
+      var defVal = defaults[key];
+      if (target[key] === undefined) {
+        target[key] = (defVal && typeof defVal === "object") ? JSON.parse(JSON.stringify(defVal)) : defVal;
+      } else if (defVal && typeof defVal === "object" && !Array.isArray(defVal) && target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
+        mergeDefaults(target[key], defVal);
+      }
+    });
+    return target;
+  }
+  function freshState() {
+    return Object.assign({
       phase: "setup",
       turn: 0,
       legislature: 1,
@@ -3328,10 +3371,6 @@
       nextElectionTurn: 90,
       nextLocalElectionTurn: 35,
       nextEuropeanElectionTurn: 60,
-      allianceOffered: false,
-      snapElectionPending: false,
-      correntiOffered: false,
-      scissionePending: false,
       player: null,
       parties: {
         fdi: 26.5, lega: 6.5, fi: 8.0, fn: 6.5, pd: 21.0, m5s: 12.8, avs: 6.2,
@@ -3346,32 +3385,14 @@
       ratingIdx: 2,
       ratingOutlook: "Positivo",
       consensoGoverno: 46,
-      countryProfile: {
-        salari: 4, trasporti: 5, welfare: 5, sanita: 5, corruzione: 4, aziende: 5, economia: 5,
-        pil: 4, felicita: 6, scuola: 5, ambientalismo: 5, commercio: 6, relazioniDiplomatiche: 6,
-        ricercaSviluppo: 4, inflazione: 6
-      },
-      countryProfilePrev: null,
-      euGroupPending: false,
-      partyLeaderOverrides: {},
-      natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false,
-      bilancioStato: { entrate: 920, uscite: 979 },
       usedDossiers: [],
-      usedFamilySituations: [],
       currentDossierId: null,
       aiDynamicDossier: null,
-      worldNews: [],
-      nucleiUpdates: [],
-      partyArcs: {},
-      dynamicParties: [],
-      dissolvedPartyIds: [],
-      dynamicCoalitions: [],
       resultData: null,
       log: [],
       electionResults: [],
-      europeanElectionResults: [],
       setupDraft: { name: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "", mode: "new", takeoverId: null }
-    };
+    }, JSON.parse(JSON.stringify(STATE_FIELD_DEFAULTS)), { countryProfile: freshCountryProfile() });
   }
 
   var state = load() || freshState();
@@ -3386,17 +3407,19 @@
       var parsed = JSON.parse(raw);
       if (parsed && parsed.player) normalizeStaff(parsed.player);
       if (parsed) {
-        if (!parsed.partyArcs) parsed.partyArcs = {};
-        if (!parsed.dynamicParties) parsed.dynamicParties = [];
-        if (!parsed.dissolvedPartyIds) parsed.dissolvedPartyIds = [];
-        if (!parsed.dynamicCoalitions) parsed.dynamicCoalitions = [];
+        // Riempie automaticamente ogni campo strutturale mancante (aggiunto in versioni successive a
+        // quella del salvataggio) con il suo valore di default — una sola volta, qui, invece di righe di
+        // migrazione scritte a mano per ogni singolo campo nuovo che si aggiunge in futuro.
+        mergeDefaults(parsed, STATE_FIELD_DEFAULTS);
+        if (!parsed.countryProfile) parsed.countryProfile = freshCountryProfile();
+        else mergeDefaults(parsed.countryProfile, freshCountryProfile());
+        if (parsed.player) mergeDefaults(parsed.player, PLAYER_FIELD_DEFAULTS);
+        // Le seguenti restano migrazioni "vere" (trasformano dati esistenti, non solo completano campi
+        // assenti) e vanno mantenute a mano caso per caso.
         if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
         if (!parsed.nextEuropeanElectionTurn) parsed.nextEuropeanElectionTurn = parsed.turn + 40;
         if (!parsed.nextReferendumTurn) parsed.nextReferendumTurn = parsed.turn + 90 + Math.floor(Math.random() * 60);
         if (!parsed.nextTrendCheckTurn) parsed.nextTrendCheckTurn = parsed.turn + 45 + Math.floor(Math.random() * 25);
-        if (!parsed.trackMilestonesFired) parsed.trackMilestonesFired = {};
-        if (!parsed.europeanElectionResults) parsed.europeanElectionResults = [];
-        if (!parsed.usedFamilySituations) parsed.usedFamilySituations = [];
         // Unione Popolare è stata sostituita da Potere al Popolo: le vecchie partite salvate hanno
         // ancora la chiave "unionepopolare" nei sondaggi e possibilmente tra i rivali/scissioni.
         if (parsed.parties && parsed.parties.unionepopolare !== undefined && parsed.parties.poterealpopolo === undefined) {
@@ -3415,32 +3438,7 @@
           if (parsed.parties.liberaldemocratico === undefined) parsed.parties.liberaldemocratico = 0.9;
           if (parsed.parties.ora === undefined) parsed.parties.ora = 0.7;
         }
-        if (!parsed.countryProfile) {
-          parsed.countryProfile = {
-            salari: 4, trasporti: 5, welfare: 5, sanita: 5, corruzione: 4, aziende: 5, economia: 5,
-            pil: 4, felicita: 6, scuola: 5, ambientalismo: 5, commercio: 6, relazioniDiplomatiche: 6,
-            ricercaSviluppo: 4, inflazione: 6
-          };
-        }
-        if (parsed.countryProfilePrev === undefined) parsed.countryProfilePrev = null;
-        if (parsed.euGroupPending === undefined) parsed.euGroupPending = false;
-        if (!parsed.partyLeaderOverrides) parsed.partyLeaderOverrides = {};
-        if (parsed.natoDecided === undefined) parsed.natoDecided = false;
-        if (parsed.euExitDecided === undefined) parsed.euExitDecided = false;
-        if (parsed.leftNato === undefined) parsed.leftNato = false;
-        if (parsed.leftEu === undefined) parsed.leftEu = false;
-        if (!parsed.bilancioStato) parsed.bilancioStato = { entrate: 920, uscite: 979 };
         if (parsed.player) {
-          if (!parsed.player.amministratoriLocali) parsed.player.amministratoriLocali = 0;
-          if (!parsed.player.seggiEuropei) parsed.player.seggiEuropei = 0;
-          if (parsed.player.euGroup === undefined) parsed.player.euGroup = null;
-          if (!parsed.player.eventCooldowns) parsed.player.eventCooldowns = {};
-          if (!parsed.player.candidatePools) parsed.player.candidatePools = {};
-          if (!parsed.player.reformCooldowns) parsed.player.reformCooldowns = {};
-          if (parsed.player.referendumCooldownTurn === undefined) parsed.player.referendumCooldownTurn = 0;
-          if (parsed.player.pendingReferendum === undefined) parsed.player.pendingReferendum = null;
-          if (parsed.player.referendumCandidates === undefined) parsed.player.referendumCandidates = null;
-          if (!parsed.player.coalitionInviteCooldowns) parsed.player.coalitionInviteCooldowns = {};
           if (parsed.player.currents && parsed.player.currents.length && !parsed.player.currents[0].id) {
             var legacyCorrentiOptions = CORRENTI_BY_FAMILY[parsed.player.family] || CORRENTI_BY_FAMILY.sovranista;
             parsed.player.currents.forEach(function (c, i) { c.id = legacyCorrentiOptions[i] ? legacyCorrentiOptions[i].id : legacyCorrentiOptions[0].id; });
@@ -4085,17 +4083,12 @@
       var name = (d.name || "").trim() || "Nuovo Movimento";
       if (!d.family) { showSaveStatus("Scegli un'area politica per il tuo partito.", true); return; }
       if (!d.leadership) { showSaveStatus("Scegli uno stile di leadership per il tuo partito.", true); return; }
-      state.player = {
+      state.player = Object.assign({
         name: name, motto: (d.motto || "").trim(), color: d.color, family: d.family, leadership: d.leadership,
         ideologyText: (d.ideologyText || "").trim(), leaderCharacter: (d.leaderCharacter || "").trim(),
         iscritti: 80, sezioni: 1, fondi: 6000, reputazione: 55, visibilita: 0,
-        sondaggi: 0, sondaggiHistory: [0],
-        allianceId: null, inParliament: false, everElected: false,
-        seatsCamera: 0, seatsSenato: 0, currents: null, staff: [], parliamentRole: null,
-        amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, candidatePools: {},
-        reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
-        coalitionInviteCooldowns: {}
-      };
+        sondaggi: 0, sondaggiHistory: [0]
+      }, JSON.parse(JSON.stringify(PLAYER_FIELD_DEFAULTS)));
       if (isTakeover) {
         // Prendere il comando di un partito reale significa ereditarne davvero la forza attuale, non
         // ripartire da zero: consensi, iscritti stimati e radicamento territoriale proporzionati ai
