@@ -569,6 +569,9 @@
   // rimandando l'utente alla schermata di fondazione anche con una partita salvata valida.
   var CENTRODESTRA_ALIGNED_FAMILIES = { sovranista: true, liberale: true, cattolico: true, nazionalpopolare: true, meridionalista: true };
   var CAMPOLARGO_ALIGNED_FAMILIES = { progressista: true, sinistra: true, comunista: true, movimentista: true };
+  // Ideologie di nicchia: partono da un elettorato reale molto più piccolo e strutturalmente meno
+  // maggioritario delle famiglie "storiche" — vedi il moltiplicatore di crescita in recomputePeriodic.
+  var NICHE_FAMILIES = { fascista: true, monarchico: true, comunista: true, gratuitista: true };
   // Relazioni di partenza con gli altri partiti reali: 0 (ostilità totale) - 100 (alleanza solidissima),
   // stimate dal campo largo di appartenenza ideologica e dal partito rivale esplicito di ogni famiglia.
   // Da lì in poi cambiano solo per effetto di scelte reali (vedi eff.relationDelta in applyChoice) e di
@@ -3744,7 +3747,7 @@
     bilancioStato: { entrate: 920, uscite: 979 },
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
-    trackMilestonesFired: {}
+    trackMilestonesFired: {}, coalitionTrust: {}
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -4034,6 +4037,24 @@
       headlines: headlines, type: "dossier", cat: dossier.cat, deltas: deltas
     });
 
+    // Se si è in coalizione, il tipo di scelta pesa sulla fiducia reciproca: una mossa divisiva che
+    // scalda la base ma fa scendere la reputazione (lo schema tipico delle posizioni nette/radicali in
+    // tutto il gioco) mette in imbarazzo gli alleati; una linea misurata e responsabile la rafforza.
+    // Così un'alleanza tenuta insieme solo per i numeri, con un partito che continua a fare scelte
+    // incoerenti con chi ne fa parte, si logora e può sciogliersi da sola sotto il 30% di fiducia.
+    if (p.allianceId) {
+      if (!state.coalitionTrust) state.coalitionTrust = {};
+      if (state.coalitionTrust[p.allianceId] === undefined) state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId);
+      var divisive = eff.reputazione < 0 && (eff.iscritti > 15 || eff.visibilita > 5);
+      var statesmanlike = eff.reputazione > 0 && !(eff.iscritti > 25);
+      if (divisive) {
+        state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] - Math.min(9, Math.abs(eff.reputazione) * 1.3 + 1), 0, 100);
+      } else if (statesmanlike) {
+        state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] + Math.min(3, eff.reputazione * 0.6), 0, 100);
+      }
+      if (state.coalitionTrust[p.allianceId] < 30) dissolveCoalition(p.allianceId);
+    }
+
     return { resultText: choice.result, headlines: headlines, deltas: deltas };
   }
 
@@ -4069,8 +4090,15 @@
     // in consenso elettorale reale. Sotto reputazione ~15 la crescita crolla quasi a zero; sopra ~60 non
     // c'è più penalità.
     var repCeiling = clamp((p.reputazione - 15) / 45, 0.03, 1);
+    // Le ideologie di nicchia (fascismo, monarchia, comunismo, gratuitismo) partono già da sondaggi
+    // molto bassi (vedi state.parties in freshState), ma senza un freno aggiuntivo crescerebbero con
+    // la STESSA facilità di un partito mainstream una volta accumulati iscritti/sezioni/reputazione — non
+    // realistico per basi elettorali strutturalmente di nicchia. Il moltiplicatore resta basso finché la
+    // reputazione è bassa/media, ma sale verso 1 (nessuna penalità) quando il giocatore costruisce davvero
+    // credibilità: difficile, non impossibile, esattamente come richiesto.
+    var nicheMult = NICHE_FAMILIES[p.family] ? clamp(0.32 + p.reputazione / 130, 0.32, 1) : 1;
     var organicTarget = clamp(
-      (0.12 + Math.sqrt(p.iscritti) * 0.028 + p.sezioni * 0.24 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.02) * style.growthMult * repCeiling,
+      (0.12 + Math.sqrt(p.iscritti) * 0.028 + p.sezioni * 0.24 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.02) * style.growthMult * repCeiling * nicheMult,
       0, 40
     );
     // La formula organica sopra è tarata su un partito che parte da zero e cresce sul campo: usata da
@@ -4505,6 +4533,7 @@
     state.nextElectionTurn = state.turn + 260;
     state.legislature++;
     p.allianceId = null;
+    state.coalitionTrust = {};
     state.allianceOffered = false;
     state.snapElectionPending = false;
 
@@ -5107,6 +5136,46 @@
     var dyn = (state.dynamicCoalitions || []).filter(function (c) { return c.id === id; })[0];
     return dyn ? { label: dyn.label, members: dyn.members } : null;
   }
+  // ---------- Fiducia della coalizione ----------
+  // Una coalizione tenuta insieme solo per far numero nei sondaggi ("mappazzone") deve essere fragile:
+  // parte da una fiducia più bassa se i membri non sono ideologicamente vicini, e si logora settimana
+  // dopo settimana se le scelte del giocatore continuano a essere incoerenti con chi ne fa parte — vedi
+  // l'aggiornamento in applyChoice e la deriva settimanale in updateCoalitionTrust. Sotto il 30% la
+  // coalizione si scioglie da sola.
+  function avgCoalitionRelation(id) {
+    var coal = coalitionById(id);
+    var members = coal ? coal.members : [];
+    if (!members.length) return 50;
+    var sum = members.reduce(function (s, mid) { return s + (state.partyRelations && state.partyRelations[mid] !== undefined ? state.partyRelations[mid] : 50); }, 0);
+    return sum / members.length;
+  }
+  function initialCoalitionTrust(id) {
+    return clamp(20 + avgCoalitionRelation(id) * 0.7, 15, 85);
+  }
+  function dissolveCoalition(id, reasonText) {
+    var p = state.player;
+    var coal = coalitionById(id);
+    var label = coal ? coal.label : id;
+    p.allianceId = null;
+    if (state.coalitionTrust) delete state.coalitionTrust[id];
+    if (state.dynamicCoalitions) state.dynamicCoalitions = state.dynamicCoalitions.filter(function (c) { return c.id !== id; });
+    p.reputazione = clamp(p.reputazione - rand(2, 5), 0, 100);
+    state.log.unshift({
+      week: state.turn, title: "La coalizione si scioglie", choiceLabel: label,
+      result: reasonText || ("La fiducia reciproca dentro " + label + " crolla sotto il livello di guardia: la coalizione si scioglie."),
+      headlines: [], type: "dossier", cat: "Strategia Elettorale"
+    });
+  }
+  function updateCoalitionTrust() {
+    var p = state.player;
+    if (!p.allianceId) return;
+    if (!state.coalitionTrust) state.coalitionTrust = {};
+    if (state.coalitionTrust[p.allianceId] === undefined) state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId);
+    var avgRel = avgCoalitionRelation(p.allianceId);
+    var trust = clamp(state.coalitionTrust[p.allianceId] + (avgRel - state.coalitionTrust[p.allianceId]) * 0.08 + (Math.random() - 0.5) * 1.5, 0, 100);
+    state.coalitionTrust[p.allianceId] = trust;
+    if (trust < 30) dissolveCoalition(p.allianceId);
+  }
   function coalitionLabelForPartyId(id) {
     if (COALITIONS.centrodestra.members.indexOf(id) !== -1) return COALITIONS.centrodestra.label;
     if (COALITIONS.campolargo.members.indexOf(id) !== -1) return COALITIONS.campolargo.label;
@@ -5187,6 +5256,8 @@
     var label = coal ? coal.label : blocId;
     if (accepted) {
       p.allianceId = blocId;
+      if (!state.coalitionTrust) state.coalitionTrust = {};
+      state.coalitionTrust[blocId] = initialCoalitionTrust(blocId);
       p.reputazione = clamp(p.reputazione + rand(1, 3), 0, 100);
       state.log.unshift({ week: state.turn, title: "Invito di alleanza accettato", choiceLabel: label, result: label + " accetta il tuo invito: correrete insieme alle prossime elezioni politiche.", headlines: [], type: "dossier", cat: "Strategia Elettorale" });
     } else {
@@ -5215,6 +5286,8 @@
         var coalId = "dyn_coal_player_" + state.turn;
         state.dynamicCoalitions.push({ id: coalId, label: p.name + " – " + party.name, familyId: party.familyId || null, members: [party.id] });
         p.allianceId = coalId;
+        if (!state.coalitionTrust) state.coalitionTrust = {};
+        state.coalitionTrust[coalId] = initialCoalitionTrust(coalId);
       }
       p.reputazione = clamp(p.reputazione + rand(1, 3), 0, 100);
       state.log.unshift({ week: state.turn, title: "Invito di alleanza accettato", choiceLabel: party.name, result: party.name + " accetta il tuo invito ad allearsi: nasce (o si allarga) una coalizione elettorale.", headlines: [], type: "dossier", cat: "Strategia Elettorale" });
@@ -5267,8 +5340,15 @@
     var isOwnDynamic = p.allianceId && !COALITIONS[p.allianceId];
     if (p.allianceId) {
       var coal = coalitionById(p.allianceId);
+      var trust = Math.round(state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined ? state.coalitionTrust[p.allianceId] : 50);
+      var trustColor = trust < 35 ? "var(--critical)" : trust < 55 ? "var(--warning)" : "var(--good)";
+      var trustNote = trust < 35 ? " La coalizione rischia di sciogliersi: scelte più coerenti con i tuoi alleati sono urgenti."
+        : trust < 55 ? " La fiducia reciproca è fragile: scelte troppo divergenti dai tuoi alleati la logorano ulteriormente."
+        : " La coalizione è solida.";
       html += '<p class="ci-hint">Sei alleato con <strong>' + (coal ? coal.label : p.allianceId) +
         '</strong>: correrete insieme alle prossime elezioni politiche, con soglia di sbarramento comune al 10%.</p>' +
+        '<p class="ci-hint">Fiducia della coalizione: <strong>' + trust + '/100</strong> (sotto il 30% si scioglie da sola).' + trustNote + '</p>' +
+        '<div class="gauge"><span style="width:' + trust + '%;background:' + trustColor + '"></span></div>' +
         '<button type="button" class="staff-btn fire" data-break-alliance="1">Rompi l\'alleanza</button>';
       if (isOwnDynamic) {
         html += '<div class="rename-row"><input type="text" id="coalition-rename-input" placeholder="Nuovo nome della coalizione" maxlength="60" value="' + (coal ? coal.label : "") + '">' +
@@ -5654,6 +5734,10 @@
 
         if (dossier.id === "alleanza_negoziato") {
           state.player.allianceId = choice.alliance;
+          if (choice.alliance) {
+            if (!state.coalitionTrust) state.coalitionTrust = {};
+            state.coalitionTrust[choice.alliance] = initialCoalitionTrust(choice.alliance);
+          }
           if (choice.effects.reputazione) state.player.reputazione = clamp(state.player.reputazione + choice.effects.reputazione, 0, 100);
           state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "dossier" });
           state.resultData = { resultText: choice.result, headlines: [] };
@@ -5889,6 +5973,7 @@
           result: "Il partito rompe l'alleanza con " + (coal ? coal.label : "l'alleato") + ": tornerà a correre da solo alle prossime elezioni, salvo nuovi accordi.",
           headlines: [], type: "dossier", cat: "Strategia Elettorale"
         });
+        if (state.coalitionTrust) delete state.coalitionTrust[p.allianceId];
         p.allianceId = null;
         p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
         save();
@@ -6009,6 +6094,7 @@
 
   async function advanceTurnLogic() {
     recomputePeriodic();
+    updateCoalitionTrust();
     triggerRivalPartyEvent();
     triggerPartyLifecycleFollowup();
     triggerDynamicCoalitionFormation();
