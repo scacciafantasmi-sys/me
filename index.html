@@ -3345,7 +3345,7 @@
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, candidatePools: {},
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
-    coalitionInviteCooldowns: {}
+    coalitionInviteCooldowns: {}, baselineSondaggi: null
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -3652,10 +3652,19 @@
     // in consenso elettorale reale. Sotto reputazione ~15 la crescita crolla quasi a zero; sopra ~60 non
     // c'è più penalità.
     var repCeiling = clamp((p.reputazione - 15) / 45, 0.03, 1);
-    var target = clamp(
+    var organicTarget = clamp(
       (0.12 + Math.sqrt(p.iscritti) * 0.028 + p.sezioni * 0.24 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.02) * style.growthMult * repCeiling,
       0, 40
     );
+    // La formula organica sopra è tarata su un partito che parte da zero e cresce sul campo: usata da
+    // sola su un partito "preso in mano" già forte (che eredita iscritti/sezioni/sondaggi reali molto
+    // più grandi) lo farebbe collassare in poche settimane verso l'equilibrio di un partito piccolo,
+    // anche senza errori del giocatore. Se il partito ha un sondaggio reale di partenza, l'obiettivo
+    // settimanale resta ancorato soprattutto a quello, e la componente organica pesa solo per un terzo
+    // (permette comunque a buone o cattive scelte di farlo salire o scendere nel tempo).
+    var target = p.baselineSondaggi !== null && p.baselineSondaggi !== undefined
+      ? clamp(organicTarget * 0.35 + p.baselineSondaggi * 0.65, 0, 40)
+      : organicTarget;
     p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.15 + (Math.random() - 0.5) * 0.45, 0, 40);
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
@@ -4097,6 +4106,7 @@
         var pollNow = state.parties[takeoverParty.id] || 1;
         state.player.sondaggi = pollNow;
         state.player.sondaggiHistory = [pollNow];
+        state.player.baselineSondaggi = pollNow;
         state.player.iscritti = Math.round(pollNow * 1200);
         state.player.fondi = Math.round(pollNow * 15000);
         state.player.sezioni = Math.max(3, Math.round(pollNow / 1.5));
@@ -4954,10 +4964,13 @@
             var lossFrac = 0.3;
             state.player.iscritti = Math.max(0, Math.round(state.player.iscritti * (1 - lossFrac)));
             if (state.player.sezioni > 1) state.player.sezioni -= 1;
+            // La corrente minoritaria lascia DAVVERO il partito: va tolta da state.player.currents, non
+            // solo abbassata all'8% — altrimenti resterebbe lì sotto la soglia di rischio scissione e
+            // farebbe ripartire lo stesso dossier ogni settimana, bloccando di fatto l'avanzamento.
             var othersS = cur.filter(function (c) { return c.id !== risky.id; });
             var othersSumS = othersS.reduce(function (s, c) { return s + c.share; }, 0);
-            risky.share = 8;
-            othersS.forEach(function (c) { c.share = othersSumS > 0 ? (c.share / othersSumS) * 92 : 92 / othersS.length; });
+            othersS.forEach(function (c) { c.share = othersSumS > 0 ? (c.share / othersSumS) * 100 : 100 / othersS.length; });
+            state.player.currents = othersS.length ? othersS : null;
             state.player.reputazione = clamp(state.player.reputazione + (choice.effects.reputazione || 0), 0, 100);
           }
           state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "scissione" });
@@ -5176,7 +5189,7 @@
     }
 
     var p = state.player;
-    if (p.currents && p.currents.length && !state.scissionePending) {
+    if (p.currents && p.currents.length >= 2 && !state.scissionePending) {
       var shares = p.currents.map(function (c) { return c.share; });
       var minShare = Math.min.apply(null, shares);
       var maxShare = Math.max.apply(null, shares);
@@ -5299,6 +5312,7 @@
       state.currentDossierId = "ai_dynamic";
     } else {
       state.currentDossierId = chosen.id;
+      state.aiDynamicDossier = null;
     }
     state.phase = "building";
   }
