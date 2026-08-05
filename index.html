@@ -1369,9 +1369,15 @@
     var openNames = openNuclei().map(function (l) { return l.name; });
     if (openNames.indexOf(loc.name) !== -1) return null;
     if (ally && !inLocalListCoalitionWindow()) return null;
+    // Senza questo limite si potevano aprire decine di sezioni tutte nella stessa settimana: p.sezioni
+    // non scende mai e pesa direttamente sulla crescita settimanale dei sondaggi, quindi un'ondata di
+    // aperture in un colpo solo produceva un salto enorme e innaturale al turno successivo. Una sola
+    // apertura a settimana tiene la crescita del radicamento territoriale, e quindi dei sondaggi, graduale.
+    if (state.turn < (p.localSectionCooldownTurn || 0)) return null;
     var cost = ally ? LOCAL_LIST_COALITION_COST : LOCAL_SECTION_OPEN_COST;
     if (p.fondi < cost) return null;
     p.fondi -= cost;
+    p.localSectionCooldownTurn = state.turn + 1;
     if (!p.sezioniLocations) p.sezioniLocations = [];
     p.sezioniLocations.push({ name: loc.name, region: loc.region });
     p.sezioni = Math.max(p.sezioni, p.sezioniLocations.length);
@@ -1401,9 +1407,13 @@
     var selectedLoc = (state.uiLocalSectionLoc && avail.some(function (l) { return l.name === state.uiLocalSectionLoc; }))
       ? state.uiLocalSectionLoc : (avail[0] ? avail[0].name : "");
     var options = avail.map(function (l) { return '<option value="' + l.name + '"' + (l.name === selectedLoc ? " selected" : "") + '>' + l.name + " (" + l.region + ")</option>"; }).join("");
-    var disabledSola = p.fondi < LOCAL_SECTION_OPEN_COST;
+    var sectionCooldown = (p.localSectionCooldownTurn || 0) - state.turn;
+    var onCooldown = sectionCooldown > 0;
+    var disabledSola = p.fondi < LOCAL_SECTION_OPEN_COST || onCooldown;
     var html = '<section aria-label="Apri una Sezione Locale"><p class="eyebrow">Apri una Sezione Locale</p>' +
-      '<p class="ci-hint">Scegli tu dove radicare il partito sul territorio, oltre ai soli grandi capoluoghi.</p>' +
+      '<p class="ci-hint">Scegli tu dove radicare il partito sul territorio, oltre ai soli grandi capoluoghi. Si può aprire una sola sezione o lista a settimana.' +
+      (onCooldown ? " Hai già aperto una sezione questa settimana: la prossima sarà disponibile tra " + sectionCooldown + " settiman" + (sectionCooldown === 1 ? "a" : "e") + "." : "") +
+      '</p>' +
       '<select id="local-section-select" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;margin-bottom:.6rem;">' + options + '</select>' +
       '<div class="option-grid">' +
       '<button type="button" class="option-card" data-open-local-section="sola"' + (disabledSola ? " disabled" : "") + '><span class="olabel">Apri da sola</span><span class="odesc">Costo: ' + fmtEuro(LOCAL_SECTION_OPEN_COST) + '</span></button>' +
@@ -1413,7 +1423,7 @@
       if (!p.localAllyCandidates || !p.localAllyCandidates.length) {
         p.localAllyCandidates = generateLocalAllyCandidates(selectedLoc);
       }
-      var disabledCoal = p.fondi < LOCAL_LIST_COALITION_COST;
+      var disabledCoal = p.fondi < LOCAL_LIST_COALITION_COST || onCooldown;
       html += '<p class="ci-hint">Mancano ' + w + " settiman" + (w === 1 ? "a" : "e") + " al voto locale: puoi costruire una vera lista elettorale in coalizione con un alleato civico, per la città selezionata sopra. Costo: " + fmtEuro(LOCAL_LIST_COALITION_COST) + '.</p><div class="option-grid">';
       p.localAllyCandidates.forEach(function (ally, i) {
         html += '<button type="button" class="option-card" data-open-local-list-ally="' + i + '"' + (disabledCoal ? " disabled" : "") + '>' +
@@ -4839,7 +4849,7 @@
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
-    sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null
+    sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -7360,7 +7370,7 @@
         var locName = select ? select.value : null;
         if (!locName) { showSaveStatus("Scegli prima una località.", true); return; }
         var res = openLocalSection(locName, null);
-        if (!res) { showSaveStatus("Non puoi ancora aprire una sezione lì (fondi insufficienti o già aperta).", true); return; }
+        if (!res) { showSaveStatus("Non puoi ancora aprire una sezione lì (fondi insufficienti, già aperta, o ne hai già aperta una questa settimana).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
@@ -7375,7 +7385,7 @@
         var ally = state.player.localAllyCandidates && state.player.localAllyCandidates[idx];
         if (!ally) return;
         var res = openLocalSection(locName, ally);
-        if (!res) { showSaveStatus("Non puoi ancora costruire questa lista lì (fondi insufficienti, già aperta, o fuori dalla finestra elettorale).", true); return; }
+        if (!res) { showSaveStatus("Non puoi ancora costruire questa lista lì (fondi insufficienti, già aperta, fuori dalla finestra elettorale, o ne hai già aperta una questa settimana).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
