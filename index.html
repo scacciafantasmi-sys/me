@@ -811,6 +811,25 @@
     state.deficitPil = clamp(-saldo / 2100 * 100, -1, 12);
     state.debitoPil = clamp(state.debitoPil + (saldo < 0 ? 0.04 : -0.03), 80, 220);
   }
+  // Sezione Giovanile: il suo grado di accordo con la linea del partito ("agreement") oscilla
+  // lentamente verso un bersaglio legato alla reputazione del partito, con un po' di rumore settimanale
+  // — se scende sotto il 30% la sezione si scioglie da sola (troppo distante dalla linea del partito
+  // madre) e può essere riaperta solo dopo un periodo di raffreddamento.
+  function driftYouthWing(p) {
+    if (!p.giovanile) return;
+    var target = clamp(45 + (p.reputazione - 50) * 0.5, 5, 95);
+    p.giovanile.agreement = clamp(p.giovanile.agreement + (target - p.giovanile.agreement) * 0.08 + (Math.random() - 0.5) * 4, 0, 100);
+    if (p.giovanile.agreement < 30) {
+      var name = p.giovanile.name;
+      p.giovanile = null;
+      p.giovanileCooldownTurn = state.turn + 15;
+      state.log.unshift({
+        week: state.turn, title: "Sezione Giovanile sciolta", choiceLabel: name,
+        result: "\"" + name + "\" si scioglie: la distanza dalla linea del partito madre è diventata insanabile. Una nuova sezione giovanile potrà essere aperta più avanti.",
+        headlines: [], type: "dossier", cat: "Sezione Giovanile"
+      });
+    }
+  }
   // Le relazioni con gli altri partiti tendono lentamente verso il centro (50) se nessuna scelta le
   // spinge in una direzione precisa — come nella realtà, le ruggini si smussano se non alimentate.
   function driftPartyRelations() {
@@ -1167,12 +1186,61 @@
     { name: "Reggio Calabria", region: "Calabria" },
     { name: "Catania", region: "Sicilia" },
     { name: "Sassari", region: "Sardegna" },
-    { name: "Brindisi", region: "Puglia" }
+    { name: "Brindisi", region: "Puglia" },
+    { name: "Bergamo", region: "Lombardia" },
+    { name: "Brescia", region: "Lombardia" },
+    { name: "Como", region: "Lombardia" },
+    { name: "Verona", region: "Veneto" },
+    { name: "Padova", region: "Veneto" },
+    { name: "Vicenza", region: "Veneto" },
+    { name: "Siena", region: "Toscana" },
+    { name: "Pisa", region: "Toscana" },
+    { name: "Livorno", region: "Toscana" },
+    { name: "Messina", region: "Sicilia" },
+    { name: "Siracusa", region: "Sicilia" },
+    { name: "Trapani", region: "Sicilia" },
+    { name: "Lecce", region: "Puglia" },
+    { name: "Taranto", region: "Puglia" },
+    { name: "Foggia", region: "Puglia" },
+    { name: "Salerno", region: "Campania" },
+    { name: "Caserta", region: "Campania" },
+    { name: "Alessandria", region: "Piemonte" },
+    { name: "Novara", region: "Piemonte" },
+    { name: "Parma", region: "Emilia-Romagna" },
+    { name: "Modena", region: "Emilia-Romagna" },
+    { name: "Ravenna", region: "Emilia-Romagna" },
+    { name: "Latina", region: "Lazio" },
+    { name: "Viterbo", region: "Lazio" },
+    { name: "Cosenza", region: "Calabria" },
+    { name: "Vibo Valentia", region: "Calabria" },
+    { name: "Nuoro", region: "Sardegna" },
+    { name: "Oristano", region: "Sardegna" },
+    { name: "La Spezia", region: "Liguria" },
+    { name: "Savona", region: "Liguria" },
+    { name: "Pesaro", region: "Marche" },
+    { name: "Macerata", region: "Marche" },
+    { name: "L'Aquila", region: "Abruzzo" },
+    { name: "Chieti", region: "Abruzzo" },
+    { name: "Udine", region: "Friuli-Venezia Giulia" },
+    { name: "Pordenone", region: "Friuli-Venezia Giulia" },
+    { name: "Bolzano", region: "Trentino-Alto Adige" },
+    { name: "Terni", region: "Umbria" },
+    { name: "Matera", region: "Basilicata" },
+    { name: "Isernia", region: "Molise" }
   ];
+  // Ogni sezione territoriale corrisponde ora a una località scelta esplicitamente dal giocatore (vedi
+  // openLocalSection), non più semplicemente alle prime N città dell'elenco in ordine fisso — quella
+  // logica resta solo come RIPIEGO per le sezioni aperte prima che questa scelta esistesse (es. dal tour
+  // territoriale, che assegna una sezione "generica" senza specificare dove).
   function openNuclei() {
     var p = state.player;
     if (!p) return [];
-    return ITALY_LOCATIONS.slice(0, Math.min(Math.floor(p.sezioni), ITALY_LOCATIONS.length));
+    var n = Math.min(Math.floor(p.sezioni), ITALY_LOCATIONS.length);
+    if (!p.sezioniLocations) p.sezioniLocations = [];
+    if (p.sezioniLocations.length >= n) return p.sezioniLocations.slice(0, n);
+    var chosenNames = p.sezioniLocations.map(function (l) { return l.name; });
+    var fallbackPool = ITALY_LOCATIONS.filter(function (l) { return chosenNames.indexOf(l.name) === -1; });
+    return p.sezioniLocations.concat(fallbackPool).slice(0, n);
   }
   function renderItalyMap() {
     var p = state.player;
@@ -1183,14 +1251,71 @@
         '<p class="ci-hint">Apri la tua prima sezione territoriale per iniziare a comparire su questo elenco.</p></section>';
     }
     var pills = open.map(function (loc, i) {
+      var coalized = p.sezioniCoalizioni && p.sezioniCoalizioni[loc.name];
       return '<span class="nucleo-pill' + (i === 0 ? " capital" : "") + '">' +
-        '<span class="sw" style="background:' + p.color + '"></span>' + loc.name +
+        '<span class="sw" style="background:' + p.color + '"></span>' + loc.name + (coalized ? " 🤝" : "") +
         '<span class="region">' + (i === 0 ? "sede nazionale" : loc.region) + '</span></span>';
     }).join("");
     var extra = p.sezioni > ITALY_LOCATIONS.length
       ? '<p class="ci-hint">+' + (Math.floor(p.sezioni) - ITALY_LOCATIONS.length) + ' altre sezioni minori diffuse sul territorio.</p>' : "";
     return '<section aria-label="Presenza sul territorio"><p class="eyebrow">Presenza sul territorio (' + open.length + (p.sezioni > ITALY_LOCATIONS.length ? "+" : "") + ')</p>' +
       '<div class="nuclei-grid">' + pills + '</div>' + extra + '</section>';
+  }
+
+  // ---------- Apertura mirata di sezioni locali, con coalizioni civiche locali ----------
+  // A differenza del vecchio meccanismo (una sezione in più capitava quasi a caso da un evento
+  // generico), qui il giocatore sceglie ESPLICITAMENTE in quale città radicarsi, tra un elenco che va
+  // ben oltre i soli capoluoghi di regione. Un'opzione in più: aprirla in coalizione con una lista
+  // civica locale, che costa meno ma dà un bonus concreto ai risultati delle elezioni locali in quella
+  // stessa città (vedi triggerLocalElectionCycle), a fronte di una crescita di iscritti leggermente
+  // minore (il merito, e i voti, si dividono con la lista locale).
+  var LOCAL_SECTION_OPEN_COST = 500;
+  var LOCAL_SECTION_COALITION_COST = 300;
+  function availableLocalSectionLocations() {
+    var openNames = openNuclei().map(function (l) { return l.name; });
+    return ITALY_LOCATIONS.filter(function (l) { return openNames.indexOf(l.name) === -1; });
+  }
+  function openLocalSection(locationName, withCoalition) {
+    var p = state.player;
+    var loc = ITALY_LOCATIONS.filter(function (l) { return l.name === locationName; })[0];
+    if (!loc) return null;
+    var openNames = openNuclei().map(function (l) { return l.name; });
+    if (openNames.indexOf(loc.name) !== -1) return null;
+    var cost = withCoalition ? LOCAL_SECTION_COALITION_COST : LOCAL_SECTION_OPEN_COST;
+    if (p.fondi < cost) return null;
+    p.fondi -= cost;
+    if (!p.sezioniLocations) p.sezioniLocations = [];
+    p.sezioniLocations.push({ name: loc.name, region: loc.region });
+    p.sezioni = Math.max(p.sezioni, p.sezioniLocations.length);
+    if (withCoalition) {
+      if (!p.sezioniCoalizioni) p.sezioniCoalizioni = {};
+      p.sezioniCoalizioni[loc.name] = true;
+    }
+    var dossier = { title: withCoalition ? "Sezione locale a " + loc.name + " in coalizione" : "Sezione locale a " + loc.name, cat: "Organizzazione" };
+    var choice = {
+      label: dossier.title,
+      effects: withCoalition ? { iscritti: rand(15, 30) } : { iscritti: rand(20, 40) },
+      result: withCoalition
+        ? "Il partito apre una sezione a " + loc.name + " in coalizione con una lista civica locale, dividendo il lavoro e i meriti sul territorio."
+        : "Il partito apre da solo una nuova sezione a " + loc.name + ", radicandosi sul territorio con le proprie sole forze."
+    };
+    return applyChoice(dossier, choice);
+  }
+  function renderLocalSectionPanel() {
+    var p = state.player;
+    if (!p) return "";
+    var avail = availableLocalSectionLocations();
+    if (!avail.length) return "";
+    var options = avail.map(function (l) { return '<option value="' + l.name + '">' + l.name + " (" + l.region + ")</option>"; }).join("");
+    var disabledSola = p.fondi < LOCAL_SECTION_OPEN_COST;
+    var disabledCoal = p.fondi < LOCAL_SECTION_COALITION_COST;
+    return '<section aria-label="Apri una Sezione Locale"><p class="eyebrow">Apri una Sezione Locale</p>' +
+      '<p class="ci-hint">Scegli tu dove radicare il partito sul territorio, oltre ai soli grandi capoluoghi: da solo, oppure in coalizione con una lista civica locale — costa meno e aiuta i risultati alle prossime elezioni locali in quella città, a fronte di una crescita un po\' più contenuta.</p>' +
+      '<select id="local-section-select" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;margin-bottom:.6rem;">' + options + '</select>' +
+      '<div class="option-grid">' +
+      '<button type="button" class="option-card" data-open-local-section="sola"' + (disabledSola ? " disabled" : "") + '><span class="olabel">Apri da sola</span><span class="odesc">Costo: ' + fmtEuro(LOCAL_SECTION_OPEN_COST) + '</span></button>' +
+      '<button type="button" class="option-card" data-open-local-section="coalizione"' + (disabledCoal ? " disabled" : "") + '><span class="olabel">Apri in coalizione con lista civica locale</span><span class="odesc">Costo: ' + fmtEuro(LOCAL_SECTION_COALITION_COST) + " — bonus ai risultati locali in questa città</span></button>" +
+      "</div></section>";
   }
 
   // ---------- Generatore combinatorio delle situazioni settimanali ----------
@@ -3793,7 +3918,9 @@
     if (!p || !open.length) return null; // senza sezioni sul territorio non c'è nulla da votare localmente
     var kind = LOCAL_ELECTION_KINDS[Math.floor(Math.random() * LOCAL_ELECTION_KINDS.length)];
     var loc = open[Math.floor(Math.random() * open.length)];
+    var coalized = !!(p.sezioniCoalizioni && p.sezioniCoalizioni[loc.name]);
     var won = Math.round(clamp(p.sondaggi * 0.6, 0, 22) + Math.min(open.length, 10) * 0.5 + Math.random() * 3);
+    if (coalized) won = Math.round(won * 1.25 + 1);
     if (!p.amministratoriLocali) p.amministratoriLocali = 0;
     var text;
     if (won >= 1) {
@@ -3803,7 +3930,7 @@
       p.visibilita = clamp(p.visibilita + Math.min(9, won * 0.8), 0, 100);
       var mult = institutionalPowerMultiplier(p);
       state.countryProfile.corruzione = clamp(state.countryProfile.corruzione + Math.min(0.4, won * 0.03) * mult, 1, 10);
-      text = "A " + loc.name + " il partito elegge " + won + " " + kind.unit + ": un passo avanti concreto nel radicamento territoriale.";
+      text = "A " + loc.name + " il partito elegge " + won + " " + kind.unit + (coalized ? ", in coalizione con la lista civica locale" : "") + ": un passo avanti concreto nel radicamento territoriale.";
     } else {
       text = "A " + loc.name + " il partito si presenta ma non riesce a eleggere " + kind.unit + " questa volta.";
     }
@@ -3824,12 +3951,15 @@
   }
 
   // ---------- Referendum nazionali ----------
-  // Evento raro (una volta ogni 90-150 settimane circa) e indipendente dal giocatore: il paese vota, e
-  // l'esito reale (sì/no) viene deciso da un tiro nazionale, non dal partito del giocatore — proprio
-  // perché è democrazia diretta, non un'iniziativa di partito. L'esito sposta subito la Scheda Paese,
-  // a prescindere da come si posiziona il giocatore; la scelta del giocatore riguarda solo come il suo
-  // partito reagisce a quell'esito già deciso (e quella reazione conta di più quanto più il partito ha
-  // potere reale, come per ogni altra situazione).
+  // Evento raro (una volta ogni 90-150 settimane circa): il paese vota, e l'esito reale (sì/no) resta
+  // deciso soprattutto dall'elettorato nel suo complesso, non dal solo partito del giocatore — è
+  // democrazia diretta, non un'iniziativa di partito. Ma il giocatore non è più un semplice spettatore:
+  // appena il referendum viene annunciato, prima ancora di sapere come andrà, può scendere in campo per
+  // il SÌ o per il NO (o restare neutrale), e quella campagna sposta un po' la probabilità dell'esito
+  // finale in proporzione al peso istituzionale reale del partito — mai in modo decisivo da sola, ma mai
+  // ininfluente. L'effetto sulla Scheda Paese resta comunque quello dell'esito nazionale, non scalato dal
+  // partito: quello è coerente con la regola per cui solo le SCELTE del partito pesano quanto è forte il
+  // partito, non un evento democratico che riguarda l'intero paese.
   var REFERENDUM_TOPICS = [
     { id: "parlamentari", title: "Referendum: ridurre ancora il numero dei parlamentari?",
       brief: "Un referendum nazionale chiede ai cittadini se ridurre ulteriormente il numero di deputati e senatori.",
@@ -3869,14 +3999,41 @@
   ];
   function triggerReferendumIfDue() {
     if (state.turn < state.nextReferendumTurn) return null;
+    if (state.pendingNationalReferendum) return null;
     state.nextReferendumTurn = state.turn + 90 + Math.floor(Math.random() * 60);
     var topic = REFERENDUM_TOPICS[Math.floor(Math.random() * REFERENDUM_TOPICS.length)];
-    var passed = Math.random() < 0.5;
+    state.pendingNationalReferendum = { topic: topic, stance: undefined, resolveTurn: state.turn + 5 + Math.floor(Math.random() * 5) };
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Referendum nazionale annunciato",
+      cat: "Referendum Nazionale", title: topic.title,
+      brief: topic.brief + " Si vota tra qualche settimana: il tuo partito può fare campagna per il SÌ, per il NO, oppure restare neutrale — la tua campagna sposta un po' l'esito, in proporzione al peso reale del partito.",
+      choices: [
+        { label: "Fai campagna per il SÌ", stance: "si", hint: "Spinge l'esito verso il SÌ, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il SÌ su questo referendum." },
+        { label: "Fai campagna per il NO", stance: "no", hint: "Spinge l'esito verso il NO, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il NO su questo referendum." },
+        { label: "Non prendere posizione", stance: null, hint: "Nessun impatto sull'esito, nessuna esposizione politica", effects: {}, result: "Il partito sceglie di non schierarsi su questo referendum." }
+      ]
+    };
+  }
+  function resolveNationalReferendumIfDue() {
+    var r = state.pendingNationalReferendum;
+    if (!r || r.stance === undefined) return null;
+    if (state.turn < r.resolveTurn) return null;
+    state.pendingNationalReferendum = null;
+    var p = state.player;
+    var topic = r.topic;
+    var nudge = r.stance ? clamp(institutionalPowerMultiplier(p) * 0.025, 0, 0.22) : 0;
+    var passProb = 0.5 + (r.stance === "si" ? nudge : r.stance === "no" ? -nudge : 0);
+    var passed = Math.random() < passProb;
     var delta = passed ? topic.passDelta : topic.failDelta;
     state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
     var esito = passed ? topic.passText : topic.failText;
+    var stanceNote = r.stance === "si"
+      ? (passed ? " Il partito aveva fatto campagna per il SÌ: la vittoria è anche un po' sua." : " Il partito aveva fatto campagna per il SÌ, ma il NO prevale comunque.")
+      : r.stance === "no"
+      ? (passed ? " Il partito aveva fatto campagna per il NO, ma il SÌ prevale comunque." : " Il partito aveva fatto campagna per il NO: la vittoria è anche un po' sua.")
+      : "";
     state.log.unshift({
-      week: state.turn, title: topic.title, choiceLabel: "Esito nazionale", result: esito,
+      week: state.turn, title: topic.title, choiceLabel: "Esito nazionale", result: esito + stanceNote,
       headlines: [], type: "referendum", cat: "Referendum Nazionale"
     });
     var rivalPool = activeParties();
@@ -3884,8 +4041,8 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "questo esito referendario", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric }, 5);
     return {
-      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Referendum nazionale — il paese ha già votato",
-      cat: "Referendum Nazionale", title: topic.title, brief: topic.brief + " " + esito + " Come si posiziona il tuo partito su questo esito?",
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Referendum nazionale — il paese ha votato",
+      cat: "Referendum Nazionale", title: topic.title, brief: esito + stanceNote + " Come si posiziona il tuo partito su questo esito?",
       choices: choices
     };
   }
@@ -3950,6 +4107,25 @@
     });
     return { resultText: "Hai proposto un referendum su " + topic.noun + ". L'esito arriverà tra qualche settimana.", headlines: [] };
   }
+  // Campagna per il referendum che il partito stesso ha proposto, utilizzabile più volte durante
+  // l'attesa: alza reputazione e visibilità, che sono già gli stessi ingredienti da cui dipende la
+  // probabilità di successo calcolata sotto in resolvePendingReferendumIfDue — così "fare campagna per
+  // il sì" ha un effetto reale sull'esito, senza bisogno di un meccanismo separato.
+  var REFERENDUM_CAMPAIGN_COST = 350;
+  function resolveReferendumCampaign() {
+    var p = state.player;
+    if (!p.pendingReferendum) return null;
+    if (state.turn < (p.referendumCampaignCooldownTurn || 0)) return null;
+    if (p.fondi < REFERENDUM_CAMPAIGN_COST) return null;
+    p.fondi -= REFERENDUM_CAMPAIGN_COST;
+    p.referendumCampaignCooldownTurn = state.turn + 2;
+    var dossier = { title: "Campagna per " + p.pendingReferendum.title, cat: "Referendum Proposto" };
+    var choice = {
+      label: "Campagna per il SÌ", effects: { reputazione: rand(1.5, 3.5), visibilita: rand(4, 8) },
+      result: "La campagna del partito per il SÌ su " + p.pendingReferendum.noun + " scalda il dibattito pubblico nelle settimane prima del voto."
+    };
+    return applyChoice(dossier, choice);
+  }
   // Risolve il referendum proposto dal giocatore quando arriva il momento: la probabilità di successo
   // dipende in parte dalla credibilità del partito (reputazione/visibilità), non è un semplice 50/50 —
   // e l'effetto sulla Scheda Paese è amplificato dal peso istituzionale del partito, come per ogni altra
@@ -4001,7 +4177,13 @@
       return html;
     }
     if (p.pendingReferendum) {
-      html += '<p class="ci-hint">Raccolta firme in corso su <strong>' + p.pendingReferendum.title + '</strong>: l\'esito arriverà tra qualche settimana.</p></section>';
+      html += '<p class="ci-hint">Raccolta firme in corso su <strong>' + p.pendingReferendum.title + '</strong>: l\'esito arriverà tra qualche settimana.</p>';
+      var campWeeksLeft = (p.referendumCampaignCooldownTurn || 0) - state.turn;
+      var campDisabled = campWeeksLeft > 0 || p.fondi < REFERENDUM_CAMPAIGN_COST;
+      var campStatus = campWeeksLeft > 0 ? "Disponibile tra " + campWeeksLeft + " settiman" + (campWeeksLeft === 1 ? "a" : "e")
+        : p.fondi < REFERENDUM_CAMPAIGN_COST ? "Fondi insufficienti (" + fmtEuro(REFERENDUM_CAMPAIGN_COST) + ")" : "Costo: " + fmtEuro(REFERENDUM_CAMPAIGN_COST);
+      html += '<div class="option-grid"><button type="button" class="option-card" data-referendum-campaign="1"' + (campDisabled ? " disabled" : "") + '>' +
+        '<span class="olabel">Fai campagna per il SÌ su questo referendum</span><span class="odesc">Alza reputazione e visibilità, e con esse la probabilità che passi. ' + campStatus + '</span></button></div></section>';
       return html;
     }
     var weeksLeft = (p.referendumCooldownTurn || 0) - state.turn;
@@ -4472,7 +4654,7 @@
     bilancioStato: { entrate: 920, uscite: 979 },
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
-    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null
+    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -4481,7 +4663,8 @@
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {},
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
-    campaignCooldowns: {}
+    campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
+    sezioniLocations: [], sezioniCoalizioni: {}
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -4805,6 +4988,7 @@
     checkLongTermTrackMilestones();
     driftPartyRelations();
     driftBilancioStato();
+    driftYouthWing(p);
 
     var commDigMember = staffMember("comunicazione_digitale");
     var commDigSkill = commDigMember ? (commDigMember.skillMult !== undefined ? commDigMember.skillMult : 1) : 0;
@@ -5717,6 +5901,58 @@
     html += '<button type="button" class="option-card" data-campaign-pledge="1"' + (pledgeDisabled ? " disabled" : "") + '>' +
       '<span class="olabel">Promessa elettorale sul tuo tema</span><span class="odesc">Una promessa specifica, coerente con la linea del partito. ' + pledgeStatus + '</span></button>';
     html += "</div></details></section>";
+    return html;
+  }
+
+  // ---------- Sezione Giovanile ----------
+  // Versione volutamente semplice: nessun nome "creativo" scelto da un motore combinatorio, solo un
+  // nome generico di default ("Giovani <Partito>") che il giocatore può cambiare quando vuole. Il suo
+  // grado di accordo con la linea del partito ("agreement") oscilla nel tempo (vedi driftYouthWing) e,
+  // se scende sotto il 30%, la sezione si scioglie da sola e può essere riaperta dopo un raffreddamento.
+  var YOUTH_WING_OPEN_COST = 200;
+  function openYouthWing() {
+    var p = state.player;
+    if (p.giovanile) return null;
+    if (state.turn < (p.giovanileCooldownTurn || 0)) return null;
+    if (p.fondi < YOUTH_WING_OPEN_COST) return null;
+    p.fondi -= YOUTH_WING_OPEN_COST;
+    p.giovanile = { name: "Giovani " + p.name, agreement: 55, foundedTurn: state.turn };
+    state.log.unshift({
+      week: state.turn, title: "Sezione Giovanile aperta", choiceLabel: p.giovanile.name,
+      result: "Nasce \"" + p.giovanile.name + "\", la sezione giovanile del partito.",
+      headlines: [], type: "dossier", cat: "Sezione Giovanile"
+    });
+    return { resultText: "Hai aperto \"" + p.giovanile.name + "\", la sezione giovanile del partito.", headlines: [] };
+  }
+  function renameYouthWing(newName) {
+    var p = state.player;
+    if (!p.giovanile) return null;
+    var trimmed = (newName || "").trim().slice(0, 60);
+    if (!trimmed) return null;
+    p.giovanile.name = trimmed;
+    return { resultText: "La sezione giovanile è stata rinominata in \"" + trimmed + "\".", headlines: [] };
+  }
+  function renderYouthWingPanel() {
+    var p = state.player;
+    if (!p) return "";
+    var html = '<section aria-label="Sezione Giovanile"><p class="eyebrow">Sezione Giovanile</p>';
+    if (p.giovanile) {
+      var ag = Math.round(p.giovanile.agreement);
+      html += '<p class="ci-hint">"<strong>' + p.giovanile.name + '</strong>" è la sezione giovanile del partito.' + (ag < 40 ? " Il suo accordo con la linea del partito sta scendendo: sotto il 30% rischia di sciogliersi." : "") + '</p>';
+      html += '<div class="stat-tile"><div class="label">Accordo con la linea del partito</div><div class="row"><span class="value">' + ag + '%</span></div>' +
+        '<div class="gauge"><span style="width:' + ag + '%;background:' + (ag < 30 ? "var(--critical)" : ag < 50 ? "var(--warning)" : "var(--good)") + '"></span></div></div>';
+      html += '<div class="option-grid"><input type="text" id="youth-wing-name-input" maxlength="60" placeholder="Nuovo nome" value="' + p.giovanile.name.replace(/"/g, "&quot;") + '" style="grid-column:1/-1;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;" />' +
+        '<button type="button" class="option-card" data-rename-youth-wing="1"><span class="olabel">Rinomina la sezione giovanile</span><span class="odesc">Scegli tu il nome, come preferisci</span></button></div>';
+    } else {
+      var cd = (p.giovanileCooldownTurn || 0) - state.turn;
+      if (cd > 0) {
+        html += '<p class="ci-hint">La sezione giovanile si è sciolta di recente: potrai riaprirne una tra ' + cd + " settiman" + (cd === 1 ? "a" : "e") + '.</p>';
+      } else {
+        var disabled = p.fondi < YOUTH_WING_OPEN_COST;
+        html += '<p class="ci-hint">Il partito non ha ancora una sezione giovanile.</p><div class="option-grid"><button type="button" class="option-card" data-open-youth-wing="1"' + (disabled ? " disabled" : "") + '><span class="olabel">Apri la Sezione Giovanile</span><span class="odesc">Costo: ' + fmtEuro(YOUTH_WING_OPEN_COST) + '</span></button></div>';
+      }
+    }
+    html += "</section>";
     return html;
   }
 
@@ -6651,6 +6887,7 @@
     body += renderPollGrid(state.prevSnapshot);
     body += renderNationalStrip();
     body += renderPartyEvents();
+    body += renderYouthWingPanel();
     body += renderCampaignPanel();
     body += renderFundraisingPanel();
     body += renderGovernmentReforms();
@@ -6664,6 +6901,7 @@
     body += renderEuParliament();
     body += renderStaffPanel();
     body += renderIdeologyProfile();
+    body += renderLocalSectionPanel();
     body += wrapCollapsed("Territorio e cronaca", renderItalyMap() + renderNucleiUpdates() + renderWorldNews() + renderBilancioStato());
     body += renderCountryProfile();
     body += renderPartyDirectory();
@@ -6800,6 +7038,9 @@
             state.euExitCooldownTurn = state.turn + 20;
           }
           state.resultData = applyChoice(dossier, choice);
+        } else if (dossier.cat === "Referendum Nazionale" && choice.stance !== undefined && state.pendingNationalReferendum) {
+          state.pendingNationalReferendum.stance = choice.stance;
+          state.resultData = applyChoice(dossier, choice);
         } else {
           var res = applyChoice(dossier, choice);
           state.resultData = res;
@@ -6889,6 +7130,47 @@
         var id = btn.getAttribute("data-campaign-activity");
         var res = resolveCampaignActivity(id);
         if (!res) { showSaveStatus("Non puoi ancora organizzare questa iniziativa di campagna (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-open-local-section]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var mode = btn.getAttribute("data-open-local-section");
+        var select = document.getElementById("local-section-select");
+        var locName = select ? select.value : null;
+        if (!locName) { showSaveStatus("Scegli prima una località.", true); return; }
+        var res = openLocalSection(locName, mode === "coalizione");
+        if (!res) { showSaveStatus("Non puoi ancora aprire una sezione lì (fondi insufficienti o già aperta).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-open-youth-wing]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var res = openYouthWing();
+        if (!res) { showSaveStatus("Non puoi ancora aprire la sezione giovanile (fondi o tempo di raffreddamento).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-rename-youth-wing]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var input = document.getElementById("youth-wing-name-input");
+        var res = renameYouthWing(input ? input.value : "");
+        if (!res) { showSaveStatus("Inserisci un nome valido.", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-referendum-campaign]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var res = resolveReferendumCampaign();
+        if (!res) { showSaveStatus("Non puoi ancora fare campagna per questo referendum (fondi o tempo di recupero insufficienti).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
@@ -7221,6 +7503,14 @@
     var mozioneDossier = resolveMozioneIfDue();
     if (mozioneDossier) {
       state.aiDynamicDossier = mozioneDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var nationalReferendumDossier = resolveNationalReferendumIfDue();
+    if (nationalReferendumDossier) {
+      state.aiDynamicDossier = nationalReferendumDossier;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
