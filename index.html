@@ -245,6 +245,18 @@
 
   section { margin-bottom: 1.75rem; }
 
+  /* ---------- Navigazione a pagine (menu a tendina) ---------- */
+  .page-nav {
+    display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 0.85rem 1rem; margin-bottom: 1.5rem;
+  }
+  .page-nav label { font-size: 0.78rem; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  .page-nav select {
+    flex: 1; min-width: 0; padding: 0.6rem 0.8rem; border-radius: 9px; border: 1px solid var(--border);
+    background: var(--panel-2); color: inherit; font-size: 0.95rem; font-weight: 600;
+  }
+
   /* ---------- Setup screen ---------- */
   .setup-import-prompt {
     display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
@@ -4654,7 +4666,8 @@
     bilancioStato: { entrate: 920, uscite: 979 },
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
-    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null
+    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
+    uiPage: "partito"
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -6812,6 +6825,51 @@
     document.body.className = computeGameTheme();
   }
 
+  // ---------- Pagine di gioco ----------
+  // La pagina era diventata troppo lunga con tutti i pannelli in sequenza: solo il dossier della
+  // settimana, le statistiche chiave e i sondaggi restano sempre visibili in cima (sono l'unica cosa
+  // che richiede un'azione o va controllata ogni settimana); tutto il resto è organizzato in pagine
+  // tematiche, richiamabili da un unico menu a tendina — non più tutto incollato in sequenza su un'unica
+  // pagina lunghissima.
+  var PAGE_DEFS = [
+    { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
+        return renderPartyEvents() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderStaffPanel() + renderIdeologyProfile();
+      } },
+    { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
+        return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
+      } },
+    { id: "parlamento", label: "Parlamento e Governo", render: function () {
+        return renderGovernmentReforms() + renderReferendumProposal() + renderMozioniPanel() + renderParliament();
+      } },
+    { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
+        return renderEuInitiatives() + renderGeopolitica() + renderEuParliament();
+      } },
+    { id: "coalizioni", label: "Coalizioni e Alleanze", render: function () {
+        return renderReunificationPanel() + renderCoalitionPanel();
+      } },
+    { id: "paese", label: "Scheda Paese e Bilancio dello Stato", render: function () {
+        return renderNationalStrip() + renderCountryProfile() + renderBilancioStato();
+      } },
+    { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
+        return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
+      } },
+    { id: "diario", label: "Diario di Partito — registro completo", render: function () {
+        return renderLog();
+      } }
+  ];
+  function activePageDef() {
+    var current = state.uiPage || PAGE_DEFS[0].id;
+    return PAGE_DEFS.filter(function (pg) { return pg.id === current; })[0] || PAGE_DEFS[0];
+  }
+  function renderPageNav() {
+    var current = activePageDef().id;
+    var options = PAGE_DEFS.map(function (pg) {
+      return '<option value="' + pg.id + '"' + (pg.id === current ? " selected" : "") + '>' + pg.label + '</option>';
+    }).join("");
+    return '<nav aria-label="Sezioni di gioco" class="page-nav"><label for="page-nav-select">Vai a</label>' +
+      '<select id="page-nav-select">' + options + '</select></nav>';
+  }
+
   function render() {
     renderMasthead();
     updateSaveControls();
@@ -6885,29 +6943,8 @@
     // di default (vedi wrapCollapsed).
     body += renderPlayerStats();
     body += renderPollGrid(state.prevSnapshot);
-    body += renderNationalStrip();
-    body += renderPartyEvents();
-    body += renderYouthWingPanel();
-    body += renderCampaignPanel();
-    body += renderFundraisingPanel();
-    body += renderGovernmentReforms();
-    body += renderEuInitiatives();
-    body += renderGeopolitica();
-    body += renderReferendumProposal();
-    body += renderMozioniPanel();
-    body += renderReunificationPanel();
-    body += renderCoalitionPanel();
-    body += renderParliament();
-    body += renderEuParliament();
-    body += renderStaffPanel();
-    body += renderIdeologyProfile();
-    body += renderLocalSectionPanel();
-    body += wrapCollapsed("Territorio e cronaca", renderItalyMap() + renderNucleiUpdates() + renderWorldNews() + renderBilancioStato());
-    body += renderCountryProfile();
-    body += renderPartyDirectory();
-    body += renderPartyRelations();
-    body += renderPartyDossier();
-    body += renderLog();
+    body += renderPageNav();
+    body += activePageDef().render();
     // Ogni render() ricostruisce l'intero DOM da zero (innerHTML), quindi lo stato open/closed di ogni
     // <details> richiudibile andrebbe perso a ogni singolo click che causa un re-render — anche solo
     // aprire una presa di posizione dentro "Iniziative al Parlamento Europeo" richiuderebbe l'intero
@@ -6932,6 +6969,14 @@
   }
 
   function bindInteractions() {
+    var pageSelect = document.getElementById("page-nav-select");
+    if (pageSelect) {
+      pageSelect.addEventListener("change", function () {
+        state.uiPage = pageSelect.value;
+        save();
+        render();
+      });
+    }
     var btns = app.querySelectorAll(".choice-btn[data-choice]");
     btns.forEach(function (btn) {
       btn.addEventListener("click", function () {
