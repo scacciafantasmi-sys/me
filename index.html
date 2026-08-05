@@ -1277,38 +1277,85 @@
   // ---------- Apertura mirata di sezioni locali, con coalizioni civiche locali ----------
   // A differenza del vecchio meccanismo (una sezione in più capitava quasi a caso da un evento
   // generico), qui il giocatore sceglie ESPLICITAMENTE in quale città radicarsi, tra un elenco che va
-  // ben oltre i soli capoluoghi di regione. Un'opzione in più: aprirla in coalizione con una lista
-  // civica locale, che costa meno ma dà un bonus concreto ai risultati delle elezioni locali in quella
-  // stessa città (vedi triggerLocalElectionCycle), a fronte di una crescita di iscritti leggermente
-  // minore (il merito, e i voti, si dividono con la lista locale).
+  // ben oltre i soli capoluoghi di regione. L'apertura "da sola" resta sempre disponibile; l'apertura
+  // di una vera LISTA in coalizione con un alleato civico locale, invece, ha senso solo a ridosso di
+  // un'elezione locale vera e propria — quindi è attiva solo entro 20 settimane dal prossimo turno di
+  // elezioni comunali/provinciali/regionali, costa di più (una lista elettorale va costruita sul
+  // serio) e richiede di scegliere un alleato concreto: una persona indipendente con una propria
+  // ideologia dichiarata, un partito/lista locale territoriale, oppure il circolo locale di un
+  // partito nazionale realmente esistente. Più l'alleato è ideologicamente vicino al partito, più
+  // forte è il bonus ai risultati della lista (vedi triggerLocalElectionCycle).
   var LOCAL_SECTION_OPEN_COST = 500;
-  var LOCAL_SECTION_COALITION_COST = 300;
+  var LOCAL_LIST_COALITION_COST = 3000;
+  var LOCAL_LIST_COALITION_WINDOW_WEEKS = 20;
+  function weeksToLocalElection() {
+    if (!state.nextLocalElectionTurn) return Infinity;
+    return state.nextLocalElectionTurn - state.turn;
+  }
+  function inLocalListCoalitionWindow() {
+    var w = weeksToLocalElection();
+    return w >= 0 && w <= LOCAL_LIST_COALITION_WINDOW_WEEKS;
+  }
+  var LOCAL_PARTY_NAME_TEMPLATES = [
+    function (city) { return "Lista Civica " + city; },
+    function (city) { return "Insieme per " + city; },
+    function (city) { return "Uniti per " + city; },
+    function (city) { return "Alternativa Civica " + city; },
+    function (city) { return "Prima " + city; },
+    function (city) { return "Civici per " + city; },
+    function (city) { return "Il Futuro di " + city; },
+    function (city) { return "Patto Civico " + city; }
+  ];
+  function allyAlignmentMultiplier(playerFamilyId, allyFamilyId) {
+    var a = LEFT_RIGHT_POSITION[playerFamilyId], b = LEFT_RIGHT_POSITION[allyFamilyId];
+    if (a === undefined || b === undefined) return 1.2;
+    var dist = Math.abs(a - b); // 0 (stessa linea) .. 6 (estremi opposti)
+    return clamp(1.45 - (dist / 6) * 0.35, 1.1, 1.45);
+  }
+  function generateLocalAllyCandidates(locationName) {
+    var p = state.player;
+    var indepFamily = FAMILIES[Math.floor(Math.random() * FAMILIES.length)];
+    var localPartyFamily = FAMILIES[Math.floor(Math.random() * FAMILIES.length)];
+    var nameTpl = LOCAL_PARTY_NAME_TEMPLATES[Math.floor(Math.random() * LOCAL_PARTY_NAME_TEMPLATES.length)];
+    var branchParty = PARTIES[Math.floor(Math.random() * PARTIES.length)];
+    var candidates = [
+      { type: "indipendente", name: generateStaffName(), familyId: indepFamily.id, ideologyLabel: "Indipendente, area " + indepFamily.label.toLowerCase(),
+        multiplier: allyAlignmentMultiplier(p.family, indepFamily.id) },
+      { type: "partito_locale", name: nameTpl(locationName), familyId: localPartyFamily.id, ideologyLabel: "Lista locale, area " + localPartyFamily.label.toLowerCase(),
+        multiplier: allyAlignmentMultiplier(p.family, localPartyFamily.id) },
+      { type: "sede_locale", name: "Circolo locale " + branchParty.short + " di " + locationName, familyId: branchParty.familyId, sourcePartyId: branchParty.id,
+        ideologyLabel: "Sede locale di " + branchParty.name, multiplier: allyAlignmentMultiplier(p.family, branchParty.familyId) }
+    ];
+    return candidates;
+  }
   function availableLocalSectionLocations() {
     var openNames = openNuclei().map(function (l) { return l.name; });
     return ITALY_LOCATIONS.filter(function (l) { return openNames.indexOf(l.name) === -1; });
   }
-  function openLocalSection(locationName, withCoalition) {
+  function openLocalSection(locationName, ally) {
     var p = state.player;
     var loc = ITALY_LOCATIONS.filter(function (l) { return l.name === locationName; })[0];
     if (!loc) return null;
     var openNames = openNuclei().map(function (l) { return l.name; });
     if (openNames.indexOf(loc.name) !== -1) return null;
-    var cost = withCoalition ? LOCAL_SECTION_COALITION_COST : LOCAL_SECTION_OPEN_COST;
+    if (ally && !inLocalListCoalitionWindow()) return null;
+    var cost = ally ? LOCAL_LIST_COALITION_COST : LOCAL_SECTION_OPEN_COST;
     if (p.fondi < cost) return null;
     p.fondi -= cost;
     if (!p.sezioniLocations) p.sezioniLocations = [];
     p.sezioniLocations.push({ name: loc.name, region: loc.region });
     p.sezioni = Math.max(p.sezioni, p.sezioniLocations.length);
-    if (withCoalition) {
+    if (ally) {
       if (!p.sezioniCoalizioni) p.sezioniCoalizioni = {};
-      p.sezioniCoalizioni[loc.name] = true;
+      p.sezioniCoalizioni[loc.name] = ally;
+      p.localAllyCandidates = null;
     }
-    var dossier = { title: withCoalition ? "Sezione locale a " + loc.name + " in coalizione" : "Sezione locale a " + loc.name, cat: "Organizzazione" };
+    var dossier = { title: ally ? "Lista locale a " + loc.name + " con " + ally.name : "Sezione locale a " + loc.name, cat: "Organizzazione" };
     var choice = {
       label: dossier.title,
-      effects: withCoalition ? { iscritti: rand(15, 30) } : { iscritti: rand(20, 40) },
-      result: withCoalition
-        ? "Il partito apre una sezione a " + loc.name + " in coalizione con una lista civica locale, dividendo il lavoro e i meriti sul territorio."
+      effects: ally ? { iscritti: rand(15, 30), reputazione: rand(0.5, 1.5) } : { iscritti: rand(20, 40) },
+      result: ally
+        ? "Il partito costruisce una vera lista elettorale a " + loc.name + " insieme a " + ally.name + " (" + ally.ideologyLabel + "), in vista del voto locale."
         : "Il partito apre da solo una nuova sezione a " + loc.name + ", radicandosi sul territorio con le proprie sole forze."
     };
     return applyChoice(dossier, choice);
@@ -1318,16 +1365,34 @@
     if (!p) return "";
     var avail = availableLocalSectionLocations();
     if (!avail.length) return "";
-    var options = avail.map(function (l) { return '<option value="' + l.name + '">' + l.name + " (" + l.region + ")</option>"; }).join("");
+    var selectedLoc = (state.uiLocalSectionLoc && avail.some(function (l) { return l.name === state.uiLocalSectionLoc; }))
+      ? state.uiLocalSectionLoc : (avail[0] ? avail[0].name : "");
+    var options = avail.map(function (l) { return '<option value="' + l.name + '"' + (l.name === selectedLoc ? " selected" : "") + '>' + l.name + " (" + l.region + ")</option>"; }).join("");
     var disabledSola = p.fondi < LOCAL_SECTION_OPEN_COST;
-    var disabledCoal = p.fondi < LOCAL_SECTION_COALITION_COST;
-    return '<section aria-label="Apri una Sezione Locale"><p class="eyebrow">Apri una Sezione Locale</p>' +
-      '<p class="ci-hint">Scegli tu dove radicare il partito sul territorio, oltre ai soli grandi capoluoghi: da solo, oppure in coalizione con una lista civica locale — costa meno e aiuta i risultati alle prossime elezioni locali in quella città, a fronte di una crescita un po\' più contenuta.</p>' +
+    var html = '<section aria-label="Apri una Sezione Locale"><p class="eyebrow">Apri una Sezione Locale</p>' +
+      '<p class="ci-hint">Scegli tu dove radicare il partito sul territorio, oltre ai soli grandi capoluoghi.</p>' +
       '<select id="local-section-select" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;margin-bottom:.6rem;">' + options + '</select>' +
       '<div class="option-grid">' +
       '<button type="button" class="option-card" data-open-local-section="sola"' + (disabledSola ? " disabled" : "") + '><span class="olabel">Apri da sola</span><span class="odesc">Costo: ' + fmtEuro(LOCAL_SECTION_OPEN_COST) + '</span></button>' +
-      '<button type="button" class="option-card" data-open-local-section="coalizione"' + (disabledCoal ? " disabled" : "") + '><span class="olabel">Apri in coalizione con lista civica locale</span><span class="odesc">Costo: ' + fmtEuro(LOCAL_SECTION_COALITION_COST) + " — bonus ai risultati locali in questa città</span></button>" +
-      "</div></section>";
+      "</div>";
+    var w = weeksToLocalElection();
+    if (inLocalListCoalitionWindow()) {
+      if (!p.localAllyCandidates || !p.localAllyCandidates.length) {
+        p.localAllyCandidates = generateLocalAllyCandidates(selectedLoc);
+      }
+      var disabledCoal = p.fondi < LOCAL_LIST_COALITION_COST;
+      html += '<p class="ci-hint">Mancano ' + w + " settiman" + (w === 1 ? "a" : "e") + " al voto locale: puoi costruire una vera lista elettorale in coalizione con un alleato civico, per la città selezionata sopra. Costo: " + fmtEuro(LOCAL_LIST_COALITION_COST) + '.</p><div class="option-grid">';
+      p.localAllyCandidates.forEach(function (ally, i) {
+        html += '<button type="button" class="option-card" data-open-local-list-ally="' + i + '"' + (disabledCoal ? " disabled" : "") + '>' +
+          '<span class="olabel">Allati con ' + ally.name + '</span><span class="odesc">' + ally.ideologyLabel + '</span></button>';
+      });
+      html += '</div><button type="button" class="staff-btn hire" data-reroll-local-ally="1">Rimescola gli alleati possibili</button>';
+    } else {
+      html += '<p class="ci-hint">Le liste elettorali in coalizione con un alleato civico locale si possono costruire solo a ridosso del voto locale (entro ' + LOCAL_LIST_COALITION_WINDOW_WEEKS + ' settimane dalla prossima elezione comunale, provinciale o regionale' +
+        (isFinite(w) ? ", tra " + w + " settimane" : "") + ').</p>';
+    }
+    html += "</section>";
+    return html;
   }
 
   // ---------- Generatore combinatorio delle situazioni settimanali ----------
@@ -3930,9 +3995,9 @@
     if (!p || !open.length) return null; // senza sezioni sul territorio non c'è nulla da votare localmente
     var kind = LOCAL_ELECTION_KINDS[Math.floor(Math.random() * LOCAL_ELECTION_KINDS.length)];
     var loc = open[Math.floor(Math.random() * open.length)];
-    var coalized = !!(p.sezioniCoalizioni && p.sezioniCoalizioni[loc.name]);
+    var ally = p.sezioniCoalizioni && p.sezioniCoalizioni[loc.name];
     var won = Math.round(clamp(p.sondaggi * 0.6, 0, 22) + Math.min(open.length, 10) * 0.5 + Math.random() * 3);
-    if (coalized) won = Math.round(won * 1.25 + 1);
+    if (ally) won = Math.round(won * (ally.multiplier || 1.25) + 1);
     if (!p.amministratoriLocali) p.amministratoriLocali = 0;
     var text;
     if (won >= 1) {
@@ -3942,7 +4007,7 @@
       p.visibilita = clamp(p.visibilita + Math.min(9, won * 0.8), 0, 100);
       var mult = institutionalPowerMultiplier(p);
       state.countryProfile.corruzione = clamp(state.countryProfile.corruzione + Math.min(0.4, won * 0.03) * mult, 1, 10);
-      text = "A " + loc.name + " il partito elegge " + won + " " + kind.unit + (coalized ? ", in coalizione con la lista civica locale" : "") + ": un passo avanti concreto nel radicamento territoriale.";
+      text = "A " + loc.name + " il partito elegge " + won + " " + kind.unit + (ally ? ", in lista con " + ally.name : "") + ": un passo avanti concreto nel radicamento territoriale.";
     } else {
       text = "A " + loc.name + " il partito si presenta ma non riesce a eleggere " + kind.unit + " questa volta.";
     }
@@ -4667,7 +4732,7 @@
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
-    uiPage: "partito"
+    uiPage: "partito", uiLocalSectionLoc: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -4677,7 +4742,7 @@
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {},
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
-    sezioniLocations: [], sezioniCoalizioni: {}
+    sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -6977,6 +7042,17 @@
         render();
       });
     }
+    var localSectionSelect = document.getElementById("local-section-select");
+    if (localSectionSelect) {
+      localSectionSelect.addEventListener("change", function () {
+        if (state.player) {
+          state.uiLocalSectionLoc = localSectionSelect.value;
+          state.player.localAllyCandidates = generateLocalAllyCandidates(localSectionSelect.value);
+          save();
+          render();
+        }
+      });
+    }
     var btns = app.querySelectorAll(".choice-btn[data-choice]");
     btns.forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -7182,13 +7258,36 @@
     });
     app.querySelectorAll("[data-open-local-section]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var mode = btn.getAttribute("data-open-local-section");
         var select = document.getElementById("local-section-select");
         var locName = select ? select.value : null;
         if (!locName) { showSaveStatus("Scegli prima una località.", true); return; }
-        var res = openLocalSection(locName, mode === "coalizione");
+        var res = openLocalSection(locName, null);
         if (!res) { showSaveStatus("Non puoi ancora aprire una sezione lì (fondi insufficienti o già aperta).", true); return; }
         showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-open-local-list-ally]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-open-local-list-ally"), 10);
+        var select = document.getElementById("local-section-select");
+        var locName = select ? select.value : null;
+        if (!locName) { showSaveStatus("Scegli prima una località.", true); return; }
+        var ally = state.player.localAllyCandidates && state.player.localAllyCandidates[idx];
+        if (!ally) return;
+        var res = openLocalSection(locName, ally);
+        if (!res) { showSaveStatus("Non puoi ancora costruire questa lista lì (fondi insufficienti, già aperta, o fuori dalla finestra elettorale).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-reroll-local-ally]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var select = document.getElementById("local-section-select");
+        var locName = select ? select.value : (availableLocalSectionLocations()[0] || {}).name;
+        state.player.localAllyCandidates = generateLocalAllyCandidates(locName || "");
         save();
         render();
       });
