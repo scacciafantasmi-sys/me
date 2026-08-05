@@ -162,6 +162,22 @@
   body.gt-election .log .eyebrow, body.gt-election .log .ci-hint, body.gt-election .log .countdown,
   body.gt-election .log .chamber-legend { color: var(--text-dim); }
 
+  /* Ultime settimane di campagna elettorale politica nazionale: blu civico con la bandiera italiana in
+     alto e le urne in basso, per tutta la durata della campagna (non solo il giorno del voto). */
+  body.gt-national-campaign { background: #123a6e; }
+  body.gt-national-campaign::before { content: "🇮🇹 🇮🇹 🇮🇹"; opacity: 0.12; font-size: 3.4rem; letter-spacing: 1.2rem;
+    line-height: 1.6; text-align: center; padding-top: 2.2rem; align-items: flex-start; }
+  body.gt-national-campaign::after { content: "🗳️ 🗳️ 🗳️"; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    display: flex; align-items: flex-end; justify-content: center; opacity: 0.14; font-size: 4.5rem;
+    letter-spacing: 1.5rem; padding-bottom: 2.5rem; }
+  body.gt-national-campaign .masthead { border-bottom-color: #2f5794; }
+  body.gt-national-campaign .masthead h1, body.gt-national-campaign .masthead .tagline,
+  body.gt-national-campaign .masthead-meta .week, body.gt-national-campaign .masthead-meta .date,
+  body.gt-national-campaign .eyebrow, body.gt-national-campaign .ci-hint, body.gt-national-campaign .countdown,
+  body.gt-national-campaign .chamber-legend { color: #f0f4fb; }
+  body.gt-national-campaign .log .eyebrow, body.gt-national-campaign .log .ci-hint, body.gt-national-campaign .log .countdown,
+  body.gt-national-campaign .log .chamber-legend { color: var(--text-dim); }
+
   body.gt-regime-fascista { background: #000000; }
   body.gt-regime-fascista .masthead { border-bottom-color: #1e1e1e; }
   body.gt-regime-fascista .eyebrow, body.gt-regime-fascista .ci-hint, body.gt-regime-fascista .countdown,
@@ -965,7 +981,7 @@
 
   var COALITIONS = {
     centrodestra: { label: "Coalizione di Centrodestra", members: ["fdi", "lega", "fi"] },
-    campolargo:   { label: "Campo Largo (PD–AVS)",        members: ["pd", "avs"] }
+    campolargo:   { label: "Campo Largo (PD–AVS–M5S)",    members: ["pd", "avs", "m5s"] }
   };
 
   // ---------- Sfondo del mondo: geopolitica, tecnologia, cronaca, governo, referendum ----------
@@ -4008,6 +4024,141 @@
     return html;
   }
 
+  // ---------- Mozioni Parlamentari ----------
+  // Uno strumento distinto dal referendum: disponibile solo a chi siede davvero in Parlamento (quindi
+  // già sopra la soglia reale d'ingresso), gratuito ma utilizzabile una volta ogni 15 settimane. Riusa
+  // lo stesso motore combinatorio di FAMILY_ANGLE_NOUNS/SITUATION_THEMES (già oltre le 30 voci per
+  // ideologia richieste) incrociato con 3 "forme" di mozione, per centinaia di mozioni possibili per
+  // ciascuna famiglia oltre a quelle generali. L'esito non è mai un semplice 50/50: più la linea
+  // politica di chi la presenta è distante da quella del Governo in carica, meno è probabile che la
+  // mozione venga accolta — una mozione della propria maggioranza passa quasi sempre, una mozione
+  // dell'opposizione più estrema viene quasi sempre respinta.
+  var MOZIONE_SHAPES = [
+    { id: "impegno", build: function (noun, metric) { return { title: "Mozione di impegno su " + noun, brief: "Presenti una mozione parlamentare per impegnare il Governo a intervenire su " + noun + ".", metric: metric, noun: noun }; } },
+    { id: "contrasto", build: function (noun, metric) { return { title: "Mozione di contrasto sul Governo riguardo a " + noun, brief: "Presenti una mozione che critica apertamente la linea del Governo su " + noun + ", chiedendo un cambio di rotta immediato.", metric: metric, noun: noun }; } },
+    { id: "indirizzo", build: function (noun, metric) { return { title: "Mozione di indirizzo politico su " + noun, brief: "Presenti una mozione di indirizzo politico per fissare la linea del Parlamento su " + noun + ".", metric: metric, noun: noun }; } }
+  ];
+  function mozioneTopicsForFamily(familyId) {
+    var angles = FAMILY_ANGLE_NOUNS[familyId];
+    var themeIds = FAMILY_SIGNATURE_THEMES[familyId] || [];
+    var topics = [];
+    if (!angles) return topics;
+    themeIds.forEach(function (themeId) {
+      var nouns = angles[themeId] || [];
+      var metric = THEME_TO_NATIONAL_METRIC[themeId];
+      nouns.forEach(function (noun) {
+        MOZIONE_SHAPES.forEach(function (shape) { topics.push(shape.build(noun, metric)); });
+      });
+    });
+    return topics;
+  }
+  function mozioneTopicsGeneral() {
+    var topics = [];
+    SITUATION_THEMES.forEach(function (theme) {
+      var metric = THEME_TO_NATIONAL_METRIC[theme.id];
+      theme.nouns.forEach(function (noun) {
+        MOZIONE_SHAPES.forEach(function (shape) { topics.push(shape.build(noun, metric)); });
+      });
+    });
+    return topics;
+  }
+  function generateMozioneCandidates(p) {
+    var familyTopics = mozioneTopicsForFamily(p.family);
+    var generalTopics = mozioneTopicsGeneral();
+    return shuffleN(familyTopics, Math.min(3, familyTopics.length)).concat(shuffleN(generalTopics, Math.min(2, generalTopics.length)));
+  }
+  // Famiglia ideologica "di riferimento" del Governo in carica: se il giocatore stesso è al governo, è
+  // la sua; altrimenti si usa la stessa convenzione già in uso nel gioco per le coalizioni (il
+  // centrodestra, sempre al governo per default, ha come famiglia di riferimento "sovranista").
+  function governingFamilyId(p) {
+    if (p.parliamentRole === "governo") return p.family;
+    return "sovranista";
+  }
+  var MOZIONE_COOLDOWN_TURNS = 15;
+  function mozioneAcceptProbability(p) {
+    if (p.parliamentRole === "governo") return 0.82 + Math.random() * 0.1;
+    var govFam = governingFamilyId(p);
+    var myPos = LEFT_RIGHT_POSITION[p.family], govPos = LEFT_RIGHT_POSITION[govFam];
+    if (myPos === undefined || govPos === undefined) return 0.35;
+    var dist = Math.abs(myPos - govPos); // 0 (stessa linea) .. 6 (estremi opposti)
+    return clamp(0.78 - (dist / 6) * 0.68, 0.06, 0.78);
+  }
+  function proposeMozione(topic) {
+    var p = state.player;
+    if (!p.inParliament) return null;
+    if (state.turn < (p.mozioneCooldownTurn || 0)) return null;
+    if (p.pendingMozione) return null;
+    p.mozioneCooldownTurn = state.turn + MOZIONE_COOLDOWN_TURNS;
+    p.pendingMozione = {
+      title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun,
+      acceptProb: mozioneAcceptProbability(p), resolveTurn: state.turn + 2 + Math.floor(Math.random() * 3)
+    };
+    p.mozioneCandidates = null;
+    state.log.unshift({
+      week: state.turn, title: "Mozione presentata", choiceLabel: topic.title,
+      result: "Il partito deposita in Parlamento una mozione su " + topic.noun + ". Il voto in Aula arriverà tra qualche settimana.",
+      headlines: [], type: "mozione", cat: "Mozione Parlamentare"
+    });
+    return { resultText: "Hai presentato una mozione su " + topic.noun + ". Il voto in Aula arriverà tra qualche settimana.", headlines: [] };
+  }
+  function resolveMozioneIfDue() {
+    var p = state.player;
+    if (!p.pendingMozione) return null;
+    if (state.turn < p.pendingMozione.resolveTurn) return null;
+    var topic = p.pendingMozione;
+    p.pendingMozione = null;
+    var passed = Math.random() < topic.acceptProb;
+    var mult = institutionalPowerMultiplier(p);
+    var isGoverno = p.parliamentRole === "governo";
+    var delta = passed ? rand(0.2, 0.45) : rand(-0.05, 0.05);
+    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+    var repDelta = passed ? rand(2, 5) : (isGoverno ? -rand(1, 3) : rand(0.5, 2));
+    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    if (state.consensoGoverno !== undefined) {
+      var cgDelta = passed ? (isGoverno ? rand(0.5, 1.5) : -rand(0.5, 1.5)) : 0;
+      if (cgDelta) state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
+    }
+    var esito = passed
+      ? "La mozione presentata dal tuo partito viene approvata dall'Aula: " + topic.noun + " entra ufficialmente nell'agenda parlamentare nella direzione che avevi chiesto."
+      : "La mozione presentata dal tuo partito viene respinta dall'Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": la battaglia parlamentare su " + topic.noun + " non si è tradotta in un voto favorevole, anche se il tema resta acceso nel dibattito pubblico.";
+    state.log.unshift({
+      week: state.turn, title: topic.title, choiceLabel: "Esito del voto in Aula", result: esito,
+      headlines: [], type: "mozione", cat: "Mozione Parlamentare"
+    });
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var choices = buildSituationChoices({ noun: "l'esito di questo voto in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua mozione è passata in Aula" : "La tua mozione è stata respinta in Aula",
+      cat: "Mozione Parlamentare", title: topic.title, brief: esito + " Come reagisce il tuo partito?",
+      choices: choices
+    };
+  }
+  function renderMozioniPanel() {
+    var p = state.player;
+    if (!p.inParliament) return "";
+    var html = '<section aria-label="Mozioni Parlamentari"><details class="log" open><summary>Mozioni Parlamentari<span>▾</span></summary>';
+    if (p.pendingMozione) {
+      html += '<p class="ci-hint">Mozione depositata su <strong>' + p.pendingMozione.title + '</strong>: il voto in Aula arriverà tra qualche settimana.</p></details></section>';
+      return html;
+    }
+    var weeksLeft = (p.mozioneCooldownTurn || 0) - state.turn;
+    if (weeksLeft > 0) {
+      html += '<p class="ci-hint">Puoi presentare una nuova mozione tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
+      return html;
+    }
+    if (!p.mozioneCandidates || !p.mozioneCandidates.length) p.mozioneCandidates = generateMozioneCandidates(p);
+    var probHint = Math.round(mozioneAcceptProbability(p) * 100);
+    html += '<p class="ci-hint">Presentabile una volta ogni ' + MOZIONE_COOLDOWN_TURNS + ' settimane, gratuita. In base alla distanza dalla linea del Governo in carica, ha circa il ' + probHint + '% di probabilità di essere approvata. Scegli una mozione da presentare:</p><div class="option-grid">';
+    p.mozioneCandidates.forEach(function (t, i) {
+      html += '<button type="button" class="option-card" data-propose-mozione="' + i + '">' +
+        '<span class="olabel">' + t.title + '</span><span class="odesc">' + t.brief + '</span></button>';
+    });
+    html += '</div><button type="button" class="staff-btn hire" data-reroll-mozione="1">Rimescola le proposte</button></details></section>';
+    return html;
+  }
+
   // ---------- Elezioni europee ----------
   // Ciclo indipendente da quello delle elezioni politiche nazionali (come nella realtà, dove il
   // Parlamento Europeo ha un proprio mandato quinquennale fisso): usa la stessa ripartizione Hamilton
@@ -4117,15 +4268,47 @@
   // Ogni materia è una vera votazione in Aula, con quattro posizioni possibili sulla STESSA iniziativa
   // (sostegno pieno, sostegno con riserve, voto contrario, assenza), mai un contenitore generico.
   var EU_INITIATIVE_DOMAINS = [
-    { id: "migrazione", label: "Redistribuzione dei Migranti", noun: "il meccanismo europeo di redistribuzione dei migranti", metric: "relazioniDiplomatiche" },
-    { id: "ambiente", label: "Green Deal Europeo", noun: "gli obiettivi del Green Deal europeo", metric: "ambientalismo" },
-    { id: "digitale", label: "Regolamentazione Europea dell'IA", noun: "la regolamentazione europea dell'intelligenza artificiale", metric: "ricercaSviluppo" },
-    { id: "economia", label: "Patto di Stabilità e Bilancio", noun: "le regole europee di bilancio", metric: "economia" },
-    { id: "energia", label: "Sicurezza Energetica Europea", noun: "il piano REPowerEU per l'indipendenza energetica", metric: "ambientalismo" },
-    { id: "agricoltura", label: "Politica Agricola Comune", noun: "la riforma della Politica Agricola Comune", metric: "commercio" },
-    { id: "sicurezza", label: "Difesa Comune Europea", noun: "il progetto di difesa comune europea", metric: "relazioniDiplomatiche" },
-    { id: "giustizia", label: "Stato di Diritto nell'Unione", noun: "il meccanismo di condizionalità sullo stato di diritto", metric: "corruzione" }
+    { id: "migrazione", label: "Redistribuzione dei Migranti", noun: "il meccanismo europeo di redistribuzione dei migranti", metric: "relazioniDiplomatiche",
+      proStance: "il meccanismo obbligatorio di redistribuzione tra tutti gli Stati membri", controStance: "la piena sovranità nazionale sulla gestione dei flussi migratori" },
+    { id: "ambiente", label: "Green Deal Europeo", noun: "gli obiettivi del Green Deal europeo", metric: "ambientalismo",
+      proStance: "obiettivi climatici europei più ambiziosi e vincolanti", controStance: "un rallentamento del Green Deal a tutela delle imprese italiane" },
+    { id: "digitale", label: "Regolamentazione Europea dell'IA", noun: "la regolamentazione europea dell'intelligenza artificiale", metric: "ricercaSviluppo",
+      proStance: "regole europee stringenti sull'intelligenza artificiale", controStance: "una regolamentazione più leggera per non frenare l'innovazione europea" },
+    { id: "economia", label: "Patto di Stabilità e Bilancio", noun: "le regole europee di bilancio", metric: "economia",
+      proStance: "regole di bilancio europee più rigide e uguali per tutti", controStance: "maggiore flessibilità di bilancio per gli Stati membri" },
+    { id: "energia", label: "Sicurezza Energetica Europea", noun: "il piano REPowerEU per l'indipendenza energetica", metric: "ambientalismo",
+      proStance: "il piano REPowerEU per l'indipendenza energetica europea", controStance: "una gestione energetica lasciata alle singole capitali nazionali" },
+    { id: "agricoltura", label: "Politica Agricola Comune", noun: "la riforma della Politica Agricola Comune", metric: "commercio",
+      proStance: "una riforma della PAC più verde, con vincoli ambientali più stretti", controStance: "il mantenimento dei sussidi agricoli attuali senza nuovi vincoli" },
+    { id: "sicurezza", label: "Difesa Comune Europea", noun: "il progetto di difesa comune europea", metric: "relazioniDiplomatiche",
+      proStance: "un esercito europeo comune e un bilancio della difesa condiviso", controStance: "la difesa nazionale gestita fuori da un comando europeo comune" },
+    { id: "giustizia", label: "Stato di Diritto nell'Unione", noun: "il meccanismo di condizionalità sullo stato di diritto", metric: "corruzione",
+      proStance: "il taglio dei fondi europei ai paesi che violano lo stato di diritto", controStance: "la sospensione del meccanismo di condizionalità, ritenuto un'ingerenza" },
+    { id: "allargamento", label: "Allargamento dell'Unione Europea", noun: "l'ingresso di nuovi paesi candidati nell'Unione", metric: "relazioniDiplomatiche",
+      proStance: "un percorso accelerato di adesione per i paesi candidati", controStance: "uno stop all'allargamento fino a una riforma delle istituzioni europee" },
+    { id: "fiscalita_ue", label: "Armonizzazione Fiscale Europea", noun: "l'armonizzazione delle aliquote fiscali tra Stati membri", metric: "economia",
+      proStance: "un'aliquota minima comune contro la concorrenza fiscale sleale", controStance: "la piena sovranità fiscale di ogni Stato membro" },
+    { id: "commercio_ue", label: "Accordi Commerciali dell'Unione", noun: "i nuovi accordi commerciali negoziati da Bruxelles", metric: "commercio",
+      proStance: "la ratifica rapida dei nuovi accordi di libero scambio", controStance: "clausole di salvaguardia più forti per i settori produttivi italiani" },
+    { id: "salute_ue", label: "Unione Europea della Salute", noun: "il rafforzamento delle competenze sanitarie comuni europee", metric: "sanita",
+      proStance: "una vera Unione Europea della Salute con acquisti comuni di farmaci", controStance: "la sanità mantenuta come competenza esclusivamente nazionale" },
+    { id: "digitale_sovranita", label: "Sovranità Tecnologica Europea", noun: "gli investimenti comuni per ridurre la dipendenza dai giganti tech esteri", metric: "ricercaSviluppo",
+      proStance: "un grande fondo europeo per l'indipendenza tecnologica dalle big tech straniere", controStance: "il mercato lasciato aperto senza interventi pubblici europei" },
+    { id: "lavoro_ue", label: "Salario Minimo Europeo", noun: "una direttiva europea sul salario minimo", metric: "salari",
+      proStance: "una direttiva europea vincolante sul salario minimo", controStance: "la contrattazione salariale lasciata ai singoli Stati membri" }
   ];
+  // Trasforma le "posizioni" concrete di ciascun dominio (proStance/controStance) in 4 scelte
+  // realmente collegate al contenuto specifico della votazione, non in un testo generico riusato
+  // identico per ogni tema: solo hint/effetti/result restano templati, l'oggetto della frase cambia
+  // sempre in base a cosa si sta davvero votando.
+  function buildStanceChoices(domain, ctxLabel) {
+    return [
+      { label: "PRO — Sostieni con decisione " + domain.proStance, hint: "Posizione PRO netta, massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.3, 0.5)) }, result: "Il sostegno deciso a " + domain.proStance + " pesa nell'esito, in proporzione alla forza reale del partito." },
+      { label: "PRO — Sostieni con cautela " + domain.proStance + ", cercando mediazioni", hint: "Posizione PRO moderata, meno esposta", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.25)) }, result: "Il sostegno cauto a " + domain.proStance + " pesa un po' meno, ma resta un contributo reale nella stessa direzione." },
+      { label: "CONTRO — Sostieni con decisione " + domain.controStance, hint: "Posizione CONTRO netta, isola il partito su " + ctxLabel, effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.2, 0.4)) }, result: "La linea decisa su " + domain.controStance + " scontenta parte degli alleati, ma premia chi in patria voleva un segnale netto in quella direzione." },
+      { label: "NEUTRALE — Non prendere posizione su " + domain.noun, hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza di posizione su " + domain.noun + " passa quasi inosservata, ma qualcuno in patria la nota." }
+    ];
+  }
   function generateEuInitiativeDossier(domainId) {
     var domain = EU_INITIATIVE_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
     if (!domain) return null;
@@ -4135,13 +4318,8 @@
       id: "eu_initiative", kind: "situazione", cat: "Parlamento Europeo",
       eyebrow: "Parlamento Europeo — " + domain.label,
       title: "Voto in Aula: " + domain.label,
-      brief: "Il Parlamento Europeo vota, PRO o CONTRO, su " + domain.noun + ". L'impatto reale del tuo voto dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito." + groupNote,
-      choices: [
-        { label: "PRO — Sostieni con convinzione la linea più ambiziosa", hint: "Posizione PRO netta, massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.3, 0.5)) }, result: "Il voto PRO convinto su " + domain.noun + " pesa nell'esito finale della votazione, in proporzione alla forza reale del partito." },
-        { label: "PRO — Sostieni con alcune riserve", hint: "Posizione PRO moderata, meno esposta", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.25)) }, result: "Il sostegno con riserve pesa un po' meno, ma resta un contributo PRO reale su " + domain.noun + "." },
-        { label: "CONTRO — Vota apertamente contro, in dissenso", hint: "Posizione CONTRO netta, isola il partito a Bruxelles", effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.2, 0.4)) }, result: "Il voto CONTRO su " + domain.noun + " scontenta gli alleati europei, ma premia chi in patria voleva un no netto." },
-        { label: "NEUTRALE — Non partecipare al voto", hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza dal voto su " + domain.noun + " passa quasi inosservata a Bruxelles, ma qualcuno in patria la nota." }
-      ]
+      brief: "Il Parlamento Europeo vota su " + domain.noun + ": da un lato " + domain.proStance + ", dall'altro " + domain.controStance + ". L'impatto reale del tuo voto dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito." + groupNote,
+      choices: buildStanceChoices(domain, "Bruxelles")
     };
   }
   // Espande le scelte di una presa di posizione (Geopolitica o Iniziative UE) direttamente sotto la
@@ -4184,14 +4362,34 @@
   // (voce istituzionale a Bruxelles) e da quanto sono solide le relazioni diplomatiche del paese in
   // quel momento (un paese isolato ha meno credibilità internazionale, chiunque parli a nome suo).
   var GEOPOLITICA_DOMAINS = [
-    { id: "usa", label: "Relazioni con gli Stati Uniti", noun: "i rapporti commerciali e diplomatici con gli Stati Uniti", metric: "relazioniDiplomatiche" },
-    { id: "cina", label: "Relazioni con la Cina", noun: "gli investimenti cinesi in infrastrutture strategiche italiane", metric: "commercio" },
-    { id: "nato_ruolo", label: "Il Ruolo dell'Italia nella NATO", noun: "il livello di spesa militare richiesto dalla NATO", metric: "relazioniDiplomatiche" },
-    { id: "medioriente", label: "Crisi in Medio Oriente", noun: "la posizione italiana sulla crisi in corso in Medio Oriente", metric: "relazioniDiplomatiche" },
-    { id: "africa", label: "Rapporti con l'Africa e Flussi Migratori", noun: "gli accordi di cooperazione con i paesi di transito africani", metric: "relazioniDiplomatiche" },
-    { id: "clima_globale", label: "Cambiamento Climatico Globale", noun: "gli impegni internazionali sulla riduzione delle emissioni", metric: "ambientalismo" },
-    { id: "commercio_internazionale", label: "Commercio Internazionale e Dazi", noun: "i nuovi dazi doganali in discussione a livello internazionale", metric: "commercio" },
-    { id: "cyber", label: "Sicurezza Cibernetica Internazionale", noun: "la cooperazione internazionale sulla sicurezza cibernetica", metric: "ricercaSviluppo" }
+    { id: "usa", label: "Relazioni con gli Stati Uniti", noun: "i rapporti commerciali e diplomatici con gli Stati Uniti", metric: "relazioniDiplomatiche",
+      proStance: "un asse più stretto con Washington su commercio e sicurezza", controStance: "una maggiore autonomia strategica dell'Italia dagli Stati Uniti" },
+    { id: "cina", label: "Relazioni con la Cina", noun: "gli investimenti cinesi in infrastrutture strategiche italiane", metric: "commercio",
+      proStance: "l'apertura agli investimenti cinesi in cambio di nuovi capitali", controStance: "restrizioni agli investimenti cinesi nei settori strategici" },
+    { id: "nato_ruolo", label: "Il Ruolo dell'Italia nella NATO", noun: "il livello di spesa militare richiesto dalla NATO", metric: "relazioniDiplomatiche",
+      proStance: "l'aumento della spesa militare fino alla soglia richiesta dalla NATO", controStance: "una spesa militare italiana più contenuta rispetto alle richieste NATO" },
+    { id: "medioriente", label: "Crisi in Medio Oriente", noun: "la posizione italiana sulla crisi in corso in Medio Oriente", metric: "relazioniDiplomatiche",
+      proStance: "un impegno diplomatico italiano più attivo per una soluzione negoziata", controStance: "il non intervento italiano diretto nella crisi in corso" },
+    { id: "africa", label: "Rapporti con l'Africa e Flussi Migratori", noun: "gli accordi di cooperazione con i paesi di transito africani", metric: "relazioniDiplomatiche",
+      proStance: "nuovi accordi di cooperazione e investimenti con i paesi africani di transito", controStance: "un approccio più rigido, senza nuovi accordi di cooperazione" },
+    { id: "clima_globale", label: "Cambiamento Climatico Globale", noun: "gli impegni internazionali sulla riduzione delle emissioni", metric: "ambientalismo",
+      proStance: "impegni internazionali più ambiziosi sulla riduzione delle emissioni", controStance: "impegni climatici internazionali più graduali, a tutela dell'industria" },
+    { id: "commercio_internazionale", label: "Commercio Internazionale e Dazi", noun: "i nuovi dazi doganali in discussione a livello internazionale", metric: "commercio",
+      proStance: "nuovi dazi a protezione della produzione italiana", controStance: "il libero scambio senza nuove barriere doganali" },
+    { id: "cyber", label: "Sicurezza Cibernetica Internazionale", noun: "la cooperazione internazionale sulla sicurezza cibernetica", metric: "ricercaSviluppo",
+      proStance: "una cooperazione internazionale più stretta sulla cybersicurezza", controStance: "capacità cibernetiche sviluppate in autonomia nazionale" },
+    { id: "russia", label: "Relazioni con la Russia", noun: "la linea italiana sulle sanzioni e sui rapporti con la Russia", metric: "relazioniDiplomatiche",
+      proStance: "il mantenimento fermo delle sanzioni e della linea occidentale", controStance: "un canale diplomatico aperto con Mosca, al di là delle sanzioni" },
+    { id: "onu_riforma", label: "Riforma delle Nazioni Unite", noun: "la riforma della governance delle Nazioni Unite", metric: "relazioniDiplomatiche",
+      proStance: "una riforma profonda degli organismi multilaterali dell'ONU", controStance: "il mantenimento dell'attuale assetto delle Nazioni Unite" },
+    { id: "america_latina", label: "Rapporti con l'America Latina", noun: "gli accordi commerciali e diplomatici con i paesi latinoamericani", metric: "commercio",
+      proStance: "nuovi accordi commerciali con i paesi dell'America Latina", controStance: "la priorità ai mercati europei rispetto a nuovi accordi extraeuropei" },
+    { id: "artico", label: "Corsa alle Risorse Artiche", noun: "la partecipazione italiana alla governance delle rotte e risorse artiche", metric: "ricercaSviluppo",
+      proStance: "un ruolo attivo dell'Italia nella governance internazionale dell'Artico", controStance: "il disimpegno italiano da una partita geopoliticamente troppo lontana" },
+    { id: "spazio", label: "Corsa allo Spazio", noun: "gli investimenti pubblici italiani nei programmi spaziali internazionali", metric: "ricercaSviluppo",
+      proStance: "un forte aumento degli investimenti pubblici nei programmi spaziali", controStance: "una spesa spaziale più contenuta a favore di altre priorità" },
+    { id: "diritti_umani", label: "Diritti Umani e Politica Estera", noun: "il peso dei diritti umani nella politica estera italiana", metric: "relazioniDiplomatiche",
+      proStance: "una politica estera che condiziona gli accordi al rispetto dei diritti umani", controStance: "una politica estera pragmatica, senza condizionalità sui diritti umani" }
   ];
   function generateGeopoliticaDossier(domainId) {
     var domain = GEOPOLITICA_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
@@ -4207,13 +4405,8 @@
       id: "geopolitica", kind: "situazione", cat: "Geopolitica",
       eyebrow: "Geopolitica — " + domain.label,
       title: "Posizione internazionale: " + domain.label,
-      brief: "Il partito è chiamato a prendere posizione, PRO o CONTRO, su " + domain.noun + ". L'impatto reale dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito." + weightNote,
-      choices: [
-        { label: "PRO — Prendi una posizione assertiva e netta", hint: "Posizione PRO netta, massimo impatto, più esposizione politica", effects: { visibilita: rand(4, 8), reputazione: rand(1, 3), national: reformMetricEffect(domain.metric, rand(0.3, 0.5)) }, result: "La posizione PRO netta su " + domain.noun + " fa notizia e pesa, in proporzione alla forza reale del partito." },
-        { label: "PRO — Cerca una posizione equilibrata e negoziale", hint: "Posizione PRO moderata, meno esposta", effects: { reputazione: rand(0.5, 1.5), national: reformMetricEffect(domain.metric, rand(0.1, 0.25)) }, result: "L'equilibrio cercato su " + domain.noun + " convince i moderati, con un impatto più contenuto." },
-        { label: "CONTRO — Assumi una posizione critica e di rottura", hint: "Posizione CONTRO netta, isola il partito a livello internazionale", effects: { reputazione: rand(-2, 1), iscritti: rand(5, 15), national: reformMetricEffect(domain.metric, -rand(0.2, 0.4)) }, result: "La rottura su " + domain.noun + " scontenta i partner internazionali, ma premia chi in patria voleva un segnale netto." },
-        { label: "NEUTRALE — Non prendere posizione, resta ai margini del dibattito", hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.5, 1.5) }, result: "L'assenza di posizione su " + domain.noun + " passa quasi inosservata all'estero, ma qualcuno in patria la nota." }
-      ]
+      brief: "Il partito è chiamato a prendere posizione su " + domain.noun + ": da un lato " + domain.proStance + ", dall'altro " + domain.controStance + ". L'impatto reale dipende dai tuoi seggi (Camera, Senato ed Europarlamento) e da quanto è grande il tuo partito." + weightNote,
+      choices: buildStanceChoices(domain, "la scena internazionale")
     };
   }
   function renderGeopolitica() {
@@ -4287,7 +4480,8 @@
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, candidatePools: {},
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {},
-    fundraisingCooldowns: {}
+    fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
+    campaignCooldowns: {}
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -5420,6 +5614,112 @@
     return applyChoice(dossier, choice);
   }
 
+  // ---------- Campagna Elettorale: attività disponibili solo nelle ultime settimane prima del voto
+  // politico nazionale, in aggiunta agli eventi di partito ordinari. Sia attività generali sia una
+  // "promessa elettorale" specifica per l'ideologia del partito, pescata dallo stesso motore
+  // combinatorio di FAMILY_ANGLE_NOUNS già usato per situazioni/referendum/mozioni. ----------
+  var CAMPAIGN_WINDOW_WEEKS = 10;
+  function weeksToNationalElection() {
+    if (!state.nextElectionTurn) return Infinity;
+    return state.nextElectionTurn - state.turn;
+  }
+  function inNationalCampaignWindow() {
+    var w = weeksToNationalElection();
+    return w >= 0 && w <= CAMPAIGN_WINDOW_WEEKS;
+  }
+  var CAMPAIGN_ACTIVITIES = {
+    comizio_chiusura: { label: "Comizio di chiusura campagna", cost: 1000, cooldown: 3,
+      desc: "Il grande comizio nella tua città di riferimento, nel pieno della campagna elettorale." },
+    porta_a_porta: { label: "Porta a porta nei quartieri", cost: 400, cooldown: 2,
+      desc: "I militanti bussano casa per casa per convincere gli indecisi, quartiere per quartiere." },
+    spot_elettorale: { label: "Spot elettorale in TV", cost: 1800, cooldown: 3,
+      desc: "Uno spot elettorale nella fascia di massimo ascolto, nei giorni caldi della campagna." },
+    dibattito_tv: { label: "Dibattito televisivo con gli avversari", cost: 0, cooldown: 4,
+      desc: "Un confronto diretto in TV con i leader degli altri partiti: alto rischio, alta visibilità." }
+  };
+  function campaignActivityEffects(id) {
+    if (id === "comizio_chiusura") return { iscritti: rand(25, 55), visibilita: rand(4, 8), reputazione: rand(0.5, 2) };
+    if (id === "porta_a_porta") return { iscritti: rand(15, 35), reputazione: rand(0.5, 1.5) };
+    if (id === "spot_elettorale") return { visibilita: rand(8, 15), iscritti: rand(10, 25) };
+    if (id === "dibattito_tv") {
+      var win = Math.random() < 0.55;
+      return win ? { visibilita: rand(6, 12), reputazione: rand(1.5, 4) } : { visibilita: rand(3, 8), reputazione: -rand(1, 3) };
+    }
+    return {};
+  }
+  function campaignActivityFlavor(id) {
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    if (id === "comizio_chiusura") return "Il comizio di chiusura a " + city + " scalda la base militante nel rush finale della campagna.";
+    if (id === "porta_a_porta") return "Il porta a porta a " + city + " e in altre città intercetta gli indecisi con un contatto diretto.";
+    if (id === "spot_elettorale") return "Lo spot elettorale in TV porta il simbolo del partito in milioni di case italiane.";
+    if (id === "dibattito_tv") return "Il dibattito televisivo con gli altri leader tiene incollati gli elettori nella settimana decisiva.";
+    return CAMPAIGN_ACTIVITIES[id].label + " si svolge senza intoppi.";
+  }
+  function resolveCampaignActivity(id) {
+    var a = CAMPAIGN_ACTIVITIES[id];
+    var p = state.player;
+    if (!inNationalCampaignWindow()) return null;
+    if (!p.campaignCooldowns) p.campaignCooldowns = {};
+    if (state.turn < (p.campaignCooldowns[id] || 0)) return null;
+    if (p.fondi < a.cost) return null;
+    p.fondi -= a.cost;
+    p.campaignCooldowns[id] = state.turn + a.cooldown;
+    var dossier = { title: a.label, cat: "Campagna Elettorale" };
+    var choice = { label: a.label, effects: campaignActivityEffects(id), result: campaignActivityFlavor(id) };
+    return applyChoice(dossier, choice);
+  }
+  function campaignPledgeCandidate(p) {
+    var themeIds = FAMILY_SIGNATURE_THEMES[p.family] || [];
+    if (!themeIds.length) return null;
+    var themeId = themeIds[Math.floor(Math.random() * themeIds.length)];
+    var angles = FAMILY_ANGLE_NOUNS[p.family];
+    var nouns = angles && angles[themeId];
+    if (!nouns || !nouns.length) return null;
+    return { noun: nouns[Math.floor(Math.random() * nouns.length)], metric: THEME_TO_NATIONAL_METRIC[themeId] };
+  }
+  function resolveCampaignPledge() {
+    var p = state.player;
+    if (!inNationalCampaignWindow()) return null;
+    if (!p.campaignCooldowns) p.campaignCooldowns = {};
+    if (state.turn < (p.campaignCooldowns.promessa || 0)) return null;
+    var candidate = campaignPledgeCandidate(p);
+    if (!candidate) return null;
+    p.campaignCooldowns.promessa = state.turn + 3;
+    var dossier = { title: "Promessa elettorale su " + candidate.noun, cat: "Campagna Elettorale" };
+    var choice = {
+      label: "Promessa elettorale su " + candidate.noun,
+      effects: { iscritti: rand(20, 45), reputazione: rand(1, 3), visibilita: rand(3, 7) },
+      result: "La promessa elettorale su " + candidate.noun + ", nel cuore della linea del partito, mobilita la base nel finale di campagna."
+    };
+    return applyChoice(dossier, choice);
+  }
+  function renderCampaignPanel() {
+    var p = state.player;
+    if (!p || !inNationalCampaignWindow()) return "";
+    if (!p.campaignCooldowns) p.campaignCooldowns = {};
+    var w = weeksToNationalElection();
+    var html = '<section aria-label="Campagna Elettorale"><details class="log" open><summary>Campagna Elettorale — mancano ' + w + " settiman" + (w === 1 ? "a" : "e") + '<span>▾</span></summary>' +
+      '<p class="ci-hint">Le elezioni politiche sono vicine: puoi organizzare iniziative di campagna, generali o legate alla linea del partito, oltre agli eventi di partito ordinari.</p><div class="option-grid">';
+    Object.keys(CAMPAIGN_ACTIVITIES).forEach(function (id) {
+      var a = CAMPAIGN_ACTIVITIES[id];
+      var cd = p.campaignCooldowns[id] || 0;
+      var weeksLeft = cd - state.turn;
+      var disabled = weeksLeft > 0 || p.fondi < a.cost;
+      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+        : p.fondi < a.cost ? "Fondi insufficienti (" + fmtEuro(a.cost) + ")" : (a.cost ? "Costo: " + fmtEuro(a.cost) : "Nessun costo");
+      html += '<button type="button" class="option-card" data-campaign-activity="' + id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
+    });
+    var pledgeCd = p.campaignCooldowns.promessa || 0;
+    var pledgeWeeksLeft = pledgeCd - state.turn;
+    var pledgeDisabled = pledgeWeeksLeft > 0;
+    var pledgeStatus = pledgeWeeksLeft > 0 ? "Disponibile tra " + pledgeWeeksLeft + " settiman" + (pledgeWeeksLeft === 1 ? "a" : "e") : "Nessun costo — legata alla linea del partito";
+    html += '<button type="button" class="option-card" data-campaign-pledge="1"' + (pledgeDisabled ? " disabled" : "") + '>' +
+      '<span class="olabel">Promessa elettorale sul tuo tema</span><span class="odesc">Una promessa specifica, coerente con la linea del partito. ' + pledgeStatus + '</span></button>';
+    html += "</div></details></section>";
+    return html;
+  }
+
   // ---------- Raccolta Fondi: scheda dedicata solo ai modi per far entrare risorse, separata dagli
   // eventi generici di partito — ognuno utilizzabile una volta ogni tot settimane (cooldown proprio). ----------
   var FUNDRAISING_ACTIONS = {
@@ -6007,7 +6307,7 @@
       }
     } else {
       html += '<p class="ci-hint">Nessuna alleanza in corso: puoi invitare un blocco o un singolo partito — QUALSIASI partito, in qualsiasi momento. L\'invito può essere accettato o rifiutato, non è mai automatico.</p><div class="option-grid">';
-      [["centrodestra", "Centrodestra", "FdI, Lega, Forza Italia"], ["campolargo", "Campo Largo", "PD, AVS"]].forEach(function (b) {
+      [["centrodestra", "Centrodestra", "FdI, Lega, Forza Italia"], ["campolargo", "Campo Largo", "PD, AVS, M5S"]].forEach(function (b) {
         var cd = p.coalitionInviteCooldowns[b[0]] || 0;
         var weeksLeft = cd - state.turn;
         var disabled = weeksLeft > 0;
@@ -6260,6 +6560,7 @@
       if (lastLog.title === "Elezioni Europee") return "gt-eu-election";
       if (lastLog.title && (lastLog.title.indexOf("Elezioni Com") === 0 || lastLog.title.indexOf("Elezioni Prov") === 0 || lastLog.title.indexOf("Elezioni Reg") === 0)) return "gt-election";
     }
+    if (inNationalCampaignWindow()) return "gt-national-campaign";
     var dossier = null;
     if (state.phase === "building") {
       try { dossier = currentDossier(); } catch (e) { dossier = null; }
@@ -6350,11 +6651,13 @@
     body += renderPollGrid(state.prevSnapshot);
     body += renderNationalStrip();
     body += renderPartyEvents();
+    body += renderCampaignPanel();
     body += renderFundraisingPanel();
     body += renderGovernmentReforms();
     body += renderEuInitiatives();
     body += renderGeopolitica();
     body += renderReferendumProposal();
+    body += renderMozioniPanel();
     body += renderReunificationPanel();
     body += renderCoalitionPanel();
     body += renderParliament();
@@ -6581,6 +6884,25 @@
         render();
       });
     });
+    app.querySelectorAll("[data-campaign-activity]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-campaign-activity");
+        var res = resolveCampaignActivity(id);
+        if (!res) { showSaveStatus("Non puoi ancora organizzare questa iniziativa di campagna (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-campaign-pledge]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var res = resolveCampaignPledge();
+        if (!res) { showSaveStatus("Non puoi ancora presentare una nuova promessa elettorale (tempo di recupero).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
     app.querySelectorAll("[data-invite-bloc]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-invite-bloc");
@@ -6682,6 +7004,26 @@
         var res = proposeReferendum(topic);
         if (!res) { showSaveStatus("Non puoi ancora proporre un referendum (fondi, tempo di recupero o raccolta firme già in corso).", true); return; }
         showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-propose-mozione]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-propose-mozione"), 10);
+        var p = state.player;
+        var topic = p.mozioneCandidates && p.mozioneCandidates[idx];
+        if (!topic) return;
+        var res = proposeMozione(topic);
+        if (!res) { showSaveStatus("Non puoi ancora presentare una mozione (tempo di recupero o mozione già in corso).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-reroll-mozione]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.player.mozioneCandidates = generateMozioneCandidates(state.player);
         save();
         render();
       });
@@ -6871,6 +7213,14 @@
     var proposedReferendumDossier = resolvePendingReferendumIfDue();
     if (proposedReferendumDossier) {
       state.aiDynamicDossier = proposedReferendumDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var mozioneDossier = resolveMozioneIfDue();
+    if (mozioneDossier) {
+      state.aiDynamicDossier = mozioneDossier;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
