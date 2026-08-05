@@ -1411,7 +1411,7 @@
     var onCooldown = sectionCooldown > 0;
     var disabledSola = p.fondi < LOCAL_SECTION_OPEN_COST || onCooldown;
     var html = '<section aria-label="Apri una Sezione Locale"><p class="eyebrow">Apri una Sezione Locale</p>' +
-      '<p class="ci-hint">Scegli tu dove radicare il partito sul territorio, oltre ai soli grandi capoluoghi. Si può aprire una sola sezione o lista a settimana. Le sezioni contano soprattutto sul territorio (elezioni comunali, provinciali e regionali): sui sondaggi nazionali pesano pochissimo, un piccolo bonus una tantum ogni 10 sezioni aperte in tutto.' +
+      '<p class="ci-hint">Scegli tu dove radicare il partito sul territorio, oltre ai soli grandi capoluoghi. Si può aprire una sola sezione o lista a settimana: il radicamento territoriale aiuta anche i sondaggi nazionali, ma in modo contenuto e graduale, mai con balzi improvvisi.' +
       (onCooldown ? " Hai già aperto una sezione questa settimana: la prossima sarà disponibile tra " + sectionCooldown + " settiman" + (sectionCooldown === 1 ? "a" : "e") + "." : "") +
       '</p>' +
       '<select id="local-section-select" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;margin-bottom:.6rem;">' + options + '</select>' +
@@ -4851,8 +4851,7 @@
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
-    sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0,
-    sezioniTierCredited: 0
+    sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -5207,14 +5206,16 @@
     // reputazione è bassa/media, ma sale verso 1 (nessuna penalità) quando il giocatore costruisce davvero
     // credibilità: difficile, non impossibile, esattamente come richiesto.
     var nicheMult = NICHE_FAMILIES[p.family] ? clamp(0.32 + p.reputazione / 130, 0.32, 1) : 1;
-    // Le sezioni locali (vedi openLocalSection) sono presidio organizzativo e da campagna elettorale sul
-    // TERRITORIO (contano per le elezioni comunali/provinciali/regionali, vedi triggerLocalElectionCycle),
-    // non un moltiplicatore continuo di consenso nazionale: per questo il loro numero non entra più in
-    // questa formula settimanale. Il loro (piccolo) effetto sui sondaggi nazionali è invece un bonus
-    // fisso una tantum ogni 10 sezioni aperte, applicato più sotto insieme al resto della crescita
-    // settimanale (vedi sezioniTierCredited), non un peso che si accumula settimana dopo settimana.
+    // Le sezioni locali (vedi openLocalSection) contano soprattutto sul TERRITORIO (elezioni
+    // comunali/provinciali/regionali, vedi triggerLocalElectionCycle), ma un radicamento reale deve
+    // ancora contribuire, in modo contenuto, anche alla crescita organica nazionale — toglierlo del
+    // tutto lasciava i sondaggi piatti o in calo anche per un partito che si sta davvero espandendo sul
+    // territorio. Il vero problema non era il peso delle sezioni in sé, ma poterne aprire decine tutte
+    // nella stessa settimana (vedi il limite di una sezione a settimana in openLocalSection): con
+    // quel limite, un coefficiente moderato (0.1, meno della metà di quello originale) non può più
+    // produrre balzi innaturali, solo una crescita lenta e proporzionata al radicamento reale.
     var organicTarget = clamp(
-      (0.12 + Math.sqrt(p.iscritti) * 0.028 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.02) * style.growthMult * repCeiling * nicheMult,
+      (0.12 + Math.sqrt(p.iscritti) * 0.028 + p.sezioni * 0.1 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.02) * style.growthMult * repCeiling * nicheMult,
       0, 40
     );
     // La formula organica sopra è tarata su un partito che parte da zero e cresce sul campo: usata da
@@ -5227,16 +5228,6 @@
       ? clamp(organicTarget * 0.35 + p.baselineSondaggi * 0.65, 0, 40)
       : organicTarget;
     p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.15 + (Math.random() - 0.5) * 0.45, 0, 40);
-    // Bonus fisso una tantum sui sondaggi nazionali per il radicamento territoriale: +0.1% ogni 10
-    // sezioni locali aperte in tutto, applicato UNA SOLA VOLTA quando si raggiunge ogni nuova decina (non
-    // ogni settimana), per tenere l'effetto delle sezioni sui sondaggi davvero minimo. sezioniTierCredited
-    // ricorda fino a che decina si è già stati premiati, quindi funziona sia per le nuove sezioni aperte
-    // sia, una tantum, per i salvataggi precedenti a questa regola che ne avevano già aperte molte.
-    var sezioniTier = Math.floor((p.sezioni || 0) / 10);
-    if (sezioniTier > (p.sezioniTierCredited || 0)) {
-      p.sondaggi = clamp(p.sondaggi + 0.1 * (sezioniTier - (p.sezioniTierCredited || 0)), 0, 40);
-      p.sezioniTierCredited = sezioniTier;
-    }
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
 
