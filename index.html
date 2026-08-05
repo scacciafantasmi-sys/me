@@ -4839,7 +4839,6 @@
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
-    membershipLevels: { base: 1, attivo: 1, socio: 1 }, membershipCampaignOpenedYear: null,
     sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
@@ -5170,11 +5169,8 @@
     var commDigSkill = commDigMember ? (commDigMember.skillMult !== undefined ? commDigMember.skillMult : 1) : 0;
     p.visibilita = p.visibilita * (0.82 + 0.06 * commDigSkill);
 
-    // quote di tesseramento: entrata settimanale proporzionale agli iscritti e al prezzo scelto per le
-    // tre fasce (vedi membershipWeightedAnnualPrice), con un bonus se la campagna di gennaio è aperta
-    var membershipCampaignOn = isMembershipCampaignActive(p, state.turn);
-    var membershipWeeklyRevenuePerMember = membershipWeightedAnnualPrice(p) / 52;
-    p.fondi += p.iscritti * membershipWeeklyRevenuePerMember * (membershipCampaignOn ? 1.3 : 1) * staffBonus("tesoriere", 0.1);
+    // quote di tesseramento: entrata settimanale proporzionale agli iscritti
+    p.fondi += p.iscritti * 0.55 * staffBonus("tesoriere", 0.1);
     // spese fisse settimanali: affitti, utenze, personale delle sezioni
     if (p.sezioni > 0) p.fondi -= p.sezioni * 65 * staffDamp("tesoriere", 0.2);
     // stipendi settimanali della direzione nazionale
@@ -5214,18 +5210,6 @@
     p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.15 + (Math.random() - 0.5) * 0.45, 0, 40);
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
-
-    // Tesserati: la base associativa reale tende verso la soglia realistica legata al consenso attuale
-    // (vedi ISCRITTI_TARGET_POINTS), modulata dal prezzo delle tessere, dalla reputazione e da
-    // un'eventuale campagna di tesseramento nazionale aperta a gennaio. Se il partito è già sopra la
-    // soglia realistica (es. dopo un forte bonus da una scelta), l'assestamento verso il basso è più
-    // lento e non dipende dal prezzo scelto.
-    var iscrittiTarget = iscrittiTargetForSondaggi(p.sondaggi);
-    var iscrittiGap = iscrittiTarget - p.iscritti;
-    var iscrittiDelta = iscrittiGap > 0
-      ? iscrittiGap * 0.04 * membershipVolumeMultiplier(p) * repCeiling * (membershipCampaignOn ? 2.5 : 1)
-      : iscrittiGap * 0.02;
-    p.iscritti = Math.max(50, p.iscritti + iscrittiDelta);
 
     // established parties: random walk, then renormalize so total + player + indecisi = 100,
     // pulling disproportionately from the player's ideological rival. L'ampiezza del movimento
@@ -6147,99 +6131,6 @@
     return html;
   }
 
-  // ---------- Tesseramento: iscritti realistici legati ai sondaggi + prezzo delle tessere ----------
-  // La base associativa reale di un partito segue linee guida realistiche legate al consenso elettorale
-  // (vedi ISCRITTI_TARGET_POINTS): un partito all'1-3% ha qualche migliaio di iscritti, uno al 30-40% ne
-  // ha centinaia di migliaia. Il numero tende verso quella soglia settimana dopo settimana (vedi
-  // recomputePeriodic), modulato dal prezzo scelto per le tre fasce di tesseramento, dalla reputazione e
-  // da un'eventuale campagna di tesseramento nazionale aperta a gennaio.
-  var ISCRITTI_TARGET_POINTS = [
-    { s: 0, i: 500 }, { s: 0.5, i: 2000 }, { s: 1, i: 3000 }, { s: 3, i: 15000 },
-    { s: 5, i: 20000 }, { s: 10, i: 50000 }, { s: 15, i: 80000 }, { s: 20, i: 150000 },
-    { s: 30, i: 200000 }, { s: 40, i: 320000 }
-  ];
-  function iscrittiTargetForSondaggi(sondaggi) {
-    var s = clamp(sondaggi, 0, 40);
-    var pts = ISCRITTI_TARGET_POINTS;
-    if (s <= pts[0].s) return pts[0].i;
-    for (var i = 1; i < pts.length; i++) {
-      if (s <= pts[i].s) {
-        var a = pts[i - 1], b = pts[i];
-        var t = (s - a.s) / (b.s - a.s);
-        return Math.exp(Math.log(a.i) + (Math.log(b.i) - Math.log(a.i)) * t);
-      }
-    }
-    return pts[pts.length - 1].i;
-  }
-  var MEMBERSHIP_PRICE_LEVELS = {
-    base: [
-      { price: 5, label: "5€ — simbolico" }, { price: 15, label: "15€ — popolare" },
-      { price: 25, label: "25€ — standard" }, { price: 40, label: "40€ — sostenuto" }
-    ],
-    attivo: [
-      { price: 15, label: "15€ — popolare" }, { price: 35, label: "35€ — standard" },
-      { price: 55, label: "55€ — sostenuto" }, { price: 85, label: "85€ — alto" }
-    ],
-    socio: [
-      { price: 40, label: "40€ — popolare" }, { price: 90, label: "90€ — standard" },
-      { price: 160, label: "160€ — sostenuto" }, { price: 260, label: "260€ — alto" }
-    ]
-  };
-  var MEMBERSHIP_TIER_LABELS = { base: "Tesserato Base", attivo: "Tesserato Attivo", socio: "Tessera Socio" };
-  var MEMBERSHIP_TIER_WEIGHTS = { base: 0.65, attivo: 0.25, socio: 0.10 };
-  var MEMBERSHIP_BASELINE_ANNUAL_PRICE = 27.5;
-  function membershipTierPrice(p, tier) {
-    var idx = p.membershipLevels && p.membershipLevels[tier] !== undefined ? p.membershipLevels[tier] : 1;
-    var levels = MEMBERSHIP_PRICE_LEVELS[tier];
-    return levels[clamp(idx, 0, levels.length - 1)].price;
-  }
-  function membershipWeightedAnnualPrice(p) {
-    return MEMBERSHIP_TIER_WEIGHTS.base * membershipTierPrice(p, "base")
-      + MEMBERSHIP_TIER_WEIGHTS.attivo * membershipTierPrice(p, "attivo")
-      + MEMBERSHIP_TIER_WEIGHTS.socio * membershipTierPrice(p, "socio");
-  }
-  // Prezzi intorno al riferimento (~27.5€/anno pesati) danno un moltiplicatore ~1: più cari scoraggiano
-  // le adesioni, più economici le favoriscono, entro un limite ragionevole.
-  function membershipVolumeMultiplier(p) {
-    var ratio = membershipWeightedAnnualPrice(p) / MEMBERSHIP_BASELINE_ANNUAL_PRICE;
-    return clamp(1.6 - ratio * 0.6, 0.45, 1.6);
-  }
-  function turnDate(turn) {
-    var start = new Date(2026, 6, 20); // stessa data di riferimento di weekLabel: 20 luglio 2026 = settimana 1
-    return new Date(start.getTime() + (turn - 1) * 7 * 86400000);
-  }
-  function isMembershipCampaignActive(p, turn) {
-    var d = turnDate(turn);
-    return d.getMonth() === 0 && p.membershipCampaignOpenedYear === d.getFullYear();
-  }
-  function renderMembershipPanel() {
-    var p = state.player;
-    if (!p) return "";
-    if (!p.membershipLevels) p.membershipLevels = { base: 1, attivo: 1, socio: 1 };
-    var d = turnDate(state.turn);
-    var isJan = d.getMonth() === 0;
-    var campaignOn = isMembershipCampaignActive(p, state.turn);
-    var html = '<section aria-label="Tesseramento"><details class="log"><summary>Tesseramento<span>▾</span></summary>' +
-      '<p class="ci-hint">Circa ' + Math.round(p.iscritti).toLocaleString("it-IT") + ' iscritti oggi, un numero che nel tempo tende verso ciò che è realistico per il tuo livello di consenso. Scegli il prezzo delle tre fasce di tesseramento: prezzi più alti portano più entrate a testa ma scoraggiano le adesioni, prezzi più bassi portano più iscritti ma meno fondi a testa. Una bassa reputazione riduce comunque le nuove adesioni, qualunque sia il prezzo.</p>';
-    Object.keys(MEMBERSHIP_TIER_LABELS).forEach(function (tier) {
-      html += '<p class="eyebrow">' + MEMBERSHIP_TIER_LABELS[tier] + '</p><div class="option-grid">';
-      MEMBERSHIP_PRICE_LEVELS[tier].forEach(function (level, idx) {
-        var selected = (p.membershipLevels[tier] || 0) === idx;
-        html += '<button type="button" class="option-card' + (selected ? " selected" : "") + '" data-membership-price="' + tier + ":" + idx + '"><span class="olabel">' + level.label + "</span></button>";
-      });
-      html += "</div>";
-    });
-    if (campaignOn) {
-      html += '<p class="ci-hint"><strong>Campagna di tesseramento nazionale aperta:</strong> per tutto gennaio, più iscritti e più fondi in entrata.</p>';
-    } else if (isJan) {
-      html += '<div class="option-grid"><button type="button" class="option-card" data-open-membership-campaign="1"><span class="olabel">Apri la Campagna di Tesseramento Nazionale</span><span class="odesc">Disponibile solo a gennaio: per tutto il mese, più iscritti e più fondi in entrata</span></button></div>';
-    } else {
-      html += '<p class="ci-hint">La campagna di tesseramento nazionale si potrà aprire a gennaio.</p>';
-    }
-    html += "</details></section>";
-    return html;
-  }
-
   // ---------- Raccolta Fondi: scheda dedicata solo ai modi per far entrare risorse, separata dagli
   // eventi generici di partito — ognuno utilizzabile una volta ogni tot settimane (cooldown proprio). ----------
   var FUNDRAISING_ACTIONS = {
@@ -7105,7 +6996,7 @@
   // pagina lunghissima.
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
-        return renderPartyEvents() + renderYouthWingPanel() + renderCampaignPanel() + renderMembershipPanel() + renderFundraisingPanel() + renderStaffPanel() + renderIdeologyProfile();
+        return renderPartyEvents() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderStaffPanel() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
@@ -7514,28 +7405,6 @@
         var res = renameYouthWing(input ? input.value : "");
         if (!res) { showSaveStatus("Inserisci un nome valido.", true); return; }
         showSaveStatus(res.resultText, false);
-        save();
-        render();
-      });
-    });
-    app.querySelectorAll("[data-membership-price]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var parts = btn.getAttribute("data-membership-price").split(":");
-        var tier = parts[0], idx = parseInt(parts[1], 10);
-        var p = state.player;
-        if (!p.membershipLevels) p.membershipLevels = { base: 1, attivo: 1, socio: 1 };
-        p.membershipLevels[tier] = idx;
-        save();
-        render();
-      });
-    });
-    app.querySelectorAll("[data-open-membership-campaign]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var p = state.player;
-        var d = turnDate(state.turn);
-        if (d.getMonth() !== 0) return;
-        p.membershipCampaignOpenedYear = d.getFullYear();
-        showSaveStatus("La campagna di tesseramento nazionale è aperta: per tutto gennaio, più iscritti e più fondi in entrata.", false);
         save();
         render();
       });
