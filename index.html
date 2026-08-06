@@ -4093,19 +4093,20 @@
   }
 
   // ---------- Crisi di governo per contagio ----------
-  // In questo gioco il "governo" è sempre il Centrodestra (vedi resolveElection): se la sua forza
-  // trainante crolla nei sondaggi rispetto al proprio massimo storico, la crisi non resta isolata — si
-  // riflette anche sugli alleati di coalizione, che condividono le colpe agli occhi dell'elettorato,
-  // partito del giocatore compreso se è alleato con loro in quel momento. Un evento raro e vistoso
-  // (serve un crollo severo, non il solito piccolo aggiustamento settimanale), non una deriva continua.
-  var GOV_CRISIS_COALITION_MEMBERS = ["fdi", "lega", "fi"];
+  // Il "governo" è quello che ha davvero vinto l'ultima elezione (state.govEntity, ricalcolato in
+  // resolveElection): se la sua forza trainante crolla nei sondaggi rispetto al proprio massimo storico,
+  // la crisi non resta isolata — si riflette anche sugli alleati di coalizione, che condividono le colpe
+  // agli occhi dell'elettorato, partito del giocatore compreso se è lui stesso al governo in quel momento.
+  // Un evento raro e vistoso (serve un crollo severo, non il solito piccolo aggiustamento settimanale),
+  // non una deriva continua.
   function triggerGovernmentCrisisContagion() {
     if (!state.partyPeakPolling) state.partyPeakPolling = {};
     var activeIds = activeParties().map(function (party) { return party.id; });
     activeIds.forEach(function (id) {
       state.partyPeakPolling[id] = Math.max(state.partyPeakPolling[id] || 0, state.parties[id] || 0);
     });
-    var members = GOV_CRISIS_COALITION_MEMBERS.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var members = govMemberIds.filter(function (id) { return activeIds.indexOf(id) !== -1; });
     if (members.length < 2) return;
     var leaderId = members.reduce(function (best, id) { return state.parties[id] > state.parties[best] ? id : best; }, members[0]);
     var leaderPeak = state.partyPeakPolling[leaderId] || state.parties[leaderId];
@@ -4120,7 +4121,7 @@
         state.parties[id] = Math.max(0.3, state.parties[id] * (1 - rand(0.15, 0.3)));
       });
       var p = state.player;
-      var playerInGov = p && (p.allianceId === "centrodestra" || p.currentTermAllianceId === "centrodestra");
+      var playerInGov = p && p.parliamentRole === "governo";
       if (playerInGov) p.sondaggi = clamp(p.sondaggi * (1 - rand(0.1, 0.2)), 0, 40);
       var text = leaderName + " crolla nei sondaggi, dimezzandosi rispetto al proprio massimo storico: la crisi di governo travolge tutta la coalizione, alleati compresi" + (playerInGov ? " — partito del giocatore incluso" : "") + ".";
       state.log.unshift({ week: state.turn, title: "Crisi di Governo", choiceLabel: leaderName, result: text, headlines: [], type: "cronaca" });
@@ -4204,15 +4205,17 @@
   }
   // Quando il Governo cade "di sorpresa" (non per un referendum del giocatore, vedi sopra), la crisi
   // travolge l'intera maggioranza con proporzioni precise: il partito guida della coalizione di governo
-  // (vedi GOV_CRISIS_COALITION_MEMBERS) perde metà dei consensi ai sondaggi, tutti gli altri alleati un
-  // terzo. Il giocatore entra nel confronto come un membro in più se è lui stesso al governo: se risulta
-  // essere il partito col consenso più alto (il "leader" della coalizione) subisce lo stesso taglio a metà
-  // più la crisi di leadership interna (con possibile perdita della guida al posto della successione
-  // forzata su un partito CPU); se è solo un alleato minore, perde comunque un terzo come tutti gli altri.
+  // (quella che ha davvero vinto l'ultima elezione, state.govEntity) perde metà dei consensi ai sondaggi,
+  // tutti gli altri alleati un terzo. Il giocatore entra nel confronto come un membro in più se è lui
+  // stesso al governo: se risulta essere il partito col consenso più alto (il "leader" della coalizione)
+  // subisce lo stesso taglio a metà più la crisi di leadership interna (con possibile perdita della guida
+  // al posto della successione forzata su un partito CPU); se è solo un alleato minore, perde comunque un
+  // terzo come tutti gli altri.
   function applyGovernmentCollapseLeadershipShock() {
     var p = state.player;
     var activeIds = activeParties().map(function (party) { return party.id; });
-    var members = GOV_CRISIS_COALITION_MEMBERS.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var members = govMemberIds.filter(function (id) { return activeIds.indexOf(id) !== -1; });
     var playerInGov = p.parliamentRole === "governo";
     var pollById = {};
     members.forEach(function (id) { pollById[id] = state.parties[id]; });
@@ -5208,7 +5211,8 @@
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
-    passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {}
+    passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {},
+    govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() }
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -5429,9 +5433,10 @@
   }
 
   function projectSeats(total) {
+    var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
     var ids = activeParties().map(function (p) { return p.id; });
     var weights = activeParties().map(function (p) {
-      return state.parties[p.id] * (p.coalition === "governo" ? 1.12 : 0.95);
+      return state.parties[p.id] * (govMemberIds.indexOf(p.id) !== -1 ? 1.12 : 0.95);
     });
     if (state.player) { ids.push("player"); weights.push(state.player.sondaggi); }
     var seatsArr = hamiltonApportion(weights, total);
@@ -6049,6 +6054,7 @@
 
     qualified.forEach(function (e, i) {
       var camTotal = camSeats[i], senTotal = senSeats[i];
+      e.totalSeats = camTotal + senTotal;
       if (e.members.length === 1) {
         seatsById[e.members[0]] = { camera: camTotal, senato: senTotal };
       } else {
@@ -6061,6 +6067,16 @@
       }
     });
 
+    // Il governo è chi ha davvero vinto: l'entità qualificata (coalizione, partito solo, o il giocatore
+    // stesso) con più seggi complessivi tra Camera e Senato, ricalcolata a ogni elezione — mai più fissa
+    // sul Centrodestra a prescindere dal risultato reale.
+    var winner = qualified.length ? qualified.reduce(function (best, e) {
+      return e.totalSeats > best.totalSeats ? e : best;
+    }, qualified[0]) : null;
+    if (winner) {
+      state.govEntity = { id: winner.id, memberIds: winner.members.filter(function (id) { return id !== "player"; }) };
+    }
+
     var playerQualified = p.allianceId
       ? entities.filter(function (e) { return e.id === p.allianceId; })[0].qualifies
       : entities.filter(function (e) { return e.id === "player"; })[0].qualifies;
@@ -6070,7 +6086,8 @@
     p.inParliament = p.seatsCamera > 0 || p.seatsSenato > 0;
     p.everElected = p.everElected || p.inParliament;
     // registrato ora perché allianceId viene azzerato qui sotto in vista del prossimo ciclo elettorale
-    p.parliamentRole = p.inParliament ? (p.allianceId === "centrodestra" ? "governo" : "opposizione") : null;
+    var playerEntityId = p.allianceId || "player";
+    p.parliamentRole = p.inParliament ? (winner && playerEntityId === winner.id ? "governo" : "opposizione") : null;
     // Stesso motivo: senza salvarla qui, l'etichetta di coalizione del partito nell'elenco partiti
     // sparisce subito dopo ogni elezione, anche se il partito resta alleato per l'intera legislatura —
     // mentre gli altri membri di Centrodestra/Campo Largo la mostrano sempre, perché la loro appartenenza
@@ -6999,6 +7016,20 @@
     var dyn = (state.dynamicCoalitions || []).filter(function (c) { return c.id === id; })[0];
     return dyn ? { label: dyn.label, members: dyn.members } : null;
   }
+  // Etichetta del governo in carica, risolta sempre "a caldo" (mai congelata al momento dell'elezione):
+  // così un partito o una coalizione rinominati dopo il voto restano corretti anche nella scritta del
+  // governo. state.govEntity.id può essere l'id di una coalizione (fissa o dinamica), l'id di un partito
+  // che governa da solo, o la stringa "player" se è il giocatore stesso a governare senza alleati.
+  function govEntityLabel() {
+    var ge = state.govEntity;
+    if (!ge) return "";
+    if (ge.id === "player") return state.player ? state.player.name : "";
+    var coal = coalitionById(ge.id);
+    if (coal) return coal.label;
+    var party = partyById(ge.id);
+    if (party) return party.name;
+    return ge.id;
+  }
   // ---------- Fiducia della coalizione ----------
   // Una coalizione tenuta insieme solo per far numero nei sondaggi ("mappazzone") deve essere fragile:
   // parte da una fiducia più bassa se i membri non sono ideologicamente vicini, e si logora settimana
@@ -7472,18 +7503,19 @@
   function renderParliament() {
     var p = state.player;
     var seatsC = projectSeats(400), seatsS = projectSeats(200);
-    var govC = ["fdi", "lega", "fi"].reduce(function (s, id) { return s + seatsC[id]; }, 0);
-    var govS = ["fdi", "lega", "fi"].reduce(function (s, id) { return s + seatsS[id]; }, 0);
+    var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var govC = govMemberIds.reduce(function (s, id) { return s + (seatsC[id] || 0); }, 0);
+    var govS = govMemberIds.reduce(function (s, id) { return s + (seatsS[id] || 0); }, 0);
     var weeksToElection = state.nextElectionTurn - state.turn;
     var html = '<section aria-label="Composizione parlamentare"><details class="log" open><summary>Quadro parlamentare (proiezione se si votasse oggi)<span>▾</span></summary>';
-    var govCoalition = COALITIONS.centrodestra;
-    var govPartyNames = activeParties().filter(function (pt) { return govCoalition.members.indexOf(pt.id) !== -1; }).map(function (pt) { return pt.name; });
+    var govPartyNames = activeParties().filter(function (pt) { return govMemberIds.indexOf(pt.id) !== -1; }).map(function (pt) { return pt.name; });
     var playerInGov = p.parliamentRole === "governo";
-    // Il giocatore può far parte del governo o perché alleato con la coalizione di centrodestra, o perché
-    // ha preso il comando di uno dei suoi partiti (subentrando al suo posto, dissolto dal roster): in
-    // entrambi i casi il suo nome deve comparire nell'elenco dei partiti al governo.
+    // Il giocatore può far parte del governo o perché alleato con la coalizione che ha vinto l'ultima
+    // elezione (state.govEntity, ricalcolato in resolveElection a ogni voto), o perché ha preso il comando
+    // di uno dei suoi partiti (subentrando al suo posto, dissolto dal roster): in entrambi i casi il suo
+    // nome deve comparire nell'elenco dei partiti al governo.
     if (playerInGov && govPartyNames.indexOf(p.name) === -1) govPartyNames.push(p.name);
-    html += '<p class="ci-hint">Governo in carica: <strong>' + govCoalition.label + '</strong>' +
+    html += '<p class="ci-hint">Governo in carica: <strong>' + govEntityLabel() + '</strong>' +
       (govPartyNames.length ? " (" + govPartyNames.join(", ") + ")" : "") +
       (playerInGov ? " — il tuo partito ne fa parte." : ".") + "</p>";
     if (p.inParliament) {
