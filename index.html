@@ -318,6 +318,11 @@
   .logo-upload-row { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; }
   .logo-upload-row .party-logo { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
   .logo-upload-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .party-logo-edit { display: flex; gap: 0.7rem; margin-top: 0.35rem; }
+  .party-logo-edit-link {
+    font-size: 0.74rem; font-weight: 600; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0;
+  }
+  .party-logo-edit-link:hover { text-decoration: underline; }
   .option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.6rem; }
   .rename-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0; }
   .rename-row input[type="text"] {
@@ -5132,7 +5137,7 @@
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
-    passedNationalReferendumIds: [], enactedPolicies: []
+    passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {}
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -7092,8 +7097,13 @@
   function renderPartyDirectory() {
     var p = state.player;
     var fam = familyById(p.family);
+    var logoOverrides = state.partyLogoOverrides || {};
     var rows = activeParties().map(function (pt) {
-      return { name: pt.name, color: pt.color, value: state.parties[pt.id], famiglia: pt.famiglia, corrente: pt.corrente, leader: pt.leader, isPlayer: false, coalitionLabel: coalitionLabelForPartyId(pt.id), motif: PARTY_ICON_MOTIFS[pt.id] };
+      return {
+        id: pt.id, name: pt.name, color: pt.color, value: state.parties[pt.id], famiglia: pt.famiglia, corrente: pt.corrente,
+        leader: pt.leader, isPlayer: false, coalitionLabel: coalitionLabelForPartyId(pt.id), motif: PARTY_ICON_MOTIFS[pt.id],
+        logoDataUrl: logoOverrides[pt.id] || null
+      };
     });
     // p.allianceId riflette la trattativa per la PROSSIMA elezione (viene azzerato subito dopo ogni
     // voto), quindi da solo sparirebbe per l'intera legislatura anche restando alleati: si mostra
@@ -7106,10 +7116,16 @@
     });
     rows.sort(function (a, b) { return b.value - a.value; });
     var html = rows.map(function (r) {
+      var logoEdit = r.isPlayer ? "" :
+        '<div class="party-logo-edit">' +
+        '<label class="party-logo-edit-link" for="party-logo-input-' + r.id + '">' + (r.logoDataUrl ? "Cambia logo" : "Carica un logo") + '</label>' +
+        '<input type="file" id="party-logo-input-' + r.id + '" data-party-logo-input="' + r.id + '" accept="image/*" style="display:none">' +
+        (r.logoDataUrl ? '<button type="button" class="party-logo-edit-link" data-party-logo-remove="' + r.id + '">Rimuovi</button>' : "") +
+        "</div>";
       return '<div class="party-row' + (r.isPlayer ? " player-row" : "") + '">' + partyBadgeHtml(r.name, r.color, r.logoDataUrl, 34, r.motif) +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + (r.isPlayer ? ' <span class="chip accent">Tu</span>' : "") + '</strong><span class="value">' + fmt1(r.value) + '%</span></div>' +
         '<div class="party-row-sub">' + r.famiglia + ' — ' + r.corrente + '<br>Leader: ' + r.leader +
-        (r.coalitionLabel ? '<br><span class="chip">' + r.coalitionLabel + '</span>' : '') + '</div></div></div>';
+        (r.coalitionLabel ? '<br><span class="chip">' + r.coalitionLabel + '</span>' : '') + '</div>' + logoEdit + '</div></div>';
     }).join("");
     return '<section aria-label="Partiti politici"><details class="log">' +
       '<summary>Partiti politici (' + rows.length + ")<span>▾</span></summary>" +
@@ -8312,6 +8328,26 @@
         render();
       });
     }
+    app.querySelectorAll("[data-party-logo-input]").forEach(function (input) {
+      input.addEventListener("change", function () {
+        var partyId = input.getAttribute("data-party-logo-input");
+        var file = input.files && input.files[0];
+        readAndResizeLogo(file, function (dataUrl) {
+          if (!state.partyLogoOverrides) state.partyLogoOverrides = {};
+          state.partyLogoOverrides[partyId] = dataUrl;
+          save();
+          render();
+        });
+      });
+    });
+    app.querySelectorAll("[data-party-logo-remove]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var partyId = btn.getAttribute("data-party-logo-remove");
+        if (state.partyLogoOverrides) delete state.partyLogoOverrides[partyId];
+        save();
+        render();
+      });
+    });
   }
 
   async function advanceTurnLogic() {
