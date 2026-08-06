@@ -4854,7 +4854,8 @@
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
-    sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0
+    sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0,
+    currentTermAllianceId: null
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -5665,6 +5666,12 @@
     p.everElected = p.everElected || p.inParliament;
     // registrato ora perché allianceId viene azzerato qui sotto in vista del prossimo ciclo elettorale
     p.parliamentRole = p.inParliament ? (p.allianceId === "centrodestra" ? "governo" : "opposizione") : null;
+    // Stesso motivo: senza salvarla qui, l'etichetta di coalizione del partito nell'elenco partiti
+    // sparisce subito dopo ogni elezione, anche se il partito resta alleato per l'intera legislatura —
+    // mentre gli altri membri di Centrodestra/Campo Largo la mostrano sempre, perché la loro appartenenza
+    // è statica. currentTermAllianceId tiene traccia dell'alleanza con cui si è corso in QUESTA
+    // legislatura, e viene sovrascritta a ogni nuova elezione (vedi renderPartyDirectory).
+    p.currentTermAllianceId = p.allianceId;
 
     state.electionResults.unshift({
       turn: state.turn, legislature: state.legislature, sondaggi: p.sondaggi,
@@ -6576,10 +6583,14 @@
     var rows = activeParties().map(function (pt) {
       return { name: pt.name, color: pt.color, value: state.parties[pt.id], famiglia: pt.famiglia, corrente: pt.corrente, leader: pt.leader, isPlayer: false, coalitionLabel: coalitionLabelForPartyId(pt.id) };
     });
+    // p.allianceId riflette la trattativa per la PROSSIMA elezione (viene azzerato subito dopo ogni
+    // voto), quindi da solo sparirebbe per l'intera legislatura anche restando alleati: si mostra
+    // l'alleanza attiva se ce n'è una fresca, altrimenti quella con cui si è corso in questa legislatura.
+    var playerCoalitionId = p.allianceId || p.currentTermAllianceId;
     rows.push({
       name: p.name, color: p.color, value: p.sondaggi, isPlayer: true,
       famiglia: fam ? fam.label : "", corrente: (p.ideologyText || (fam ? fam.desc : "")), leader: "Tu",
-      coalitionLabel: p.allianceId ? (coalitionById(p.allianceId) || {}).label || null : null
+      coalitionLabel: playerCoalitionId ? (coalitionById(playerCoalitionId) || {}).label || null : null
     });
     rows.sort(function (a, b) { return b.value - a.value; });
     var html = rows.map(function (r) {
