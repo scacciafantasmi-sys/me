@@ -5205,54 +5205,60 @@
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
   }
+  // Riempie automaticamente ogni campo strutturale mancante in un salvataggio (aggiunto in versioni
+  // successive a quella del salvataggio) con il suo valore di default, più le migrazioni "vere" caso per
+  // caso. Condivisa tra load() (avvio automatico da localStorage) e l'importazione manuale di un file:
+  // un salvataggio vecchio caricato SENZA passare da qui lascerebbe campi nuovi come playerIsLeader
+  // undefined invece che al loro default — e undefined viene letto come "falso" da molti controlli nel
+  // gioco (es. playerIsLeader undefined verrebbe interpretato come "non sei più leader", innescando le
+  // primarie a sorpresa alla primissima settimana giocata dopo l'importazione).
+  function normalizeLoadedState(parsed) {
+    if (!parsed) return parsed;
+    if (parsed.player) normalizeStaff(parsed.player);
+    mergeDefaults(parsed, STATE_FIELD_DEFAULTS);
+    if (!parsed.countryProfile) parsed.countryProfile = freshCountryProfile();
+    else mergeDefaults(parsed.countryProfile, freshCountryProfile());
+    if (parsed.player) mergeDefaults(parsed.player, PLAYER_FIELD_DEFAULTS);
+    // Le seguenti restano migrazioni "vere" (trasformano dati esistenti, non solo completano campi
+    // assenti) e vanno mantenute a mano caso per caso.
+    if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
+    if (!parsed.nextEuropeanElectionTurn) parsed.nextEuropeanElectionTurn = parsed.turn + 40;
+    if (!parsed.nextReferendumTurn) parsed.nextReferendumTurn = parsed.turn + 90 + Math.floor(Math.random() * 60);
+    if (!parsed.nextTrendCheckTurn) parsed.nextTrendCheckTurn = parsed.turn + 45 + Math.floor(Math.random() * 25);
+    // Unione Popolare è stata sostituita da Potere al Popolo: le vecchie partite salvate hanno
+    // ancora la chiave "unionepopolare" nei sondaggi e possibilmente tra i rivali/scissioni.
+    if (parsed.parties && parsed.parties.unionepopolare !== undefined && parsed.parties.poterealpopolo === undefined) {
+      parsed.parties.poterealpopolo = parsed.parties.unionepopolare;
+      delete parsed.parties.unionepopolare;
+    }
+    if (parsed.dissolvedPartyIds) {
+      parsed.dissolvedPartyIds = parsed.dissolvedPartyIds.map(function (id) { return id === "unionepopolare" ? "poterealpopolo" : id; });
+    }
+    if (parsed.partyArcs && parsed.partyArcs.unionepopolare && !parsed.partyArcs.poterealpopolo) {
+      parsed.partyArcs.poterealpopolo = parsed.partyArcs.unionepopolare;
+      delete parsed.partyArcs.unionepopolare;
+    }
+    // Due nuovi partiti aggiunti al roster: le vecchie partite salvate non hanno ancora la loro voce.
+    if (parsed.parties) {
+      if (parsed.parties.liberaldemocratico === undefined) parsed.parties.liberaldemocratico = 0.9;
+      if (parsed.parties.ora === undefined) parsed.parties.ora = 0.7;
+    }
+    if (parsed.player) {
+      if (parsed.player.currents && parsed.player.currents.length && !parsed.player.currents[0].id) {
+        var legacyCorrentiOptions = CORRENTI_BY_FAMILY[parsed.player.family] || CORRENTI_BY_FAMILY.sovranista;
+        parsed.player.currents.forEach(function (c, i) { c.id = legacyCorrentiOptions[i] ? legacyCorrentiOptions[i].id : legacyCorrentiOptions[0].id; });
+      }
+      if (parsed.player.seggiEuropei > 0 && !parsed.player.euGroup && !parsed.euGroupPending) parsed.euGroupPending = true;
+      if (!parsed.partyRelations) parsed.partyRelations = initPartyRelations(parsed.player);
+    }
+    return parsed;
+  }
   function load() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
       var parsed = JSON.parse(raw);
-      if (parsed && parsed.player) normalizeStaff(parsed.player);
-      if (parsed) {
-        // Riempie automaticamente ogni campo strutturale mancante (aggiunto in versioni successive a
-        // quella del salvataggio) con il suo valore di default — una sola volta, qui, invece di righe di
-        // migrazione scritte a mano per ogni singolo campo nuovo che si aggiunge in futuro.
-        mergeDefaults(parsed, STATE_FIELD_DEFAULTS);
-        if (!parsed.countryProfile) parsed.countryProfile = freshCountryProfile();
-        else mergeDefaults(parsed.countryProfile, freshCountryProfile());
-        if (parsed.player) mergeDefaults(parsed.player, PLAYER_FIELD_DEFAULTS);
-        // Le seguenti restano migrazioni "vere" (trasformano dati esistenti, non solo completano campi
-        // assenti) e vanno mantenute a mano caso per caso.
-        if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
-        if (!parsed.nextEuropeanElectionTurn) parsed.nextEuropeanElectionTurn = parsed.turn + 40;
-        if (!parsed.nextReferendumTurn) parsed.nextReferendumTurn = parsed.turn + 90 + Math.floor(Math.random() * 60);
-        if (!parsed.nextTrendCheckTurn) parsed.nextTrendCheckTurn = parsed.turn + 45 + Math.floor(Math.random() * 25);
-        // Unione Popolare è stata sostituita da Potere al Popolo: le vecchie partite salvate hanno
-        // ancora la chiave "unionepopolare" nei sondaggi e possibilmente tra i rivali/scissioni.
-        if (parsed.parties && parsed.parties.unionepopolare !== undefined && parsed.parties.poterealpopolo === undefined) {
-          parsed.parties.poterealpopolo = parsed.parties.unionepopolare;
-          delete parsed.parties.unionepopolare;
-        }
-        if (parsed.dissolvedPartyIds) {
-          parsed.dissolvedPartyIds = parsed.dissolvedPartyIds.map(function (id) { return id === "unionepopolare" ? "poterealpopolo" : id; });
-        }
-        if (parsed.partyArcs && parsed.partyArcs.unionepopolare && !parsed.partyArcs.poterealpopolo) {
-          parsed.partyArcs.poterealpopolo = parsed.partyArcs.unionepopolare;
-          delete parsed.partyArcs.unionepopolare;
-        }
-        // Due nuovi partiti aggiunti al roster: le vecchie partite salvate non hanno ancora la loro voce.
-        if (parsed.parties) {
-          if (parsed.parties.liberaldemocratico === undefined) parsed.parties.liberaldemocratico = 0.9;
-          if (parsed.parties.ora === undefined) parsed.parties.ora = 0.7;
-        }
-        if (parsed.player) {
-          if (parsed.player.currents && parsed.player.currents.length && !parsed.player.currents[0].id) {
-            var legacyCorrentiOptions = CORRENTI_BY_FAMILY[parsed.player.family] || CORRENTI_BY_FAMILY.sovranista;
-            parsed.player.currents.forEach(function (c, i) { c.id = legacyCorrentiOptions[i] ? legacyCorrentiOptions[i].id : legacyCorrentiOptions[0].id; });
-          }
-          if (parsed.player.seggiEuropei > 0 && !parsed.player.euGroup && !parsed.euGroupPending) parsed.euGroupPending = true;
-          if (!parsed.partyRelations) parsed.partyRelations = initPartyRelations(parsed.player);
-        }
-      }
-      return parsed;
+      return normalizeLoadedState(parsed);
     } catch (e) { return null; }
   }
 
@@ -8624,8 +8630,7 @@
         if (!parsed || typeof parsed !== "object" || !parsed.player || !parsed.parties || typeof parsed.turn !== "number") {
           throw new Error("invalid");
         }
-        normalizeStaff(parsed.player);
-        state = parsed;
+        state = normalizeLoadedState(parsed);
         save();
         render();
         showSaveStatus("Partita importata correttamente.");
