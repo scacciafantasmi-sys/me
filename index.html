@@ -4203,31 +4203,42 @@
     state.resultData = { resultText: resultText, headlines: [] };
   }
   // Quando il Governo cade "di sorpresa" (non per un referendum del giocatore, vedi sopra), la crisi
-  // travolge l'intera maggioranza, non solo il suo partito guida: ogni componente della coalizione di
-  // governo (vedi GOV_CRISIS_COALITION_MEMBERS) perde una quota di consenso. In più, la crisi di leadership
-  // scatta: sul giocatore se è lui al governo, altrimenti su chi guida davvero la coalizione in quel
-  // momento — con una successione interna forzata, invece della rara probabilità settimanale di
-  // triggerLeaderSuccession().
+  // travolge l'intera maggioranza con proporzioni precise: il partito guida della coalizione di governo
+  // (vedi GOV_CRISIS_COALITION_MEMBERS) perde metà dei consensi ai sondaggi, tutti gli altri alleati un
+  // terzo. Il giocatore entra nel confronto come un membro in più se è lui stesso al governo: se risulta
+  // essere il partito col consenso più alto (il "leader" della coalizione) subisce lo stesso taglio a metà
+  // più la crisi di leadership interna (con possibile perdita della guida al posto della successione
+  // forzata su un partito CPU); se è solo un alleato minore, perde comunque un terzo come tutti gli altri.
   function applyGovernmentCollapseLeadershipShock() {
     var p = state.player;
     var activeIds = activeParties().map(function (party) { return party.id; });
     var members = GOV_CRISIS_COALITION_MEMBERS.filter(function (id) { return activeIds.indexOf(id) !== -1; });
-    members.forEach(function (id) { state.parties[id] = Math.max(0.3, state.parties[id] * (1 - rand(0.08, 0.18))); });
-    if (p.parliamentRole === "governo") {
+    var playerInGov = p.parliamentRole === "governo";
+    var pollById = {};
+    members.forEach(function (id) { pollById[id] = state.parties[id]; });
+    if (playerInGov) pollById.player = p.sondaggi;
+    var ids = Object.keys(pollById);
+    if (!ids.length) return;
+    var leaderId = ids.reduce(function (best, id) { return pollById[id] > pollById[best] ? id : best; }, ids[0]);
+    ids.forEach(function (id) {
+      var factor = id === leaderId ? 0.5 : (2 / 3);
+      if (id === "player") p.sondaggi = clamp(p.sondaggi * factor, 0, 40);
+      else state.parties[id] = Math.max(0.3, state.parties[id] * factor);
+    });
+    if (leaderId === "player") {
       p.leaderTrust = clamp((p.leaderTrust === undefined || p.leaderTrust === null ? 65 : p.leaderTrust) - rand(30, 45), 0, 100);
-      p.sondaggi = clamp(p.sondaggi * (1 - rand(0.08, 0.18)), 0, 40);
       return;
     }
-    if (members.length < 2) return;
-    var govId = members.reduce(function (best, id) { return state.parties[id] > state.parties[best] ? id : best; }, members[0]);
-    var govParty = partyById(govId);
+    var govParty = partyById(leaderId);
     if (!govParty) return;
     var newLeader = generateStaffName();
-    var oldLeader = state.partyLeaderOverrides && state.partyLeaderOverrides[govId] ? state.partyLeaderOverrides[govId] : govParty.leader;
+    var oldLeader = state.partyLeaderOverrides && state.partyLeaderOverrides[leaderId] ? state.partyLeaderOverrides[leaderId] : govParty.leader;
     if (!state.partyLeaderOverrides) state.partyLeaderOverrides = {};
-    state.partyLeaderOverrides[govId] = newLeader;
-    state.parties[govId] = Math.max(0.3, state.parties[govId] - rand(0.5, 2));
-    var text = "La caduta improvvisa del Governo travolge tutta la maggioranza, a partire dalla leadership di " + govParty.name + ": primarie interne lampo portano " + newLeader + " alla guida del partito, al posto di " + oldLeader + ".";
+    state.partyLeaderOverrides[leaderId] = newLeader;
+    var otherCount = ids.filter(function (id) { return id !== leaderId; }).length;
+    var text = "La caduta improvvisa del Governo dimezza il consenso di " + govParty.name +
+      (otherCount ? " (il resto della coalizione perde un terzo dei consensi)" : "") +
+      " e ne travolge la leadership: primarie interne lampo portano " + newLeader + " alla guida del partito, al posto di " + oldLeader + ".";
     state.log.unshift({ week: state.turn, title: "Primarie interne dopo la caduta del Governo", choiceLabel: govParty.short, result: text, headlines: [], type: "cronaca" });
     state.worldNews.unshift({ cat: "Governo", text: text });
   }
