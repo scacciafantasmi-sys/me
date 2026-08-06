@@ -5294,23 +5294,46 @@
 
   function allianceDossier() {
     var fam = familyById(state.player.family);
+    var currentId = state.player.allianceId;
+    var current = coalitionById(currentId);
+    var choices = [];
+    // Se il partito è già alleato con qualcuno (una coalizione fissa o una nata durante la partita) al
+    // momento in cui si avvicina il voto, la scelta più naturale — continuare con l'alleanza attuale —
+    // deve essere un'opzione esplicita, non un semplice "non succede nulla" silenzioso. Non tocca
+    // l'alleanza né la fiducia della coalizione (vedi il gestore del click): è una vera conferma, non
+    // una nuova adesione.
+    if (current) {
+      choices.push({
+        label: "Corri con " + current.label, hint: "Continua con l'alleanza attuale — soglia coalizione 10%",
+        effects: { reputazione: 1 },
+        result: "Il partito conferma l'alleanza con " + current.label + " in vista del voto: continuità, non una nuova intesa.",
+        alliance: currentId, keepCurrent: true
+      });
+    }
+    if (currentId !== "centrodestra") {
+      choices.push({ label: "Allearsi con il Centrodestra", hint: "FdI, Lega, Forza Italia — soglia coalizione 10%",
+        effects: { reputazione: CENTRODESTRA_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
+        result: "L'accordo con il centrodestra apre le porte a un listino comune, con soglia di coalizione al 10%.",
+        alliance: "centrodestra" });
+    }
+    if (currentId !== "campolargo") {
+      choices.push({ label: "Allearsi con il Campo Largo (PD–AVS)", hint: "PD, AVS — soglia coalizione 10%",
+        effects: { reputazione: CAMPOLARGO_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
+        result: "L'intesa con il campo largo porta il partito dentro una coalizione ampia, soglia al 10%.",
+        alliance: "campolargo" });
+    }
+    choices.push({ label: "Corri da solo", hint: "Nessuna alleanza — soglia 3% da soli",
+      effects: { reputazione: 1 },
+      result: current
+        ? "Il partito lascia " + current.label + " e si presenta da solo alle urne: identità intatta, ma la soglia individuale resta al 3%."
+        : "Il partito si presenta da solo alle urne: identità intatta, ma la soglia individuale resta al 3%.",
+      alliance: null });
     return {
       id: "alleanza_negoziato", cat: "Strategia Elettorale", title: "Trattativa per un'Alleanza",
-      brief: "Le elezioni si avvicinano. Ti contattano da più schieramenti per valutare un accordo di coalizione: correre insieme abbassa la soglia di sbarramento al 10% collettivo, ma corri con altri simboli sulla scheda.",
-      choices: [
-        { label: "Allearsi con il Centrodestra", hint: "FdI, Lega, Forza Italia — soglia coalizione 10%",
-          effects: { reputazione: CENTRODESTRA_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
-          result: "L'accordo con il centrodestra apre le porte a un listino comune, con soglia di coalizione al 10%.",
-          alliance: "centrodestra" },
-        { label: "Allearsi con il Campo Largo (PD–AVS)", hint: "PD, AVS — soglia coalizione 10%",
-          effects: { reputazione: CAMPOLARGO_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
-          result: "L'intesa con il campo largo porta il partito dentro una coalizione ampia, soglia al 10%.",
-          alliance: "campolargo" },
-        { label: "Corri da solo", hint: "Nessuna alleanza — soglia 3% da soli",
-          effects: { reputazione: 1 },
-          result: "Il partito si presenta da solo alle urne: identità intatta, ma la soglia individuale resta al 3%.",
-          alliance: null }
-      ]
+      brief: current
+        ? "Le elezioni si avvicinano. Sei già alleato con " + current.label + ": confermi, o valuti un cambio di schieramento? Correre in coalizione abbassa la soglia di sbarramento al 10% collettivo, ma corri con altri simboli sulla scheda."
+        : "Le elezioni si avvicinano. Ti contattano da più schieramenti per valutare un accordo di coalizione: correre insieme abbassa la soglia di sbarramento al 10% collettivo, ma corri con altri simboli sulla scheda.",
+      choices: choices
     };
   }
 
@@ -5573,8 +5596,13 @@
   function resolveElection() {
     var p = state.player;
     var entities = [];
-    var cdMembers = COALITIONS.centrodestra.members.slice();
-    var clMembers = COALITIONS.campolargo.members.slice();
+    var activeIds = activeParties().map(function (party) { return party.id; });
+    // Un partito membro fisso di Centrodestra/Campo Largo può, in rari casi, sciogliersi nel corso
+    // della partita (vedi triggerPartyLifecycleFollowup): se è successo non deve più contare né nei
+    // voti né nei seggi della coalizione — esattamente come già succede per le coalizioni nate durante
+    // la partita, che filtrano i membri ancora attivi con lo stesso activeIds qui sotto.
+    var cdMembers = COALITIONS.centrodestra.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    var clMembers = COALITIONS.campolargo.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
     var cdVotes = cdMembers.reduce(function (s, id) { return s + state.parties[id]; }, 0);
     var clVotes = clMembers.reduce(function (s, id) { return s + state.parties[id]; }, 0);
     var playerInCd = p.allianceId === "centrodestra";
@@ -5584,7 +5612,6 @@
 
     entities.push({ id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes, members: cdMembers.concat(playerInCd ? ["player"] : []), isCoalition: true });
     entities.push({ id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes, members: clMembers.concat(playerInCl ? ["player"] : []), isCoalition: true });
-    var activeIds = activeParties().map(function (party) { return party.id; });
     var dynamicCoalitions = (state.dynamicCoalitions || []).map(function (c) {
       var liveMembers = c.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
       if (p.allianceId === c.id) liveMembers = liveMembers.concat(["player"]);
@@ -7190,7 +7217,9 @@
 
         if (dossier.id === "alleanza_negoziato") {
           state.player.allianceId = choice.alliance;
-          if (choice.alliance) {
+          // "Corri con l'alleanza attuale" è una conferma, non una nuova adesione: non deve azzerare
+          // la fiducia di coalizione già costruita nel tempo.
+          if (choice.alliance && !choice.keepCurrent) {
             if (!state.coalitionTrust) state.coalitionTrust = {};
             state.coalitionTrust[choice.alliance] = initialCoalitionTrust(choice.alliance);
           }
@@ -7747,7 +7776,10 @@
     }
 
     var weeksToElection = state.nextElectionTurn - state.turn;
-    if (weeksToElection <= 24 && !state.allianceOffered && !state.player.allianceId) {
+    // Il dossier va offerto anche a chi è già alleato (con Centrodestra/Campo Largo o con una coalizione
+    // nata durante la partita): la scelta "corri con l'alleanza attuale" è costruita dentro
+    // allianceDossier() in base a state.player.allianceId, non serve escludere qui chi ha già un'alleanza.
+    if (weeksToElection <= 24 && !state.allianceOffered) {
       state.allianceOffered = true;
       state.currentDossierId = "alleanza_negoziato";
       state.phase = "building";
