@@ -3971,6 +3971,44 @@
     }
   }
 
+  // ---------- Crisi di governo per contagio ----------
+  // In questo gioco il "governo" è sempre il Centrodestra (vedi resolveElection): se la sua forza
+  // trainante crolla nei sondaggi rispetto al proprio massimo storico, la crisi non resta isolata — si
+  // riflette anche sugli alleati di coalizione, che condividono le colpe agli occhi dell'elettorato,
+  // partito del giocatore compreso se è alleato con loro in quel momento. Un evento raro e vistoso
+  // (serve un crollo severo, non il solito piccolo aggiustamento settimanale), non una deriva continua.
+  var GOV_CRISIS_COALITION_MEMBERS = ["fdi", "lega", "fi"];
+  function triggerGovernmentCrisisContagion() {
+    if (!state.partyPeakPolling) state.partyPeakPolling = {};
+    var activeIds = activeParties().map(function (party) { return party.id; });
+    activeIds.forEach(function (id) {
+      state.partyPeakPolling[id] = Math.max(state.partyPeakPolling[id] || 0, state.parties[id] || 0);
+    });
+    var members = GOV_CRISIS_COALITION_MEMBERS.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    if (members.length < 2) return;
+    var leaderId = members.reduce(function (best, id) { return state.parties[id] > state.parties[best] ? id : best; }, members[0]);
+    var leaderPeak = state.partyPeakPolling[leaderId] || state.parties[leaderId];
+    var leaderNow = state.parties[leaderId];
+    if (leaderPeak < 5) return; // troppo piccolo per un vero e proprio crollo
+    var inCrisis = leaderNow <= leaderPeak * 0.5;
+    if (inCrisis && !state.govCrisisActive) {
+      state.govCrisisActive = true;
+      var others = members.filter(function (id) { return id !== leaderId; });
+      var leaderName = partyById(leaderId).name;
+      others.forEach(function (id) {
+        state.parties[id] = Math.max(0.3, state.parties[id] * (1 - rand(0.15, 0.3)));
+      });
+      var p = state.player;
+      var playerInGov = p && (p.allianceId === "centrodestra" || p.currentTermAllianceId === "centrodestra");
+      if (playerInGov) p.sondaggi = clamp(p.sondaggi * (1 - rand(0.1, 0.2)), 0, 40);
+      var text = leaderName + " crolla nei sondaggi, dimezzandosi rispetto al proprio massimo storico: la crisi di governo travolge tutta la coalizione, alleati compresi" + (playerInGov ? " — partito del giocatore incluso" : "") + ".";
+      state.log.unshift({ week: state.turn, title: "Crisi di Governo", choiceLabel: leaderName, result: text, headlines: [], type: "cronaca" });
+      state.worldNews.unshift({ cat: "Governo", text: text });
+    } else if (!inCrisis && leaderNow >= leaderPeak * 0.65) {
+      state.govCrisisActive = false; // la crisi rientra: una nuova, in futuro, potrà scattare di nuovo
+    }
+  }
+
   // ---------- Coalizioni spontanee tra partiti terzi ----------
   // Oltre a centrodestra e campolargo, con il tempo può nascere una terza coalizione tra partiti reali
   // vicini per famiglia ideologica ma oggi fuori dai due schieramenti storici (es. Italia Viva e Partito
@@ -4843,7 +4881,7 @@
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
-    uiPage: "partito", uiLocalSectionLoc: null
+    uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -7738,6 +7776,7 @@
     recomputePeriodic();
     updateCoalitionTrust();
     triggerRivalPartyEvent();
+    triggerGovernmentCrisisContagion();
     triggerPartyLifecycleFollowup();
     triggerDynamicCoalitionFormation();
     triggerLeaderSuccession();
