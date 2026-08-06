@@ -315,6 +315,9 @@
     width: 42px; height: 42px; border-radius: 50%; border: 2px solid transparent; padding: 0;
   }
   .swatch-btn.selected { border-color: var(--text); }
+  .logo-upload-row { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; }
+  .logo-upload-row .party-logo { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+  .logo-upload-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
   .option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.6rem; }
   .rename-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0; }
   .rename-row input[type="text"] {
@@ -531,6 +534,7 @@
   }
   .party-row:last-child { border-bottom: none; }
   .party-row .sw { width: 12px; height: 12px; border-radius: 50%; margin-top: 0.3rem; flex-shrink: 0; }
+  .party-row .party-logo { border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-top: 0.1rem; }
   .party-row-body { flex: 1; min-width: 0; }
   .party-row-head { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.88rem; }
   .party-row-head .value { font-family: var(--font-mono); color: var(--text-dim); flex-shrink: 0; }
@@ -5040,7 +5044,7 @@
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
     sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0,
-    currentTermAllianceId: null, correntiLeaders: {}, acceptedMozioni: [], acceptedReferendum: []
+    currentTermAllianceId: null, correntiLeaders: {}, acceptedMozioni: [], acceptedReferendum: [], logoDataUrl: null
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -5086,7 +5090,7 @@
       resultData: null,
       log: [],
       electionResults: [],
-      setupDraft: { name: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "", mode: "new", takeoverId: null }
+      setupDraft: { name: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "", mode: "new", takeoverId: null, logoDataUrl: null }
     }, JSON.parse(JSON.stringify(STATE_FIELD_DEFAULTS)), { countryProfile: freshCountryProfile() });
   }
 
@@ -6006,6 +6010,7 @@
       SWATCHES.map(function (c) {
         return '<button type="button" class="swatch-btn' + (d.color === c ? " selected" : "") + '" data-color="' + c + '" style="background:' + c + '" aria-label="Colore ' + c + '"></button>';
       }).join("") + "</div></div>";
+    html += renderLogoUploadField(d.logoDataUrl, d.color, d.name || "Il tuo partito", "setup-logo-input", "setup-logo-remove-btn");
     if (mode !== "takeover") {
       html += '<div class="field"><label class="field-label">Area politica</label><div class="option-grid">' +
         FAMILIES.map(function (f) {
@@ -6085,6 +6090,23 @@
         renderSetup();
       });
     });
+    var setupLogoInput = document.getElementById("setup-logo-input");
+    if (setupLogoInput) {
+      setupLogoInput.addEventListener("change", function () {
+        var file = setupLogoInput.files && setupLogoInput.files[0];
+        readAndResizeLogo(file, function (dataUrl) {
+          state.setupDraft.logoDataUrl = dataUrl;
+          renderSetup();
+        });
+      });
+    }
+    var setupLogoRemove = document.getElementById("setup-logo-remove-btn");
+    if (setupLogoRemove) {
+      setupLogoRemove.addEventListener("click", function () {
+        state.setupDraft.logoDataUrl = null;
+        renderSetup();
+      });
+    }
     document.getElementById("found-btn").addEventListener("click", function () {
       var d = state.setupDraft;
       var isTakeover = d.mode === "takeover";
@@ -6099,6 +6121,7 @@
         iscritti: 80, sezioni: 1, fondi: 6000, reputazione: 55, visibilita: 0,
         sondaggi: 0, sondaggiHistory: [0]
       }, JSON.parse(JSON.stringify(PLAYER_FIELD_DEFAULTS)));
+      state.player.logoDataUrl = d.logoDataUrl || null;
       if (isTakeover) {
         // Prendere il comando di un partito reale significa ereditarne davvero la forza attuale, non
         // ripartire da zero: consensi, iscritti stimati e radicamento territoriale proporzionati ai
@@ -6599,6 +6622,7 @@
     var html = '<section aria-label="Profilo ideologico"><details class="log">' +
       '<summary>Ideologia e leader<span>▾</span></summary>' +
       '<div class="staff-grid" style="grid-template-columns:1fr">' +
+      renderLogoUploadField(p.logoDataUrl, p.color, p.name, "logo-upload-input", "logo-remove-btn") +
       '<div class="field"><label class="field-label">Area politica attuale: ' + (fam ? fam.label : "") + '</label>' +
       '<p class="ci-hint">Puoi cambiarla anche a partita in corso, ma non è gratis: reputazione e iscritti reagiscono, tanto più quanto più il salto è radicale, e le correnti interne (se esistono) ne risentono.</p>' +
       '<div class="option-grid">' +
@@ -6818,6 +6842,78 @@
     var dyn = (state.dynamicCoalitions || []).filter(function (c) { return c.members.indexOf(id) !== -1; })[0];
     return dyn ? dyn.label : null;
   }
+  // ---------- Loghi di partito ----------
+  // Il giocatore può caricare un'immagine reale come simbolo del proprio partito (all'inizio o a
+  // partita in corso); i partiti della CPU, che non hanno un file da caricare, ricevono invece un
+  // simbolo generico generato al volo — iniziali su sfondo del colore del partito, sempre coerente e
+  // senza bisogno di alcun asset esterno. Non si usano MAI loghi ufficiali reali dei partiti italiani
+  // (sarebbero materiale protetto da copyright): solo l'eventuale immagine caricata dal giocatore stesso
+  // per il proprio partito, o simboli generici per tutti gli altri.
+  var LOGO_MAX_FILE_BYTES = 8 * 1024 * 1024;
+  var LOGO_CANVAS_SIZE = 128;
+  function partyInitials(name) {
+    var stopWords = ["di", "de", "del", "della", "dei", "delle", "e", "per", "il", "la", "lo", "i", "gli", "le", "un", "una", "d'italia", "italia"];
+    var words = (name || "").split(/\s+/).filter(function (w) { return w.length > 1 && stopWords.indexOf(w.toLowerCase()) === -1; });
+    if (!words.length) words = (name || "P").split(/\s+/);
+    var initials = words.slice(0, 2).map(function (w) { return w.charAt(0).toUpperCase(); }).join("");
+    return initials || "P";
+  }
+  function badgeTextColor(bgColor) {
+    var hex = (bgColor || "#888888").replace("#", "");
+    if (hex.length === 3) hex = hex.split("").map(function (c) { return c + c; }).join("");
+    var r = parseInt(hex.substr(0, 2), 16), g = parseInt(hex.substr(2, 2), 16), b = parseInt(hex.substr(4, 2), 16);
+    var lum = (0.299 * (r || 128) + 0.587 * (g || 128) + 0.114 * (b || 128)) / 255;
+    return lum > 0.6 ? "#14161f" : "#ffffff";
+  }
+  function partyBadgeHtml(name, color, logoDataUrl, sizePx) {
+    var size = sizePx || 34;
+    var safeName = (name || "").replace(/"/g, "&quot;");
+    if (logoDataUrl) {
+      return '<img class="party-logo" style="width:' + size + 'px;height:' + size + 'px" src="' + logoDataUrl + '" alt="Logo di ' + safeName + '">';
+    }
+    var initials = partyInitials(name);
+    var textColor = badgeTextColor(color);
+    return '<svg class="party-logo" width="' + size + '" height="' + size + '" viewBox="0 0 40 40" role="img" aria-label="Simbolo di ' + safeName + '">' +
+      '<circle cx="20" cy="20" r="20" fill="' + color + '"></circle>' +
+      '<text x="20" y="21" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="' + textColor + '">' + initials + '</text></svg>';
+  }
+  // Legge il file scelto, lo ridimensiona/centra su un quadrato fisso (128x128) via canvas e restituisce
+  // un data-URL PNG: tiene il salvataggio leggero anche caricando foto ad alta risoluzione, e mantiene
+  // l'eventuale trasparenza del logo originale (a differenza di un JPEG).
+  function readAndResizeLogo(file, callback) {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { showSaveStatus("Il file scelto non è un'immagine.", true); return; }
+    if (file.size > LOGO_MAX_FILE_BYTES) { showSaveStatus("Immagine troppo grande (limite 8 MB).", true); return; }
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var size = LOGO_CANVAS_SIZE;
+        var canvas = document.createElement("canvas");
+        canvas.width = size; canvas.height = size;
+        var ctx = canvas.getContext("2d");
+        var side = Math.min(img.width, img.height);
+        var sx = (img.width - side) / 2, sy = (img.height - side) / 2;
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        callback(canvas.toDataURL("image/png"));
+      };
+      img.onerror = function () { showSaveStatus("Impossibile leggere questa immagine.", true); };
+      img.src = e.target.result;
+    };
+    reader.onerror = function () { showSaveStatus("Impossibile leggere questo file.", true); };
+    reader.readAsDataURL(file);
+  }
+  function renderLogoUploadField(currentLogoDataUrl, currentColor, currentName, inputId, removeBtnId) {
+    return '<div class="field"><label class="field-label">Logo del partito (facoltativo)</label>' +
+      '<div class="logo-upload-row">' + partyBadgeHtml(currentName, currentColor, currentLogoDataUrl, 56) +
+      '<div class="logo-upload-actions">' +
+      '<label class="save-bar-btn" for="' + inputId + '" style="cursor:pointer">Carica un\'immagine</label>' +
+      '<input type="file" id="' + inputId + '" accept="image/*" style="display:none">' +
+      (currentLogoDataUrl ? '<button type="button" class="save-bar-btn" id="' + removeBtnId + '">Rimuovi</button>' : "") +
+      "</div></div>" +
+      '<p class="field-hint">Se non carichi nulla, viene usato un simbolo generico con le iniziali sul colore del partito — come per tutti gli altri partiti.</p></div>';
+  }
+
   function renderPartyDirectory() {
     var p = state.player;
     var fam = familyById(p.family);
@@ -6829,13 +6925,13 @@
     // l'alleanza attiva se ce n'è una fresca, altrimenti quella con cui si è corso in questa legislatura.
     var playerCoalitionId = p.allianceId || p.currentTermAllianceId;
     rows.push({
-      name: p.name, color: p.color, value: p.sondaggi, isPlayer: true,
+      name: p.name, color: p.color, value: p.sondaggi, isPlayer: true, logoDataUrl: p.logoDataUrl,
       famiglia: fam ? fam.label : "", corrente: (p.ideologyText || (fam ? fam.desc : "")), leader: "Tu",
       coalitionLabel: playerCoalitionId ? (coalitionById(playerCoalitionId) || {}).label || null : null
     });
     rows.sort(function (a, b) { return b.value - a.value; });
     var html = rows.map(function (r) {
-      return '<div class="party-row' + (r.isPlayer ? " player-row" : "") + '"><span class="sw" style="background:' + r.color + '"></span>' +
+      return '<div class="party-row' + (r.isPlayer ? " player-row" : "") + '">' + partyBadgeHtml(r.name, r.color, r.logoDataUrl, 34) +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + (r.isPlayer ? ' <span class="chip accent">Tu</span>' : "") + '</strong><span class="value">' + fmt1(r.value) + '%</span></div>' +
         '<div class="party-row-sub">' + r.famiglia + ' — ' + r.corrente + '<br>Leader: ' + r.leader +
         (r.coalitionLabel ? '<br><span class="chip">' + r.coalitionLabel + '</span>' : '') + '</div></div></div>';
@@ -7993,6 +8089,25 @@
         state.player.leaderCharacter = (leaderCharacterEditInput.value || "").trim();
         save();
         showSaveStatus("Ideologia e carattere del leader aggiornati.");
+      });
+    }
+    var logoUploadInput = document.getElementById("logo-upload-input");
+    if (logoUploadInput) {
+      logoUploadInput.addEventListener("change", function () {
+        var file = logoUploadInput.files && logoUploadInput.files[0];
+        readAndResizeLogo(file, function (dataUrl) {
+          state.player.logoDataUrl = dataUrl;
+          save();
+          render();
+        });
+      });
+    }
+    var logoRemoveBtn = document.getElementById("logo-remove-btn");
+    if (logoRemoveBtn) {
+      logoRemoveBtn.addEventListener("click", function () {
+        state.player.logoDataUrl = null;
+        save();
+        render();
       });
     }
   }
