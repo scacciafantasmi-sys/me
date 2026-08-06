@@ -1013,6 +1013,34 @@
                          { id: "sindacale_lusso", label: "Ala Sindacale del Tempo Libero" }]
   };
 
+  // La "Corrente Generica" rappresenta la linea ufficiale e la maggioranza silenziosa del partito: non
+  // rivendica nulla di proprio, esegue il programma così com'è — è sempre presente quando nascono le
+  // correnti, non ha bisogno di una voce nel CORRENTI_BY_FAMILY di ciascuna famiglia. Le altre 1-4
+  // correnti che le si affiancano sono invece scelte da CORRENTI_BY_FAMILY: il totale va quindi da 2
+  // (Generica + 1 ala) a 5 (Generica + tutte e 4 le ali scelte).
+  var GENERICA_CORRENTE_ID = "generica";
+  var GENERICA_CORRENTE_LABEL = "Corrente Generica";
+  // Frammenti di motivazione, combinati con il nome della corrente per dare un perché credibile alla
+  // sua nascita senza dover scrivere una storia unica per ciascuna delle ~85 ali possibili.
+  var CORRENTE_BACKSTORY_FRAGMENTS = [
+    "crede che la linea ufficiale del partito si sia fatta troppo prudente, e vuole imprimere una svolta più netta",
+    "nasce da chi pensa che il partito debba tornare alle proprie radici, prima che siano compromessi troppi principi",
+    "raccoglie chi, sul territorio, sente la linea nazionale lontana dai problemi reali della gente",
+    "si è formata attorno a un gruppo di dirigenti che chiedeva più spazio nelle decisioni del partito",
+    "è nata da un disaccordo pubblico su una scelta strategica che ha lasciato ferite mai del tutto rimarginate",
+    "riunisce chi crede che il partito debba aprirsi di più, con toni e proposte diverse da quelli di sempre",
+    "si è coagulata attorno a un tema che la segreteria nazionale continua a considerare secondario",
+    "nasce dalla convinzione che serva una linea più pragmatica, meno legata alle battaglie identitarie",
+    "raccoglie i delusi da una stagione di compromessi che, secondo loro, hanno svuotato il progetto originario",
+    "si è formata quando un gruppo di parlamentari ha deciso di far sentire la propria voce fuori dai canali ufficiali",
+    "nasce dal desiderio di parlare più direttamente a una parte di elettorato che si sente poco rappresentata",
+    "riunisce chi, pur restando nel partito, non si riconosce più del tutto nella linea imposta dal vertice"
+  ];
+  function correnteBackstory(label) {
+    var fragment = CORRENTE_BACKSTORY_FRAGMENTS[Math.floor(Math.random() * CORRENTE_BACKSTORY_FRAGMENTS.length)];
+    return "La " + label + " " + fragment + ".";
+  }
+
   var COALITIONS = {
     centrodestra: { label: "Coalizione di Centrodestra", members: ["fdi", "lega", "fi"] },
     campolargo:   { label: "Campo Largo (PD–AVS–M5S)",    members: ["pd", "avs", "m5s"] }
@@ -4893,7 +4921,7 @@
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
     sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0,
-    currentTermAllianceId: null
+    currentTermAllianceId: null, correntiLeaders: {}
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -5380,27 +5408,60 @@
     return CORRENTI_BY_FAMILY[state.player.family] || CORRENTI_BY_FAMILY.sovranista;
   }
   function correnteLabel(id) {
+    if (id === GENERICA_CORRENTE_ID) return GENERICA_CORRENTE_LABEL;
     var found = correntiOptions().filter(function (c) { return c.id === id; })[0];
     return found ? found.label : "Corrente";
   }
-  // Le correnti attive di un partito (2-4, non necessariamente le prime della famiglia): p.currents
-  // porta con sé solo {id, share}, l'etichetta si guarda sempre da CORRENTI_BY_FAMILY tramite l'id, così
-  // l'ordine e il numero possono variare liberamente da una partita all'altra.
+  // Le correnti attive di un partito (2-5: la Generica più 1-4 ali, non necessariamente le prime della
+  // famiglia): p.currents porta con sé solo {id, share}, l'etichetta si guarda sempre da
+  // CORRENTI_BY_FAMILY (o dalla Generica) tramite l'id, così l'ordine e il numero possono variare
+  // liberamente da una partita all'altra. Il leader e la storia di ciascuna corrente vivono invece in
+  // p.correntiLeaders, generati una sola volta alla nascita delle correnti (vedi il gestore del click
+  // su "formazione_correnti") e mai più ricalcolati, così restano stabili per tutta la partita.
   function correntiActive(p) {
-    return (p.currents || []).map(function (c) { return { id: c.id, share: c.share, label: correnteLabel(c.id) }; });
+    // Ripiego per le correnti già esistenti in un salvataggio precedente a questa funzionalità: la
+    // prima volta che vengono mostrate, generano il loro leader e la loro storia al volo.
+    if (p.currents && p.currents.length && (!p.correntiLeaders || p.currents.some(function (c) { return !p.correntiLeaders[c.id]; }))) {
+      ensureCorrentiLeaders(p, p.currents.map(function (c) { return c.id; }));
+    }
+    return (p.currents || []).map(function (c) {
+      var leader = p.correntiLeaders && p.correntiLeaders[c.id];
+      return { id: c.id, share: c.share, label: correnteLabel(c.id), leaderName: leader ? leader.name : null, backstory: leader ? leader.backstory : null };
+    });
+  }
+  // Genera un leader (nome + storia) per ogni corrente indicata che non ne abbia già uno: la Generica
+  // ha sempre la stessa "guida" impersonale (rappresenta il vertice di partito, non un singolo dissidente),
+  // le ali vere e proprie hanno invece un nome e una storia diversi a ogni partita.
+  function ensureCorrentiLeaders(p, correntiIds) {
+    if (!p.correntiLeaders) p.correntiLeaders = {};
+    correntiIds.forEach(function (id) {
+      if (p.correntiLeaders[id]) return;
+      var label = correnteLabel(id);
+      if (id === GENERICA_CORRENTE_ID) {
+        p.correntiLeaders[id] = { name: "La segreteria di partito", backstory: "Rappresenta la linea ufficiale e la maggioranza silenziosa del partito: non rivendica nulla di proprio, esegue il programma così com'è stato scritto." };
+      } else {
+        p.correntiLeaders[id] = { name: generateStaffName(), backstory: correnteBackstory(label) };
+      }
+    });
   }
 
-  // Quando le correnti nascono la prima volta, il numero (2, 3 o 4) non è fisso: è pesato a caso, con 2
-  // come esito più probabile — "non è obbligatorio che ogni partito abbia [tante] correnti".
+  // Quando le correnti nascono la prima volta, la Generica (la linea ufficiale) c'è sempre; ad
+  // affiancarla sono 1-4 ali vere e proprie scelte tra quelle della famiglia ideologica del partito —
+  // per un totale di 2-5 correnti, non più fisso a "sempre due": 1 ala resta l'esito più probabile,
+  // ma il partito può arrivare ad averne fino a 4 accanto alla Generica.
   function formazioneCorrentiDossier() {
     var options = correntiOptions();
-    var n = pickWeighted([2, 3, 4], function (v) { return v === 2 ? 60 : v === 3 ? 30 : 10; });
-    var chosenOptions = shuffleN(options, Math.min(n, options.length));
-    var names = chosenOptions.map(function (c) { return c.label; });
-    var namesText = names.length === 2 ? names[0] + " e " + names[1]
-      : names.slice(0, -1).join(", ") + " e " + names[names.length - 1];
+    var nNamed = pickWeighted([1, 2, 3, 4], function (v) { return v === 1 ? 40 : v === 2 ? 35 : v === 3 ? 17 : 8; });
+    var namedOptions = shuffleN(options, Math.min(nNamed, options.length));
+    var chosenOptions = [{ id: GENERICA_CORRENTE_ID, label: GENERICA_CORRENTE_LABEL }].concat(namedOptions);
+    var namedNames = namedOptions.map(function (c) { return c.label; });
+    var namesText = namedNames.length === 1 ? namedNames[0]
+      : namedNames.length === 2 ? namedNames[0] + " e " + namedNames[1]
+      : namedNames.slice(0, -1).join(", ") + " e " + namedNames[namedNames.length - 1];
     var choices = [];
-    var featured = shuffleN(chosenOptions, Math.min(chosenOptions.length, 3));
+    // Solo le ali vere e proprie possono essere "favorite": la Generica, per definizione, è già la linea
+    // di maggioranza — non avrebbe senso proporre di favorirla come se fosse un'opzione tra le altre.
+    var featured = shuffleN(namedOptions, Math.min(namedOptions.length, 3));
     featured.forEach(function (fav) {
       var rest = chosenOptions.filter(function (c) { return c.id !== fav.id; });
       var favShare = 40 + Math.round(20 / chosenOptions.length) + 8;
@@ -5423,9 +5484,9 @@
     });
     return {
       id: "formazione_correnti", cat: "Correnti Interne", title: "Nascono le Prime Correnti Interne",
-      brief: chosenOptions.length === 2
-        ? "Con la crescita del partito emergono due anime distinte: la " + namesText + ". Come imposti gli equilibri di partenza?"
-        : "Con la crescita del partito emergono ben " + chosenOptions.length + " anime distinte: " + namesText + ". Come imposti gli equilibri di partenza?",
+      brief: namedOptions.length === 1
+        ? "Accanto alla linea ufficiale del partito emerge una voce distinta: la " + namesText + ". Come imposti gli equilibri di partenza?"
+        : "Accanto alla linea ufficiale del partito emergono ben " + namedOptions.length + " voci distinte: " + namesText + ". Come imposti gli equilibri di partenza?",
       choices: choices
     };
   }
@@ -5980,10 +6041,10 @@
     html += '<div class="stat-tile"><div class="label">Reputazione</div><div class="row"><span class="value">' + Math.round(p.reputazione) + '%</span></div>' +
       '<div class="gauge"><span style="width:' + p.reputazione + '%;background:' + (p.reputazione < 35 ? "var(--critical)" : p.reputazione < 55 ? "var(--warning)" : "var(--good)") + '"></span></div></div>';
     if (p.currents && p.currents.length) {
-      var CORRENTI_GAUGE_COLORS = ["var(--accent)", "var(--warning)", "var(--good)", "var(--critical)"];
+      var CORRENTI_GAUGE_COLORS = ["var(--accent)", "var(--warning)", "var(--good)", "var(--critical)", "#9068c0"];
       var active = correntiActive(p);
       html += '<div class="stat-tile"><div class="label">Equilibrio delle correnti (' + active.length + ")</div>" +
-        '<div class="gauge split">' + active.map(function (c, i) { return '<span style="width:' + c.share + "%;background:" + CORRENTI_GAUGE_COLORS[i % 4] + '"></span>'; }).join("") + "</div>" +
+        '<div class="gauge split">' + active.map(function (c, i) { return '<span style="width:' + c.share + "%;background:" + CORRENTI_GAUGE_COLORS[i % 5] + '"></span>'; }).join("") + "</div>" +
         '<div class="correnti-row">' + active.map(function (c) { return "<span>" + c.label + " " + Math.round(c.share) + "%</span>"; }).join("") + "</div></div>";
     }
     if (p.amministratoriLocali) {
@@ -6395,6 +6456,24 @@
     }
     return resultText;
   }
+  // ---------- Correnti interne: leader e storia di ciascuna ----------
+  // Il piccolo indicatore a barre in "Il tuo partito" mostra solo i numeri; qui invece ogni corrente
+  // attiva ha un volto e un perché, per dare corpo alle tensioni interne che i dossier di corrente
+  // (correntiTensionDossier, rischioScissioneDossier) già raccontano settimana dopo settimana.
+  function renderCorrentiPanel() {
+    var p = state.player;
+    if (!p.currents || !p.currents.length) return "";
+    var active = correntiActive(p);
+    var html = '<section aria-label="Correnti Interne"><details class="log"><summary>Correnti Interne — leader e storia<span>▾</span></summary>' +
+      '<p class="ci-hint">Il partito resta unito, ma al suo interno convivono anime diverse: ciascuna ha una guida e una ragione per esistere. Restano stabili per tutta la partita, salvo scissioni.</p>' +
+      '<div class="party-directory">' + active.map(function (c) {
+        return '<div class="party-row"><span class="sw" style="background:' + p.color + '"></span>' +
+          '<div class="party-row-body"><div class="party-row-head"><strong>' + c.label + '</strong><span class="value">' + Math.round(c.share) + '%</span></div>' +
+          '<div class="party-row-sub">Guidata da ' + (c.leaderName || "—") + (c.backstory ? '<br>' + c.backstory : '') + '</div></div></div>';
+      }).join("") + '</div></details></section>';
+    return html;
+  }
+
   function renderIdeologyProfile() {
     var p = state.player;
     var fam = familyById(p.family);
@@ -7107,7 +7186,7 @@
   // pagina lunghissima.
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
-        return renderPartyEvents() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderStaffPanel() + renderIdeologyProfile();
+        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderStaffPanel() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
@@ -7284,6 +7363,7 @@
           state.resultData = { resultText: choice.result, headlines: [] };
         } else if (dossier.id === "formazione_correnti") {
           state.player.currents = choice.currentsSetup ? choice.currentsSetup.map(function (c) { return { id: c.id, share: c.share }; }) : null;
+          if (choice.currentsSetup) ensureCorrentiLeaders(state.player, choice.currentsSetup.map(function (c) { return c.id; }));
           if (!choice.currentsSetup) state.correntiOfferedAgainTurn = state.turn + 40;
           if (choice.effects.reputazione) state.player.reputazione = clamp(state.player.reputazione + choice.effects.reputazione, 0, 100);
           state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "dossier" });
