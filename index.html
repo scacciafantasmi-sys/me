@@ -4036,6 +4036,55 @@
     }
   }
 
+  // ---------- Nascita spontanea di nuovi partiti (non scissioni) ----------
+  // Oltre alle scissioni sopra (sempre legate alla storia recente di un partito già esistente), la scena
+  // politica può vedere emergere un soggetto del tutto nuovo, senza alcun legame con i partiti già in
+  // campo: un movimento civico che intercetta una fetta di indecisi/astenuti. Pesca dalla riserva di
+  // indecisi (non toglie voti a nessun partito esistente), così il totale generale resta coerente con il
+  // resto del sistema sondaggi.
+  var SPONTANEOUS_PARTY_LABELS = ["Movimento", "Lista Civica", "Alternativa", "Nuova Italia", "Costituente", "Cantiere", "Rete Civica", "Fronte dei Cittadini"];
+  function generateSpontaneousParty(week) {
+    var existingNames = activeParties().map(function (pt) { return pt.name.toLowerCase(); });
+    var family = FAMILIES[Math.floor(Math.random() * FAMILIES.length)];
+    var label, word, name;
+    for (var attempt = 0; attempt < 20; attempt++) {
+      label = SPONTANEOUS_PARTY_LABELS[Math.floor(Math.random() * SPONTANEOUS_PARTY_LABELS.length)];
+      word = pickFamilyPartyWord(family.id);
+      name = label + " " + word;
+      if (existingNames.indexOf(name.toLowerCase()) === -1) break;
+    }
+    var id = "dyn_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "") + "_" + week;
+    var short = name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase();
+    return {
+      id: id, name: name, short: short, color: SWATCHES[Math.floor(Math.random() * SWATCHES.length)],
+      coalition: "opposizione", dynamic: true, spontaneous: true, parentId: null,
+      leader: generateStaffName(),
+      famiglia: family.label,
+      corrente: "Movimento civico nato spontaneamente dal malcontento diffuso, senza legami con i partiti esistenti (" + weekLabel(week) + ")"
+    };
+  }
+  function triggerSpontaneousPartyFormation() {
+    if (!state.dynamicParties) state.dynamicParties = [];
+    // Stesso tetto complessivo delle scissioni: resta un fenomeno raro, non deve affollare la scena.
+    if (state.dynamicParties.length > 3) return;
+    // Serve un bacino reale di indecisi/astenuti da cui pescare, e non troppo presto in partita.
+    if (state.turn < 20 || state.indecisi < 2.5) return;
+    if (Math.random() >= 0.04) return;
+    var carve = Math.min(state.indecisi * 0.4, 0.5 + Math.random() * 2);
+    if (carve < 0.5) return;
+    var born = generateSpontaneousParty(state.turn);
+    state.indecisi = Math.max(0.5, state.indecisi - carve);
+    state.parties[born.id] = carve;
+    state.dynamicParties.push(born);
+    if (state.partyRelations) state.partyRelations[born.id] = 50;
+    state.log.unshift({
+      week: state.turn, title: "Nasce un nuovo movimento civico", choiceLabel: born.short,
+      result: "Dal malcontento di una parte di indecisi e astenuti nasce " + born.name + ", guidato da " + born.leader +
+        ": un soggetto del tutto nuovo, senza legami con i partiti già in campo.",
+      headlines: [], type: "cronaca"
+    });
+  }
+
   // ---------- Crisi di governo per contagio ----------
   // In questo gioco il "governo" è sempre il Centrodestra (vedi resolveElection): se la sua forza
   // trainante crolla nei sondaggi rispetto al proprio massimo storico, la crisi non resta isolata — si
@@ -8394,6 +8443,7 @@
     triggerRivalPartyEvent();
     triggerGovernmentCrisisContagion();
     triggerPartyLifecycleFollowup();
+    triggerSpontaneousPartyFormation();
     triggerDynamicCoalitionFormation();
     triggerLeaderSuccession();
     triggerWorldNews();
