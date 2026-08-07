@@ -324,6 +324,19 @@
   }
   .party-logo-edit-link:hover { text-decoration: underline; }
   .option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.6rem; }
+  .budget-row {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.55rem 0.75rem; display: flex; flex-direction: column; gap: 0.35rem;
+  }
+  .budget-row label { font-size: 0.82rem; color: var(--text); }
+  .budget-row input[type="number"] {
+    width: 100%; padding: 0.4rem 0.55rem; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 0.9rem;
+  }
+  .budget-outcome { font-size: 0.78rem; font-weight: 700; }
+  .budget-outcome.positivo { color: var(--good); }
+  .budget-outcome.neutro { color: var(--text-dim); }
+  .budget-outcome.negativo { color: var(--critical); }
   .rename-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0; }
   .rename-row input[type="text"] {
     flex: 1; min-width: 180px; padding: 0.6rem 0.75rem; border-radius: 8px;
@@ -763,7 +776,8 @@
     { key: "commercio", label: "Commercio ed export" },
     { key: "relazioniDiplomatiche", label: "Relazioni diplomatiche" },
     { key: "ricercaSviluppo", label: "Ricerca e sviluppo" },
-    { key: "inflazione", label: "Stabilità dei prezzi (inflazione)" }
+    { key: "inflazione", label: "Stabilità dei prezzi (inflazione)" },
+    { key: "difesa", label: "Capacità di difesa nazionale" }
   ];
   // Quanto pesa davvero una presa di posizione del partito sulla Scheda Paese: zero se il partito
   // non ha nemmeno un seggio (né a Camera/Senato né al Parlamento Europeo), un po' di più se ha
@@ -911,6 +925,229 @@
     var saldo = b.entrate - b.uscite;
     state.deficitPil = clamp(-saldo / 2100 * 100, -1, 12);
     state.debitoPil = clamp(state.debitoPil + (saldo < 0 ? 0.04 : -0.03), 80, 220);
+  }
+  // ---------- Stanziamento del bilancio pubblico: chi governa (giocatore o CPU) decide dove investire ----------
+  // 7 grandi categorie, ciascuna con 5-6 sottocategorie concrete (38 voci in totale): il partito che
+  // guida il governo in quel momento — il giocatore se governa lui, altrimenti la CPU in base alla sua
+  // ideologia — stanzia una quota del "tesoretto" annuale su ciascuna voce. A fine anno (ogni 52
+  // settimane) ogni stanziamento viene risolto: può andare bene, così così, o rivelarsi uno spreco —
+  // con effetti reali, positivi o negativi, sull'indicatore della Scheda Paese collegato alla categoria.
+  var BUDGET_CATEGORIES = [
+    { id: "economia", label: "Economia", metric: "economia", subs: [
+      { id: "sgravi_pmi", label: "Sgravi fiscali per le PMI" },
+      { id: "export", label: "Incentivi alle esportazioni" },
+      { id: "startup", label: "Sostegno alle startup innovative" },
+      { id: "cuneo", label: "Riduzione del cuneo fiscale" },
+      { id: "credito_garanzia", label: "Fondo di garanzia per il credito alle imprese" },
+      { id: "zes", label: "Zone economiche speciali" }
+    ] },
+    { id: "trasporti", label: "Trasporti", metric: "trasporti", subs: [
+      { id: "ferrovie", label: "Manutenzione della rete ferroviaria" },
+      { id: "metro", label: "Nuove linee metropolitane" },
+      { id: "ponti", label: "Manutenzione di ponti e viadotti" },
+      { id: "ciclabili", label: "Piste ciclabili e mobilità sostenibile" },
+      { id: "aree_interne", label: "Collegamenti con le aree interne" }
+    ] },
+    { id: "sanita", label: "Sanità", metric: "sanita", subs: [
+      { id: "personale_medico", label: "Assunzione di personale medico e infermieristico" },
+      { id: "apparecchiature", label: "Ammodernamento delle apparecchiature ospedaliere" },
+      { id: "liste_attesa", label: "Riduzione delle liste d'attesa" },
+      { id: "medicina_territoriale", label: "Potenziamento della medicina territoriale" },
+      { id: "salute_mentale", label: "Salute mentale" },
+      { id: "ricerca_oncologica", label: "Ricerca oncologica pubblica" }
+    ] },
+    { id: "istruzione", label: "Istruzione", metric: "scuola", subs: [
+      { id: "edilizia_scolastica", label: "Edilizia scolastica" },
+      { id: "insegnanti", label: "Assunzione di nuovi insegnanti" },
+      { id: "digitalizzazione", label: "Digitalizzazione delle aule" },
+      { id: "borse_studio", label: "Borse di studio per studenti meritevoli" },
+      { id: "dispersione", label: "Contrasto alla dispersione scolastica" }
+    ] },
+    { id: "difesa", label: "Difesa", metric: "difesa", subs: [
+      { id: "ammodernamento_ffaa", label: "Ammodernamento delle forze armate" },
+      { id: "mezzi_militari", label: "Nuovi mezzi e velivoli militari" },
+      { id: "cybersicurezza", label: "Cybersicurezza nazionale" },
+      { id: "missioni_pace", label: "Missioni internazionali di pace" },
+      { id: "protezione_civile", label: "Difesa civile e protezione dai disastri" }
+    ] },
+    { id: "welfare", label: "Welfare", metric: "welfare", subs: [
+      { id: "famiglie_numerose", label: "Sostegno alle famiglie numerose" },
+      { id: "disoccupazione", label: "Assegni di disoccupazione" },
+      { id: "anziani", label: "Assistenza agli anziani non autosufficienti" },
+      { id: "edilizia_popolare", label: "Edilizia popolare" },
+      { id: "asili_nido", label: "Asili nido gratuiti" },
+      { id: "disabilita", label: "Sostegno alla disabilità" }
+    ] },
+    { id: "ambiente", label: "Ambiente", metric: "ambientalismo", subs: [
+      { id: "rinnovabili", label: "Energie rinnovabili" },
+      { id: "bonifiche", label: "Bonifica dei siti inquinati" },
+      { id: "rifiuti", label: "Gestione dei rifiuti ed economia circolare" },
+      { id: "dissesto", label: "Prevenzione del dissesto idrogeologico" },
+      { id: "aree_protette", label: "Tutela delle aree naturali protette" }
+    ] }
+  ];
+  var BUDGET_SUBCATEGORY_BY_KEY = {};
+  BUDGET_CATEGORIES.forEach(function (cat) {
+    cat.subs.forEach(function (sub) { BUDGET_SUBCATEGORY_BY_KEY[cat.id + "." + sub.id] = { cat: cat, sub: sub }; });
+  });
+  // Quanto "tesoretto" discrezionale c'è ogni anno da stanziare: una quota fissa della spesa pubblica
+  // annua del Bilancio dello Stato, in miliardi di euro.
+  function budgetPoolTotal() { return Math.round(state.bilancioStato.uscite * 0.15); }
+  // Peso relativo di ciascuna categoria per l'auto-stanziamento della CPU, in base all'ideologia di chi
+  // guida davvero il governo in quel momento (vedi currentGoverningFamilyId). Le famiglie non elencate
+  // usano pesi neutri (1 su tutto).
+  var BUDGET_FAMILY_BIAS = {
+    liberale: { economia: 1.6, trasporti: 1, sanita: 0.8, istruzione: 1, difesa: 1, welfare: 0.6, ambiente: 0.8 },
+    libertario: { economia: 1.6, trasporti: 1, sanita: 0.7, istruzione: 0.9, difesa: 1, welfare: 0.5, ambiente: 0.8 },
+    sovranista: { economia: 1, trasporti: 1, sanita: 1, istruzione: 1, difesa: 1.6, welfare: 1, ambiente: 0.6 },
+    nazionalpopolare: { economia: 1, trasporti: 1, sanita: 1, istruzione: 0.9, difesa: 1.5, welfare: 1, ambiente: 0.5 },
+    progressista: { economia: 0.8, trasporti: 1, sanita: 1.3, istruzione: 1.2, difesa: 0.5, welfare: 1.2, ambiente: 1.7 },
+    tecnoprogressista: { economia: 1.2, trasporti: 1, sanita: 1.1, istruzione: 1.4, difesa: 0.7, welfare: 1, ambiente: 1.3 },
+    sinistra: { economia: 0.9, trasporti: 1, sanita: 1.3, istruzione: 1.1, difesa: 0.5, welfare: 1.7, ambiente: 1 },
+    comunista: { economia: 0.7, trasporti: 1, sanita: 1.4, istruzione: 1.1, difesa: 0.4, welfare: 1.8, ambiente: 0.9 },
+    comunismolusso: { economia: 0.8, trasporti: 1, sanita: 1.2, istruzione: 1.3, difesa: 0.4, welfare: 1.5, ambiente: 1.4 },
+    gratuitista: { economia: 0.6, trasporti: 1, sanita: 1.6, istruzione: 1.3, difesa: 0.4, welfare: 1.9, ambiente: 1 },
+    cattolico: { economia: 1, trasporti: 1, sanita: 1.2, istruzione: 1.3, difesa: 0.8, welfare: 1.4, ambiente: 0.8 },
+    fascista: { economia: 1, trasporti: 1, sanita: 0.8, istruzione: 0.9, difesa: 2, welfare: 0.7, ambiente: 0.5 },
+    monarchico: { economia: 1, trasporti: 1, sanita: 1, istruzione: 1.1, difesa: 1.3, welfare: 0.9, ambiente: 0.7 },
+    europeista: { economia: 1.2, trasporti: 1.2, sanita: 1, istruzione: 1.1, difesa: 0.9, welfare: 1, ambiente: 1.1 },
+    meridionalista: { economia: 1.2, trasporti: 1.6, sanita: 1.1, istruzione: 1, difesa: 0.6, welfare: 1, ambiente: 0.8 },
+    regionalista: { economia: 1.2, trasporti: 1.5, sanita: 1, istruzione: 1, difesa: 0.6, welfare: 1, ambiente: 1 },
+    movimentista: { economia: 1, trasporti: 1.2, sanita: 1.2, istruzione: 1.2, difesa: 0.6, welfare: 1.1, ambiente: 1.2 }
+  };
+  // Famiglie ideologicamente ostili a NATO/UE per costruzione: se guidano davvero il governo (vedi
+  // currentGoverningFamilyId) mentre il paese resta membro, subiscono una lenta pressione di isolamento
+  // internazionale — l'incentivo a decidere, prima o poi, se restare o uscire davvero.
+  var HOSTILE_TO_NATO_EU_FAMILIES = ["comunista", "fascista", "gratuitista"];
+  function applyCpuBudgetAllocation() {
+    var famId = currentGoverningFamilyId();
+    var bias = BUDGET_FAMILY_BIAS[famId] || {};
+    var pool = budgetPoolTotal();
+    var totalWeight = BUDGET_CATEGORIES.reduce(function (sum, cat) { return sum + (bias[cat.id] || 1); }, 0);
+    var allocations = {};
+    BUDGET_CATEGORIES.forEach(function (cat) {
+      var catShare = pool * ((bias[cat.id] || 1) / totalWeight);
+      var n = cat.subs.length;
+      cat.subs.forEach(function (sub, i) {
+        var noise = 0.7 + Math.random() * 0.6;
+        allocations[cat.id + "." + sub.id] = Math.round((catShare / n) * noise * 10) / 10;
+      });
+    });
+    state.budgetAllocations = allocations;
+  }
+  // Risolve un anno di stanziamenti: ogni voce con importo > 0 ha un esito casuale (buono, così così,
+  // uno spreco) e sposta di conseguenza l'indicatore collegato — non sempre in positivo, come nella
+  // realtà un investimento pubblico può anche fallire o essere mal speso.
+  function resolveBudgetLineOutcome(amount) {
+    var roll = Math.random();
+    var outcome = roll < 0.6 ? "positivo" : roll < 0.85 ? "neutro" : "negativo";
+    var impactPerBillion = 0.02;
+    var delta = amount * impactPerBillion;
+    if (outcome === "positivo") delta *= rand(0.9, 1.6);
+    else if (outcome === "neutro") delta *= rand(0.1, 0.35);
+    else delta = -delta * rand(0.4, 1.1);
+    return { outcome: outcome, delta: delta };
+  }
+  var BUDGET_OUTCOME_NOTES = {
+    positivo: ["L'investimento produce risultati tangibili, sopra le attese.", "I fondi vengono spesi bene, con ricadute concrete e misurabili.", "Il progetto viene completato in tempo e porta benefici reali."],
+    neutro: ["I risultati arrivano, ma più lentamente e in misura minore del previsto.", "L'investimento produce un effetto modesto, senza infamia né lode.", "Il progetto avanza a rilento, tra ritardi burocratici e primi risultati parziali."],
+    negativo: ["Ritardi, sprechi e un'inchiesta sui costi lievitati fanno discutere.", "Il progetto naufraga tra rinvii e una gestione contestata.", "I fondi vengono spesi male, e l'opposizione ne fa un caso politico."]
+  };
+  function resolveAnnualBudget() {
+    if (state.turn - (state.lastBudgetReviewTurn || 0) < 52) return;
+    state.lastBudgetReviewTurn = state.turn;
+    var p = state.player;
+    if (p.parliamentRole !== "governo") applyCpuBudgetAllocation();
+    var allocations = state.budgetAllocations || {};
+    var totalAllocated = 0;
+    var lines = [];
+    var metricDeltas = {};
+    Object.keys(allocations).forEach(function (key) {
+      var amount = allocations[key];
+      if (!amount || amount <= 0) return;
+      var info = BUDGET_SUBCATEGORY_BY_KEY[key];
+      if (!info) return;
+      totalAllocated += amount;
+      var res = resolveBudgetLineOutcome(amount);
+      metricDeltas[info.cat.metric] = (metricDeltas[info.cat.metric] || 0) + res.delta;
+      var note = BUDGET_OUTCOME_NOTES[res.outcome][Math.floor(Math.random() * BUDGET_OUTCOME_NOTES[res.outcome].length)];
+      lines.push({ catLabel: info.cat.label, subLabel: info.sub.label, amount: amount, outcome: res.outcome, note: note });
+    });
+    Object.keys(metricDeltas).forEach(function (metric) {
+      if (state.countryProfile[metric] === undefined) return;
+      state.countryProfile[metric] = clamp(state.countryProfile[metric] + metricDeltas[metric], 1, 10);
+    });
+    var positives = lines.filter(function (l) { return l.outcome === "positivo"; }).length;
+    var negatives = lines.filter(function (l) { return l.outcome === "negativo"; }).length;
+    var report = {
+      year: Math.floor(state.turn / 52), week: state.turn, totalAllocated: Math.round(totalAllocated * 10) / 10,
+      lines: lines, positives: positives, negatives: negatives, govLabel: govEntityLabel()
+    };
+    state.budgetHistory.unshift(report);
+    if (state.budgetHistory.length > 6) state.budgetHistory.length = 6;
+    if (lines.length) {
+      state.log.unshift({
+        week: state.turn, title: "Bilancio Annuale degli Investimenti Pubblici", choiceLabel: report.govLabel,
+        result: "Il governo ha stanziato " + fmtEuroMld(report.totalAllocated) + " su " + lines.length + " voci di investimento: " +
+          positives + " si sono rivelate un successo, " + negatives + " uno spreco o un fallimento. Il dettaglio è nella Scheda Paese e Bilancio dello Stato.",
+        headlines: [], type: "cronaca"
+      });
+    }
+  }
+  // ---------- Pressione di isolamento NATO/UE su governi ideologicamente ostili ----------
+  // Un governo comunista, fascista o gratuitista che resta membro della NATO e/o dell'UE non se la cava
+  // gratis: le due organizzazioni tendono realisticamente a isolarlo (fondi congelati, vertici saltati,
+  // diffidenza dei mercati), una lenta pressione settimanale che spinge verso una scelta netta — restare
+  // e subirla, o uscire e affrontarne di diverse (vedi applyEuExitConsequences e la scelta gov_uscita_nato).
+  function updateNatoEuStanding() {
+    var famId = currentGoverningFamilyId();
+    if (HOSTILE_TO_NATO_EU_FAMILIES.indexOf(famId) === -1) return;
+    var pressured = false;
+    if (!state.leftNato) {
+      state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche - rand(0.015, 0.045), 1, 10);
+      pressured = true;
+    }
+    if (!state.leftEu) {
+      state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche - rand(0.015, 0.045), 1, 10);
+      state.countryProfile.economia = clamp(state.countryProfile.economia - rand(0.01, 0.03), 1, 10);
+      pressured = true;
+    }
+    if (pressured && Math.random() < 0.05) {
+      state.worldNews.unshift({ week: state.turn, cat: "Cronaca", text: "NATO e Unione Europea osservano con crescente diffidenza la linea del governo italiano, tra vertici saltati e fondi congelati in attesa di chiarimenti." });
+      if (state.worldNews.length > 6) state.worldNews.length = 6;
+    }
+  }
+  // Diversamente dal giocatore (che decide da sé tramite i dossier gov_uscita_nato/gov_uscita_ue), una
+  // CPU ideologicamente ostile può, molto raramente, decidere da sola di uscire — solo quando il
+  // giocatore non è lui stesso al governo (altrimenti la scelta resta sua, tramite i dossier dedicati).
+  function triggerCpuNatoEuExit() {
+    var p = state.player;
+    if (p.parliamentRole === "governo") return;
+    var famId = currentGoverningFamilyId();
+    if (HOSTILE_TO_NATO_EU_FAMILIES.indexOf(famId) === -1) return;
+    var govLabel = govEntityLabel();
+    if (!state.leftNato && Math.random() < 0.004) {
+      state.leftNato = true; state.natoDecided = true;
+      state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche - rand(1.5, 3), 1, 10);
+      state.countryProfile.economia = clamp(state.countryProfile.economia - rand(0.5, 1.5), 1, 10);
+      state.spreadBps += 150;
+      state.spreadHistory.push(state.spreadBps);
+      if (state.spreadHistory.length > 12) state.spreadHistory.shift();
+      state.log.unshift({
+        week: state.turn, title: "Il Governo Lascia la NATO", choiceLabel: govLabel,
+        result: govLabel + " porta il paese fuori dall'Alleanza Atlantica: una svolta storica nella collocazione internazionale dell'Italia.",
+        headlines: [], type: "cronaca"
+      });
+      return;
+    }
+    if (!state.leftEu && Math.random() < 0.003) {
+      applyEuExitConsequences();
+      state.log.unshift({
+        week: state.turn, title: "Il Governo Lascia l'Unione Europea", choiceLabel: govLabel,
+        result: govLabel + " porta il paese fuori dall'Unione Europea, senza passare da un referendum: una rottura netta con Bruxelles.",
+        headlines: [], type: "cronaca"
+      });
+    }
   }
   // Sezione Giovanile: il suo grado di accordo con la linea del partito ("agreement") oscilla
   // lentamente verso un bersaglio legato alla reputazione del partito, con un po' di rumore settimanale
@@ -1688,7 +1925,7 @@
     corruzione: "la lotta alla corruzione", aziende: "il sostegno alle imprese", economia: "l'economia",
     pil: "la crescita del PIL", felicita: "il benessere sociale", scuola: "la scuola",
     ambientalismo: "la tutela ambientale", commercio: "il commercio", relazioniDiplomatiche: "le relazioni diplomatiche",
-    ricercaSviluppo: "la ricerca e sviluppo", inflazione: "il controllo dell'inflazione"
+    ricercaSviluppo: "la ricerca e sviluppo", inflazione: "il controllo dell'inflazione", difesa: "la difesa nazionale"
   };
   var SITUATION_SHAPES = [
     { kind: "Inchiesta", brief: function (noun, ctx) { return "Un'inchiesta giornalistica accende i riflettori su " + noun + " a " + ctx.city + "."; } },
@@ -5843,7 +6080,7 @@
     return {
       salari: 4, trasporti: 5, welfare: 5, sanita: 5, corruzione: 4, aziende: 5, economia: 5,
       pil: 4, felicita: 6, scuola: 5, ambientalismo: 5, commercio: 6, relazioniDiplomatiche: 6,
-      ricercaSviluppo: 4, inflazione: 6
+      ricercaSviluppo: 4, inflazione: 6, difesa: 5
     };
   }
   var STATE_FIELD_DEFAULTS = {
@@ -5851,6 +6088,7 @@
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
+    budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [],
     usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
@@ -7595,6 +7833,50 @@
     return html;
   }
 
+  // Pannello di stanziamento del bilancio: visibile e modificabile solo quando il partito del giocatore
+  // è davvero al governo (se governa la CPU, decide lei da sola in silenzio, vedi applyCpuBudgetAllocation
+  // dentro resolveAnnualBudget) — 7 categorie, 38 voci, un input numerico per ciascuna, un solo tasto
+  // salva. Sotto, il resoconto dell'ultimo anno chiuso: cosa ha funzionato, cosa no.
+  function renderBudgetAllocation() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return "";
+    var pool = budgetPoolTotal();
+    var allocations = state.budgetAllocations || {};
+    var allocated = Object.keys(allocations).reduce(function (sum, k) { return sum + (allocations[k] || 0); }, 0);
+    var html = '<section aria-label="Stanziamento del Bilancio"><details class="log" open><summary>Stanziamento del Bilancio Pubblico<span>▾</span></summary>';
+    html += '<p class="ci-hint">Come governo, decidi tu dove investire il tesoretto discrezionale di quest\'anno: scrivi un importo (in miliardi di euro) per ciascuna voce e salva. A fine anno ogni stanziamento avrà un esito, buono o cattivo, sulla Scheda Paese.</p>';
+    html += '<div class="stat-grid">' +
+      '<div class="stat-tile"><div class="label">Tesoretto annuale</div><div class="row"><span class="value">' + fmtEuroMld(pool) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Stanziato finora</div><div class="row"><span class="value">' + fmtEuroMld(allocated) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Residuo</div><div class="row"><span class="value">' + fmtEuroMld(Math.max(0, pool - allocated)) + "</span></div></div>" +
+      "</div>";
+    BUDGET_CATEGORIES.forEach(function (cat) {
+      html += '<p class="eyebrow" style="margin-top:1rem">' + cat.label + '</p><div class="option-grid">';
+      cat.subs.forEach(function (sub) {
+        var key = cat.id + "." + sub.id;
+        var val = allocations[key] || 0;
+        html += '<div class="budget-row"><label for="budget-' + key + '">' + sub.label + '</label>' +
+          '<input type="number" min="0" step="0.5" id="budget-' + key + '" data-budget-key="' + key + '" value="' + val + '"></div>';
+      });
+      html += "</div>";
+    });
+    html += '<button class="save-bar-btn primary" id="save-budget-btn" type="button" style="margin-top:1rem">Salva stanziamenti</button>';
+    if (state.budgetHistory && state.budgetHistory.length) {
+      var last = state.budgetHistory[0];
+      html += '<p class="eyebrow" style="margin-top:1.2rem">Ultimo bilancio annuale chiuso (settimana ' + last.week + ')</p>' +
+        '<p class="ci-hint">' + last.govLabel + ' ha stanziato ' + fmtEuroMld(last.totalAllocated) + ': ' + last.positives + ' investimenti riusciti, ' + last.negatives + ' sprechi o fallimenti.</p>' +
+        '<ul class="enacted-policy-list">' + last.lines.map(function (l) {
+          return '<li><strong>' + l.catLabel + ' — ' + l.subLabel + '</strong> <span class="ci-hint">(' + fmtEuroMld(l.amount) + ')</span> ' +
+            '<span class="budget-outcome ' + l.outcome + '">' + l.outcome.toUpperCase() + '</span><br>' + l.note + '</li>';
+        }).join("") + '</ul>';
+      if (state.budgetHistory.length > 1) {
+        html += '<p class="ci-hint">Bilanci degli anni precedenti conservati: ' + (state.budgetHistory.length - 1) + '.</p>';
+      }
+    }
+    html += "</details></section>";
+    return html;
+  }
+
   // "Scheda Paese": lo stato reale del paese su 15 indicatori 1-10. Cambia da solo nel tempo (piccola
   // deriva) e viene spinto dalle scelte del giocatore — poco se il partito è piccolo, molto se è in
   // parlamento/europarlamento, moltissimo se è a governo (vedi institutionalPowerMultiplier).
@@ -8425,7 +8707,7 @@
         return renderReunificationPanel() + renderCoalitionPanel();
       } },
     { id: "paese", label: "Scheda Paese e Bilancio dello Stato", render: function () {
-        return renderNationalStrip() + renderCountryProfile() + renderBilancioStato();
+        return renderNationalStrip() + renderCountryProfile() + renderBilancioStato() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -9283,6 +9565,26 @@
         render();
       });
     }
+    var saveBudgetBtn = document.getElementById("save-budget-btn");
+    if (saveBudgetBtn) {
+      saveBudgetBtn.addEventListener("click", function () {
+        var pool = budgetPoolTotal();
+        var entries = [];
+        var total = 0;
+        app.querySelectorAll("[data-budget-key]").forEach(function (input) {
+          var amt = Math.max(0, parseFloat(input.value) || 0);
+          entries.push({ key: input.getAttribute("data-budget-key"), amount: amt });
+          total += amt;
+        });
+        var scale = total > pool && total > 0 ? pool / total : 1;
+        var allocations = {};
+        entries.forEach(function (e) { allocations[e.key] = Math.round(e.amount * scale * 10) / 10; });
+        state.budgetAllocations = allocations;
+        save();
+        render();
+        showSaveStatus(scale < 1 ? "Stanziamenti salvati, riproporzionati al tesoretto disponibile." : "Stanziamenti salvati.", false);
+      });
+    }
   }
 
   async function advanceTurnLogic() {
@@ -9298,6 +9600,9 @@
     triggerLeaderSuccession();
     updateForeignRelations();
     triggerEuMembershipShift();
+    updateNatoEuStanding();
+    triggerCpuNatoEuExit();
+    resolveAnnualBudget();
     triggerWorldNews();
     triggerMinorCountryEvent();
     triggerNucleoUpdate();
@@ -9458,11 +9763,11 @@
     if (p.inParliament) {
       var parlPool = p.parliamentRole === "governo" ? GOVERNO_DOSSIERS : OPPOSIZIONE_DOSSIERS;
       pool = pool.concat(parlPool.filter(function (d) {
-        // I sondaggi del giocatore restano sempre sotto al 40% per formula (vedi il tetto fisso in
-        // recomputePeriodic e in ogni altro punto che scrive p.sondaggi): usare "45%" come soglia lo
-        // renderebbe letteralmente irraggiungibile. 35% resta comunque una posizione dominante — il
-        // 90% del massimo teoricamente possibile — coerente con lo spirito della richiesta originale.
-        if (d.id === "gov_uscita_nato") return !state.natoDecided && p.sondaggi >= 35;
+        // La NATO si può lasciare subito, senza soglia: è una scelta di politica estera, non serve un
+        // consenso elettorale enorme. L'UE resta più difficile da lasciare (serve una base solida e una
+        // grande delegazione europea): i sondaggi del giocatore restano sempre sotto al 40% per formula
+        // (vedi il tetto fisso in recomputePeriodic), quindi 35% resta comunque una posizione dominante.
+        if (d.id === "gov_uscita_nato") return !state.natoDecided;
         if (d.id === "gov_uscita_ue") {
           if (state.euExitDecided || state.leftEu || p.pendingReferendum) return false;
           if (state.euExitCooldownTurn && state.turn < state.euExitCooldownTurn) return false;
