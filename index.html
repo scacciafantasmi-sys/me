@@ -5252,7 +5252,10 @@
         esitoGovernoNote = " La vittoria rafforza la tenuta della maggioranza di governo.";
       } else {
         state.consensoGoverno = clamp(state.consensoGoverno - rand(5, 10), 0, 100);
-        if (!state.regime && !state.snapElectionPending && Math.random() < 0.4) {
+        // Il governo cade per un'unica, chiara ragione: la fiducia scende sotto il 20%, non un tiro di
+        // dado indipendente da quel numero — vale identicamente qui, nel crollo settimanale e in ogni
+        // altro punto che tocca state.consensoGoverno (vedi checkGovernmentConsensusCollapse).
+        if (!state.regime && !state.snapElectionPending && state.consensoGoverno < 20) {
           state.snapElectionPending = true;
           state.nextElectionTurn = state.turn + 8;
           // La caduta del governo travolge anche la fiducia interna nella tua leadership, non solo i sondaggi.
@@ -5260,7 +5263,7 @@
           governmentCrisisDossier = {
             id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Crisi di governo",
             cat: "Crisi di Governo", title: "Il Governo Cade",
-            brief: "La sconfitta al referendum promosso dallo stesso partito di maggioranza si rivela fatale: gli alleati di governo si sfilano, e il Presidente della Repubblica scioglie le Camere. Si torna al voto in anticipo, con una campagna lampo.",
+            brief: "La sconfitta al referendum promosso dallo stesso partito di maggioranza fa crollare la fiducia nel governo sotto il 20%: gli alleati di governo si sfilano, e il Presidente della Repubblica scioglie le Camere. Si torna al voto in anticipo, con una campagna lampo.",
             choices: [{ label: "Ho capito, si parte con la campagna lampo", hint: "Le urne sono ormai vicine", effects: {}, result: "La caduta del governo apre una campagna elettorale improvvisa e serrata." }]
           };
         } else {
@@ -6623,7 +6626,7 @@
       deficitPil: 2.8,
       ratingIdx: 2,
       ratingOutlook: "Positivo",
-      consensoGoverno: 46,
+      consensoGoverno: 50,
       usedDossiers: [],
       currentDossierId: null,
       aiDynamicDossier: null,
@@ -7497,6 +7500,10 @@
       var seatSplit = {};
       winnerMemberIds.forEach(function (mid) { seatSplit[mid] = seatsById[mid] || { camera: 0, senato: 0 }; });
       state.govEntity = { id: winner.id, memberIds: winnerMemberIds, seatSplit: seatSplit };
+      // Un nuovo governo (vinca chi vinca) riparte sempre da una fiducia standard del 50%, non dal
+      // valore ereditato dalla legislatura precedente: la fiducia racconta il rapporto tra QUESTO
+      // governo e il paese, non un contatore che continua a scendere elezione dopo elezione.
+      state.consensoGoverno = 50;
     }
 
     var playerQualified = p.allianceId
@@ -10248,6 +10255,20 @@
     var localElectionSpotlight = triggerLocalElectionCycle();
     resolveEuropeanElection();
 
+    // Il governo cade per un'unica ragione, sempre la stessa, sia che a governare sia il giocatore sia
+    // che sia la CPU: la fiducia di governo scende sotto il 20%. Non è più un tiro di dado indipendente
+    // da quel numero — la fiducia di governo è l'unico vero indicatore di tenuta della maggioranza.
+    // Questo controllo va eseguito PRIMA di qualunque altro blocco che possa fare return in anticipo,
+    // altrimenti la caduta di governo non scatterebbe quasi mai.
+    if (!state.snapElectionPending && state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20) {
+      state.snapElectionPending = true;
+      state.nextElectionTurn = state.turn + 8;
+      applyGovernmentCollapseLeadershipShock();
+      state.currentDossierId = SNAP_NOTICE.id;
+      state.phase = "building";
+      return;
+    }
+
     if (!state.regime && state.turn >= state.nextElectionTurn) {
       resolveElection();
       return;
@@ -10417,15 +10438,6 @@
     if (trendDossier) {
       state.aiDynamicDossier = trendDossier;
       state.currentDossierId = "ai_dynamic";
-      state.phase = "building";
-      return;
-    }
-
-    if (!state.snapElectionPending && state.turn > state.lastElectionTurn + 52 && Math.random() < 0.006) {
-      state.snapElectionPending = true;
-      state.nextElectionTurn = state.turn + 8;
-      applyGovernmentCollapseLeadershipShock();
-      state.currentDossierId = SNAP_NOTICE.id;
       state.phase = "building";
       return;
     }
