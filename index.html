@@ -4497,7 +4497,7 @@
     var short = name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase();
     return {
       id: id, name: name, short: short, color: shiftColor(parent.color),
-      coalition: "opposizione", dynamic: true, parentId: parent.id,
+      coalition: "opposizione", dynamic: true, parentId: parent.id, familyId: parent.familyId,
       leader: "Un gruppo di ex dirigenti di " + parent.name,
       famiglia: parent.famiglia,
       corrente: "Nata da una scissione interna a " + parent.name + " (" + weekLabel(week) + ")"
@@ -4578,7 +4578,7 @@
     var short = name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase();
     return {
       id: id, name: name, short: short, color: SWATCHES[Math.floor(Math.random() * SWATCHES.length)],
-      coalition: "opposizione", dynamic: true, spontaneous: true, parentId: null,
+      coalition: "opposizione", dynamic: true, spontaneous: true, parentId: null, familyId: family.id,
       leader: generateStaffName(),
       famiglia: family.label,
       corrente: "Movimento civico nato spontaneamente dal malcontento diffuso, senza legami con i partiti esistenti (" + weekLabel(week) + ")"
@@ -4716,7 +4716,7 @@
     var oldPartyId = "dyn_" + p.name.toLowerCase().replace(/[^a-z0-9]+/g, "") + "_" + state.turn;
     var oldParty = {
       id: oldPartyId, name: p.name, short: p.short || p.name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase(),
-      color: p.color, coalition: "opposizione", dynamic: true, parentId: "player",
+      color: p.color, coalition: "opposizione", dynamic: true, parentId: "player", familyId: p.family,
       leader: challenger, famiglia: oldFam ? oldFam.label : "",
       corrente: "Il partito storico, rimasto a " + challenger + " dopo la tua uscita (" + weekLabel(state.turn) + ")"
     };
@@ -6684,6 +6684,26 @@
       }
       if (parsed.player.seggiEuropei > 0 && !parsed.player.euGroup && !parsed.euGroupPending) parsed.euGroupPending = true;
       if (!parsed.partyRelations) parsed.partyRelations = initPartyRelations(parsed.player);
+    }
+    // I partiti dinamici (nati da scissioni o spontaneamente) non salvavano un familyId, solo una
+    // descrizione testuale ("famiglia"): tutto ciò che dipende dall'ideologia di un partito CPU (mozioni,
+    // proposte di legge, modifiche, budget, coerenza NATO/UE...) li trattava quindi come generici, non
+    // davvero coerenti con la loro linea politica. Per le partite già salvate lo si ricostruisce a
+    // posteriori dal genitore (reale o già ricostruito) o, in mancanza, dal nome della famiglia.
+    if (parsed.dynamicParties && parsed.dynamicParties.length) {
+      var dpById = {};
+      parsed.dynamicParties.forEach(function (dp) { dpById[dp.id] = dp; });
+      for (var famPass = 0; famPass < 3; famPass++) {
+        parsed.dynamicParties.forEach(function (dp) {
+          if (dp.familyId) return;
+          var parentReal = PARTIES.filter(function (rp) { return rp.id === dp.parentId; })[0];
+          if (parentReal && parentReal.familyId) { dp.familyId = parentReal.familyId; return; }
+          var parentDyn = dpById[dp.parentId];
+          if (parentDyn && parentDyn.familyId) { dp.familyId = parentDyn.familyId; return; }
+          var famMatch = FAMILIES.filter(function (f) { return f.label === dp.famiglia; })[0];
+          if (famMatch) dp.familyId = famMatch.id;
+        });
+      }
     }
     return parsed;
   }
