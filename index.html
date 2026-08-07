@@ -937,6 +937,23 @@
     var baseline = 45;
     state.consensoGoverno = clamp(state.consensoGoverno + (baseline - state.consensoGoverno) * 0.05 + (Math.random() - 0.5) * 1.5, 0, 100);
   }
+  // Il paese che va oggettivamente meglio o peggio deve pesare anche sulla fiducia di governo, non solo
+  // gli eventi discreti in Aula: confronta la Scheda Paese di questa settimana con quella della settimana
+  // scorsa (countryProfilePrev, la stessa base usata per le frecce +/- mostrate nella Scheda Paese) PRIMA
+  // che driftCountryProfile() la sovrascriva con lo snapshot nuovo — va quindi chiamata subito prima di
+  // driftCountryProfile() in recomputePeriodic(), non dopo.
+  function driftConsensoGovernoByCountryTrend() {
+    if (state.consensoGoverno === undefined || state.consensoGoverno === null) return;
+    var prev = state.countryProfilePrev;
+    if (!prev) return;
+    var totalDelta = 0;
+    COUNTRY_PROFILE_METRICS.forEach(function (m) {
+      if (prev[m.key] === undefined || state.countryProfile[m.key] === undefined) return;
+      totalDelta += state.countryProfile[m.key] - prev[m.key];
+    });
+    var cgDelta = clamp(totalDelta * 1.5, -3, 3);
+    if (cgDelta) state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
+  }
   // ---------- Stanziamento del bilancio pubblico: chi governa (giocatore o CPU) decide dove investire ----------
   // 7 grandi categorie, ciascuna con 5-6 sottocategorie concrete (38 voci in totale): il partito che
   // guida il governo in quel momento — il giocatore se governa lui, altrimenti la CPU in base alla sua
@@ -6936,6 +6953,7 @@
     var p = state.player;
     if (!p) return;
     var style = leadershipById(p.leadership);
+    driftConsensoGovernoByCountryTrend();
     driftCountryProfile();
     checkLongTermTrackMilestones();
     driftPartyRelations();
