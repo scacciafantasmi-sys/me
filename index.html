@@ -5379,6 +5379,60 @@
     var generalTopics = mozioneTopicsGeneral().filter(function (t) { return accepted.indexOf(t.title) === -1; });
     return shuffleN(familyTopics, Math.min(3, familyTopics.length)).concat(shuffleN(generalTopics, Math.min(2, generalTopics.length)));
   }
+  // ---------- Proposte di Legge: un livello sopra le mozioni (non un atto di indirizzo, ma una vera
+  // legge) ---------- Stessa architettura combinatoria delle mozioni (temi generali + temi per ideologia
+  // pescati da FAMILY_ANGLE_NOUNS, già decine per famiglia), ma con effetti reali più forti sulla Scheda
+  // Paese e più rari (una volta ogni 25 settimane): non un semplice atto di indirizzo, una legge vera.
+  // 15 temi generali (uno per ciascun indicatore principale della Scheda Paese) più i temi identitari di
+  // ciascuna delle 17 famiglie politiche (5 temi x 7 sostantivi = 35 per famiglia, ben oltre i 30 richiesti).
+  var GENERAL_LAW_TOPICS = [
+    { noun: "l'introduzione di un salario minimo legale nazionale", metric: "salari" },
+    { noun: "un piano nazionale per il rinnovo del trasporto pubblico", metric: "trasporti" },
+    { noun: "una riforma organica del sistema di welfare familiare", metric: "welfare" },
+    { noun: "l'istituzione di un fascicolo sanitario elettronico nazionale unico", metric: "sanita" },
+    { noun: "una legge organica anticorruzione per gli appalti pubblici", metric: "corruzione" },
+    { noun: "una legge quadro per la semplificazione normativa delle imprese", metric: "aziende" },
+    { noun: "una riforma strutturale del sistema fiscale nazionale", metric: "economia" },
+    { noun: "un piano nazionale di investimenti per la crescita economica", metric: "pil" },
+    { noun: "una legge sul benessere lavorativo e la settimana corta", metric: "felicita" },
+    { noun: "una riforma organica del sistema scolastico nazionale", metric: "scuola" },
+    { noun: "una legge quadro sulla transizione ecologica", metric: "ambientalismo" },
+    { noun: "una legge di sostegno all'export delle piccole imprese", metric: "commercio" },
+    { noun: "una legge sulla cooperazione internazionale allo sviluppo", metric: "relazioniDiplomatiche" },
+    { noun: "una legge sul finanziamento pubblico della ricerca scientifica", metric: "ricercaSviluppo" },
+    { noun: "un pacchetto di misure calmiere sui prezzi dei beni essenziali", metric: "inflazione" }
+  ];
+  var LAW_SHAPES = [
+    { id: "iniziativa", build: function (noun, metric) { return { title: "Proposta di Legge su " + noun.charAt(0).toUpperCase() + noun.slice(1), brief: "Depositi in Parlamento una proposta di legge organica su " + noun + ": un provvedimento vero, non solo un atto di indirizzo.", metric: metric, noun: noun }; } },
+    { id: "delega", build: function (noun, metric) { return { title: "Disegno di Legge Delega su " + noun.charAt(0).toUpperCase() + noun.slice(1), brief: "Presenti un disegno di legge delega su " + noun + ", per dare al Governo gli strumenti concreti per intervenire davvero.", metric: metric, noun: noun }; } }
+  ];
+  function lawTopicsForFamily(familyId) {
+    var angles = FAMILY_ANGLE_NOUNS[familyId];
+    var themeIds = FAMILY_SIGNATURE_THEMES[familyId] || [];
+    var topics = [];
+    if (!angles) return topics;
+    themeIds.forEach(function (themeId) {
+      var nouns = angles[themeId] || [];
+      var metric = THEME_TO_NATIONAL_METRIC[themeId];
+      nouns.forEach(function (noun) {
+        LAW_SHAPES.forEach(function (shape) { topics.push(shape.build(noun, metric)); });
+      });
+    });
+    return topics;
+  }
+  function lawTopicsGeneral() {
+    var topics = [];
+    GENERAL_LAW_TOPICS.forEach(function (t) {
+      LAW_SHAPES.forEach(function (shape) { topics.push(shape.build(t.noun, t.metric)); });
+    });
+    return topics;
+  }
+  function generateLawCandidates(p) {
+    var accepted = p.acceptedLeggi || [];
+    var familyTopics = lawTopicsForFamily(p.family).filter(function (t) { return accepted.indexOf(t.title) === -1; });
+    var generalTopics = lawTopicsGeneral().filter(function (t) { return accepted.indexOf(t.title) === -1; });
+    return shuffleN(familyTopics, Math.min(3, familyTopics.length)).concat(shuffleN(generalTopics, Math.min(2, generalTopics.length)));
+  }
   // Famiglia ideologica "di riferimento" del Governo in carica: se il giocatore stesso è al governo, è
   // la sua; altrimenti si usa la stessa convenzione già in uso nel gioco per le coalizioni (il
   // centrodestra, sempre al governo per default, ha come famiglia di riferimento "sovranista").
@@ -5386,7 +5440,7 @@
     if (p.parliamentRole === "governo") return p.family;
     return "sovranista";
   }
-  var MOZIONE_COOLDOWN_TURNS = 15;
+  var MOZIONE_COOLDOWN_TURNS = 25;
   function mozioneAcceptProbability(p) {
     if (p.parliamentRole === "governo") return 0.82 + Math.random() * 0.1;
     var govFam = governingFamilyId(p);
@@ -5453,6 +5507,145 @@
     };
   }
 
+  // Le leggi vere sono più difficili da approvare di una semplice mozione, specie per chi è
+  // all'opposizione: tetto più basso per chi non governa (0.55 contro lo 0.78 delle mozioni).
+  var LEGGE_COOLDOWN_TURNS = 25;
+  function leggeAcceptProbability(p) {
+    if (p.parliamentRole === "governo") return 0.75 + Math.random() * 0.12;
+    var govFam = governingFamilyId(p);
+    var myPos = LEFT_RIGHT_POSITION[p.family], govPos = LEFT_RIGHT_POSITION[govFam];
+    if (myPos === undefined || govPos === undefined) return 0.2;
+    var dist = Math.abs(myPos - govPos);
+    return clamp(0.55 - (dist / 6) * 0.5, 0.03, 0.55);
+  }
+  function proposeLegge(topic) {
+    var p = state.player;
+    if (!p.inParliament) return null;
+    if (state.turn < (p.leggeCooldownTurn || 0)) return null;
+    if (p.pendingLegge) return null;
+    p.leggeCooldownTurn = state.turn + LEGGE_COOLDOWN_TURNS;
+    p.pendingLegge = {
+      title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun,
+      acceptProb: leggeAcceptProbability(p), resolveTurn: state.turn + 3 + Math.floor(Math.random() * 4)
+    };
+    p.leggeCandidates = null;
+    state.log.unshift({
+      week: state.turn, title: "Proposta di legge depositata", choiceLabel: topic.title,
+      result: "Il partito deposita in Parlamento una proposta di legge su " + topic.noun + ". L'iter passerà dalle commissioni prima del voto finale in Aula.",
+      headlines: [], type: "mozione", cat: "Proposta di Legge"
+    });
+    return { resultText: "Hai depositato una proposta di legge su " + topic.noun + ". L'iter parlamentare richiederà qualche settimana.", headlines: [] };
+  }
+  function resolveLeggeIfDue() {
+    var p = state.player;
+    if (!p.pendingLegge) return null;
+    if (state.turn < p.pendingLegge.resolveTurn) return null;
+    var topic = p.pendingLegge;
+    p.pendingLegge = null;
+    var passed = Math.random() < topic.acceptProb;
+    var mult = institutionalPowerMultiplier(p);
+    var isGoverno = p.parliamentRole === "governo";
+    var delta = passed ? rand(0.5, 1.0) : rand(-0.1, 0.1);
+    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+    var repDelta = passed ? rand(1.5, 3.5) : (isGoverno ? -rand(1, 3) : rand(0.3, 1.2));
+    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    if (state.consensoGoverno !== undefined) {
+      var cgDelta = passed ? (isGoverno ? rand(1.5, 3.5) : -rand(1.5, 3.5)) : (isGoverno ? -rand(0.5, 1.5) : rand(0.3, 1));
+      state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
+    }
+    var esito = passed
+      ? "La proposta di legge del tuo partito viene approvata in via definitiva dall'Aula: " + topic.noun + " diventa legge dello Stato."
+      : "La proposta di legge del tuo partito viene respinta in Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": " + topic.noun + " resta senza una legge dedicata, anche se il tema resta acceso nel dibattito pubblico.";
+    state.log.unshift({
+      week: state.turn, title: topic.title, choiceLabel: "Esito del voto finale in Aula", result: esito,
+      headlines: [], type: "mozione", cat: "Proposta di Legge"
+    });
+    if (passed) {
+      if (!p.acceptedLeggi) p.acceptedLeggi = [];
+      p.acceptedLeggi.push(topic.title);
+      recordEnactedPolicy(topic.title, "Legge approvata: " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.");
+    }
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua legge è passata in Aula" : "La tua proposta di legge è stata respinta",
+      cat: "Proposta di Legge", title: topic.title, brief: esito + " Come reagisce il tuo partito?",
+      choices: choices
+    };
+  }
+  // ---------- Proposte di legge presentate da altri partiti ----------
+  // Stessa logica delle mozioni CPU: chi propone (di governo o di opposizione) pesca dal pool pesato
+  // sui sondaggi, la probabilità dipende da chi governa davvero, e il voto del gruppo del giocatore la
+  // sposta un po' in un verso o nell'altro. Effetti più forti delle mozioni, perché è una legge vera.
+  var CPU_LEGGE_COOLDOWN_TURNS = 25;
+  function buildCpuLeggeDossier() {
+    var pool = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 1; });
+    if (!pool.length) return null;
+    var weighted = pool.map(function (pt) { return { pt: pt, w: Math.max(0.5, state.parties[pt.id] || 0.5) }; });
+    var proposer = pickWeighted(weighted, function (e) { return e.w; }).pt;
+    var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
+    var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
+    if (!topicPool.length) topicPool = lawTopicsGeneral();
+    if (!topicPool.length) return null;
+    var topic = topicPool[Math.floor(Math.random() * topicPool.length)];
+    var baseProb;
+    if (isGovProposer) {
+      baseProb = 0.72 + Math.random() * 0.15;
+    } else {
+      var govFam = currentGoverningFamilyId();
+      var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
+      baseProb = (myPos === undefined || govPos === undefined) ? 0.2 : clamp(0.55 - (Math.abs(myPos - govPos) / 6) * 0.5, 0.03, 0.55);
+    }
+    var brief = proposer.name + " deposita in Parlamento una proposta di legge su " + topic.noun +
+      (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") +
+      " Come si schiera il tuo gruppo sul voto finale?";
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: (isGovProposer ? "Proposta di legge della maggioranza di governo" : "Proposta di legge di un partito d'opposizione") + " — vota anche il tuo gruppo",
+      cat: "Proposta di Legge", title: topic.title + " (" + proposer.short + ")", brief: brief,
+      cpuLeggeMeta: { proposerId: proposer.id, proposerName: proposer.name, metric: topic.metric, noun: topic.noun, baseProb: baseProb, isGovProposer: isGovProposer },
+      choices: [
+        { label: "Vota a favore", mozioneVote: "favore", effects: {}, result: "" },
+        { label: "Vota contro", mozioneVote: "contro", effects: {}, result: "" },
+        { label: "Astieniti", mozioneVote: "astensione", effects: {}, result: "" }
+      ]
+    };
+  }
+  function resolveCpuLeggeChoice(dossier, choice) {
+    var p = state.player;
+    var meta = dossier.cpuLeggeMeta || {};
+    var voteAdj = choice.mozioneVote === "favore" ? 0.06 : choice.mozioneVote === "contro" ? -0.06 : 0;
+    var prob = clamp((meta.baseProb === undefined ? 0.3 : meta.baseProb) + voteAdj, 0.03, 0.95);
+    var passed = Math.random() < prob;
+    var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
+    if (meta.metric) state.countryProfile[meta.metric] = clamp(state.countryProfile[meta.metric] + delta, 1, 10);
+    if (meta.proposerId && state.partyRelations && state.partyRelations[meta.proposerId] !== undefined) {
+      var relDelta = choice.mozioneVote === "favore" ? rand(2, 5) : choice.mozioneVote === "contro" ? -rand(2, 5) : 0;
+      if (relDelta) state.partyRelations[meta.proposerId] = clamp(state.partyRelations[meta.proposerId] + relDelta, 0, 100);
+    }
+    var repDelta = choice.mozioneVote === "astensione" ? -rand(0.5, 1.5) : rand(0.5, 1.8);
+    var visDelta = choice.mozioneVote === "astensione" ? rand(0.8, 2) : rand(2, 4.5);
+    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    p.visibilita = clamp((p.visibilita || 0) + visDelta, 0, 100);
+    if (state.consensoGoverno !== undefined) {
+      var cg = meta.isGovProposer ? (passed ? rand(1.5, 3.5) : -rand(2, 4)) : (passed ? -rand(2, 4) : rand(0.5, 1.5));
+      state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
+    }
+    var voteNote = choice.mozioneVote === "favore" ? "con il voto favorevole anche del tuo gruppo"
+      : choice.mozioneVote === "contro" ? "nonostante il voto contrario del tuo gruppo" : "con il tuo gruppo astenuto";
+    var esito = passed
+      ? "La proposta di legge di " + meta.proposerName + " su " + meta.noun + " viene approvata in via definitiva dall'Aula, " + voteNote + ": " + meta.noun + " diventa legge dello Stato."
+      : "La proposta di legge di " + meta.proposerName + " su " + meta.noun + " viene respinta dall'Aula, " + voteNote + ": il tema resta comunque acceso nel dibattito pubblico.";
+    if (passed) {
+      if (!p.acceptedLeggi) p.acceptedLeggi = [];
+      p.acceptedLeggi.push(dossier.title.split(" (")[0]);
+      recordEnactedPolicy(dossier.title.split(" (")[0], "Legge approvata (proposta da " + meta.proposerName + "): " + meta.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.");
+    }
+    state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
+    state.resultData = { resultText: esito, headlines: [] };
+  }
   // ---------- Mozioni presentate da altri partiti ----------
   // Non solo il giocatore: ogni tanto è un ALTRO partito (di governo o di opposizione) a presentare una
   // mozione, e il gruppo parlamentare del giocatore deve schierarsi — a favore, contro, o astenersi. La
@@ -5460,7 +5653,7 @@
   // presentarla (dispone dei numeri), altrimenti dalla distanza ideologica dal governo in carica — con un
   // piccolo margine in più o in meno a seconda di come vota il partito del giocatore. Se passa, entra
   // nella Scheda Paese esattamente come una mozione del giocatore.
-  var CPU_MOZIONE_COOLDOWN_TURNS = 6;
+  var CPU_MOZIONE_COOLDOWN_TURNS = 25;
   function buildCpuMozioneDossier() {
     var pool = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 1; });
     if (!pool.length) return null;
@@ -5548,6 +5741,30 @@
         '<span class="olabel">' + t.title + '</span><span class="odesc">' + t.brief + '</span></button>';
     });
     html += '</div><button type="button" class="staff-btn hire" data-reroll-mozione="1">Rimescola le proposte</button></details></section>';
+    return html;
+  }
+
+  function renderLeggiPanel() {
+    var p = state.player;
+    if (!p.inParliament) return "";
+    var html = '<section aria-label="Proposte di Legge"><details class="log" open><summary>Proposte di Legge<span>▾</span></summary>';
+    if (p.pendingLegge) {
+      html += '<p class="ci-hint">Proposta di legge depositata su <strong>' + p.pendingLegge.title + '</strong>: il voto finale in Aula arriverà tra qualche settimana, dopo il passaggio in commissione.</p></details></section>';
+      return html;
+    }
+    var weeksLeft = (p.leggeCooldownTurn || 0) - state.turn;
+    if (weeksLeft > 0) {
+      html += '<p class="ci-hint">Puoi depositare una nuova proposta di legge tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
+      return html;
+    }
+    if (!p.leggeCandidates || !p.leggeCandidates.length) p.leggeCandidates = generateLawCandidates(p);
+    var probHint = Math.round(leggeAcceptProbability(p) * 100);
+    html += '<p class="ci-hint">A differenza di una mozione (un atto di indirizzo), una proposta di legge diventa davvero legge dello Stato se approvata: effetti reali più forti, ma più difficile da far passare. Presentabile una volta ogni ' + LEGGE_COOLDOWN_TURNS + ' settimane, gratuita. In base alla distanza dalla linea del Governo in carica, ha circa il ' + probHint + '% di probabilità di essere approvata. Scegli una proposta da depositare:</p><div class="option-grid">';
+    p.leggeCandidates.forEach(function (t, i) {
+      html += '<button type="button" class="option-card" data-propose-legge="' + i + '">' +
+        '<span class="olabel">' + t.title + '</span><span class="odesc">' + t.brief + '</span></button>';
+    });
+    html += '</div><button type="button" class="staff-btn hire" data-reroll-legge="1">Rimescola le proposte</button></details></section>';
     return html;
   }
 
@@ -6108,7 +6325,7 @@
     govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() },
     foreignRelations: {}, euMembershipOverrides: {}, euFederalized: false,
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
-    cpuMozioneCooldownTurn: 0
+    cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -6123,7 +6340,8 @@
     currentTermAllianceId: null, correntiLeaders: {}, acceptedMozioni: [], acceptedReferendum: [], logoDataUrl: null,
     leaderTrust: 65, playerIsLeader: true, interimLeaderName: null, primariesCooldownTurn: 0, short: null,
     joinedBrics: false, organization: null,
-    questionTimeCooldownTurn: 0, pendingQuestionTime: null
+    questionTimeCooldownTurn: 0, pendingQuestionTime: null,
+    leggeCooldownTurn: 0, pendingLegge: null, leggeCandidates: null, acceptedLeggi: []
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -7001,7 +7219,12 @@
       return e.totalSeats > best.totalSeats ? e : best;
     }, qualified[0]) : null;
     if (winner) {
-      state.govEntity = { id: winner.id, memberIds: winner.members.filter(function (id) { return id !== "player"; }) };
+      var winnerMemberIds = winner.members.filter(function (id) { return id !== "player"; });
+      // Quanti seggi porta in dote ciascun partito della coalizione di governo: serve a ripartire i
+      // ministeri in modo proporzionale (vedi computeCabinetAllocation), non solo a sapere chi c'è dentro.
+      var seatSplit = {};
+      winnerMemberIds.forEach(function (mid) { seatSplit[mid] = seatsById[mid] || { camera: 0, senato: 0 }; });
+      state.govEntity = { id: winner.id, memberIds: winnerMemberIds, seatSplit: seatSplit };
     }
 
     var playerQualified = p.allianceId
@@ -8037,6 +8260,38 @@
     if (!p.allianceId) entities.push({ id: "player", label: p.name, votes: p.sondaggi });
     return entities.reduce(function (best, e) { return e.votes > best.votes ? e : best; }, entities[0]);
   }
+  // ---------- Ripartizione dei ministeri in una coalizione di governo ----------
+  // Quando vince una coalizione (di due o più partiti, non un partito singolo), non basta dire "governa
+  // la coalizione X": bisogna anche vedere come si dividono il potere davvero. Riusa lo stesso metodo
+  // Hamilton già usato per i seggi (hamiltonApportion) per ripartire in modo proporzionale ai seggi
+  // portati in dote da ciascun partito (state.govEntity.seatSplit, salvato in resolveElection): il partito
+  // più forte esprime la Presidenza del Consiglio e riceve il maggior numero di ministeri.
+  var MINISTRIES = [
+    "Economia e Finanze", "Interno", "Esteri", "Difesa", "Giustizia", "Istruzione",
+    "Salute", "Ambiente e Transizione Ecologica", "Infrastrutture e Trasporti", "Lavoro e Politiche Sociali"
+  ];
+  function computeCabinetAllocation() {
+    var ge = state.govEntity;
+    if (!ge || !ge.memberIds || ge.memberIds.length < 2) return null;
+    var activeIds = activeParties().map(function (party) { return party.id; });
+    var members = ge.memberIds.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    if (members.length < 2) return null;
+    var seatSplit = ge.seatSplit || {};
+    var weights = members.map(function (id) {
+      var s = seatSplit[id];
+      return Math.max(1, (s ? s.camera + s.senato : 0) || state.parties[id] || 1);
+    });
+    var sorted = members.map(function (id, i) { return { id: id, w: weights[i] }; }).sort(function (a, b) { return b.w - a.w; });
+    var counts = hamiltonApportion(sorted.map(function (s) { return s.w; }), MINISTRIES.length);
+    var allocation = { premierId: sorted[0].id, ministries: {} };
+    var mIdx = 0;
+    sorted.forEach(function (s, i) {
+      var assigned = [];
+      for (var k = 0; k < counts[i] && mIdx < MINISTRIES.length; k++) { assigned.push(MINISTRIES[mIdx]); mIdx++; }
+      allocation.ministries[s.id] = assigned;
+    });
+    return allocation;
+  }
   // ---------- Fiducia della coalizione ----------
   // Una coalizione tenuta insieme solo per far numero nei sondaggi ("mappazzone") deve essere fragile:
   // parte da una fiducia più bassa se i membri non sono ideologicamente vicini, e si logora settimana
@@ -8529,6 +8784,20 @@
     if (state.govEntity && projected.id !== state.govEntity.id) {
       html += '<p class="ci-hint">Se si votasse oggi, invece, in testa ai sondaggi ci sarebbe <strong>' + projected.label + '</strong>: il governo in carica sta perdendo consenso, ma resta al suo posto fino al prossimo voto.</p>';
     }
+    var cabinet = computeCabinetAllocation();
+    if (cabinet) {
+      var premierParty = partyById(cabinet.premierId);
+      var premierName = cabinet.premierId === "player" ? p.name : (premierParty ? premierParty.name : cabinet.premierId);
+      html += '<p class="eyebrow" style="margin-top:0.9rem">Come si divide la coalizione di governo</p>' +
+        '<p class="ci-hint">' + premierName + ' esprime la Presidenza del Consiglio, come partito più forte della coalizione. I ministeri si dividono in proporzione ai seggi portati in dote da ciascun alleato:</p><div class="stat-grid">' +
+        Object.keys(cabinet.ministries).map(function (id) {
+          var list = cabinet.ministries[id];
+          if (!list.length) return "";
+          var party = partyById(id);
+          var name = id === "player" ? p.name : (party ? party.name : id);
+          return '<div class="stat-tile"><div class="label">' + name + (id === cabinet.premierId ? " (Presidenza)" : "") + '</div><div class="row"><span class="value">' + list.length + " ministero" + (list.length === 1 ? "" : "i") + '</span></div><p class="ci-hint" style="margin-top:0.3rem">' + list.join(", ") + '</p></div>';
+        }).join("") + '</div>';
+    }
     if (p.inParliament) {
       var roleGood = p.parliamentRole === "governo";
       html += '<p class="countdown"><span class="chip ' + (roleGood ? "good" : "accent") + '">' +
@@ -8750,7 +9019,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", render: function () {
-        return renderGovernmentReforms() + renderReferendumProposal() + renderMozioniPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderGovernmentReforms() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
         return renderEuInitiatives() + renderGeopolitica() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
@@ -9021,6 +9290,8 @@
         resolvePrimariesChoice(dossier, choice);
       } else if (dossier.cpuMozioneMeta) {
         resolveCpuMozioneChoice(dossier, choice);
+      } else if (dossier.cpuLeggeMeta) {
+        resolveCpuLeggeChoice(dossier, choice);
       } else {
         var res = applyChoice(dossier, choice);
         state.resultData = res;
@@ -9363,6 +9634,26 @@
     app.querySelectorAll("[data-reroll-mozione]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.player.mozioneCandidates = generateMozioneCandidates(state.player);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-propose-legge]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-propose-legge"), 10);
+        var p = state.player;
+        var topic = p.leggeCandidates && p.leggeCandidates[idx];
+        if (!topic) return;
+        var res = proposeLegge(topic);
+        if (!res) { showSaveStatus("Non puoi ancora depositare una proposta di legge (tempo di recupero o proposta già in corso).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-reroll-legge]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.player.leggeCandidates = generateLawCandidates(state.player);
         save();
         render();
       });
@@ -9753,6 +10044,14 @@
       return;
     }
 
+    var leggeDossier = resolveLeggeIfDue();
+    if (leggeDossier) {
+      state.aiDynamicDossier = leggeDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
     var questionTimeDue = resolveQuestionTimeIfDue();
     if (questionTimeDue) {
       state.aiDynamicDossier = questionTimeDue;
@@ -9766,6 +10065,17 @@
       if (cpuMozioneDossier) {
         state.cpuMozioneCooldownTurn = state.turn + CPU_MOZIONE_COOLDOWN_TURNS;
         state.aiDynamicDossier = cpuMozioneDossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
+    }
+
+    if (p.inParliament && state.turn >= (state.cpuLeggeCooldownTurn || 0) && Math.random() < 0.3) {
+      var cpuLeggeDossier = buildCpuLeggeDossier();
+      if (cpuLeggeDossier) {
+        state.cpuLeggeCooldownTurn = state.turn + CPU_LEGGE_COOLDOWN_TURNS;
+        state.aiDynamicDossier = cpuLeggeDossier;
         state.currentDossierId = "ai_dynamic";
         state.phase = "building";
         return;
