@@ -7989,6 +7989,42 @@
     if (party) return party.name;
     return ge.id;
   }
+  // Chi vincerebbe SE si votasse oggi, sui sondaggi attuali — non è chi governa davvero (quello resta
+  // fisso a chi ha vinto l'ultima elezione reale, vedi state.govEntity in resolveElection, fino al voto
+  // successivo). Con legislature lunghe i sondaggi possono ribaltarsi parecchio a metà mandato: senza
+  // questo confronto esplicito, vedere "Governo in carica: Centrodestra" mentre in cima ai sondaggi c'è
+  // il Campo Largo sembra un errore, quando invece è semplicemente un governo in carica che sta calando.
+  function projectedGovEntity() {
+    var p = state.player;
+    var activeIds = activeParties().map(function (party) { return party.id; });
+    var cdMembers = COALITIONS.centrodestra.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    var clMembers = COALITIONS.campolargo.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    var cdVotes = cdMembers.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0);
+    var clVotes = clMembers.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0);
+    var playerInCd = p.allianceId === "centrodestra";
+    var playerInCl = p.allianceId === "campolargo";
+    if (playerInCd) cdVotes += p.sondaggi;
+    if (playerInCl) clVotes += p.sondaggi;
+    var entities = [
+      { id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes },
+      { id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes }
+    ];
+    var coalitionMemberIds = cdMembers.concat(clMembers);
+    (state.dynamicCoalitions || []).forEach(function (c) {
+      var liveMembers = c.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
+      if (p.allianceId === c.id) liveMembers = liveMembers.concat(["player"]);
+      coalitionMemberIds = coalitionMemberIds.concat(c.members);
+      if (liveMembers.length < 2) return;
+      var votes = liveMembers.reduce(function (s, id) { return s + (id === "player" ? p.sondaggi : (state.parties[id] || 0)); }, 0);
+      entities.push({ id: c.id, label: c.label, votes: votes });
+    });
+    activeParties().forEach(function (party) {
+      if (coalitionMemberIds.indexOf(party.id) !== -1) return;
+      entities.push({ id: party.id, label: party.name, votes: state.parties[party.id] || 0 });
+    });
+    if (!p.allianceId) entities.push({ id: "player", label: p.name, votes: p.sondaggi });
+    return entities.reduce(function (best, e) { return e.votes > best.votes ? e : best; }, entities[0]);
+  }
   // ---------- Fiducia della coalizione ----------
   // Una coalizione tenuta insieme solo per far numero nei sondaggi ("mappazzone") deve essere fragile:
   // parte da una fiducia più bassa se i membri non sono ideologicamente vicini, e si logora settimana
@@ -8474,9 +8510,13 @@
     // di uno dei suoi partiti (subentrando al suo posto, dissolto dal roster): in entrambi i casi il suo
     // nome deve comparire nell'elenco dei partiti al governo.
     if (playerInGov && govPartyNames.indexOf(p.name) === -1) govPartyNames.push(p.name);
-    html += '<p class="ci-hint">Governo in carica: <strong>' + govEntityLabel() + '</strong>' +
+    html += '<p class="ci-hint">Governo in carica dalle elezioni della settimana ' + state.lastElectionTurn + ': <strong>' + govEntityLabel() + '</strong>' +
       (govPartyNames.length ? " (" + govPartyNames.join(", ") + ")" : "") +
-      (playerInGov ? " — il tuo partito ne fa parte." : ".") + "</p>";
+      (playerInGov ? " — il tuo partito ne fa parte." : ".") + " Resta in carica fino alla prossima elezione (settimana " + state.nextElectionTurn + "), qualunque cosa dicano i sondaggi nel frattempo.</p>";
+    var projected = projectedGovEntity();
+    if (state.govEntity && projected.id !== state.govEntity.id) {
+      html += '<p class="ci-hint">Se si votasse oggi, invece, in testa ai sondaggi ci sarebbe <strong>' + projected.label + '</strong>: il governo in carica sta perdendo consenso, ma resta al suo posto fino al prossimo voto.</p>';
+    }
     if (p.inParliament) {
       var roleGood = p.parliamentRole === "governo";
       html += '<p class="countdown"><span class="chip ' + (roleGood ? "good" : "accent") + '">' +
