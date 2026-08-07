@@ -7052,9 +7052,18 @@
   }
 
   function allianceDossier() {
-    var fam = familyById(state.player.family);
-    var currentId = state.player.allianceId;
+    var p = state.player;
+    var fam = familyById(p.family);
+    var currentId = p.allianceId;
     var current = coalitionById(currentId);
+    // p.allianceId viene azzerato a ogni elezione (va rinegoziato), ma se il giocatore aveva costruito
+    // una propria coalizione (tramite gli inviti alle altre forze) e questa esiste ancora, l'unica
+    // scelta visibile qui non deve ridursi a "Centrodestra / Campo Largo / da solo": va offerta
+    // esplicitamente anche la possibilità di ripresentarsi con la propria alleanza.
+    if (!current && p.currentTermAllianceId && !COALITIONS[p.currentTermAllianceId]) {
+      var ownCoal = coalitionById(p.currentTermAllianceId);
+      if (ownCoal) { currentId = p.currentTermAllianceId; current = ownCoal; }
+    }
     var choices = [];
     // Se il partito è già alleato con qualcuno (una coalizione fissa o una nata durante la partita) al
     // momento in cui si avvicina il voto, la scelta più naturale — continuare con l'alleanza attuale —
@@ -9444,8 +9453,10 @@
     if (dossier.id === "alleanza_negoziato") {
         state.player.allianceId = choice.alliance;
         // "Corri con l'alleanza attuale" è una conferma, non una nuova adesione: non deve azzerare
-        // la fiducia di coalizione già costruita nel tempo.
-        if (choice.alliance && !choice.keepCurrent) {
+        // la fiducia di coalizione già costruita nel tempo. Eccezione: se la fiducia non esiste affatto
+        // (es. il giocatore riprende una propria coalizione dopo che il post-elezione l'aveva azzerata),
+        // va comunque inizializzata, altrimenti resterebbe indefinita per il resto della legislatura.
+        if (choice.alliance && (!choice.keepCurrent || !state.coalitionTrust || state.coalitionTrust[choice.alliance] === undefined)) {
           if (!state.coalitionTrust) state.coalitionTrust = {};
           state.coalitionTrust[choice.alliance] = initialCoalitionTrust(choice.alliance);
         }
