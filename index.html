@@ -9210,21 +9210,31 @@
     entries.sort(function (a, b) { return a.pos - b.pos; });
     return entries;
   }
-  // L'emiciclo VERO, uscito dalle urne l'ultima volta che si è votato: resta fisso per tutta la
-  // legislatura (vedi state.parliamentSeats, salvato in resolveElection), a differenza del "Quadro
-  // parlamentare" più sotto che invece segue i sondaggi del momento, settimana per settimana.
+  // L'emiciclo va mostrato SEMPRE, non solo dopo la prima elezione giocata con questa funzione già
+  // presente: se il salvataggio non ha ancora una vera composizione uscita dalle urne
+  // (state.parliamentSeats, salvato in resolveElection — resta fisso per tutta la legislatura), si
+  // ripiega sulla stessa proiezione sui sondaggi del momento già usata dal "Quadro parlamentare" più
+  // sotto (projectSeats), lasciandolo comunque ben distinto con un'etichetta diversa.
   function renderParliamentHemicycles() {
     var seats = state.parliamentSeats;
-    if (!seats) {
-      return '<section aria-label="Composizione reale del Parlamento"><details class="log" open><summary>Composizione reale del Parlamento<span>▾</span></summary>' +
-        '<p class="ci-hint">Si vedrà qui, con tanto di emiciclo, non appena si terranno le prossime elezioni politiche.</p></details></section>';
+    var isReal = !!seats;
+    var camMap, senMap, headerNote;
+    if (isReal) {
+      camMap = seats.camera; senMap = seats.senato;
+      headerNote = "Composizione reale del Parlamento (elezioni della settimana " + seats.turn + ")";
+    } else {
+      camMap = projectSeats(400); senMap = projectSeats(200);
+      headerNote = "Composizione del Parlamento (proiezione sui sondaggi attuali)";
     }
-    var camEntries = buildHemicycleEntries(seats.camera);
-    var senEntries = buildHemicycleEntries(seats.senato);
+    var camEntries = buildHemicycleEntries(camMap);
+    var senEntries = buildHemicycleEntries(senMap);
     var camTotal = camEntries.reduce(function (s, e) { return s + e.seats; }, 0);
     var senTotal = senEntries.reduce(function (s, e) { return s + e.seats; }, 0);
-    return '<section aria-label="Composizione reale del Parlamento"><details class="log" open><summary>Composizione reale del Parlamento (elezioni della settimana ' + seats.turn + ')<span>▾</span></summary>' +
-      '<p class="ci-hint">L\'emiciclo uscito davvero dalle urne, con i partiti (soglia 3%) e le coalizioni (soglia 10%) che hanno superato lo sbarramento: resta fisso per tutta la legislatura, a differenza del quadro sondaggi qui sotto.</p>' +
+    var note = isReal
+      ? "L'emiciclo uscito davvero dalle urne, con i partiti (soglia 3%) e le coalizioni (soglia 10%) che hanno superato lo sbarramento: resta fisso per tutta la legislatura, a differenza del quadro sondaggi qui sotto."
+      : "Nessuna elezione politica ancora registrata in questo salvataggio: l'emiciclo qui sotto è una proiezione sui sondaggi di oggi, si aggiorna ogni settimana finché non si vota davvero — da quel momento in poi mostrerà la composizione reale e fissa uscita dalle urne.";
+    return '<section aria-label="Composizione reale del Parlamento"><details class="log" open><summary>' + headerNote + '<span>▾</span></summary>' +
+      '<p class="ci-hint">' + note + '</p>' +
       '<div class="chambers">' +
       '<div class="chamber"><div class="chamber-head"><span class="title">Camera dei Deputati</span><span class="chip">' + camTotal + ' seggi</span></div>' +
       '<div class="hemicycle-wrap">' + renderHemicycleSvg(camEntries) + '</div>' +
@@ -9307,18 +9317,36 @@
     var opts = party && party.familyId ? EU_GROUP_OPTIONS_BY_FAMILY[party.familyId] : null;
     return (opts && opts[0]) || "non_iscritti";
   }
-  // Emiciclo della delegazione italiana all'Europarlamento (i seggi VERI usciti dall'ultima elezione
-  // europea, vedi state.euParliamentSeats in resolveEuropeanElection), raggruppati per gruppo politico
-  // europeo — non l'intera assemblea da ~720 seggi di tutti i 27 Stati membri, che il gioco non simula.
+  // Proiezione a caldo dei seggi della delegazione italiana all'Europarlamento sui sondaggi di oggi,
+  // stessa soglia/logica di resolveEuropeanElection() ma senza toccare lo stato — usata come ripiego in
+  // renderEuHemicycle() quando non c'è ancora mai stata un'elezione europea vera in questo salvataggio.
+  function projectEuSeatsByParty() {
+    var p = state.player;
+    var entities = activeParties().map(function (party) {
+      return { id: party.id, votes: state.parties[party.id] };
+    });
+    if (p) entities.push({ id: "player", votes: p.sondaggi });
+    var qualified = entities.filter(function (e) { return e.votes >= EU_THRESHOLD; });
+    var weights = qualified.map(function (e) { return e.votes; });
+    var seatsArr = hamiltonApportion(weights, EU_SEATS_ITALY);
+    var byParty = {};
+    qualified.forEach(function (e, i) { byParty[e.id] = seatsArr[i]; });
+    return byParty;
+  }
+  // Emiciclo della delegazione italiana all'Europarlamento, raggruppato per gruppo politico europeo —
+  // non l'intera assemblea da ~720 seggi di tutti i 27 Stati membri, che il gioco non simula. Usa i
+  // seggi VERI usciti dall'ultima elezione europea (state.euParliamentSeats) quando ci sono già stati,
+  // altrimenti una proiezione sui sondaggi di oggi, per mostrare sempre qualcosa fin da subito.
   function renderEuHemicycle() {
     var seats = state.euParliamentSeats;
-    if (!seats || !seats.byParty) {
-      return '<section aria-label="Composizione del Parlamento Europeo"><details class="log" open><summary>Composizione del Parlamento Europeo — delegazione italiana<span>▾</span></summary>' +
-        '<p class="ci-hint">Si vedrà qui, con tanto di emiciclo per gruppo politico, non appena si terranno le prossime elezioni europee.</p></details></section>';
-    }
+    var isReal = !!(seats && seats.byParty);
+    var byParty = isReal ? seats.byParty : projectEuSeatsByParty();
+    var headerNote = isReal
+      ? "Composizione del Parlamento Europeo — delegazione italiana (elezioni della settimana " + seats.turn + ")"
+      : "Composizione del Parlamento Europeo — delegazione italiana (proiezione sui sondaggi attuali)";
     var byGroup = {};
-    Object.keys(seats.byParty).forEach(function (id) {
-      var n = seats.byParty[id];
+    Object.keys(byParty).forEach(function (id) {
+      var n = byParty[id];
       if (!n) return;
       var groupId = euGroupIdForParty(id);
       byGroup[groupId] = (byGroup[groupId] || 0) + n;
@@ -9327,8 +9355,11 @@
       return { id: g.id, label: g.label, seats: byGroup[g.id] || 0, color: EU_GROUP_COLORS[g.id] || "#999" };
     }).filter(function (e) { return e.seats > 0; });
     var total = entries.reduce(function (s, e) { return s + e.seats; }, 0);
-    return '<section aria-label="Composizione del Parlamento Europeo"><details class="log" open><summary>Composizione del Parlamento Europeo — delegazione italiana (elezioni della settimana ' + seats.turn + ')<span>▾</span></summary>' +
-      '<p class="ci-hint">I ' + total + ' seggi italiani all\'Europarlamento, raggruppati per gruppo politico europeo — non l\'intera assemblea da 720 seggi di tutti i 27 Stati membri, che il gioco non simula, solo la delegazione italiana.</p>' +
+    var note = isReal
+      ? "I " + total + " seggi italiani all'Europarlamento, raggruppati per gruppo politico europeo — non l'intera assemblea da 720 seggi di tutti i 27 Stati membri, che il gioco non simula, solo la delegazione italiana."
+      : "Nessuna elezione europea ancora registrata in questo salvataggio: qui sotto una proiezione sui sondaggi di oggi (soglia " + EU_THRESHOLD + "%), aggiornata ogni settimana finché non si vota davvero — da quel momento mostrerà la composizione reale e fissa.";
+    return '<section aria-label="Composizione del Parlamento Europeo"><details class="log" open><summary>' + headerNote + '<span>▾</span></summary>' +
+      '<p class="ci-hint">' + note + '</p>' +
       '<div class="chamber"><div class="hemicycle-wrap">' + renderHemicycleSvg(entries) + '</div>' +
       '<div class="chamber-legend">' + hemicycleLegend(entries) + '</div></div></details></section>';
   }
