@@ -382,6 +382,8 @@
   .poll-tile .delta { font-family: var(--font-mono); font-size: 0.7rem; margin-top: 0.2rem; }
   .delta.up { color: var(--good); } .delta.down { color: var(--critical); } .delta.flat { color: var(--text-dim); }
   .poll-tile.indecisi { border-style: dashed; }
+  .poll-target-hint { font-size: 0.66rem; margin-top: 0.35rem; line-height: 1.25; }
+  .poll-target-hint.up { color: var(--good); } .poll-target-hint.down { color: var(--critical); } .poll-target-hint.flat { color: var(--text-dim); }
 
   .stat-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -4701,7 +4703,15 @@
     var pool = activeParties();
     var party = pool[Math.floor(Math.random() * pool.length)];
     var tpl = RIVAL_EVENTS[Math.floor(Math.random() * RIVAL_EVENTS.length)];
-    var delta = tpl.delta[0] + Math.random() * (tpl.delta[1] - tpl.delta[0]);
+    var rawDelta = tpl.delta[0] + Math.random() * (tpl.delta[1] - tpl.delta[0]);
+    // I range sopra sono tarati su un partito "medio" di riferimento (~8%): applicati com'erano, un
+    // partito piccolo (1-2%) veniva sballottato da un singolo trafiletto di cronaca per una percentuale
+    // enorme del proprio consenso (fino a +150%/-150%), mentre un partito enorme (30%+) non se ne
+    // accorgeva quasi. Scalando la magnitudine sulla dimensione attuale del partito (con un pavimento
+    // e un tetto) la stessa notizia pesa quanto deve: percepibile ma non uno sconvolgimento per chi è
+    // piccolo, un movimento più ampio ma comunque proporzionato per chi è grande.
+    var sizeScale = clamp(state.parties[party.id] / 8, 0.18, 1.6);
+    var delta = rawDelta * sizeScale;
     state.parties[party.id] = Math.max(0.3, state.parties[party.id] + delta);
     var text = tpl.text(party.name);
     state.log.unshift({
@@ -4926,12 +4936,17 @@
       state.govCrisisActive = true;
       var others = members.filter(function (id) { return id !== leaderId; });
       var leaderName = partyById(leaderId).name;
+      // Perdite ammorbidite (erano -15/-30% per gli alleati e -10/-20% per il giocatore): restava un
+      // evento raro e vistoso anche con un taglio più contenuto, ma -30% in una sola settimana per un
+      // semplice effetto di contagio (non la caduta vera e propria del governo, vedi
+      // applyGovernmentCollapseLeadershipShock più sotto) era sproporzionato rispetto a quanto l'alleato
+      // avesse effettivamente sbagliato.
       others.forEach(function (id) {
-        state.parties[id] = Math.max(0.3, state.parties[id] * (1 - rand(0.15, 0.3)));
+        state.parties[id] = Math.max(0.3, state.parties[id] * (1 - rand(0.08, 0.18)));
       });
       var p = state.player;
       var playerInGov = p && p.parliamentRole === "governo";
-      if (playerInGov) p.sondaggi = clamp(p.sondaggi * (1 - rand(0.1, 0.2)), 0, 40);
+      if (playerInGov) p.sondaggi = clamp(p.sondaggi * (1 - rand(0.05, 0.12)), 0, 40);
       var text = leaderName + " crolla nei sondaggi, dimezzandosi rispetto al proprio massimo storico: la crisi di governo travolge tutta la coalizione, alleati compresi" + (playerInGov ? " — partito del giocatore incluso" : "") + ".";
       state.log.unshift({ week: state.turn, title: "Crisi di Governo", choiceLabel: leaderName, result: text, headlines: [], type: "cronaca" });
       state.worldNews.unshift({ cat: "Governo", text: text });
@@ -5081,12 +5096,16 @@
   }
   // Quando il Governo cade "di sorpresa" (non per un referendum del giocatore, vedi sopra), la crisi
   // travolge l'intera maggioranza con proporzioni precise: il partito guida della coalizione di governo
-  // (quella che ha davvero vinto l'ultima elezione, state.govEntity) perde metà dei consensi ai sondaggi,
-  // tutti gli altri alleati un terzo. Il giocatore entra nel confronto come un membro in più se è lui
-  // stesso al governo: se risulta essere il partito col consenso più alto (il "leader" della coalizione)
-  // subisce lo stesso taglio a metà più la crisi di leadership interna (con possibile perdita della guida
-  // al posto della successione forzata su un partito CPU); se è solo un alleato minore, perde comunque un
-  // terzo come tutti gli altri.
+  // (quella che ha davvero vinto l'ultima elezione, state.govEntity) perde una quota consistente dei
+  // consensi ai sondaggi, tutti gli altri alleati una quota minore. Il giocatore entra nel confronto come
+  // un membro in più se è lui stesso al governo: se risulta essere il partito col consenso più alto (il
+  // "leader" della coalizione) subisce lo stesso taglio più la crisi di leadership interna (con possibile
+  // perdita della guida al posto della successione forzata su un partito CPU); se è solo un alleato
+  // minore, perde comunque la quota più piccola come tutti gli altri.
+  // Tagli ammorbiditi (erano metà per il leader, un terzo per gli alleati): un evento raro e già
+  // drammatico di suo — richiede una vera caduta di governo, non un normale passaggio settimanale — non
+  // deve anche azzerare mesi di lavoro in un colpo solo. Restano tagli pesanti e ben visibili, solo non
+  // più catastrofici al punto da rendere irrilevante tutto quello fatto fino a quel momento.
   function applyGovernmentCollapseLeadershipShock() {
     var p = state.player;
     var activeIds = activeParties().map(function (party) { return party.id; });
@@ -5100,7 +5119,7 @@
     if (!ids.length) return;
     var leaderId = ids.reduce(function (best, id) { return pollById[id] > pollById[best] ? id : best; }, ids[0]);
     ids.forEach(function (id) {
-      var factor = id === leaderId ? 0.5 : (2 / 3);
+      var factor = id === leaderId ? 0.62 : 0.75;
       if (id === "player") p.sondaggi = clamp(p.sondaggi * factor, 0, 40);
       else state.parties[id] = Math.max(0.3, state.parties[id] * factor);
     });
@@ -5115,8 +5134,8 @@
     if (!state.partyLeaderOverrides) state.partyLeaderOverrides = {};
     state.partyLeaderOverrides[leaderId] = newLeader;
     var otherCount = ids.filter(function (id) { return id !== leaderId; }).length;
-    var text = "La caduta improvvisa del Governo dimezza il consenso di " + govParty.name +
-      (otherCount ? " (il resto della coalizione perde un terzo dei consensi)" : "") +
+    var text = "La caduta improvvisa del Governo affossa il consenso di " + govParty.name +
+      (otherCount ? " (il resto della coalizione perde consensi a sua volta)" : "") +
       " e ne travolge la leadership: primarie interne lampo portano " + newLeader + " alla guida del partito, al posto di " + oldLeader + ".";
     state.log.unshift({ week: state.turn, title: "Primarie interne dopo la caduta del Governo", choiceLabel: govParty.short, result: text, headlines: [], type: "cronaca" });
     state.worldNews.unshift({ cat: "Governo", text: text });
@@ -6906,7 +6925,7 @@
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
-    amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, candidatePools: {},
+    amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
@@ -7318,7 +7337,12 @@
 
     var commDigMember = staffMember("comunicazione_digitale");
     var commDigSkill = commDigMember ? (commDigMember.skillMult !== undefined ? commDigMember.skillMult : 1) : 0;
-    p.visibilita = p.visibilita * (0.82 + 0.06 * commDigSkill);
+    // Il decadimento era troppo aggressivo (fino al -18%/settimana senza staff dedicato): costringeva a
+    // rincorrere la visibilità con eventi in continuazione solo per non perderla, un contributo che pesa
+    // poco nel bersaglio ma si consuma troppo in fretta. Ammorbidito (-13%/settimana senza staff, -8% con
+    // il Comunicazione Digitale al massimo della competenza): resta comunque una risorsa da alimentare,
+    // non più un rubinetto che si svuota da solo più veloce di quanto un giocatore attivo possa riempirlo.
+    p.visibilita = p.visibilita * (0.87 + 0.05 * commDigSkill);
 
     // quote di tesseramento: entrata settimanale proporzionale agli iscritti
     p.fondi += p.iscritti * 0.55 * staffBonus("tesoriere", 0.1);
@@ -7351,10 +7375,20 @@
     // tutto lasciava i sondaggi piatti o in calo anche per un partito che si sta davvero espandendo sul
     // territorio. Il vero problema non era il peso delle sezioni in sé, ma poterne aprire decine tutte
     // nella stessa settimana (vedi il limite di una sezione a settimana in openLocalSection): con
-    // quel limite, un coefficiente moderato (0.1, meno della metà di quello originale) non può più
-    // produrre balzi innaturali, solo una crescita lenta e proporzionata al radicamento reale.
+    // quel limite, un coefficiente moderato non può più produrre balzi innaturali, solo una crescita
+    // lenta e proporzionata al radicamento reale.
+    // Pesi ricalibrati: la radice quadrata sugli iscritti (rendimenti fortemente decrescenti, voluti)
+    // penalizzava troppo i partiti già grandi (es. presi in mano già forti, o cresciuti molto in una
+    // partita lunga), che restavano strutturalmente condannati a scendere verso un equilibrio molto più
+    // basso qualunque cosa facesse il giocatore. Il coefficiente sale leggermente (0.028 -> 0.034): un
+    // partito piccolo non se ne accorge quasi, uno grande recupera qualche punto di bersaglio. Stesso
+    // discorso per le sezioni (0.1 -> 0.12, il radicamento territoriale vale un po' di più) e per la
+    // reputazione oltre il tetto moltiplicativo di repCeiling: il contributo diretto (reputazione-50)
+    // saliva troppo poco (0.02/punto, quasi nullo tra 60 e 100 dove repCeiling è già saturo) — portato a
+    // 0.032, così mantenere una reputazione alta continua a dare un ritorno reale anche a lungo termine,
+    // non solo nella fascia bassa dove sblocca repCeiling.
     var organicTarget = clamp(
-      (0.12 + Math.sqrt(p.iscritti) * 0.028 + p.sezioni * 0.1 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.02) * style.growthMult * repCeiling * nicheMult,
+      (0.12 + Math.sqrt(p.iscritti) * 0.034 + p.sezioni * 0.12 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.032) * style.growthMult * repCeiling * nicheMult,
       0, 40
     );
     // La formula organica sopra è tarata su un partito che parte da zero e cresce sul campo: usata da
@@ -7375,6 +7409,11 @@
     var isGovernoNow = p.parliamentRole === "governo";
     var countrySondaggiEffect = clamp(countryTrendDelta * 0.4 * (isGovernoNow ? 1 : -0.4), -1.5, 1.5);
     target = clamp(target + countrySondaggiEffect, 0, 40);
+    // Salvato solo per mostrarlo in UI (vedi renderPollGrid): prima il giocatore vedeva salire o scendere
+    // i sondaggi settimana dopo settimana senza alcuna indicazione del PERCHÉ — nessun modo di capire se
+    // stesse convergendo verso un equilibrio più alto o più basso finché non ci arrivava. Non altera in
+    // alcun modo il calcolo sopra.
+    p.lastPollingTarget = Math.round(target * 10) / 10;
     // Nella realtà i sondaggi di un partito si muovono lentamente settimana dopo settimana, con scatti
     // bruschi solo in occasioni straordinarie (scandali, elezioni, grandi eventi): un avvicinamento del
     // 15% del divario ogni settimana era troppo reattivo. Portato all'8%, un cambiamento neutro (rallenta
@@ -7384,11 +7423,17 @@
     // il valore di questa settimana) mantiene un po' della propria inerzia anche prima che la formula del
     // bersaglio la raggiunga — non è più solo "rumore settimana per settimana", si comporta come un vero
     // trend elettorale che si autoalimenta un po', entro un tetto piccolo per non degenerare in una spirale.
+    // Il moltiplicatore (0.3, tetto 0.4) amplificava troppo un trend già in corso, sommandosi per intero
+    // alla convergenza verso il bersaglio: un partito in discesa scendeva più in fretta della propria
+    // stessa formula di equilibrio, e viceversa in salita — la classica spirale "sale troppo/scende
+    // troppo" di cui si accorge il giocatore. Ammorbidito (0.2, tetto 0.3): il trend continua a pesare
+    // (i sondaggi restano "vivi", non un semplice inseguimento del bersaglio) ma non raddoppia più il
+    // movimento naturale della settimana.
     var momentumTerm = 0;
     if (p.sondaggiHistory && p.sondaggiHistory.length >= 3) {
       var momentumWindow = p.sondaggiHistory.slice(Math.max(0, p.sondaggiHistory.length - 5));
       var momentumAvgDelta = (momentumWindow[momentumWindow.length - 1] - momentumWindow[0]) / (momentumWindow.length - 1);
-      momentumTerm = clamp(momentumAvgDelta * 0.3, -0.4, 0.4);
+      momentumTerm = clamp(momentumAvgDelta * 0.2, -0.3, 0.3);
     }
     p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3, 0, 40);
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
@@ -8839,8 +8884,24 @@
 
     var playerBefore = prevSnapshot ? prevSnapshot.playerSondaggi : p.sondaggi;
     var playerDisplay = p.sondaggi < 1 ? '<span class="value nr">n.r.</span>' : '<span class="value">' + fmt1(p.sondaggi) + "%</span>";
+    // Il giocatore vedeva solo il numero salire o scendere settimana dopo settimana, senza modo di capire
+    // SE e VERSO DOVE si stesse assestando prima di arrivarci: p.lastPollingTarget (calcolato in
+    // recomputePeriodic, mai alterato qui) è l'esatto bersaglio verso cui la formula sta convergendo
+    // quella settimana. Un divario minimo non vale la pena di segnalarlo (rumore statistico); uno reale
+    // spiega in anticipo da dove viene la tendenza, verso l'alto o verso il basso.
+    var targetHint = "";
+    if (p.lastPollingTarget !== null && p.lastPollingTarget !== undefined) {
+      var gap = p.lastPollingTarget - p.sondaggi;
+      if (Math.abs(gap) >= 0.4) {
+        var gapCls = gap > 0 ? "up" : "down";
+        var gapWord = gap > 0 ? "in salita verso" : "in discesa verso";
+        targetHint = '<div class="poll-target-hint ' + gapCls + '">Tendenza: ' + gapWord + " ~" + fmt1(p.lastPollingTarget) + '% di equilibrio</div>';
+      } else {
+        targetHint = '<div class="poll-target-hint flat">Tendenza: stabile intorno a questo valore</div>';
+      }
+    }
     html += '<div class="poll-tile player-tile"><div class="name"><span class="swatch" style="background:' + p.color + '"></span>' + (p.short || p.name) + ' <span class="chip accent">Tu</span></div>' +
-      playerDisplay + deltaLabel(playerBefore, p.sondaggi, "pt") + "</div>";
+      playerDisplay + deltaLabel(playerBefore, p.sondaggi, "pt") + targetHint + "</div>";
 
     activeParties().forEach(function (party) {
       var val = state.parties[party.id];
