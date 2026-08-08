@@ -7495,14 +7495,18 @@
     state.resultData = applyChoice(dossier, choice);
   }
 
-  function resolveElection() {
+  // Le entità (coalizioni fisse, coalizioni dinamiche, partiti indipendenti, il giocatore) in gara a
+  // un'elezione politica, con voti aggregati per BLOCCO — un partito membro fisso di Centrodestra/Campo
+  // Largo può, in rari casi, sciogliersi nel corso della partita (vedi triggerPartyLifecycleFollowup): se
+  // è successo non deve più contare né nei voti né nei seggi della coalizione, esattamente come già
+  // succede per le coalizioni nate durante la partita, che filtrano i membri ancora attivi con lo stesso
+  // activeIds qui sotto. Solo chi supera la soglia (10% le coalizioni, 3% i partiti singoli) qualifica.
+  // Usata sia da resolveElection() per il voto vero sia da projectRealParliamentSeats() per la proiezione
+  // "se si votasse oggi" nell'emiciclo — stessa identica logica, un solo punto per non farle divergere.
+  function computeQualifiedElectionEntities() {
     var p = state.player;
     var entities = [];
     var activeIds = activeParties().map(function (party) { return party.id; });
-    // Un partito membro fisso di Centrodestra/Campo Largo può, in rari casi, sciogliersi nel corso
-    // della partita (vedi triggerPartyLifecycleFollowup): se è successo non deve più contare né nei
-    // voti né nei seggi della coalizione — esattamente come già succede per le coalizioni nate durante
-    // la partita, che filtrano i membri ancora attivi con lo stesso activeIds qui sotto.
     var cdMembers = COALITIONS.centrodestra.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
     var clMembers = COALITIONS.campolargo.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
     var cdVotes = cdMembers.reduce(function (s, id) { return s + state.parties[id]; }, 0);
@@ -7533,8 +7537,13 @@
     }
 
     entities.forEach(function (e) { e.qualifies = e.isCoalition ? e.votes >= 10 : e.votes >= 3; });
-    var qualified = entities.filter(function (e) { return e.qualifies; });
-    var regimeInfo = detectRegimeChange(qualified);
+    return { entities: entities, qualified: entities.filter(function (e) { return e.qualifies; }) };
+  }
+  // Ripartisce i seggi di Camera e Senato tra le entità qualificate (vedi computeQualifiedElectionEntities)
+  // e li sub-divide tra i membri di ogni coalizione in proporzione ai loro voti — la stessa logica usata
+  // sia dal voto vero (resolveElection) sia dalla proiezione live (projectRealParliamentSeats).
+  function computeChamberSeatsById(qualified) {
+    var p = state.player;
     var weights = qualified.map(function (e) { return e.votes; });
     var camSeats = hamiltonApportion(weights, 400);
     var senSeats = hamiltonApportion(weights, 200);
@@ -7557,6 +7566,22 @@
         });
       }
     });
+    return seatsById;
+  }
+  // Proiezione "se si votasse oggi" dei seggi REALI (con soglie e coalizioni, non i seggi "morbidi" di
+  // projectSeats() usati dal quadro sondaggi) — usata come ripiego dall'emiciclo quando il salvataggio
+  // non ha ancora una vera elezione registrata (vedi renderParliamentHemicycles).
+  function projectRealParliamentSeats() {
+    var qualified = computeQualifiedElectionEntities().qualified;
+    return computeChamberSeatsById(qualified);
+  }
+  function resolveElection() {
+    var p = state.player;
+    var built = computeQualifiedElectionEntities();
+    var entities = built.entities;
+    var qualified = built.qualified;
+    var regimeInfo = detectRegimeChange(qualified);
+    var seatsById = computeChamberSeatsById(qualified);
     // Composizione REALE del Parlamento appena eletto (non una proiezione sui sondaggi del momento, che
     // invece cambia settimana per settimana — vedi projectSeats): resta fissa per tutta la legislatura,
     // fino alla prossima vera elezione, ed è la base dell'emiciclo mostrato nella pagina Parlamento.
@@ -9223,7 +9248,16 @@
       camMap = seats.camera; senMap = seats.senato;
       headerNote = "Composizione reale del Parlamento (elezioni della settimana " + seats.turn + ")";
     } else {
-      camMap = projectSeats(400); senMap = projectSeats(200);
+      // Non projectSeats() (che dà un seggio a ogni partito attivo, senza soglie né coalizioni: serve
+      // solo al quadro sondaggi qui sotto) — projectRealParliamentSeats() applica le stesse soglie e lo
+      // stesso raggruppamento in coalizioni del voto vero, solo sui sondaggi di oggi invece che su un
+      // risultato reale.
+      var projected = projectRealParliamentSeats();
+      camMap = {}; senMap = {};
+      Object.keys(projected).forEach(function (id) {
+        if (projected[id].camera > 0) camMap[id] = projected[id].camera;
+        if (projected[id].senato > 0) senMap[id] = projected[id].senato;
+      });
       headerNote = "Composizione del Parlamento (proiezione sui sondaggi attuali)";
     }
     var camEntries = buildHemicycleEntries(camMap);
@@ -9232,7 +9266,7 @@
     var senTotal = senEntries.reduce(function (s, e) { return s + e.seats; }, 0);
     var note = isReal
       ? "L'emiciclo uscito davvero dalle urne, con i partiti (soglia 3%) e le coalizioni (soglia 10%) che hanno superato lo sbarramento: resta fisso per tutta la legislatura, a differenza del quadro sondaggi qui sotto."
-      : "Nessuna elezione politica ancora registrata in questo salvataggio: l'emiciclo qui sotto è una proiezione sui sondaggi di oggi, si aggiorna ogni settimana finché non si vota davvero — da quel momento in poi mostrerà la composizione reale e fissa uscita dalle urne.";
+      : "Nessuna elezione politica ancora registrata in questo salvataggio: l'emiciclo qui sotto è una proiezione sui sondaggi di oggi (stesse soglie del voto vero: partiti singoli sopra il 3%, coalizioni sopra il 10%), si aggiorna ogni settimana finché non si vota davvero — da quel momento in poi mostrerà la composizione reale e fissa uscita dalle urne.";
     return '<section aria-label="Composizione reale del Parlamento"><details class="log" open><summary>' + headerNote + '<span>▾</span></summary>' +
       '<p class="ci-hint">' + note + '</p>' +
       '<div class="chambers">' +
