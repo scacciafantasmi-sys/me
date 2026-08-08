@@ -8528,7 +8528,11 @@
   // successivo). Con legislature lunghe i sondaggi possono ribaltarsi parecchio a metà mandato: senza
   // questo confronto esplicito, vedere "Governo in carica: Centrodestra" mentre in cima ai sondaggi c'è
   // il Campo Largo sembra un errore, quando invece è semplicemente un governo in carica che sta calando.
-  function projectedGovEntity() {
+  // Le stesse entità (coalizioni fisse, coalizioni dinamiche, partiti indipendenti, il giocatore) che
+  // resolveElection() metterebbe in gara se si votasse oggi, ordinate per voti — usata sia da
+  // projectedGovEntity() (solo la prima, chi vincerebbe) sia da renderCoalitionStandings() (la
+  // classifica intera, per farla vedere per esteso al giocatore).
+  function buildProjectedEntities() {
     var p = state.player;
     var activeIds = activeParties().map(function (party) { return party.id; });
     var cdMembers = COALITIONS.centrodestra.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
@@ -8540,8 +8544,10 @@
     if (playerInCd) cdVotes += p.sondaggi;
     if (playerInCl) clVotes += p.sondaggi;
     var entities = [
-      { id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes },
-      { id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes }
+      { id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes, isCoalition: true,
+        members: cdMembers.concat(playerInCd ? ["player"] : []) },
+      { id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes, isCoalition: true,
+        members: clMembers.concat(playerInCl ? ["player"] : []) }
     ];
     var coalitionMemberIds = cdMembers.concat(clMembers);
     (state.dynamicCoalitions || []).forEach(function (c) {
@@ -8550,14 +8556,44 @@
       coalitionMemberIds = coalitionMemberIds.concat(c.members);
       if (liveMembers.length < 2) return;
       var votes = liveMembers.reduce(function (s, id) { return s + (id === "player" ? p.sondaggi : (state.parties[id] || 0)); }, 0);
-      entities.push({ id: c.id, label: c.label, votes: votes });
+      entities.push({ id: c.id, label: c.label, votes: votes, isCoalition: true, members: liveMembers });
     });
     activeParties().forEach(function (party) {
       if (coalitionMemberIds.indexOf(party.id) !== -1) return;
-      entities.push({ id: party.id, label: party.name, votes: state.parties[party.id] || 0 });
+      entities.push({ id: party.id, label: party.name, votes: state.parties[party.id] || 0, isCoalition: false, members: [party.id] });
     });
-    if (!p.allianceId) entities.push({ id: "player", label: p.name, votes: p.sondaggi });
-    return entities.reduce(function (best, e) { return e.votes > best.votes ? e : best; }, entities[0]);
+    if (!p.allianceId) entities.push({ id: "player", label: p.name, votes: p.sondaggi, isCoalition: false, members: ["player"] });
+    entities.sort(function (a, b) { return b.votes - a.votes; });
+    return entities;
+  }
+  function projectedGovEntity() {
+    var entities = buildProjectedEntities();
+    return entities[0];
+  }
+  // Classifica per blocco/coalizione, non solo per singolo partito: alle elezioni non vince il partito
+  // più votato in assoluto, vince chi somma più voti nel proprio blocco (Centrodestra, Campo Largo, una
+  // coalizione dinamica, o un partito che corre da solo) — quindi il primo in questa classifica è, sui
+  // sondaggi di oggi, chi diventerebbe il governo del paese.
+  function renderCoalitionStandings() {
+    var entities = buildProjectedEntities();
+    var sittingId = state.govEntity && state.govEntity.id;
+    var rows = entities.map(function (e, i) {
+      var memberNames = e.members.map(function (mid) {
+        if (mid === "player") return state.player.name;
+        var pt = partyById(mid);
+        return pt ? pt.short : mid;
+      }).join(", ");
+      var isSitting = e.id === sittingId;
+      var tags = (i === 0 ? '<span class="chip good">Vincerebbe oggi</span>' : "") +
+        (isSitting ? '<span class="chip accent">Al governo</span>' : "");
+      return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + e.label + (e.isCoalition ? "" : " (corre da sola)") + '</strong><span class="value">' + fmt1(e.votes) + '%</span></div>' +
+        '<div class="party-row-sub">' + memberNames + '</div>' +
+        (tags ? '<div class="party-row-sub">' + tags + '</div>' : '') + '</div></div>';
+    }).join("");
+    return '<section aria-label="Classifica delle coalizioni"><details class="log" open>' +
+      '<summary>Classifica delle coalizioni<span>▾</span></summary>' +
+      '<p class="ci-hint">Non vince il partito più votato in assoluto, vince chi somma più voti nel proprio blocco: chi è primo qui, sui sondaggi di oggi, è chi diventerebbe il governo se si votasse ora. "Al governo" indica invece chi governa davvero, deciso dall\'ultima elezione reale.</p>' +
+      '<div class="party-directory">' + rows + "</div></details></section>";
   }
   // ---------- Ripartizione dei ministeri in una coalizione di governo ----------
   // Quando vince una coalizione (di due o più partiti, non un partito singolo), non basta dire "governa
@@ -9330,7 +9366,7 @@
         return renderNationalStrip() + renderCountryProfile() + renderBilancioStato() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
-        return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
+        return renderCoalitionStandings() + renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
       } },
     { id: "diario", label: "Diario di Partito — registro completo", render: function () {
         return renderLog();
