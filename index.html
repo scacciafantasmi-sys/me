@@ -4876,7 +4876,9 @@
   // sull'area europeista): un fenomeno raro, che poi pesa davvero nel conteggio dei voti alle elezioni.
   function triggerDynamicCoalitionFormation() {
     if (!state.dynamicCoalitions) state.dynamicCoalitions = [];
-    if (state.dynamicCoalitions.length >= 2) return;
+    // Nessun tetto al numero di coalizioni spontanee contemporaneamente in scena, sulla stessa linea
+    // scelta per i partiti dinamici: nascono e si sciolgono (vedi updateCpuOnlyCoalitionTrust più sotto)
+    // solo in base a chi è davvero disponibile e a come va la fiducia reciproca, non a un limite fisso.
     if (Math.random() > 0.008) return;
 
     var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
@@ -8789,18 +8791,43 @@
   function initialCoalitionTrust(id) {
     return clamp(20 + avgCoalitionRelation(id) * 0.7, 15, 85);
   }
+  // Scioglie una coalizione qualunque, fissa o dinamica — usata sia quando è il giocatore a farne parte
+  // (vedi updateCoalitionTrust) sia quando è una coalizione TUTTA tra partiti CPU, senza il giocatore
+  // (vedi updateCpuOnlyCoalitionTrust): tocca p.allianceId/p.reputazione solo se il giocatore è
+  // effettivamente membro di QUESTA coalizione, altrimenti scioglierne una CPU-only azzererebbe per
+  // sbaglio un'alleanza del giocatore completamente diversa.
   function dissolveCoalition(id, reasonText) {
     var p = state.player;
     var coal = coalitionById(id);
     var label = coal ? coal.label : id;
-    p.allianceId = null;
+    if (p.allianceId === id) {
+      p.allianceId = null;
+      p.reputazione = clamp(p.reputazione - rand(2, 5), 0, 100);
+    }
     if (state.coalitionTrust) delete state.coalitionTrust[id];
     if (state.dynamicCoalitions) state.dynamicCoalitions = state.dynamicCoalitions.filter(function (c) { return c.id !== id; });
-    p.reputazione = clamp(p.reputazione - rand(2, 5), 0, 100);
     state.log.unshift({
       week: state.turn, title: "La coalizione si scioglie", choiceLabel: label,
       result: reasonText || ("La fiducia reciproca dentro " + label + " crolla sotto il livello di guardia: la coalizione si scioglie."),
       headlines: [], type: "dossier", cat: "Strategia Elettorale"
+    });
+  }
+  // Le coalizioni spontanee tra partiti CPU (vedi triggerDynamicCoalitionFormation), senza il giocatore
+  // dentro, non erano mai valutate per lo scioglimento: una volta nate restavano fisse per il resto della
+  // partita, qualunque cosa succedesse ai rapporti reali tra i loro membri. Stessa logica di fiducia già
+  // usata per la coalizione del giocatore (avgCoalitionRelation, soglia 30%), solo estesa a chi non lo
+  // coinvolge.
+  function updateCpuOnlyCoalitionTrust() {
+    if (!state.dynamicCoalitions || !state.dynamicCoalitions.length) return;
+    if (!state.coalitionTrust) state.coalitionTrust = {};
+    var p = state.player;
+    state.dynamicCoalitions.slice().forEach(function (c) {
+      if (p.allianceId === c.id) return;
+      if (state.coalitionTrust[c.id] === undefined) state.coalitionTrust[c.id] = initialCoalitionTrust(c.id);
+      var avgRel = avgCoalitionRelation(c.id);
+      var trust = clamp(state.coalitionTrust[c.id] + (avgRel - state.coalitionTrust[c.id]) * 0.08 + (Math.random() - 0.5) * 1.5, 0, 100);
+      state.coalitionTrust[c.id] = trust;
+      if (trust < 30) dissolveCoalition(c.id);
     });
   }
   function updateCoalitionTrust() {
@@ -10577,6 +10604,7 @@
     state.inlineExpandedTopic = null;
     recomputePeriodic();
     updateCoalitionTrust();
+    updateCpuOnlyCoalitionTrust();
     updateLeaderTrust();
     triggerRivalPartyEvent();
     triggerGovernmentCrisisContagion();
