@@ -1137,6 +1137,46 @@
       });
     }
   }
+  // ---------- Tassazione mensile a scaglioni sul patrimonio del partito ----------
+  // Un partito reale non tiene la propria cassa esente da imposte: ogni ~4 settimane (un "mese" nel
+  // ritmo settimanale del gioco) il patrimonio in cassa (p.fondi) paga un'imposta progressiva a scaglioni,
+  // sul modello semplificato dell'IRPEF italiana — solo la quota di patrimonio che ricade in ciascuno
+  // scaglione paga l'aliquota di quello scaglione, non l'intero importo. Un partito povero o indebitato
+  // non versa nulla; un partito che ha accumulato una grande cassa (tipico di chi "prende in mano" un
+  // partito già forte) ne versa una quota più che proporzionale.
+  var PARTY_TAX_BRACKETS = [
+    { upTo: 5000, rate: 0 },
+    { upTo: 20000, rate: 0.03 },
+    { upTo: 50000, rate: 0.06 },
+    { upTo: 150000, rate: 0.09 },
+    { upTo: Infinity, rate: 0.12 }
+  ];
+  function computePartyTax(amount) {
+    if (amount <= 0) return 0;
+    var tax = 0, lastCap = 0;
+    for (var i = 0; i < PARTY_TAX_BRACKETS.length; i++) {
+      var bracket = PARTY_TAX_BRACKETS[i];
+      var taxableInBracket = Math.max(0, Math.min(amount, bracket.upTo) - lastCap);
+      tax += taxableInBracket * bracket.rate;
+      lastCap = bracket.upTo;
+      if (amount <= bracket.upTo) break;
+    }
+    return tax;
+  }
+  function resolveMonthlyPartyTax() {
+    if (state.turn - (state.lastPartyTaxTurn || 0) < 4) return;
+    state.lastPartyTaxTurn = state.turn;
+    var p = state.player;
+    if (!p || p.fondi <= 0) return;
+    var tax = Math.round(computePartyTax(p.fondi));
+    if (tax <= 0) return;
+    p.fondi -= tax;
+    state.log.unshift({
+      week: state.turn, title: "Tasse di partito", choiceLabel: "Versamento mensile a scaglioni",
+      result: "Il partito versa " + fmtEuro(tax) + " di tasse sul proprio patrimonio, secondo la tassazione a scaglioni prevista per le finanze dei movimenti politici.",
+      headlines: [], type: "cronaca", cat: "Finanze", deltas: { fondi: -tax }
+    });
+  }
   // ---------- Pressione di isolamento NATO/UE su governi ideologicamente ostili ----------
   // Un governo comunista, fascista o gratuitista che resta membro della NATO e/o dell'UE non se la cava
   // gratis: le due organizzazioni tendono realisticamente a isolarlo (fondi congelati, vertici saltati,
@@ -6852,7 +6892,7 @@
     cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
-    budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [],
+    budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0,
     usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
@@ -6866,7 +6906,7 @@
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
-    amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, candidatePools: {},
+    amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, candidatePools: {},
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
@@ -7166,7 +7206,7 @@
   function applyChoice(dossier, choice) {
     var eff = choice.effects || {};
     var p = state.player;
-    var before = { iscritti: p.iscritti, fondi: p.fondi, reputazione: p.reputazione, visibilita: p.visibilita };
+    var before = { iscritti: p.iscritti, fondi: p.fondi, reputazione: p.reputazione, visibilita: p.visibilita, sondaggi: p.sondaggi };
     var style = leadershipById(p.leadership);
     var isPolicy = dossier.cat && dossier.cat.indexOf("Politica") === 0;
     var entiBoost = isPolicy ? staffBonus("responsabile_enti_locali", 0.2) : 1;
@@ -7192,6 +7232,11 @@
       if (visDelta < 0) visDelta *= strategicoDamp;
       p.visibilita = clamp(p.visibilita + visDelta, 0, 100);
     }
+    // Bump diretto sui sondaggi (usato dagli eventi di partito, vedi resolvePartyEvent): a differenza
+    // della crescita organica settimanale (iscritti/sezioni/reputazione, vedi recomputePeriodic), qui il
+    // valore passa così com'è, senza moltiplicatori di stile — dà un piccolo scatto immediato e prevedibile,
+    // non un effetto amplificabile a dismisura da leadership o staff.
+    if (eff.sondaggi) p.sondaggi = clamp(p.sondaggi + eff.sondaggi, 0, 40);
     if (eff.spreadDelta) state.spreadBps = clamp(state.spreadBps + jitter(eff.spreadDelta), 40, 400);
     if (eff.consensoGoverno) state.consensoGoverno = clamp(state.consensoGoverno + jitter(eff.consensoGoverno), 0, 100);
     if (eff.rivalExtra) {
@@ -7227,6 +7272,7 @@
       fondi: Math.round(p.fondi - before.fondi),
       reputazione: Math.round((p.reputazione - before.reputazione) * 10) / 10,
       visibilita: Math.round((p.visibilita - before.visibilita) * 10) / 10,
+      sondaggi: Math.round((p.sondaggi - before.sondaggi) * 100) / 100,
       national: nationalDeltas
     };
 
@@ -8329,32 +8375,43 @@
   // Un'azione autonoma del giocatore, indipendente dalla situazione della settimana: sempre disponibile
   // (fondi e tempo di recupero permettendo), non fa avanzare la settimana da sola. Costano cari, ma
   // rafforzano davvero il partito — più di quanto farebbe aspettare passivamente la prossima situazione.
+  // Ricalibrati su richiesta: prima l'organizzazione eventi era troppo generosa (costi bassi, cooldown
+  // brevi, effetti su iscritti fino a +90 a evento) e da sola bastava a far volare i sondaggi. Ora ogni
+  // evento costa parecchio, si ricarica lentamente, e il suo effetto principale è un piccolo scatto
+  // diretto e prevedibile sui sondaggi (vedi partyEventEffects) invece di grandi numeri su iscritti che
+  // si accumulavano settimana dopo settimana. In più, un cooldown CONDIVISO tra tutti e sei gli eventi
+  // (vedi resolvePartyEvent) impedisce di incatenarne più di uno nella stessa manciata di settimane.
   var PARTY_EVENTS = {
     comizio: {
-      label: "Comizio pubblico", cost: 800, cooldown: 3,
+      label: "Comizio pubblico", cost: 2000, cooldown: 5,
       desc: "Un comizio nella tua città di riferimento, per mobilitare simpatizzanti e militanti."
     },
     manifestazione: {
-      label: "Manifestazione di piazza", cost: 1400, cooldown: 4,
+      label: "Manifestazione di piazza", cost: 5000, cooldown: 10,
       desc: "Una manifestazione di piazza su un tema identitario del partito: molto visibile, un po' divisiva."
     },
     congresso: {
-      label: "Congresso nazionale", cost: 3200, cooldown: 10,
+      label: "Congresso nazionale", cost: 15000, cooldown: 10,
       desc: "Un congresso nazionale per rilanciare la linea del partito: il più caro, ma anche il più efficace."
     },
     tour_territoriale: {
-      label: "Tour nei territori", cost: 600, cooldown: 4,
+      label: "Tour nei territori", cost: 5000, cooldown: 5,
       desc: "Un giro di tappe in diverse città, per radicare il partito lontano dai grandi centri."
     },
     missione_diplomatica: {
-      label: "Missione diplomatica internazionale", cost: 2500, cooldown: 10,
+      label: "Missione diplomatica internazionale", cost: 30000, cooldown: 17,
       desc: "Una missione all'estero per costruire relazioni internazionali e rafforzare il profilo del partito sulla scena globale."
     },
     campagna_mediatica_nazionale: {
-      label: "Campagna mediatica nazionale", cost: 1800, cooldown: 6,
+      label: "Campagna mediatica nazionale", cost: 2000, cooldown: 4,
       desc: "Una campagna coordinata sui media nazionali per portare il partito al centro del dibattito pubblico."
     }
   };
+  // Oltre al cooldown individuale di ogni evento (sopra), un solo evento di partito — di QUALSIASI tipo
+  // tra i sei — è utilizzabile ogni 3 settimane in totale: vedi il controllo su lastPartyEventTurn in
+  // resolvePartyEvent, che impedisce di incatenarne più di uno nella stessa settimana o nelle immediate
+  // successive anche quando i cooldown individuali lo permetterebbero.
+  var PARTY_EVENTS_SHARED_COOLDOWN = 3;
   var DIPLOMATIC_PARTNERS = ["con la Francia", "con la Germania", "con la Spagna", "con gli Stati Uniti", "con il Regno Unito", "con il Giappone", "con il Brasile", "con l'India", "con il Canada", "con gli Emirati Arabi Uniti", "con la Polonia", "con il Marocco"];
   var DIPLOMATIC_TOPICS = ["la cooperazione commerciale", "la sicurezza e la difesa", "la transizione energetica", "la ricerca scientifica", "la cooperazione culturale", "la gestione dei flussi migratori"];
   var MEDIA_CAMPAIGN_FLAVORS = [
@@ -8362,12 +8419,12 @@
     "una serie di ospitate nei talk show politici del prime time", "un'iniziativa mediatica coordinata sui temi al centro del dibattito pubblico"
   ];
   function partyEventEffects(eventId) {
-    if (eventId === "comizio") return { visibilita: rand(4, 9), iscritti: rand(15, 35), reputazione: rand(0.5, 2) };
-    if (eventId === "manifestazione") return { visibilita: rand(8, 15), iscritti: rand(20, 45), reputazione: rand(-1, 2) };
-    if (eventId === "congresso") return { visibilita: rand(6, 12), iscritti: rand(40, 90), reputazione: rand(2, 5) };
-    if (eventId === "tour_territoriale") return { iscritti: rand(30, 60), sezioni: Math.random() < 0.3 ? 1 : 0, reputazione: rand(0.5, 2) };
-    if (eventId === "missione_diplomatica") return { visibilita: rand(3, 7), reputazione: rand(1, 3), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
-    if (eventId === "campagna_mediatica_nazionale") return { visibilita: rand(10, 18), reputazione: rand(-1, 3) };
+    if (eventId === "comizio") return { sondaggi: rand(0.08, 0.12) };
+    if (eventId === "manifestazione") return { sondaggi: rand(0.08, 0.12), reputazione: rand(1, 2.5), visibilita: rand(3, 6) };
+    if (eventId === "congresso") return { sondaggi: rand(0.16, 0.24) };
+    if (eventId === "tour_territoriale") return { sondaggi: rand(0.08, 0.12), reputazione: rand(3, 6) };
+    if (eventId === "missione_diplomatica") return { sondaggi: rand(0.08, 0.12), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
+    if (eventId === "campagna_mediatica_nazionale") return { sondaggi: rand(0.08, 0.12) };
     return {};
   }
   // Ogni evento genera un testo di esito diverso a ogni attivazione (città, partner internazionale o
@@ -8394,9 +8451,11 @@
     var p = state.player;
     if (!p.eventCooldowns) p.eventCooldowns = {};
     if (state.turn < (p.eventCooldowns[eventId] || 0)) return null;
+    if (state.turn - (p.lastPartyEventTurn || -Infinity) < PARTY_EVENTS_SHARED_COOLDOWN) return null;
     if (p.fondi < ev.cost) return null;
     p.fondi -= ev.cost;
     p.eventCooldowns[eventId] = state.turn + ev.cooldown;
+    p.lastPartyEventTurn = state.turn;
     var dossier = { title: ev.label, cat: "Organizzazione" };
     var choice = { label: ev.label, effects: partyEventEffects(eventId), result: partyEventFlavor(eventId) };
     return applyChoice(dossier, choice);
@@ -8639,13 +8698,14 @@
 
   function renderPartyEvents() {
     var p = state.player;
+    var sharedWeeksLeft = PARTY_EVENTS_SHARED_COOLDOWN - (state.turn - (p.lastPartyEventTurn || -Infinity));
     var html = '<section aria-label="Eventi di partito"><details class="log" open><summary>Organizza un evento di partito<span>▾</span></summary>' +
-      '<p class="ci-hint">Costa fondi e ha un tempo di recupero, ma rafforza davvero il partito — indipendentemente dalla situazione della settimana.</p>' +
+      '<p class="ci-hint">Costa fondi e ha un tempo di recupero, ma rafforza davvero il partito — indipendentemente dalla situazione della settimana. Se ne può organizzare uno solo (di qualsiasi tipo) ogni ' + PARTY_EVENTS_SHARED_COOLDOWN + ' settimane.</p>' +
       '<div class="option-grid">';
     Object.keys(PARTY_EVENTS).forEach(function (id) {
       var ev = PARTY_EVENTS[id];
       var cd = (p.eventCooldowns && p.eventCooldowns[id]) || 0;
-      var weeksLeft = cd - state.turn;
+      var weeksLeft = Math.max(cd - state.turn, sharedWeeksLeft);
       var disabled = weeksLeft > 0 || p.fondi < ev.cost;
       var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
         : p.fondi < ev.cost ? "Fondi insufficienti (" + fmtEuro(ev.cost) + ")" : "Costo: " + fmtEuro(ev.cost);
@@ -9945,7 +10005,7 @@
   // moltiplicatori di stile/staff) in piccoli chip colorati — verde se il numero è salito, rosso se è
   // sceso. Usato sia nella schermata di esito subito dopo la scelta, sia in ogni voce del registro, così
   // l'impatto delle decisioni passate resta visibile anche a distanza di settimane, non solo nel testo.
-  var IMPACT_CHIP_LABELS = { iscritti: "Iscritti", fondi: "Fondi", reputazione: "Reputazione", visibilita: "Visibilità" };
+  var IMPACT_CHIP_LABELS = { iscritti: "Iscritti", fondi: "Fondi", reputazione: "Reputazione", visibilita: "Visibilità", sondaggi: "Sondaggi" };
   function countryMetricLabel(key) {
     for (var i = 0; i < COUNTRY_PROFILE_METRICS.length; i++) if (COUNTRY_PROFILE_METRICS[i].key === key) return COUNTRY_PROFILE_METRICS[i].label;
     return key;
@@ -9954,11 +10014,11 @@
     if (!deltas) return "";
     var chips = Object.keys(IMPACT_CHIP_LABELS).map(function (k) {
       var v = deltas[k];
-      var threshold = k === "iscritti" || k === "fondi" ? 1 : 0.05;
+      var threshold = k === "iscritti" || k === "fondi" ? 1 : k === "sondaggi" ? 0.01 : 0.05;
       if (!v || Math.abs(v) < threshold) return "";
       var cls = v > 0 ? "up" : "down";
       var sign = v > 0 ? "+" : "−";
-      var display = k === "fondi" ? sign + "€" + Math.round(Math.abs(v)) : sign + Math.abs(v).toFixed(k === "iscritti" ? 0 : 1);
+      var display = k === "fondi" ? sign + "€" + Math.round(Math.abs(v)) : sign + Math.abs(v).toFixed(k === "iscritti" ? 0 : k === "sondaggi" ? 2 : 1);
       return '<span class="impact-chip ' + cls + '">' + IMPACT_CHIP_LABELS[k] + " " + display + "</span>";
     }).join("");
     // Le voci "national" (Scheda Paese, es. relazioni diplomatiche, ambientalismo) toccate da prese di
@@ -11088,6 +11148,7 @@
     triggerCpuNatoEuExit();
     triggerCpuEuFederalization();
     resolveAnnualBudget();
+    resolveMonthlyPartyTax();
     triggerWorldNews();
     triggerMinorCountryEvent();
     triggerNucleoUpdate();
