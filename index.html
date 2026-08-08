@@ -777,7 +777,13 @@
     { key: "relazioniDiplomatiche", label: "Relazioni diplomatiche" },
     { key: "ricercaSviluppo", label: "Ricerca e sviluppo" },
     { key: "inflazione", label: "Stabilità dei prezzi (inflazione)" },
-    { key: "difesa", label: "Capacità di difesa nazionale" }
+    { key: "difesa", label: "Capacità di difesa nazionale" },
+    { key: "sicurezza", label: "Sicurezza pubblica" },
+    { key: "giustizia", label: "Efficienza della giustizia" },
+    { key: "casa", label: "Accesso alla casa" },
+    { key: "immigrazione", label: "Gestione dell'immigrazione" },
+    { key: "disoccupazione", label: "Occupazione" },
+    { key: "energia", label: "Indipendenza energetica" }
   ];
   // Quanto pesa davvero una presa di posizione del partito sulla Scheda Paese: zero se il partito
   // non ha nemmeno un seggio (né a Camera/Senato né al Parlamento Europeo), un po' di più se ha
@@ -937,21 +943,27 @@
     var baseline = 45;
     state.consensoGoverno = clamp(state.consensoGoverno + (baseline - state.consensoGoverno) * 0.05 + (Math.random() - 0.5) * 1.5, 0, 100);
   }
-  // Il paese che va oggettivamente meglio o peggio deve pesare anche sulla fiducia di governo, non solo
-  // gli eventi discreti in Aula: confronta la Scheda Paese di questa settimana con quella della settimana
-  // scorsa (countryProfilePrev, la stessa base usata per le frecce +/- mostrate nella Scheda Paese) PRIMA
-  // che driftCountryProfile() la sovrascriva con lo snapshot nuovo — va quindi chiamata subito prima di
-  // driftCountryProfile() in recomputePeriodic(), non dopo.
-  function driftConsensoGovernoByCountryTrend() {
-    if (state.consensoGoverno === undefined || state.consensoGoverno === null) return;
+  // Quanto è migliorato o peggiorato il paese nel complesso nell'ultima settimana: confronta la Scheda
+  // Paese di oggi con quella della settimana scorsa (countryProfilePrev, la stessa base usata per le
+  // frecce +/- mostrate nella pagina Scheda Paese) PRIMA che driftCountryProfile() la sovrascriva con lo
+  // snapshot nuovo — va quindi calcolata subito prima di driftCountryProfile() in recomputePeriodic(), non
+  // dopo. Un'unica lettura per settimana, riusata sia per la fiducia di governo sia per i sondaggi dei
+  // partiti (vedi driftConsensoGovernoByCountryTrend e la sezione sondaggi più sotto).
+  function computeCountryTrendDelta() {
     var prev = state.countryProfilePrev;
-    if (!prev) return;
+    if (!prev) return 0;
     var totalDelta = 0;
     COUNTRY_PROFILE_METRICS.forEach(function (m) {
       if (prev[m.key] === undefined || state.countryProfile[m.key] === undefined) return;
       totalDelta += state.countryProfile[m.key] - prev[m.key];
     });
-    var cgDelta = clamp(totalDelta * 1.5, -3, 3);
+    return totalDelta;
+  }
+  // Il paese che va oggettivamente meglio o peggio deve pesare anche sulla fiducia di governo, non solo
+  // gli eventi discreti in Aula.
+  function driftConsensoGovernoByCountryTrend(countryTrendDelta) {
+    if (state.consensoGoverno === undefined || state.consensoGoverno === null) return;
+    var cgDelta = clamp(countryTrendDelta * 1.5, -3, 3);
     if (cgDelta) state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
   }
   // ---------- Stanziamento del bilancio pubblico: chi governa (giocatore o CPU) decide dove investire ----------
@@ -1953,7 +1965,9 @@
     corruzione: "la lotta alla corruzione", aziende: "il sostegno alle imprese", economia: "l'economia",
     pil: "la crescita del PIL", felicita: "il benessere sociale", scuola: "la scuola",
     ambientalismo: "la tutela ambientale", commercio: "il commercio", relazioniDiplomatiche: "le relazioni diplomatiche",
-    ricercaSviluppo: "la ricerca e sviluppo", inflazione: "il controllo dell'inflazione", difesa: "la difesa nazionale"
+    ricercaSviluppo: "la ricerca e sviluppo", inflazione: "il controllo dell'inflazione", difesa: "la difesa nazionale",
+    sicurezza: "la sicurezza pubblica", giustizia: "la giustizia", casa: "la casa e l'abitare",
+    immigrazione: "la gestione dell'immigrazione", disoccupazione: "l'occupazione", energia: "l'indipendenza energetica"
   };
   var SITUATION_SHAPES = [
     { kind: "Inchiesta", brief: function (noun, ctx) { return "Un'inchiesta giornalistica accende i riflettori su " + noun + " a " + ctx.city + "."; } },
@@ -3786,17 +3800,17 @@
   var REFORM_DOMAINS = [
     { id: "sanita", label: "Sanità", nouns: ["il sistema sanitario nazionale", "la rete ospedaliera pubblica", "la sanità territoriale"], metric: "sanita" },
     { id: "scuola", label: "Scuola e Istruzione", nouns: ["il sistema scolastico", "l'istruzione pubblica", "la formazione professionale"], metric: "scuola" },
-    { id: "sicurezza", label: "Sicurezza Pubblica", nouns: ["la sicurezza pubblica", "il sistema di ordine pubblico", "la sicurezza urbana"], metric: "corruzione" },
-    { id: "casa", label: "Casa e Abitare", nouns: ["il mercato della casa", "l'edilizia residenziale pubblica", "la politica abitativa"], metric: "welfare" },
-    { id: "lavoro", label: "Lavoro", nouns: ["il mercato del lavoro", "le tutele dei lavoratori", "il sistema contrattuale"], metric: "salari" },
+    { id: "sicurezza", label: "Sicurezza Pubblica", nouns: ["la sicurezza pubblica", "il sistema di ordine pubblico", "la sicurezza urbana"], metric: "sicurezza" },
+    { id: "casa", label: "Casa e Abitare", nouns: ["il mercato della casa", "l'edilizia residenziale pubblica", "la politica abitativa"], metric: "casa" },
+    { id: "lavoro", label: "Lavoro", nouns: ["il mercato del lavoro", "le tutele dei lavoratori", "il sistema contrattuale"], metric: "disoccupazione" },
     { id: "ambiente", label: "Ambiente e Clima", nouns: ["la politica ambientale", "la gestione del territorio", "la transizione ecologica"], metric: "ambientalismo" },
     { id: "pensioni", label: "Pensioni e Previdenza", nouns: ["il sistema previdenziale", "le pensioni pubbliche", "il welfare per gli anziani"], metric: "welfare" },
-    { id: "immigrazione", label: "Immigrazione", nouns: ["la politica migratoria", "il sistema di accoglienza", "la gestione dei flussi migratori"], metric: "relazioniDiplomatiche" },
-    { id: "giustizia", label: "Giustizia", nouns: ["il sistema giudiziario", "l'amministrazione della giustizia", "il sistema penitenziario"], metric: "corruzione" },
+    { id: "immigrazione", label: "Immigrazione", nouns: ["la politica migratoria", "il sistema di accoglienza", "la gestione dei flussi migratori"], metric: "immigrazione" },
+    { id: "giustizia", label: "Giustizia", nouns: ["il sistema giudiziario", "l'amministrazione della giustizia", "il sistema penitenziario"], metric: "giustizia" },
     { id: "digitale", label: "Digitale e Innovazione", nouns: ["la trasformazione digitale del paese", "l'infrastruttura tecnologica nazionale", "la regolazione del digitale"], metric: "ricercaSviluppo" },
     { id: "trasporti", label: "Trasporti", nouns: ["il sistema dei trasporti pubblici", "la rete infrastrutturale di trasporto", "la mobilità nazionale"], metric: "trasporti" },
     { id: "economia", label: "Fisco ed Economia", nouns: ["il sistema fiscale", "la politica economica nazionale", "il sostegno alle imprese"], metric: "economia" },
-    { id: "energia", label: "Energia", nouns: ["la politica energetica nazionale", "l'approvvigionamento energetico", "il mercato dell'energia"], metric: "ambientalismo" },
+    { id: "energia", label: "Energia", nouns: ["la politica energetica nazionale", "l'approvvigionamento energetico", "il mercato dell'energia"], metric: "energia" },
     { id: "agricoltura", label: "Agricoltura", nouns: ["la politica agricola nazionale", "il sostegno al settore agroalimentare", "la filiera agroalimentare"], metric: "commercio" },
     { id: "infrastrutture", label: "Grandi Infrastrutture", nouns: ["le grandi infrastrutture nazionali", "la rete viaria e ferroviaria", "gli investimenti infrastrutturali"], metric: "trasporti" },
     { id: "cultura", label: "Cultura e Spettacolo", nouns: ["il sostegno al settore culturale", "la promozione delle arti e dello spettacolo", "la tutela del patrimonio artistico"], metric: "felicita" },
@@ -3809,7 +3823,7 @@
     { id: "servizi_postali", label: "Servizi Postali e Comunicazioni", nouns: ["il servizio postale nazionale", "le infrastrutture di comunicazione", "la copertura dei servizi nelle aree remote"], metric: "trasporti" },
     { id: "politiche_giovanili", label: "Politiche Giovanili", nouns: ["le politiche per i giovani", "il sostegno all'autonomia dei giovani", "le opportunità per le nuove generazioni"], metric: "felicita" },
     { id: "terzo_settore_generale", label: "Terzo Settore e Volontariato", nouns: ["il sostegno al terzo settore", "le associazioni di volontariato", "l'economia sociale"], metric: "felicita" },
-    { id: "servizi_carcerari", label: "Sistema Penitenziario", nouns: ["il sistema carcerario", "le condizioni delle carceri", "il reinserimento dei detenuti"], metric: "corruzione" },
+    { id: "servizi_carcerari", label: "Sistema Penitenziario", nouns: ["il sistema carcerario", "le condizioni delle carceri", "il reinserimento dei detenuti"], metric: "giustizia" },
     { id: "politiche_animali", label: "Benessere Animale", nouns: ["la tutela del benessere animale", "la lotta al randagismo", "la protezione della fauna selvatica"], metric: "felicita" },
     { id: "rischio_idrogeologico", label: "Rischio Idrogeologico", nouns: ["la prevenzione del rischio idrogeologico", "la messa in sicurezza del territorio", "il dissesto idrogeologico"], metric: "ambientalismo" },
     { id: "politiche_famiglia_generale", label: "Sostegno alla Famiglia", nouns: ["il sostegno generale alle famiglie", "le politiche familiari", "l'equilibrio tra lavoro e famiglia"], metric: "welfare" },
@@ -6572,7 +6586,8 @@
     return {
       salari: 4, trasporti: 5, welfare: 5, sanita: 5, corruzione: 4, aziende: 5, economia: 5,
       pil: 4, felicita: 6, scuola: 5, ambientalismo: 5, commercio: 6, relazioniDiplomatiche: 6,
-      ricercaSviluppo: 4, inflazione: 6, difesa: 5
+      ricercaSviluppo: 4, inflazione: 6, difesa: 5,
+      sicurezza: 5, giustizia: 4, casa: 4, immigrazione: 5, disoccupazione: 5, energia: 4
     };
   }
   var STATE_FIELD_DEFAULTS = {
@@ -6953,7 +6968,8 @@
     var p = state.player;
     if (!p) return;
     var style = leadershipById(p.leadership);
-    driftConsensoGovernoByCountryTrend();
+    var countryTrendDelta = computeCountryTrendDelta();
+    driftConsensoGovernoByCountryTrend(countryTrendDelta);
     driftCountryProfile();
     checkLongTermTrackMilestones();
     driftPartyRelations();
@@ -7011,23 +7027,48 @@
     var target = p.baselineSondaggi !== null && p.baselineSondaggi !== undefined
       ? clamp(organicTarget * 0.35 + p.baselineSondaggi * 0.65, 0, 40)
       : organicTarget;
+    // Il paese che va oggettivamente meglio o peggio deve pesare anche sui sondaggi, non solo sulle
+    // statistiche interne del partito (iscritti, sezioni, reputazione): chi governa ne riceve credito o
+    // colpa diretta; chi è all'opposizione (o fuori dal Parlamento) ne trae un piccolo vantaggio quando
+    // il paese peggiora (voto di protesta) e un piccolo svantaggio quando il paese migliora (il governo
+    // in carica ne raccoglie il merito) — un effetto più tenue di quello diretto sul governo, come
+    // capita davvero nel "voto economico".
+    var isGovernoNow = p.parliamentRole === "governo";
+    var countrySondaggiEffect = clamp(countryTrendDelta * 0.4 * (isGovernoNow ? 1 : -0.4), -1.5, 1.5);
+    target = clamp(target + countrySondaggiEffect, 0, 40);
     // Nella realtà i sondaggi di un partito si muovono lentamente settimana dopo settimana, con scatti
     // bruschi solo in occasioni straordinarie (scandali, elezioni, grandi eventi): un avvicinamento del
     // 15% del divario ogni settimana era troppo reattivo. Portato all'8%, un cambiamento neutro (rallenta
     // allo stesso modo sia la crescita sia il calo, non favorisce né sfavorisce il giocatore) — un partito
     // impiega più settimane a raggiungere il proprio equilibrio, ma quell'equilibrio resta lo stesso.
-    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + (Math.random() - 0.5) * 0.3, 0, 40);
+    // Un trend che si consolida da diverse settimane (sondaggiHistory, letto QUI prima di aggiornarlo con
+    // il valore di questa settimana) mantiene un po' della propria inerzia anche prima che la formula del
+    // bersaglio la raggiunga — non è più solo "rumore settimana per settimana", si comporta come un vero
+    // trend elettorale che si autoalimenta un po', entro un tetto piccolo per non degenerare in una spirale.
+    var momentumTerm = 0;
+    if (p.sondaggiHistory && p.sondaggiHistory.length >= 3) {
+      var momentumWindow = p.sondaggiHistory.slice(Math.max(0, p.sondaggiHistory.length - 5));
+      var momentumAvgDelta = (momentumWindow[momentumWindow.length - 1] - momentumWindow[0]) / (momentumWindow.length - 1);
+      momentumTerm = clamp(momentumAvgDelta * 0.3, -0.4, 0.4);
+    }
+    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3, 0, 40);
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
 
     // established parties: random walk, then renormalize so total + player + indecisi = 100,
     // pulling disproportionately from the player's ideological rival. L'ampiezza del movimento
     // settimanale è moderata di proposito (non deve sembrare un sondaggio elettorale in tempo reale),
-    // ma abbastanza percepibile da rendere i partiti vivi settimana dopo settimana.
+    // ma abbastanza percepibile da rendere i partiti vivi settimana dopo settimana. Stesso principio del
+    // giocatore: i partiti della maggioranza di governo ricevono credito/colpa diretti dall'andamento del
+    // paese, gli altri un effetto opposto più tenue — la rinormalizzazione subito sotto mantiene i totali
+    // coerenti, quindi qui basta spostare le proporzioni relative nella direzione giusta.
     var rivalId = familyById(p.family).rival;
     var others = activeParties();
+    var govMemberIdsForGrowth = (state.govEntity && state.govEntity.memberIds) || [];
     others.forEach(function (party) {
-      state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (Math.random() - 0.5) * 0.55);
+      var isGovMemberForGrowth = govMemberIdsForGrowth.indexOf(party.id) !== -1;
+      var partyCountryBias = clamp(countryTrendDelta * (isGovMemberForGrowth ? 0.25 : -0.1), isGovMemberForGrowth ? -1 : -0.4, isGovMemberForGrowth ? 1 : 0.4);
+      state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (Math.random() - 0.5) * 0.55 + partyCountryBias);
     });
     var totalOthers = others.reduce(function (s, party) { return s + state.parties[party.id]; }, 0);
     var targetOthers = clamp(100 - p.sondaggi - state.indecisi, 20, 99);
