@@ -6849,7 +6849,7 @@
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
-    cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null,
+    cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [],
@@ -7399,6 +7399,7 @@
     if (state.currentDossierId === "rischio_scissione") return rischioScissioneDossier();
     if (state.currentDossierId === "eu_group_choice") return euGroupDossier();
     if (state.currentDossierId === "cabinet_formation") return cabinetFormationDossier();
+    if (state.currentDossierId === "government_oath") return governmentOathDossier();
     if (state.currentDossierId === "gov_emendamento") return decretoDinamicoDossier();
     for (var i = 0; i < CORRENTI_DOSSIER_TEMPLATES.length; i++) {
       if (CORRENTI_DOSSIER_TEMPLATES[i].id === state.currentDossierId) return correntiTensionDossier(CORRENTI_DOSSIER_TEMPLATES[i]);
@@ -7946,6 +7947,11 @@
         };
       }
     }
+    // Dopo aver scelto i ministri (se ce n'erano da scegliere), il governo nel suo insieme deve ancora
+    // prestare giuramento nelle mani del Presidente della Repubblica: l'ultimo passo, puramente simbolico
+    // nella stragrande maggioranza dei casi, prima che la legislatura inizi davvero. Vedi
+    // governmentOathDossier, mostrato non appena state.pendingCabinetFormation si svuota.
+    if (p.parliamentRole === "governo") state.pendingGovernmentOath = true;
 
     state.electionResults.unshift({
       turn: state.turn, legislature: state.legislature, sondaggi: p.sondaggi,
@@ -9150,6 +9156,31 @@
       choices: choices
     };
   }
+  // Scenetta simbolica di chiusura della formazione del governo: dopo aver scelto i ministri (se ce
+  // n'erano da scegliere), tutto il governo si presenta al Quirinale per il giuramento nelle mani del
+  // Presidente della Repubblica — l'ultimo passo formale prima che la legislatura inizi davvero. Nella
+  // stragrande maggioranza dei casi è un atto dovuto e scontato, ma il giocatore può comunque scegliere
+  // di rifiutarsi: un gesto clamoroso che manda il governo in crisi ancora prima di insediarsi, con le
+  // stesse conseguenze di una caduta di governo "normale" (elezioni anticipate, vedi
+  // applyGovernmentCollapseLeadershipShock).
+  function governmentOathDossier() {
+    var p = state.player;
+    var premierName = state.cabinet && state.cabinet.premierId === "player" ? p.name : govEntityLabel();
+    return {
+      id: "government_oath", kind: "situazione", localDynamic: false,
+      eyebrow: "Cerimonia — Giuramento del Governo",
+      cat: "Governo", title: "Il Giuramento nelle Mani del Presidente della Repubblica",
+      brief: "Il nuovo governo, con " + premierName + " alla guida, si presenta al Quirinale per il giuramento di fedeltà alla Repubblica davanti al Presidente: l'ultimo passo formale prima che la legislatura inizi davvero. Il tuo partito ne fa parte, ed è chiamato a giurare.",
+      choices: [
+        { label: "Giura fedeltà alla Repubblica", hint: "Il governo si insedia regolarmente", swearOath: true,
+          effects: { reputazione: 2 },
+          result: "Il giuramento si svolge senza intoppi: il governo è ufficialmente nelle sue funzioni, e la legislatura può iniziare." },
+        { label: "Rifiuta di giurare", hint: "Gesto clamoroso: il governo cade prima ancora di insediarsi", swearOath: false,
+          effects: { reputazione: -8, visibilita: 15 },
+          result: "Il rifiuto di giurare fedeltà manda in crisi il governo prima ancora che si insedi davvero: una scelta clamorosa, con conseguenze politiche pesanti." }
+      ]
+    };
+  }
   // ---------- Fiducia della coalizione ----------
   // Una coalizione tenuta insieme solo per far numero nei sondaggi ("mappazzone") deve essere fragile:
   // parte da una fiducia più bassa se i membri non sono ideologicamente vicini, e si logora settimana
@@ -9768,6 +9799,8 @@
         }).join("") + '</div>';
       if (state.pendingCabinetFormation && state.pendingCabinetFormation.remainingMinistries.length) {
         html += '<p class="ci-hint">La formazione del governo è ancora in corso: scegli i ministri mancanti dal dossier della settimana.</p>';
+      } else if (state.pendingGovernmentOath) {
+        html += '<p class="ci-hint">Il governo deve ancora prestare giuramento nelle mani del Presidente della Repubblica: vedi il dossier della settimana.</p>';
       }
     }
     if (p.inParliament) {
@@ -10337,6 +10370,16 @@
           });
         }
         state.resultData = { resultText: choice.result, headlines: [] };
+      } else if (dossier.id === "government_oath") {
+        state.pendingGovernmentOath = false;
+        if (!choice.swearOath) {
+          // Stesse conseguenze di una caduta di governo "normale" (vedi il controllo su consensoGoverno
+          // in advanceTurnLogic): la coalizione perde consenso, e tra 8 settimane si torna alle urne.
+          state.snapElectionPending = true;
+          state.nextElectionTurn = state.turn + 8;
+          applyGovernmentCollapseLeadershipShock();
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
         state.natoDecided = true;
         if (choice.exitNato) state.leftNato = true;
@@ -11147,6 +11190,12 @@
       return;
     }
 
+    if (state.pendingGovernmentOath) {
+      state.currentDossierId = "government_oath";
+      state.phase = "building";
+      return;
+    }
+
     var proposedReferendumDossier = resolvePendingReferendumIfDue();
     if (proposedReferendumDossier) {
       state.aiDynamicDossier = proposedReferendumDossier;
@@ -11426,6 +11475,7 @@
           candidates: buildPlayerCabinetCandidatePool(migPlayerMinistries.length)
         };
       }
+      if (state.player.parliamentRole === "governo") state.pendingGovernmentOath = true;
     }
   }
 
