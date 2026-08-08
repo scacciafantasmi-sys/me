@@ -9318,6 +9318,37 @@
   function initialCoalitionTrust(id) {
     return clamp(20 + avgCoalitionRelation(id) * 0.7, 15, 85);
   }
+  // ---------- Approvazione della coalizione di governo ----------
+  // Quando si governa in coalizione, nessuna scelta di governo è più unilaterale: prima di applicare gli
+  // effetti, gli alleati devono approvarla, esattamente come vale sia se il giocatore guida la coalizione
+  // sia se ne è solo un alleato minore (governo CPU con il giocatore dentro) — la fiducia di coalizione
+  // (state.coalitionTrust, la stessa usata altrove per decidere se la coalizione si sfalda) fa da base di
+  // probabilità: una maggioranza coesa approva quasi sempre, una che si sta sfaldando (fiducia già vicina
+  // alla soglia di scioglimento sotto 30) boccia sempre più spesso, un vero potere di veto degli alleati
+  // e non solo un contatore che scende sullo sfondo. Un governo solista (nessun alleato reale in
+  // state.govEntity.memberIds) decide sempre da solo: qui non scatta nulla.
+  function resolveCoalitionApproval() {
+    var allyIds = (state.govEntity && state.govEntity.memberIds) || [];
+    if (!allyIds.length) return { approved: true };
+    var allianceId = state.govEntity.id;
+    if (!state.coalitionTrust) state.coalitionTrust = {};
+    if (state.coalitionTrust[allianceId] === undefined) state.coalitionTrust[allianceId] = initialCoalitionTrust(allianceId);
+    var trust = state.coalitionTrust[allianceId];
+    var approveProb = clamp(trust / 100 + 0.12, 0.15, 0.95);
+    var approved = Math.random() < approveProb;
+    var allyNames = allyIds.map(function (id) { var pt = partyById(id); return pt ? pt.short : id; }).join(", ");
+    if (!approved) state.coalitionTrust[allianceId] = clamp(trust - rand(1, 3), 0, 100);
+    return { approved: approved, allyNames: allyNames, trust: trust };
+  }
+  // Dossier che rappresentano una vera scelta DI GOVERNO (agenda dell'esecutivo, riforme, NATO/UE) e
+  // quindi vanno sottoposti al vaglio della coalizione — non le formalità di insediamento (formazione dei
+  // ministeri, giuramento), che sono decisioni interne al proprio partito e non richiedono il consenso
+  // degli alleati.
+  function isCoalitionGatedDossier(dossier) {
+    if (!dossier) return false;
+    if (dossier.id === "cabinet_formation" || dossier.id === "government_oath") return false;
+    return dossier.cat === "Governo" || dossier.cat === "Riforme di Governo";
+  }
   // Scioglie una coalizione qualunque, fissa o dinamica — usata sia quando è il giocatore a farne parte
   // (vedi updateCoalitionTrust) sia quando è una coalizione TUTTA tra partiti CPU, senza il giocatore
   // (vedi updateCpuOnlyCoalitionTrust): tocca p.allianceId/p.reputazione solo se il giocatore è
@@ -10383,6 +10414,25 @@
   // casi, invece di ricadere silenziosamente sul solo applyChoice generico.
   function resolveDossierChoice(dossier, choice) {
     state.prevSnapshot = { parties: Object.assign({}, state.parties), playerSondaggi: state.player.sondaggi };
+    // Governo di coalizione: prima di eseguire QUALUNQUE ramo sotto (compresi quelli con effetti
+    // collaterali propri, come l'uscita da NATO/UE, che altrimenti scatterebbero comunque anche a scelta
+    // "bocciata" dagli alleati) verifichiamo se la coalizione approva. Va fatto qui, prima di ogni
+    // branch — non dentro applyChoice — perché diversi rami sotto mutano lo stato PRIMA di chiamare
+    // applyChoice (es. state.leftNato), e un blocco tardivo lascerebbe comunque quelle mutazioni.
+    if (state.player.parliamentRole === "governo" && isCoalitionGatedDossier(dossier)) {
+      var coalitionApproval = resolveCoalitionApproval();
+      if (!coalitionApproval.approved) {
+        var blockedText = "La coalizione di governo non approva la linea proposta su \"" + dossier.title + "\": " +
+          (coalitionApproval.allyNames || "gli alleati di maggioranza") +
+          " si oppongono, e la proposta resta bloccata, senza alcun effetto.";
+        state.log.unshift({
+          week: state.turn, title: dossier.title, choiceLabel: "Bocciata dalla coalizione", result: blockedText,
+          headlines: [], type: "dossier", cat: dossier.cat
+        });
+        state.resultData = { resultText: blockedText, headlines: [] };
+        return;
+      }
+    }
     if (dossier.id === "alleanza_negoziato") {
         state.player.allianceId = choice.alliance;
         // "Corri con l'alleanza attuale" è una conferma, non una nuova adesione: non deve azzerare
