@@ -1192,6 +1192,28 @@
       });
     }
   }
+  // Speculare a triggerCpuNatoEuExit sopra, ma nella direzione opposta: un governo guidato da un partito
+  // europeista, se non è il giocatore a guidarlo (quel caso passa dal dossier "gov_federalizza_ue", con
+  // scelta esplicita), spinge prima o poi per trasformare l'Unione Europea in una vera federazione
+  // politica. Prima esisteva solo per il giocatore: un governo CPU europeista restava per sempre
+  // un'occasione persa, senza che accadesse mai nulla di equivalente.
+  function triggerCpuEuFederalization() {
+    var p = state.player;
+    if (p.parliamentRole === "governo") return;
+    if (state.euFederalized || state.leftEu || state.euExitDecided) return;
+    var famId = currentGoverningFamilyId();
+    if (famId !== "europeista") return;
+    if (Math.random() > 0.006) return;
+    state.euFederalized = true;
+    var govLabel = govEntityLabel();
+    state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche + rand(1.5, 3), 1, 10);
+    state.countryProfile.economia = clamp(state.countryProfile.economia + rand(0.5, 1.5), 1, 10);
+    state.log.unshift({
+      week: state.turn, title: "Il Governo Spinge per una Federazione Europea", choiceLabel: govLabel,
+      result: govLabel + " lancia ufficialmente la proposta di trasformare l'Unione Europea in una vera federazione politica: la svolta più ambiziosa nella storia dell'integrazione europea, tra l'entusiasmo dei federalisti e l'allarme dei sovranisti di tutto il continente.",
+      headlines: [], type: "cronaca"
+    });
+  }
   // Sezione Giovanile: il suo grado di accordo con la linea del partito ("agreement") oscilla
   // lentamente verso un bersaglio legato alla reputazione del partito, con un po' di rumore settimanale
   // — se scende sotto il 30% la sezione si scioglie da sola (troppo distante dalla linea del partito
@@ -1972,6 +1994,18 @@
     var metric = THEME_TO_NATIONAL_METRIC[themeId];
     if (METRIC_TO_THEME_ID[metric] === undefined) METRIC_TO_THEME_ID[metric] = themeId;
   });
+  // Quanto "notiziabile" è oggi un tema, in base a come sta davvero quell'indicatore nella Scheda Paese
+  // (scala 1-10): un paese con la sanità al collasso (2/10) vede molte più situazioni sulla sanità di uno
+  // dove va già bene (8/10) — come nella realtà, dove i problemi irrisolti restano in agenda e le
+  // eccellenze fanno meno notizia. Prima la scelta del tema era slegata dallo stato reale del paese
+  // (solo lo slancio delle scelte recenti del giocatore contava, vedi computeThemeMomentum): due partite
+  // con la stessa ideologia e la stessa storia recente vedevano esattamente lo stesso ventaglio di temi,
+  // qualunque fosse lo stato effettivo del paese in quel momento.
+  function themeUrgencyWeight(themeId) {
+    var metric = THEME_TO_NATIONAL_METRIC[themeId];
+    if (!metric || !state.countryProfile || state.countryProfile[metric] === undefined) return 1;
+    return clamp((11 - state.countryProfile[metric]) / 5.5, 0.2, 2.2);
+  }
   // Etichetta discorsiva di ciascun indicatore della Scheda Paese (scala 1-10), usata dal question time
   // e dagli emendamenti dinamici per parlare del problema con parole vere, non con il nome del campo dati.
   var METRIC_LABELS = {
@@ -3150,7 +3184,7 @@
     var themeIds = FAMILY_SIGNATURE_THEMES[p.family];
     var angles = FAMILY_ANGLE_NOUNS[p.family];
     if (!themeIds || !themeIds.length || !angles) return null;
-    var themeId = themeIds[Math.floor(Math.random() * themeIds.length)];
+    var themeId = pickWeighted(themeIds, themeUrgencyWeight);
     var nouns = angles[themeId];
     if (!nouns || !nouns.length) return null;
     var noun = pickFreshItem(nouns, "recentSituationNouns", 10);
@@ -3174,7 +3208,8 @@
     var signature = FAMILY_SIGNATURE_THEMES[p.family] || [];
     var momentumCat = computeThemeMomentum();
     var theme = pickWeighted(SITUATION_THEMES, function (th) {
-      return (momentumCat && th.label === momentumCat) ? 4 : 1;
+      var momentumMult = (momentumCat && th.label === momentumCat) ? 4 : 1;
+      return momentumMult * themeUrgencyWeight(th.id);
     });
     var noun = pickFreshItem(theme.nouns, "recentSituationNouns", 10);
     var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
@@ -10675,6 +10710,7 @@
     triggerEuMembershipShift();
     updateNatoEuStanding();
     triggerCpuNatoEuExit();
+    triggerCpuEuFederalization();
     resolveAnnualBudget();
     triggerWorldNews();
     triggerMinorCountryEvent();
