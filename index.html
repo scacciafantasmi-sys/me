@@ -6602,7 +6602,7 @@
   var STATE_FIELD_DEFAULTS = {
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
-    parliamentSeats: null, euParliamentSeats: null,
+    parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [],
@@ -7566,6 +7566,13 @@
       if (seatsById[id].senato > 0) parliamentSeatsSenato[id] = seatsById[id].senato;
     });
     state.parliamentSeats = { camera: parliamentSeatsCamera, senato: parliamentSeatsSenato, turn: state.turn };
+    // Classifica di questa elezione per BLOCCO (coalizione o partito solo), non per singolo partito:
+    // alle elezioni non conta chi prende più voti in assoluto come partito, conta chi somma più seggi nel
+    // proprio blocco — è quello che stabilisce davvero chi vince (vedi "winner" subito sotto). Mostrata
+    // nella schermata di risultato elettorale (renderElectionResult), non come pannello permanente.
+    state.lastElectionStandings = qualified.map(function (e) {
+      return { id: e.id, label: e.label, votes: e.votes, isCoalition: e.isCoalition, seats: e.totalSeats };
+    }).sort(function (a, b) { return b.seats - a.seats; });
 
     // Il governo è chi ha davvero vinto: l'entità qualificata (coalizione, partito solo, o il giocatore
     // stesso) con più seggi complessivi tra Camera e Senato, ricalcolata a ogni elezione — mai più fissa
@@ -8643,9 +8650,10 @@
   // questo confronto esplicito, vedere "Governo in carica: Centrodestra" mentre in cima ai sondaggi c'è
   // il Campo Largo sembra un errore, quando invece è semplicemente un governo in carica che sta calando.
   // Le stesse entità (coalizioni fisse, coalizioni dinamiche, partiti indipendenti, il giocatore) che
-  // resolveElection() metterebbe in gara se si votasse oggi, ordinate per voti — usata sia da
-  // projectedGovEntity() (solo la prima, chi vincerebbe) sia da renderCoalitionStandings() (la
-  // classifica intera, per farla vedere per esteso al giocatore).
+  // resolveElection() metterebbe in gara se si votasse oggi, ordinate per voti — usata da
+  // projectedGovEntity() per il confronto "se si votasse oggi" nella pagina Parlamento. La classifica
+  // delle coalizioni VERA compare invece solo al momento delle elezioni (vedi state.lastElectionStandings
+  // in resolveElection() e renderElectionResult()), non qui come pannello sempre visibile.
   function buildProjectedEntities() {
     var p = state.player;
     var activeIds = activeParties().map(function (party) { return party.id; });
@@ -8683,31 +8691,6 @@
   function projectedGovEntity() {
     var entities = buildProjectedEntities();
     return entities[0];
-  }
-  // Classifica per blocco/coalizione, non solo per singolo partito: alle elezioni non vince il partito
-  // più votato in assoluto, vince chi somma più voti nel proprio blocco (Centrodestra, Campo Largo, una
-  // coalizione dinamica, o un partito che corre da solo) — quindi il primo in questa classifica è, sui
-  // sondaggi di oggi, chi diventerebbe il governo del paese.
-  function renderCoalitionStandings() {
-    var entities = buildProjectedEntities();
-    var sittingId = state.govEntity && state.govEntity.id;
-    var rows = entities.map(function (e, i) {
-      var memberNames = e.members.map(function (mid) {
-        if (mid === "player") return state.player.name;
-        var pt = partyById(mid);
-        return pt ? pt.short : mid;
-      }).join(", ");
-      var isSitting = e.id === sittingId;
-      var tags = (i === 0 ? '<span class="chip good">Vincerebbe oggi</span>' : "") +
-        (isSitting ? '<span class="chip accent">Al governo</span>' : "");
-      return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + e.label + (e.isCoalition ? "" : " (corre da sola)") + '</strong><span class="value">' + fmt1(e.votes) + '%</span></div>' +
-        '<div class="party-row-sub">' + memberNames + '</div>' +
-        (tags ? '<div class="party-row-sub">' + tags + '</div>' : '') + '</div></div>';
-    }).join("");
-    return '<section aria-label="Classifica delle coalizioni"><details class="log" open>' +
-      '<summary>Classifica delle coalizioni<span>▾</span></summary>' +
-      '<p class="ci-hint">Non vince il partito più votato in assoluto, vince chi somma più voti nel proprio blocco: chi è primo qui, sui sondaggi di oggi, è chi diventerebbe il governo se si votasse ora. "Al governo" indica invece chi governa davvero, deciso dall\'ultima elezione reale.</p>' +
-      '<div class="party-directory">' + rows + "</div></details></section>";
   }
   // ---------- Ripartizione dei ministeri in una coalizione di governo ----------
   // Quando vince una coalizione (di due o più partiti, non un partito singolo), non basta dire "governa
@@ -9481,6 +9464,20 @@
     var lastResult = state.electionResults[0];
     var allianceLabel = lastResult.allianceId ? ((coalitionById(lastResult.allianceId) || {}).label || "una coalizione") : "da solo";
 
+    // Chi vince davvero non è il partito più votato in assoluto, è chi somma più seggi nel proprio
+    // blocco (coalizione o partito solo): vedi state.lastElectionStandings, salvato in resolveElection()
+    // proprio per questa schermata — mostrata SOLO qui, al momento delle elezioni, non come pannello
+    // permanente altrove.
+    var standings = state.lastElectionStandings || [];
+    var standingsHtml = standings.length ? (
+      '<p class="eyebrow" style="margin-top:1.1rem">Classifica delle coalizioni</p>' +
+      '<div class="party-directory">' + standings.map(function (e, i) {
+        return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + e.label + (e.isCoalition ? "" : " (corre da sola)") + '</strong><span class="value">' + fmt1(e.votes) + '%</span></div>' +
+          (i === 0 ? '<div class="party-row-sub"><span class="chip good">Vince le elezioni</span></div>' : "") +
+          "</div></div>";
+      }).join("") + "</div>"
+    ) : "";
+
     var html = '<div class="election-card ' + (success ? "success" : "fail") + '"><p class="eyebrow">Giorno delle elezioni — Legislatura ' + (state.legislature - 1) + "</p>";
     html += "<h2>" + (success ? "Il partito entra in Parlamento" : "Il partito resta fuori dal Parlamento") + "</h2>";
     html += "<p>" + p.name + " si è presentato <strong>" + allianceLabel + "</strong> con il <strong>" + fmt1(lastResult.sondaggi) + "%</strong> dei consensi. ";
@@ -9488,6 +9485,8 @@
       ? "Risultato: <strong>" + p.seatsCamera + "</strong> seggi alla Camera e <strong>" + p.seatsSenato + "</strong> al Senato."
       : "La soglia di sbarramento non è stata raggiunta: nessun seggio in questa legislatura.";
     html += "</p>";
+    html += standingsHtml;
+    html += '<p class="eyebrow" style="margin-top:1.1rem">Classifica dei singoli partiti</p>';
     html += bars;
     html += '<button class="primary-btn" id="election-continue-btn" type="button">Continua a costruire il partito</button></div>';
     return html;
@@ -9562,7 +9561,7 @@
         return renderNationalStrip() + renderCountryProfile() + renderBilancioStato() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
-        return renderCoalitionStandings() + renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
+        return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
       } },
     { id: "diario", label: "Diario di Partito — registro completo", render: function () {
         return renderLog();
