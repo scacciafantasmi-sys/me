@@ -6682,6 +6682,27 @@
   }
 
   var state = load() || freshState();
+  // Migrazione una tantum per i salvataggi la cui ultima elezione (politica e/o europea) è avvenuta
+  // PRIMA che il gioco iniziasse a registrare la composizione reale dei seggi (state.parliamentSeats /
+  // state.euParliamentSeats, salvati da resolveElection()/resolveEuropeanElection()): quel dettaglio
+  // storico non esisteva ancora e non è recuperabile per davvero, ma lasciare il salvataggio "in
+  // proiezione perenne" finché non si tiene una NUOVA elezione non è quello che serve — congela invece
+  // qui, una sola volta, i seggi calcolati sui sondaggi di oggi con la stessa identica matematica a
+  // soglie/coalizioni del voto vero: da questo momento in poi restano fissi come un vero risultato
+  // elettorale, non più una proiezione che si muove settimana per settimana.
+  if (state.player && !state.parliamentSeats && state.lastElectionTurn > 0) {
+    var migQualified = computeQualifiedElectionEntities().qualified;
+    var migSeatsById = computeChamberSeatsById(migQualified);
+    var migCamera = {}, migSenato = {};
+    Object.keys(migSeatsById).forEach(function (id) {
+      if (migSeatsById[id].camera > 0) migCamera[id] = migSeatsById[id].camera;
+      if (migSeatsById[id].senato > 0) migSenato[id] = migSeatsById[id].senato;
+    });
+    state.parliamentSeats = { camera: migCamera, senato: migSenato, turn: state.lastElectionTurn };
+  }
+  if (state.player && !state.euParliamentSeats && state.europeanElectionResults && state.europeanElectionResults.length) {
+    state.euParliamentSeats = { byParty: projectEuSeatsByParty(), turn: state.europeanElectionResults[0].turn };
+  }
 
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
