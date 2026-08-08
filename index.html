@@ -3112,6 +3112,24 @@
     var choices = chosen.choices.concat([{ label: extra.label, hint: extra.hint, effects: extra.effects, result: extra.result }]);
     return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: choices };
   }
+  // Pesca da un pool evitando, quando possibile, gli elementi usati più di recente (memoria a finestra
+  // scorrevole in state[recentArrKey], lunga windowSize). Senza questo, generateFamilySpecificSituation e
+  // generateCombinatorialSituation pescavano noun e "forma" narrativa in modo puramente casuale: su un
+  // pool di poche decine di elementi il birthday paradox fa ripresentare la stessa combinazione (o lo
+  // stesso noun) molto più spesso di quanto sembri equo, ed è proprio quello che rende il gioco percepito
+  // come ripetitivo settimana dopo settimana. Se il pool è già tutto "recente" (es. pool piccolissimo),
+  // si ripesca semplicemente dall'intero pool: meglio un'eventuale ripetizione occasionale che un errore.
+  function pickFreshItem(pool, recentArrKey, windowSize, keyFn) {
+    if (!state[recentArrKey]) state[recentArrKey] = [];
+    var recent = state[recentArrKey];
+    keyFn = keyFn || function (x) { return x; };
+    var available = pool.filter(function (item) { return recent.indexOf(keyFn(item)) === -1; });
+    if (!available.length) available = pool;
+    var chosen = available[Math.floor(Math.random() * available.length)];
+    recent.push(keyFn(chosen));
+    if (recent.length > windowSize) recent.shift();
+    return chosen;
+  }
   // Motore combinatorio per le situazioni legate all'ideologia specifica del partito: stessa meccanica
   // di generateCombinatorialSituation qui sotto, ma pesca il "noun" da FAMILY_ANGLE_NOUNS invece che dal
   // sostantivo neutro di SITUATION_THEMES — così ogni situazione parla davvero il linguaggio di quella
@@ -3124,9 +3142,9 @@
     var themeId = themeIds[Math.floor(Math.random() * themeIds.length)];
     var nouns = angles[themeId];
     if (!nouns || !nouns.length) return null;
-    var noun = nouns[Math.floor(Math.random() * nouns.length)];
+    var noun = pickFreshItem(nouns, "recentSituationNouns", 10);
     var themeObj = SITUATION_THEME_BY_ID[themeId];
-    var shape = SITUATION_SHAPES[Math.floor(Math.random() * SITUATION_SHAPES.length)];
+    var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -3147,8 +3165,8 @@
     var theme = pickWeighted(SITUATION_THEMES, function (th) {
       return (momentumCat && th.label === momentumCat) ? 4 : 1;
     });
-    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
-    var shape = SITUATION_SHAPES[Math.floor(Math.random() * SITUATION_SHAPES.length)];
+    var noun = pickFreshItem(theme.nouns, "recentSituationNouns", 10);
+    var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -4474,7 +4492,8 @@
   // prosecuzione narrativa di una serie di eventi reali già accaduti a QUEL partito specifico (la sua
   // striscia di cronache positive/negative sopra). Quale partito nasce o muore, e quando, non è mai deciso
   // in anticipo: dipende da come è andata la sua storia in quella particolare partita.
-  var SPLINTER_LABELS = ["Movimento", "Alleanza", "Fronte", "Lista", "Unione", "Coalizione Civica", "Patto"];
+  var SPLINTER_LABELS = ["Movimento", "Alleanza", "Fronte", "Lista", "Unione", "Coalizione Civica", "Patto",
+    "Rinascimento", "Costituente", "Cantiere", "Nuovo Corso", "Primavera", "Officina", "Laboratorio", "Rete"];
   // Il nome di un nuovo partito (nato da una scissione interna, o proposto come lista civica locale)
   // deve richiamare davvero la linea/simbologia dell'ideologia di provenienza, non essere una parola
   // politica generica pescata a caso: un partito socialista non può chiamarsi "Lotta Civica" tanto
@@ -4482,23 +4501,23 @@
   // scissioni nazionali (generateSplinterParty) sia per le liste civiche locali
   // (generateLocalAllyCandidates), così il "nome" del nuovo soggetto politico è sempre coerente.
   var FAMILY_PARTY_WORDS = {
-    sovranista: ["Sovrana", "Nazionale", "Patria", "Identità", "Confini"],
-    liberale: ["Liberale", "Riformista", "Impresa", "Merito", "Libera Iniziativa"],
-    progressista: ["Progressista", "Verde", "Ecologista", "Diritti", "Futura"],
-    movimentista: ["Diretta", "Onestà", "Trasparente", "Cittadina", "Anticasta"],
-    sinistra: ["Lavoro", "Sociale", "Popolare", "Solidale", "Operaia"],
-    cattolico: ["Popolare", "Cristiana", "Famiglia", "Solidale", "Comunità"],
-    regionalista: ["Autonoma", "Territoriale", "Regionale", "Federale", "Identità Locale"],
-    comunista: ["Rossa", "Proletaria", "Popolare", "Comunista", "Lavoratori"],
-    nazionalpopolare: ["Nazionale", "Popolare", "Sovrana", "Identitaria", "Patriottica"],
-    europeista: ["Europea", "Federale", "Comune", "Unita", "Comunitaria"],
-    libertario: ["Libertaria", "Libera", "Individuale", "Indipendente"],
-    tecnoprogressista: ["Digitale", "Futura", "Innovazione", "Tecnologica"],
-    meridionalista: ["Meridionale", "del Sud", "Mediterranea", "Territoriale"],
-    fascista: ["Nazionale", "Nuovo Ordine", "Patria", "Tricolore", "Rivoluzionaria"],
-    monarchico: ["Monarchica", "Reale", "della Corona", "Tradizione", "Costituzionale"],
-    gratuitista: ["Popolare", "Gratuita", "Comune", "Sociale", "Universale"],
-    comunismolusso: ["Automazione", "Abbondanza", "Futura", "Tecnologica", "Post-Scarsità"]
+    sovranista: ["Sovrana", "Nazionale", "Patria", "Identità", "Confini", "Tricolore", "Radici"],
+    liberale: ["Liberale", "Riformista", "Impresa", "Merito", "Libera Iniziativa", "Crescita", "Concorrenza"],
+    progressista: ["Progressista", "Verde", "Ecologista", "Diritti", "Futura", "Orizzonte", "Domani"],
+    movimentista: ["Diretta", "Onestà", "Trasparente", "Cittadina", "Anticasta", "Pulizia", "Partecipazione"],
+    sinistra: ["Lavoro", "Sociale", "Popolare", "Solidale", "Operaia", "Uguaglianza", "Riscatto"],
+    cattolico: ["Popolare", "Cristiana", "Famiglia", "Solidale", "Comunità", "Dignità", "Sussidiarietà"],
+    regionalista: ["Autonoma", "Territoriale", "Regionale", "Federale", "Identità Locale", "Radici Locali", "Comunità Territoriale"],
+    comunista: ["Rossa", "Proletaria", "Popolare", "Comunista", "Lavoratori", "Rivoluzionaria", "Internazionalista"],
+    nazionalpopolare: ["Nazionale", "Popolare", "Sovrana", "Identitaria", "Patriottica", "del Popolo", "Radici"],
+    europeista: ["Europea", "Federale", "Comune", "Unita", "Comunitaria", "Atlantica", "Continentale"],
+    libertario: ["Libertaria", "Libera", "Individuale", "Indipendente", "Autonoma", "Minima"],
+    tecnoprogressista: ["Digitale", "Futura", "Innovazione", "Tecnologica", "Domani", "Dati"],
+    meridionalista: ["Meridionale", "del Sud", "Mediterranea", "Territoriale", "Ionica", "Adriatica"],
+    fascista: ["Nazionale", "Nuovo Ordine", "Patria", "Tricolore", "Rivoluzionaria", "Imperiale", "Littoria"],
+    monarchico: ["Monarchica", "Reale", "della Corona", "Tradizione", "Costituzionale", "Sabauda", "Dinastica"],
+    gratuitista: ["Popolare", "Gratuita", "Comune", "Sociale", "Universale", "Condivisa", "per Tutti"],
+    comunismolusso: ["Automazione", "Abbondanza", "Futura", "Tecnologica", "Post-Scarsità", "Digitale", "Orizzonte"]
   };
   function pickFamilyPartyWord(familyId) {
     var words = FAMILY_PARTY_WORDS[familyId];
@@ -4600,7 +4619,8 @@
   // (che in partita resta spesso basso, poche unità percentuali): l'evento deve poter scattare comunque,
   // di tanto in tanto, senza dipendere da quella riserva. Il totale generale resta coerente perché la
   // quota tolta ai partiti esistenti è esattamente quella assegnata al nuovo soggetto.
-  var SPONTANEOUS_PARTY_LABELS = ["Movimento", "Lista Civica", "Alternativa", "Nuova Italia", "Costituente", "Cantiere", "Rete Civica", "Fronte dei Cittadini"];
+  var SPONTANEOUS_PARTY_LABELS = ["Movimento", "Lista Civica", "Alternativa", "Nuova Italia", "Costituente", "Cantiere", "Rete Civica", "Fronte dei Cittadini",
+    "Primavera Civica", "Officina Politica", "Risveglio", "Nuovo Corso", "Laboratorio Civico", "Patto Popolare", "Assemblea Cittadina", "Onda Civica"];
   function generateSpontaneousParty(week) {
     var existingNames = activeParties().map(function (pt) { return pt.name.toLowerCase(); });
     var family = FAMILIES[Math.floor(Math.random() * FAMILIES.length)];
@@ -4874,6 +4894,33 @@
   // vicini per famiglia ideologica ma oggi fuori dai due schieramenti storici (es. Italia Viva e Partito
   // Liberal Democratico sull'area liberale, M5S e Ora! sull'area movimentista, Azione e +Europa
   // sull'area europeista): un fenomeno raro, che poi pesa davvero nel conteggio dei voti alle elezioni.
+  // Prima la coalizione spontanea tra soli partiti CPU si chiamava sempre e solo "Alleanza " + il nome
+  // della famiglia ideologica (es. sempre "Alleanza Liberale", ogni singola volta): zero varietà, lo
+  // stesso nome tornava identico partita dopo partita. Più formule, sul modello di
+  // LOCAL_PARTY_NAME_TEMPLATES, pescate a caso ed evitando collisione col nome di una coalizione già
+  // esistente in quella partita.
+  var DYNAMIC_COALITION_NAME_TEMPLATES = [
+    function (famLabel) { return "Alleanza " + famLabel; },
+    function (famLabel) { return "Patto " + famLabel; },
+    function (famLabel) { return "Fronte " + famLabel; },
+    function (famLabel) { return "Unione " + famLabel; },
+    function (famLabel) { return "Coalizione " + famLabel; },
+    function (famLabel) { return "Insieme per l'Italia " + famLabel; },
+    function (famLabel) { return "Cartello " + famLabel; },
+    function (famLabel) { return "Intesa " + famLabel; },
+    function (famLabel) { return "Convergenza " + famLabel; },
+    function (famLabel) { return "Blocco " + famLabel; }
+  ];
+  function generateDynamicCoalitionLabel(famLabel) {
+    var existingLabels = (state.dynamicCoalitions || []).map(function (c) { return c.label.toLowerCase(); });
+    var label, tpl;
+    for (var attempt = 0; attempt < 10; attempt++) {
+      tpl = DYNAMIC_COALITION_NAME_TEMPLATES[Math.floor(Math.random() * DYNAMIC_COALITION_NAME_TEMPLATES.length)];
+      label = tpl(famLabel);
+      if (existingLabels.indexOf(label.toLowerCase()) === -1) break;
+    }
+    return label;
+  }
   function triggerDynamicCoalitionFormation() {
     if (!state.dynamicCoalitions) state.dynamicCoalitions = [];
     // Nessun tetto al numero di coalizioni spontanee contemporaneamente in scena, sulla stessa linea
@@ -4903,10 +4950,11 @@
     var memberNames = members.map(function (m) { return m.name; });
     var namesText = memberNames.length === 2 ? memberNames[0] + " e " + memberNames[1]
       : memberNames.slice(0, -1).join(", ") + " e " + memberNames[memberNames.length - 1];
+    var coalitionLabel = generateDynamicCoalitionLabel(fam.label);
 
-    state.dynamicCoalitions.push({ id: coalitionId, label: "Alleanza " + fam.label, familyId: famId, members: members.map(function (m) { return m.id; }) });
+    state.dynamicCoalitions.push({ id: coalitionId, label: coalitionLabel, familyId: famId, members: members.map(function (m) { return m.id; }) });
     state.log.unshift({
-      week: state.turn, title: "Nasce una nuova coalizione", choiceLabel: "Alleanza " + fam.label,
+      week: state.turn, title: "Nasce una nuova coalizione", choiceLabel: coalitionLabel,
       result: namesText + " annunciano la nascita di un'alleanza elettorale comune su base " + fam.label.toLowerCase() +
         ", per superare insieme la soglia di sbarramento alle prossime elezioni politiche.",
       headlines: [], type: "cronaca"
@@ -6611,7 +6659,7 @@
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [],
-    usedFamilySituations: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
+    usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
