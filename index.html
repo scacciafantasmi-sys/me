@@ -445,6 +445,9 @@
   .chamber-legend span.sw { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 0.3rem; }
   .countdown { font-size: 0.78rem; color: var(--text-dim); margin-top: 0.6rem; }
   .countdown strong { color: var(--text); font-family: var(--font-mono); }
+  .hemicycle-wrap { margin-bottom: 0.5rem; }
+  .hemicycle { width: 100%; height: auto; display: block; }
+  .hemicycle circle { stroke: var(--panel); stroke-width: 0.5; }
 
   /* ---------- Dossier / event card ---------- */
   .dossier {
@@ -6112,6 +6115,12 @@
     var seatsById = {};
     qualified.forEach(function (e, i) { seatsById[e.id] = seatsArr[i]; });
     var playerSeats = seatsById.player || 0;
+    // Composizione REALE della delegazione italiana all'Europarlamento, fissa fino alla prossima
+    // elezione europea: solo i seggi (per partito), non il gruppo — il gruppo di ciascun partito CPU
+    // (non tracciato individualmente, solo per il giocatore via p.euGroup) e quello del giocatore vengono
+    // risolti "a caldo" a ogni render (vedi renderEuHemicycle), così restano sempre coerenti anche se il
+    // giocatore cambia gruppo più avanti nella legislatura europea.
+    state.euParliamentSeats = { byParty: seatsById, turn: state.turn };
     p.seggiEuropei = playerSeats;
     if (!state.europeanElectionResults) state.europeanElectionResults = [];
     state.europeanElectionResults.unshift({ turn: state.turn, seats: playerSeats });
@@ -6593,6 +6602,7 @@
   var STATE_FIELD_DEFAULTS = {
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
+    parliamentSeats: null, euParliamentSeats: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [],
@@ -7547,6 +7557,15 @@
         });
       }
     });
+    // Composizione REALE del Parlamento appena eletto (non una proiezione sui sondaggi del momento, che
+    // invece cambia settimana per settimana — vedi projectSeats): resta fissa per tutta la legislatura,
+    // fino alla prossima vera elezione, ed è la base dell'emiciclo mostrato nella pagina Parlamento.
+    var parliamentSeatsCamera = {}, parliamentSeatsSenato = {};
+    Object.keys(seatsById).forEach(function (id) {
+      if (seatsById[id].camera > 0) parliamentSeatsCamera[id] = seatsById[id].camera;
+      if (seatsById[id].senato > 0) parliamentSeatsSenato[id] = seatsById[id].senato;
+    });
+    state.parliamentSeats = { camera: parliamentSeatsCamera, senato: parliamentSeatsSenato, turn: state.turn };
 
     // Il governo è chi ha davvero vinto: l'entità qualificata (coalizione, partito solo, o il giocatore
     // stesso) con più seggi complessivi tra Camera e Senato, ricalcolata a ogni elezione — mai più fissa
@@ -7626,6 +7645,60 @@
   var mastheadMeta = document.getElementById("masthead-meta");
   var mastheadTitle = document.getElementById("masthead-title");
   var mastheadTagline = document.getElementById("masthead-tagline");
+
+  // ---------- Emiciclo parlamentare ----------
+  // Diagramma a semicerchio con un pallino per seggio, come nei veri diagrammi di un'assemblea elettiva:
+  // le file esterne (raggio maggiore) ospitano più seggi di quelle interne, in proporzione al raggio,
+  // così la densità dei pallini resta costante da un capo all'altro dell'emiciclo. I seggi vengono poi
+  // assegnati ai gruppi/partiti nell'ORDINE in cui compaiono in "entries" (sinistra -> destra), scorrendo
+  // le posizioni ordinate per angolo: il risultato è il classico "spicchio" per forza politica, non una
+  // vera mappa posto-per-posto (che il gioco non tiene traccia di chi siede esattamente dove).
+  function hemicycleSeatPositions(total, innerR, outerR, cx, cy) {
+    var rows = Math.max(1, Math.min(12, Math.round(Math.sqrt(total) * 0.65)));
+    var radii = [];
+    for (var i = 0; i < rows; i++) radii.push(rows === 1 ? (innerR + outerR) / 2 : innerR + (outerR - innerR) * (i / (rows - 1)));
+    var sumR = radii.reduce(function (s, r) { return s + r; }, 0);
+    var rawCounts = radii.map(function (r) { return (r / sumR) * total; });
+    var floorCounts = rawCounts.map(Math.floor);
+    var used = floorCounts.reduce(function (s, c) { return s + c; }, 0);
+    var remainder = total - used;
+    var byFraction = rawCounts.map(function (c, idx) { return { idx: idx, frac: c - floorCounts[idx] }; })
+      .sort(function (a, b) { return b.frac - a.frac; });
+    for (var k = 0; k < remainder; k++) floorCounts[byFraction[k].idx]++;
+    var positions = [];
+    floorCounts.forEach(function (n, ri) {
+      if (n <= 0) return;
+      var r = radii[ri];
+      for (var s = 0; s < n; s++) {
+        var t = n === 1 ? 0.5 : s / (n - 1);
+        var angleDeg = 172 - t * 164;
+        var angleRad = angleDeg * Math.PI / 180;
+        positions.push({ x: cx + r * Math.cos(angleRad), y: cy - r * Math.sin(angleRad), angle: angleDeg });
+      }
+    });
+    positions.sort(function (a, b) { return b.angle - a.angle; });
+    return positions;
+  }
+  function renderHemicycleSvg(entries) {
+    var total = entries.reduce(function (s, e) { return s + e.seats; }, 0);
+    if (!total) return "";
+    var w = 320, h = 132, cx = w / 2, cy = 118, innerR = 30, outerR = 102;
+    var positions = hemicycleSeatPositions(total, innerR, outerR, cx, cy);
+    var dotR = total > 300 ? 2.0 : total > 150 ? 2.6 : total > 60 ? 3.4 : 4.6;
+    var dots = "", idx = 0;
+    entries.forEach(function (e) {
+      for (var i = 0; i < e.seats && idx < positions.length; i++, idx++) {
+        var pos = positions[idx];
+        dots += '<circle cx="' + pos.x.toFixed(1) + '" cy="' + pos.y.toFixed(1) + '" r="' + dotR + '" fill="' + e.color + '"><title>' + e.label + " — " + e.seats + " seggi</title></circle>";
+      }
+    });
+    return '<svg class="hemicycle" viewBox="0 0 ' + w + " " + h + '" role="img" aria-label="Composizione dell\'assemblea, ' + total + ' seggi">' + dots + "</svg>";
+  }
+  function hemicycleLegend(entries) {
+    return entries.filter(function (e) { return e.seats > 0; }).map(function (e) {
+      return '<span><span class="sw" style="background:' + e.color + '"></span>' + e.label + " " + e.seats + "</span>";
+    }).join("");
+  }
 
   function sparkline(values, color) {
     var w = 100, h = 26, pad = 3;
@@ -9138,6 +9211,46 @@
       "</div>";
   }
 
+  // Costruisce le voci dell'emiciclo (partito/giocatore + seggi + colore) da una mappa di seggi reali
+  // {partyId: seggi}, ordinate da sinistra a destra secondo LEFT_RIGHT_POSITION — così i gruppi vicini
+  // ideologicamente finiscono vicini anche nell'emiciclo, come in un vero Parlamento.
+  function buildHemicycleEntries(seatMap) {
+    var p = state.player;
+    var entries = Object.keys(seatMap || {}).map(function (id) {
+      if (id === "player") {
+        return { id: "player", label: p.name, seats: seatMap[id], color: p.color, pos: LEFT_RIGHT_POSITION[p.family] };
+      }
+      var party = partyById(id);
+      return { id: id, label: party ? party.short : id, seats: seatMap[id], color: party ? party.color : "#999",
+        pos: party && party.familyId && LEFT_RIGHT_POSITION[party.familyId] !== undefined ? LEFT_RIGHT_POSITION[party.familyId] : 0 };
+    }).filter(function (e) { return e.seats > 0; });
+    entries.sort(function (a, b) { return a.pos - b.pos; });
+    return entries;
+  }
+  // L'emiciclo VERO, uscito dalle urne l'ultima volta che si è votato: resta fisso per tutta la
+  // legislatura (vedi state.parliamentSeats, salvato in resolveElection), a differenza del "Quadro
+  // parlamentare" più sotto che invece segue i sondaggi del momento, settimana per settimana.
+  function renderParliamentHemicycles() {
+    var seats = state.parliamentSeats;
+    if (!seats) {
+      return '<section aria-label="Composizione reale del Parlamento"><details class="log" open><summary>Composizione reale del Parlamento<span>▾</span></summary>' +
+        '<p class="ci-hint">Si vedrà qui, con tanto di emiciclo, non appena si terranno le prossime elezioni politiche.</p></details></section>';
+    }
+    var camEntries = buildHemicycleEntries(seats.camera);
+    var senEntries = buildHemicycleEntries(seats.senato);
+    var camTotal = camEntries.reduce(function (s, e) { return s + e.seats; }, 0);
+    var senTotal = senEntries.reduce(function (s, e) { return s + e.seats; }, 0);
+    return '<section aria-label="Composizione reale del Parlamento"><details class="log" open><summary>Composizione reale del Parlamento (elezioni della settimana ' + seats.turn + ')<span>▾</span></summary>' +
+      '<p class="ci-hint">L\'emiciclo uscito davvero dalle urne, con i partiti (soglia 3%) e le coalizioni (soglia 10%) che hanno superato lo sbarramento: resta fisso per tutta la legislatura, a differenza del quadro sondaggi qui sotto.</p>' +
+      '<div class="chambers">' +
+      '<div class="chamber"><div class="chamber-head"><span class="title">Camera dei Deputati</span><span class="chip">' + camTotal + ' seggi</span></div>' +
+      '<div class="hemicycle-wrap">' + renderHemicycleSvg(camEntries) + '</div>' +
+      '<div class="chamber-legend">' + hemicycleLegend(camEntries) + '</div></div>' +
+      '<div class="chamber"><div class="chamber-head"><span class="title">Senato della Repubblica</span><span class="chip">' + senTotal + ' seggi</span></div>' +
+      '<div class="hemicycle-wrap">' + renderHemicycleSvg(senEntries) + '</div>' +
+      '<div class="chamber-legend">' + hemicycleLegend(senEntries) + '</div></div>' +
+      '</div></details></section>';
+  }
   function renderParliament() {
     var p = state.player;
     var seatsC = projectSeats(400), seatsS = projectSeats(200);
@@ -9194,6 +9307,48 @@
 
   // Vista dedicata al Parlamento Europeo (seggi + gruppo) e alle prossime scadenze elettorali locali/UE,
   // così che comunali/regionali ed europee restino sempre visibili anche quando mancano molte settimane.
+  var EU_GROUP_COLORS = {
+    the_left: "#a3123a", sd: "#e3232f", greens: "#3f9c35", renew: "#ffd700",
+    ppe: "#3399ff", ecr: "#2c4d8a", pfe: "#0d3b66", esn: "#5c5c5c", non_iscritti: "#8a8a8a"
+  };
+  // Il gioco non traccia un gruppo europeo per ogni partito CPU (solo per il giocatore, tramite
+  // p.euGroup, scelto a mano dopo ogni elezione europea): qui si usa la prima opzione coerente con la
+  // sua famiglia ideologica (la stessa lista di EU_GROUP_OPTIONS_BY_FAMILY offerta al giocatore), letta
+  // sempre "a caldo" così resta corretta anche se il giocatore cambia gruppo più avanti.
+  function euGroupIdForParty(id) {
+    var p = state.player;
+    if (id === "player") {
+      return p.euGroup || (EU_GROUP_OPTIONS_BY_FAMILY[p.family] && EU_GROUP_OPTIONS_BY_FAMILY[p.family][0]) || "non_iscritti";
+    }
+    var party = partyById(id);
+    var opts = party && party.familyId ? EU_GROUP_OPTIONS_BY_FAMILY[party.familyId] : null;
+    return (opts && opts[0]) || "non_iscritti";
+  }
+  // Emiciclo della delegazione italiana all'Europarlamento (i seggi VERI usciti dall'ultima elezione
+  // europea, vedi state.euParliamentSeats in resolveEuropeanElection), raggruppati per gruppo politico
+  // europeo — non l'intera assemblea da ~720 seggi di tutti i 27 Stati membri, che il gioco non simula.
+  function renderEuHemicycle() {
+    var seats = state.euParliamentSeats;
+    if (!seats || !seats.byParty) {
+      return '<section aria-label="Composizione del Parlamento Europeo"><details class="log" open><summary>Composizione del Parlamento Europeo — delegazione italiana<span>▾</span></summary>' +
+        '<p class="ci-hint">Si vedrà qui, con tanto di emiciclo per gruppo politico, non appena si terranno le prossime elezioni europee.</p></details></section>';
+    }
+    var byGroup = {};
+    Object.keys(seats.byParty).forEach(function (id) {
+      var n = seats.byParty[id];
+      if (!n) return;
+      var groupId = euGroupIdForParty(id);
+      byGroup[groupId] = (byGroup[groupId] || 0) + n;
+    });
+    var entries = EU_GROUPS.map(function (g) {
+      return { id: g.id, label: g.label, seats: byGroup[g.id] || 0, color: EU_GROUP_COLORS[g.id] || "#999" };
+    }).filter(function (e) { return e.seats > 0; });
+    var total = entries.reduce(function (s, e) { return s + e.seats; }, 0);
+    return '<section aria-label="Composizione del Parlamento Europeo"><details class="log" open><summary>Composizione del Parlamento Europeo — delegazione italiana (elezioni della settimana ' + seats.turn + ')<span>▾</span></summary>' +
+      '<p class="ci-hint">I ' + total + ' seggi italiani all\'Europarlamento, raggruppati per gruppo politico europeo — non l\'intera assemblea da 720 seggi di tutti i 27 Stati membri, che il gioco non simula, solo la delegazione italiana.</p>' +
+      '<div class="chamber"><div class="hemicycle-wrap">' + renderHemicycleSvg(entries) + '</div>' +
+      '<div class="chamber-legend">' + hemicycleLegend(entries) + '</div></div></details></section>';
+  }
   function renderEuParliament() {
     var p = state.player;
     var weeksToEU = state.nextEuropeanElectionTurn - state.turn;
@@ -9395,10 +9550,10 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", render: function () {
-        return renderGovernmentReforms() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
-        return renderEuInitiatives() + renderGeopolitica() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
+        return renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
       } },
     { id: "coalizioni", label: "Coalizioni e Alleanze", render: function () {
         return renderReunificationPanel() + renderCoalitionPanel();
