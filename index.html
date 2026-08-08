@@ -2063,7 +2063,21 @@
     { kind: "Caso sollevato da un influencer", brief: function (noun, ctx) { return "Un influencer molto seguito solleva il tema di " + noun + ", portandolo all'attenzione di un pubblico giovane."; } },
     { kind: "Question time a sorpresa", brief: function (noun, ctx) { return "Un question time non programmato ti costringe a prendere posizione in diretta su " + noun + "."; } },
     { kind: "Dossier di un think tank", brief: function (noun, ctx) { return "Un think tank pubblica un dossier tecnico su " + noun + ", ripreso ampiamente dai media."; } },
-    { kind: "Confronto tra generazioni", brief: function (noun, ctx) { return "Un dibattito pubblico a " + ctx.city + " mette a confronto generazioni diverse sul tema di " + noun + "."; } }
+    { kind: "Confronto tra generazioni", brief: function (noun, ctx) { return "Un dibattito pubblico a " + ctx.city + " mette a confronto generazioni diverse sul tema di " + noun + "."; } },
+    { kind: "Dato statistico ufficiale", brief: function (noun, ctx) { return "Un nuovo dato ufficiale dell'Istat riaccende il dibattito su " + noun + "."; } },
+    { kind: "Gaffe di un esponente politico", brief: function (noun, ctx) { return "Una dichiarazione infelice di " + ctx.rivalName + " su " + noun + " diventa il caso del giorno."; } },
+    { kind: "Prima pagina di un quotidiano", brief: function (noun, ctx) { return "Un grande quotidiano nazionale apre in prima pagina con un'inchiesta su " + noun + "."; } },
+    { kind: "Tavolo tecnico convocato dal ministero", brief: function (noun, ctx) { return "Il ministero competente convoca un tavolo tecnico urgente su " + noun + ", e chiede la posizione di tutti i partiti."; } },
+    { kind: "Ricorso al TAR", brief: function (noun, ctx) { return "Un ricorso al TAR legato a " + noun + " blocca temporaneamente un provvedimento, riaccendendo la polemica politica."; } },
+    { kind: "Consiglio regionale in seduta straordinaria", brief: function (noun, ctx) { return "Il consiglio regionale di " + ctx.city + " convoca una seduta straordinaria su " + noun + "."; } },
+    { kind: "Appello di un premio Nobel o scienziato", brief: function (noun, ctx) { return "Un noto scienziato italiano lancia un appello pubblico sui rischi legati a " + noun + "."; } },
+    { kind: "Inchiesta di un programma televisivo d'approfondimento", brief: function (noun, ctx) { return "Un programma televisivo d'inchiesta dedica un servizio approfondito a " + noun + ", con reazioni immediate in Parlamento."; } },
+    { kind: "Controversia tra opinionisti sui social", brief: function (noun, ctx) { return "Una controversia tra opinionisti noti divide i social su " + noun + ", e ti chiedono di prendere posizione."; } },
+    { kind: "Presidio davanti a Palazzo Chigi", brief: function (noun, ctx) { return "Un presidio organizzato davanti a Palazzo Chigi chiede risposte immediate su " + noun + "."; } },
+    { kind: "Editoriale di un economista", brief: function (noun, ctx) { return "Un noto economista firma un editoriale critico sulla gestione di " + noun + "."; } },
+    { kind: "Evento benefico legato al tema", brief: function (noun, ctx) { return "Un evento di beneficenza a " + ctx.city + " porta l'attenzione pubblica su " + noun + ", e i cronisti ti chiedono un commento."; } },
+    { kind: "Statistica europea comparata", brief: function (noun, ctx) { return "Una statistica comparata pubblicata da Eurostat colloca l'Italia in una posizione scomoda su " + noun + "."; } },
+    { kind: "Mobilitazione di categoria a sorpresa", brief: function (noun, ctx) { return "Una categoria professionale finora silenziosa si mobilita a sorpresa su " + noun + ", colpendo tutti i partiti impreparati."; } }
   ];
   var SITUATION_INTROS = [
     "Prima di tutto: come reagisci?", "Cosa decidi di fare o dire questa settimana?", "Come pensi di rispondere?",
@@ -3342,9 +3356,29 @@
       }
     }
   ];
+  // Prima le azioni parlamentari (interrogazioni, mozioni, iniziative, question time, emendamenti)
+  // offrivano SEMPRE e solo le 5 posture di PARLIAMENT_ARCHETYPES (durissima/istituzionale/convergenza/
+  // ritira/mediatica), tutte e 5 rimescolate ogni volta: con esattamente 5 archetipi e 5 scelte richieste,
+  // il ventaglio era LETTERALMENTE identico ogni singola volta, solo in ordine diverso. Ora, quando si
+  // conosce il tema (ctx.themeId), si mescolano alcune leve politiche specifiche di quella materia
+  // (THEME_POLICY_ARCHETYPES, già usate altrove nel gioco) con un sottoinsieme delle posture generiche —
+  // così il contenuto parla davvero dell'argomento in questione, non solo del tono con cui affrontarlo.
   function buildParliamentChoices(ctx, n) {
-    var picked = shuffleN(PARLIAMENT_ARCHETYPES, n || 5);
-    return picked.map(function (arch) {
+    n = n || 5;
+    var themePoolFull = ctx.themeId && THEME_POLICY_ARCHETYPES[ctx.themeId];
+    if (themePoolFull && themePoolFull.length) {
+      var specificCount = Math.min(themePoolFull.length, n - 2, 3);
+      var specific = shuffleN(themePoolFull, specificCount);
+      var postureCount = n - specificCount;
+      var posture = shuffleN(PARLIAMENT_ARCHETYPES, postureCount);
+      var picked = shuffleN(specific.concat(posture), n);
+      return picked.map(function (arch) {
+        var c = arch.make(ctx);
+        return { label: c.label, hint: c.hint, effects: c.effects, result: c.result };
+      });
+    }
+    var pickedGeneric = shuffleN(PARLIAMENT_ARCHETYPES, n);
+    return pickedGeneric.map(function (arch) {
       var c = arch.make(ctx);
       return { label: c.label, hint: c.hint, effects: c.effects, result: c.result };
     });
@@ -3380,7 +3414,7 @@
     var rivalId = leadingGovPartyId();
     var title = "Question Time — " + noun.charAt(0).toUpperCase() + noun.slice(1);
     var brief = "Con " + noun + " fermo a " + fmt1(value) + "/10, presenti un question time in Aula per chiedere conto al Governo guidato da " + govLabel + " di questo ritardo.";
-    var choices = buildParliamentChoices({ nationalMetric: metric, isGoverno: false, rivalId: rivalId }, 4);
+    var choices = buildParliamentChoices({ noun: noun, nationalMetric: metric, isGoverno: false, rivalId: rivalId, themeId: METRIC_TO_THEME_ID[metric] }, 4);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Question Time — pesa di più perché sei in Parlamento",
       cat: "Opposizione", title: title, brief: brief, choices: choices
@@ -3400,7 +3434,7 @@
     var rival = oppPool.length ? oppPool[Math.floor(Math.random() * oppPool.length)] : null;
     var title = "Emendamento a un Decreto del Governo — " + noun.charAt(0).toUpperCase() + noun.slice(1);
     var brief = "Con " + noun + " a " + fmt1(value) + "/10, il tuo gruppo di maggioranza ha la possibilità di proporre un emendamento a un decreto in discussione, per intervenire davvero su questo fronte.";
-    var choices = buildParliamentChoices({ nationalMetric: metric, isGoverno: true, rivalId: rival ? rival.id : null }, 4);
+    var choices = buildParliamentChoices({ noun: noun, nationalMetric: metric, isGoverno: true, rivalId: rival ? rival.id : null, themeId: METRIC_TO_THEME_ID[metric] }, 4);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Emendamento di Governo — pesa di più perché sei al governo",
       cat: "Governo", title: title, brief: brief, choices: choices
@@ -3411,13 +3445,13 @@
       var themeIds = FAMILY_SIGNATURE_THEMES[p.family];
       var angles = FAMILY_ANGLE_NOUNS[p.family];
       if (themeIds && angles) {
-        var themeId = themeIds[Math.floor(Math.random() * themeIds.length)];
+        var themeId = pickWeighted(themeIds, themeUrgencyWeight);
         var nouns = angles[themeId];
-        if (nouns && nouns.length) return { noun: nouns[Math.floor(Math.random() * nouns.length)], themeObj: SITUATION_THEME_BY_ID[themeId] };
+        if (nouns && nouns.length) return { noun: pickFreshItem(nouns, "recentSituationNouns", 10), themeObj: SITUATION_THEME_BY_ID[themeId] };
       }
     }
-    var theme = SITUATION_THEMES[Math.floor(Math.random() * SITUATION_THEMES.length)];
-    return { noun: theme.nouns[Math.floor(Math.random() * theme.nouns.length)], themeObj: theme };
+    var theme = pickWeighted(SITUATION_THEMES, function (th) { return themeUrgencyWeight(th.id); });
+    return { noun: pickFreshItem(theme.nouns, "recentSituationNouns", 10), themeObj: theme };
   }
   function generateParliamentaryAction(p) {
     var kind = pickWeighted([
@@ -3435,7 +3469,7 @@
     var title = kindLabel + " — " + topic.themeObj.label.replace("Politica — ", "");
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
-    var choices = buildParliamentChoices({ noun: topic.noun, nationalMetric: THEME_TO_NATIONAL_METRIC[topic.themeObj.id], isGoverno: isGoverno, rivalId: rival.id }, 5);
+    var choices = buildParliamentChoices({ noun: topic.noun, nationalMetric: THEME_TO_NATIONAL_METRIC[topic.themeObj.id], isGoverno: isGoverno, rivalId: rival.id, themeId: topic.themeObj.id }, 5);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: kindLabel + " — pesa di più perché sei in Parlamento",
       cat: topic.themeObj.label, title: title, brief: brief, choices: choices
@@ -4418,6 +4452,46 @@
         { label: "Rinvia il tema, non è il momento", hint: "Prudente", euFederalize: false,
           effects: { reputazione: -1 },
           result: "Il tema della federazione europea viene rinviato: il governo preferisce concentrarsi su altre priorità, per ora." }
+      ] },
+    { id: "gov_rimpasto", kind: "notizia", cat: "Governo", title: "Voci di Rimpasto di Governo",
+      brief: "Circolano insistenti voci su un possibile rimpasto della squadra di governo: il tuo partito viene consultato sulle proprie richieste.",
+      choices: [
+        { label: "Chiedi apertamente più peso nella squadra di governo", hint: "Rischia lo scontro con gli alleati, ma può pagare", effects: { visibilita: 6, reputazione: -1, consensoGoverno: -1 },
+          result: "La richiesta esplicita di più peso mette pressione sugli alleati, con qualche attrito interno alla maggioranza." },
+        { label: "Sostieni la squadra attuale senza fare pressioni", hint: "Leale, ma rinuncia a un'occasione", effects: { reputazione: 2, consensoGoverno: 1 },
+          result: "Il sostegno senza pressioni rafforza l'immagine di lealtà del partito verso la coalizione." }
+      ] },
+    { id: "gov_scandalo_alleato", kind: "notizia", cat: "Governo", title: "Scandalo Coinvolge un Alleato di Governo",
+      brief: "Un'inchiesta giornalistica coinvolge un esponente di un partito alleato nella maggioranza: la stampa chiede una reazione anche al tuo gruppo.",
+      choices: [
+        { label: "Prendi le distanze pubblicamente", hint: "Tutela la tua immagine, irrita l'alleato coinvolto", effects: { reputazione: 3, consensoGoverno: -2 },
+          result: "La presa di distanze pubblica tutela la tua immagine, ma raffredda i rapporti con l'alleato coinvolto." },
+        { label: "Difendi la maggioranza nel suo complesso", hint: "Solidarietà di coalizione, rischia di essere associato allo scandalo", effects: { reputazione: -2, consensoGoverno: 2 },
+          result: "La difesa compatta della maggioranza rassicura gli alleati, ma espone il partito al rischio di essere accostato allo scandalo." }
+      ] },
+    { id: "gov_visita_stato", kind: "notizia", cat: "Governo", title: "Visita di Stato di un Leader Straniero",
+      brief: "La visita ufficiale di un importante leader straniero mette il governo sotto i riflettori internazionali: il tuo gruppo di maggioranza partecipa agli eventi ufficiali.",
+      choices: [
+        { label: "Punta sui grandi accordi commerciali annunciati", hint: "Enfasi economica, immagine di governo capace", effects: { reputazione: 3, national: { commercio: 0.4, economia: 0.3 } },
+          result: "L'enfasi sugli accordi commerciali rafforza l'immagine di un governo capace di attrarre investimenti." },
+        { label: "Punta sui temi dei diritti umani nel confronto bilaterale", hint: "Posizione più valoriale, rischia di raffreddare i rapporti", effects: { reputazione: 2, national: { relazioniDiplomatiche: -0.2 } },
+          result: "L'attenzione ai diritti umani viene apprezzata da una parte dell'opinione pubblica, ma raffredda un po' i rapporti bilaterali." }
+      ] },
+    { id: "gov_class_action_stato", kind: "notizia", cat: "Governo", title: "Class Action contro un Ente Pubblico",
+      brief: "Un gruppo di cittadini avvia una class action contro un ente pubblico per disservizi diffusi: il governo deve decidere come reagire.",
+      choices: [
+        { label: "Avvia subito un tavolo di risarcimento", hint: "Costoso, ma disinnesca la protesta", effects: { fondi: -600, reputazione: 3, consensoGoverno: 1 },
+          result: "Il tavolo di risarcimento disinnesca la protesta, a un costo reale per le casse pubbliche." },
+        { label: "Lascia che sia la giustizia a decidere", hint: "Nessun costo immediato, ma il caso resta aperto a lungo", effects: { reputazione: -1 },
+          result: "L'attesa della decisione giudiziaria evita spese immediate, ma lascia il caso aperto e la protesta viva." }
+      ] },
+    { id: "gov_conferenza_stampa_annuale", kind: "notizia", cat: "Governo", title: "Conferenza Stampa di Fine Anno del Governo",
+      brief: "Il governo tiene la tradizionale conferenza stampa di fine anno: il tuo gruppo di maggioranza prepara la linea da tenere sui risultati ottenuti.",
+      choices: [
+        { label: "Rivendica con forza i risultati ottenuti finora", hint: "Ottimismo di governo, rischia di sembrare distante dai problemi reali", effects: { reputazione: 2, visibilita: 5, consensoGoverno: 1 },
+          result: "La rivendicazione dei risultati rafforza l'immagine di un governo che sa dove sta andando." },
+        { label: "Riconosci i limiti e annuncia correttivi", hint: "Più credibile, meno trionfalistico", effects: { reputazione: 3, consensoGoverno: -1 },
+          result: "Il riconoscimento dei limiti, con l'annuncio di correttivi, viene letto come un segno di maturità politica." }
       ] }
   ];
   var OPPOSIZIONE_DOSSIERS = [
@@ -4452,6 +4526,38 @@
           result: "Il coordinamento con le altre opposizioni amplifica la voce del partito in Parlamento." },
         { label: "Mantieni l'autonomia", hint: "Identità intatta, meno peso", effects: { reputazione: 1 },
           result: "L'autonomia mantenuta preserva l'identità del partito, a costo di un peso minore in aula." }
+      ] },
+    { id: "opp_ostruzionismo", kind: "notizia", cat: "Opposizione", title: "Ostruzionismo su un Provvedimento del Governo",
+      brief: "Il tuo gruppo valuta se ricorrere all'ostruzionismo parlamentare per rallentare un provvedimento chiave del governo.",
+      choices: [
+        { label: "Fai ostruzionismo a oltranza", hint: "Molta visibilità, rischia di apparire pretestuoso", effects: { visibilita: 8, reputazione: -1, consensoGoverno: -2 },
+          result: "L'ostruzionismo a oltranza rallenta i lavori parlamentari e domina i titoli, ma qualcuno lo legge come pretestuoso." },
+        { label: "Lascia che il provvedimento proceda, con riserva critica", hint: "Meno rumore, più credibilità istituzionale", effects: { reputazione: 2 },
+          result: "La scelta di non ostacolare il provvedimento, pur criticandolo, rafforza l'immagine di un'opposizione responsabile." }
+      ] },
+    { id: "opp_ombra_governo", kind: "notizia", cat: "Opposizione", title: "Proposta di un Governo Ombra",
+      brief: "Alcuni dirigenti del partito propongono di formare un vero e proprio governo ombra, con portavoce dedicati a ogni ministero.",
+      choices: [
+        { label: "Costituisci il governo ombra", hint: "Visibilità e credibilità di lungo periodo, richiede risorse", effects: { fondi: -500, reputazione: 3, visibilita: 4 },
+          result: "Il governo ombra dà al partito un profilo più strutturato agli occhi dell'opinione pubblica, a fronte di un impegno organizzativo reale." },
+        { label: "Resta su una linea di opposizione più tradizionale", hint: "Meno costoso, meno visibile", effects: { reputazione: 1 },
+          result: "La linea di opposizione tradizionale non fa notizia, ma evita l'impegno organizzativo di un governo ombra." }
+      ] },
+    { id: "opp_esposto_corte_conti", kind: "notizia", cat: "Opposizione", title: "Esposto alla Corte dei Conti",
+      brief: "Il tuo gruppo valuta se presentare un esposto alla Corte dei Conti su una spesa pubblica contestata del governo.",
+      choices: [
+        { label: "Presenta l'esposto ufficialmente", hint: "Alta visibilità, esito incerto e non immediato", effects: { visibilita: 7, reputazione: 2, consensoGoverno: -1 },
+          result: "L'esposto alla Corte dei Conti fa notizia e mette pressione sul governo, anche se l'esito richiederà tempo." },
+        { label: "Limita la critica a una dichiarazione pubblica", hint: "Più rapido, meno formale", effects: { visibilita: 3, reputazione: 1 },
+          result: "La dichiarazione pubblica fa discutere per qualche giorno, senza le conseguenze formali di un esposto." }
+      ] },
+    { id: "opp_tour_territorio", kind: "notizia", cat: "Opposizione", title: "Tour Nazionale di Ascolto sul Territorio",
+      brief: "La direzione del partito valuta un tour nazionale di incontri pubblici per raccogliere il malcontento verso il governo direttamente dai cittadini.",
+      choices: [
+        { label: "Organizza il tour nazionale", hint: "Costoso ma radica il partito sul territorio", effects: { fondi: -700, iscritti: 40, visibilita: 5 },
+          result: "Il tour nazionale di ascolto rafforza il radicamento territoriale del partito, con un impegno organizzativo importante." },
+        { label: "Punta invece su una campagna social mirata", hint: "Più economico, meno contatto diretto", effects: { fondi: -150, visibilita: 4 },
+          result: "La campagna social mirata raggiunge un pubblico ampio a basso costo, ma senza il contatto diretto del territorio." }
       ] }
   ];
   GOVERNO_DOSSIERS.concat(OPPOSIZIONE_DOSSIERS).forEach(function (d) {
@@ -4624,6 +4730,7 @@
       var lastEvent = state.partyArcs[dying.id].lastEventText || (dying.name + " attraversa una lunga crisi interna.");
       state.parties[dying.id] = 0.3;
       state.dissolvedPartyIds.push(dying.id);
+      removePartyFromCoalitions(dying.id);
       delete state.partyArcs[dying.id];
       state.log.unshift({
         week: state.turn, title: "Scioglimento di un partito", choiceLabel: dying.short,
@@ -6802,6 +6909,22 @@
   if (state.player && !state.euParliamentSeats && state.europeanElectionResults && state.europeanElectionResults.length) {
     state.euParliamentSeats = { byParty: projectEuSeatsByParty(), turn: state.europeanElectionResults[0].turn };
   }
+  // Migrazione una tantum: prima che removePartyFromCoalitions esistesse, un partito sciolto restava per
+  // sempre "membro" della sua coalizione dinamica (vedi triggerPartyLifecycleFollowup) — un salvataggio
+  // vecchio può quindi avere una coalizione ancora tecnicamente "in vita" ma con un solo membro reale
+  // rimasto (l'altro è nei dissolvedPartyIds), che blocca per sempre la formazione di una nuova alleanza
+  // per quella stessa famiglia ideologica (vedi triggerDynamicCoalitionFormation). Ripulita una sola
+  // volta al caricamento, con la stessa identica logica ormai applicata in partita ad ogni scioglimento.
+  if (state.player && state.dynamicCoalitions && state.dynamicCoalitions.length) {
+    var dissolvedIds = state.dissolvedPartyIds || [];
+    state.dynamicCoalitions.slice().forEach(function (c) {
+      var alive = c.members.filter(function (mid) { return dissolvedIds.indexOf(mid) === -1; });
+      if (alive.length !== c.members.length) c.members = alive;
+      if (c.members.length < 2) {
+        dissolveCoalition(c.id, "Con lo scioglimento di uno dei partner, " + c.label + " resta con un solo membro effettivo e si scioglie.");
+      }
+    });
+  }
 
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
@@ -8906,6 +9029,25 @@
       headlines: [], type: "dossier", cat: "Strategia Elettorale"
     });
   }
+  // Quando un partito dinamico si scioglie o si riunifica col partito d'origine (vedi
+  // triggerPartyLifecycleFollowup e la riunificazione delle scissioni), va tolto SUBITO da qualunque
+  // coalizione dinamica di cui facesse parte — altrimenti resta un membro "fantasma" per sempre: la
+  // coalizione continua a esistere con lui ancora in elenco, e questo blocca la formazione di una NUOVA
+  // coalizione per la sua stessa famiglia ideologica (triggerDynamicCoalitionFormation salta le famiglie
+  // già "occupate" da una coalizione esistente) anche se di fatto quella coalizione è ridotta a un solo
+  // membro reale e non serve più a niente. Se dopo la rimozione restano meno di 2 membri, la coalizione
+  // stessa si scioglie: un'alleanza a un solo membro non ha più senso.
+  function removePartyFromCoalitions(partyId) {
+    if (!state.dynamicCoalitions || !state.dynamicCoalitions.length) return;
+    state.dynamicCoalitions.slice().forEach(function (c) {
+      var idx = c.members.indexOf(partyId);
+      if (idx === -1) return;
+      c.members.splice(idx, 1);
+      if (c.members.length < 2) {
+        dissolveCoalition(c.id, "Con lo scioglimento di uno dei partner, " + c.label + " resta con un solo membro effettivo e si scioglie.");
+      }
+    });
+  }
   // Le coalizioni spontanee tra partiti CPU (vedi triggerDynamicCoalitionFormation), senza il giocatore
   // dentro, non erano mai valutate per lo scioglimento: una volta nate restavano fisse per il resto della
   // partita, qualunque cosa succedesse ai rapporti reali tra i loro membri. Stessa logica di fiducia già
@@ -10283,6 +10425,7 @@
           delete state.parties[id];
           if (!state.dissolvedPartyIds) state.dissolvedPartyIds = [];
           state.dissolvedPartyIds.push(id);
+          removePartyFromCoalitions(id);
           state.dynamicParties = state.dynamicParties.filter(function (dp) { return dp.id !== id; });
           if (state.partyRelations) delete state.partyRelations[id];
           state.log.unshift({
