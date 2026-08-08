@@ -6849,6 +6849,7 @@
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
+    cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [],
@@ -6965,7 +6966,6 @@
       }
     });
   }
-
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
   }
@@ -7398,6 +7398,7 @@
     if (state.currentDossierId === "formazione_correnti") return formazioneCorrentiDossier();
     if (state.currentDossierId === "rischio_scissione") return rischioScissioneDossier();
     if (state.currentDossierId === "eu_group_choice") return euGroupDossier();
+    if (state.currentDossierId === "cabinet_formation") return cabinetFormationDossier();
     if (state.currentDossierId === "gov_emendamento") return decretoDinamicoDossier();
     for (var i = 0; i < CORRENTI_DOSSIER_TEMPLATES.length; i++) {
       if (CORRENTI_DOSSIER_TEMPLATES[i].id === state.currentDossierId) return correntiTensionDossier(CORRENTI_DOSSIER_TEMPLATES[i]);
@@ -7918,6 +7919,33 @@
     // è statica. currentTermAllianceId tiene traccia dell'alleanza con cui si è corso in QUESTA
     // legislatura, e viene sovrascritta a ogni nuova elezione (vedi renderPartyDirectory).
     p.currentTermAllianceId = p.allianceId;
+
+    // Nuova legislatura, nuovo governo: la squadra ministeriale della precedente non ha più senso.
+    // I ministeri dei partiti CPU vengono assegnati subito a persone reali (leader del partito + esponenti
+    // generati, stabili per tutta la legislatura); i ministeri del giocatore, se governa, restano "da
+    // assegnare" finché non li sceglie lui stesso attraverso il dossier di formazione del governo (vedi
+    // il controllo su state.pendingCabinetFormation in advanceTurnLogic).
+    state.cabinet = null;
+    state.cabinetCpuNamePool = {};
+    state.pendingCabinetFormation = null;
+    var cabinetAlloc = computeCabinetAllocation();
+    if (cabinetAlloc) {
+      var cabinetAssignments = {};
+      Object.keys(cabinetAlloc.ministries).forEach(function (holderId) {
+        if (holderId === "player") return;
+        cabinetAlloc.ministries[holderId].forEach(function (ministry, idx) {
+          cabinetAssignments[ministry] = { holderId: holderId, name: cabinetHolderNamedPerson(holderId, ministry, idx === 0) };
+        });
+      });
+      state.cabinet = { turn: state.turn, premierId: cabinetAlloc.premierId, ministries: cabinetAlloc.ministries, assignments: cabinetAssignments };
+      var playerMinistries = cabinetAlloc.ministries.player;
+      if (playerMinistries && playerMinistries.length) {
+        state.pendingCabinetFormation = {
+          remainingMinistries: playerMinistries.slice(),
+          candidates: buildPlayerCabinetCandidatePool(playerMinistries.length)
+        };
+      }
+    }
 
     state.electionResults.unshift({
       turn: state.turn, legislature: state.legislature, sondaggi: p.sondaggi,
@@ -9010,14 +9038,29 @@
     "Economia e Finanze", "Interno", "Esteri", "Difesa", "Giustizia", "Istruzione",
     "Salute", "Ambiente e Transizione Ecologica", "Infrastrutture e Trasporti", "Lavoro e Politiche Sociali"
   ];
+  var MINISTRY_ARTICLED = {
+    "Economia e Finanze": "dell'Economia e delle Finanze", "Interno": "dell'Interno", "Esteri": "degli Affari Esteri",
+    "Difesa": "della Difesa", "Giustizia": "della Giustizia", "Istruzione": "dell'Istruzione", "Salute": "della Salute",
+    "Ambiente e Transizione Ecologica": "dell'Ambiente e della Transizione Ecologica",
+    "Infrastrutture e Trasporti": "delle Infrastrutture e dei Trasporti", "Lavoro e Politiche Sociali": "del Lavoro e delle Politiche Sociali"
+  };
+  // Prima funzionava solo per governi di coalizione (2+ membri): un governo di un SOLO partito (o del
+  // giocatore da solo) non aveva alcuna ripartizione dei ministeri, e il pannello restava vuoto. Ora
+  // gestisce in modo unificato sia il caso di un solo partito (che riceve tutti i ministeri) sia quello
+  // di una coalizione, includendo esplicitamente il giocatore quando è lui a governare — prima
+  // state.govEntity.memberIds non lo conteneva mai (viene filtrato via in resolveElection), quindi un
+  // giocatore a capo di una coalizione risultava "invisibile" nella ripartizione dei ministeri.
   function computeCabinetAllocation() {
     var ge = state.govEntity;
-    if (!ge || !ge.memberIds || ge.memberIds.length < 2) return null;
+    if (!ge) return null;
+    var p = state.player;
     var activeIds = activeParties().map(function (party) { return party.id; });
-    var members = ge.memberIds.filter(function (id) { return activeIds.indexOf(id) !== -1; });
-    if (members.length < 2) return null;
+    var members = (ge.memberIds || []).filter(function (id) { return activeIds.indexOf(id) !== -1; });
+    if (p && p.parliamentRole === "governo" && members.indexOf("player") === -1) members = members.concat(["player"]);
+    if (!members.length) return null;
     var seatSplit = ge.seatSplit || {};
     var weights = members.map(function (id) {
+      if (id === "player") return Math.max(1, (p.seatsCamera || 0) + (p.seatsSenato || 0) || p.sondaggi || 1);
       var s = seatSplit[id];
       return Math.max(1, (s ? s.camera + s.senato : 0) || state.parties[id] || 1);
     });
@@ -9031,6 +9074,81 @@
       allocation.ministries[s.id] = assigned;
     });
     return allocation;
+  }
+  // Nome di una persona reale per un ministero assegnato a un partito CPU: il primo ministero ricevuto
+  // dal partito va sempre al SUO leader (coerente con partyLeaderOverrides se c'è stata una successione),
+  // gli altri a esponenti generati e poi mantenuti stabili per tutta la legislatura (memorizzati in
+  // state.cabinetCpuNamePool, non rigenerati ogni volta che si guarda il pannello).
+  function cabinetHolderNamedPerson(holderId, ministry, isFirstForHolder) {
+    if (isFirstForHolder) {
+      var leaderName = (state.partyLeaderOverrides && state.partyLeaderOverrides[holderId]) || (function () { var pt = partyById(holderId); return pt ? pt.leader : null; })();
+      if (leaderName) return leaderName;
+    }
+    if (!state.cabinetCpuNamePool) state.cabinetCpuNamePool = {};
+    if (!state.cabinetCpuNamePool[holderId]) state.cabinetCpuNamePool[holderId] = {};
+    var pool = state.cabinetCpuNamePool[holderId];
+    if (!pool[ministry]) pool[ministry] = generateStaffName();
+    return pool[ministry];
+  }
+  // Il pool di candidati REALI che il giocatore può nominare ministri: prima lo staff assunto (nomi veri,
+  // con il proprio ruolo di partito), poi i leader delle correnti interne (anche loro nomi veri, generati
+  // alla nascita delle correnti — vedi ensureCorrentiLeaders), poi un rappresentante generato per ciascuna
+  // sezione locale aperta e per la sezione giovanile (il gioco non tiene traccia di persone specifiche lì,
+  // solo del luogo/nome della sezione), infine tanti dirigenti nazionali generati quanti servono a
+  // coprire tutti i ministeri con un minimo di scelta reale. Costruito una sola volta alla formazione del
+  // governo (vedi resolveElection) e salvato in state.pendingCabinetFormation.candidates: rigenerarlo ad
+  // ogni render farebbe cambiare i nomi disponibili sotto gli occhi del giocatore a metà selezione.
+  function buildPlayerCabinetCandidatePool(neededCount) {
+    var p = state.player;
+    var names = [];
+    var seen = {};
+    function pushName(name, source) {
+      if (!name || seen[name]) return;
+      seen[name] = true;
+      names.push({ id: "cab_" + names.length, name: name, source: source });
+    }
+    (p.staff || []).forEach(function (s) {
+      var role = roleById(s.id);
+      pushName(s.name, role ? role.label + " del partito" : "Dirigenza nazionale del partito");
+    });
+    if (p.currents) {
+      p.currents.forEach(function (c) {
+        var leader = p.correntiLeaders && p.correntiLeaders[c.id];
+        if (leader && leader.name && leader.name !== "La segreteria di partito") pushName(leader.name, "Leader della " + correnteLabel(c.id));
+      });
+    }
+    (p.sezioniLocations || []).slice(0, 5).forEach(function (loc) {
+      if (loc && loc.name) pushName(generateStaffName(), "Responsabile della sezione locale di " + loc.name);
+    });
+    if (p.giovanile) pushName(generateStaffName(), "Responsabile della Sezione Giovanile");
+    while (names.length < neededCount + 2) pushName(generateStaffName(), "Dirigenza nazionale del partito");
+    return names;
+  }
+  // Un ministero alla volta, come una vera trattativa di governo: il giocatore vede 3 candidati reali
+  // (pescati dal pool costruito in resolveElection) per il PRIMO ministero ancora da assegnare, sceglie,
+  // e il ministero successivo compare al turno dopo — finché la squadra non è al completo. Riusa
+  // interamente l'infrastruttura esistente dei dossier a scelta multipla (nessun nuovo tipo di schermata),
+  // semplicemente incatenando più dossier in sequenza.
+  function cabinetFormationDossier() {
+    var pcf = state.pendingCabinetFormation;
+    var ministry = pcf.remainingMinistries[0];
+    var totalCount = (state.cabinet && state.cabinet.ministries && state.cabinet.ministries.player ? state.cabinet.ministries.player.length : pcf.remainingMinistries.length);
+    var doneCount = totalCount - pcf.remainingMinistries.length;
+    var options = shuffleN(pcf.candidates, Math.min(pcf.candidates.length, 3));
+    var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
+    var choices = options.map(function (cand) {
+      return {
+        label: cand.name, hint: cand.source, cabinetCandidateId: cand.id, effects: {},
+        result: cand.name + " (" + cand.source + ") diventa il nuovo Ministro " + articled + "."
+      };
+    });
+    return {
+      id: "cabinet_formation", kind: "situazione", localDynamic: false,
+      eyebrow: "Formazione del Governo — ministero " + (doneCount + 1) + " di " + totalCount,
+      cat: "Governo", title: "A chi affidi il Ministero " + articled + "?",
+      brief: "Il tuo partito ha ottenuto il Ministero " + articled + ": scegli a chi affidare l'incarico tra le persone di fiducia del partito.",
+      choices: choices
+    };
   }
   // ---------- Fiducia della coalizione ----------
   // Una coalizione tenuta insieme solo per far numero nei sondaggi ("mappazzone") deve essere fragile:
@@ -9627,19 +9745,30 @@
     if (state.govEntity && projected.id !== state.govEntity.id) {
       html += '<p class="ci-hint">Se si votasse oggi, invece, in testa ai sondaggi ci sarebbe <strong>' + projected.label + '</strong>: il governo in carica sta perdendo consenso, ma resta al suo posto fino al prossimo voto.</p>';
     }
-    var cabinet = computeCabinetAllocation();
-    if (cabinet) {
+    var cabinet = state.cabinet;
+    if (cabinet && cabinet.ministries) {
       var premierParty = partyById(cabinet.premierId);
       var premierName = cabinet.premierId === "player" ? p.name : (premierParty ? premierParty.name : cabinet.premierId);
-      html += '<p class="eyebrow" style="margin-top:0.9rem">Come si divide la coalizione di governo</p>' +
-        '<p class="ci-hint">' + premierName + ' esprime la Presidenza del Consiglio, come partito più forte della coalizione. I ministeri si dividono in proporzione ai seggi portati in dote da ciascun alleato:</p><div class="stat-grid">' +
+      var isCoalitionCabinet = Object.keys(cabinet.ministries).length > 1;
+      html += '<p class="eyebrow" style="margin-top:0.9rem">' + (isCoalitionCabinet ? "Come si divide la coalizione di governo" : "Il Governo e i suoi ministri") + '</p>' +
+        '<p class="ci-hint">' + premierName + ' esprime la Presidenza del Consiglio' + (isCoalitionCabinet ? ", come partito più forte della coalizione. I ministeri si dividono in proporzione ai seggi portati in dote da ciascun alleato:" : ":") + '</p><div class="stat-grid">' +
         Object.keys(cabinet.ministries).map(function (id) {
           var list = cabinet.ministries[id];
           if (!list.length) return "";
           var party = partyById(id);
           var name = id === "player" ? p.name : (party ? party.name : id);
-          return '<div class="stat-tile"><div class="label">' + name + (id === cabinet.premierId ? " (Presidenza)" : "") + '</div><div class="row"><span class="value">' + list.length + " ministero" + (list.length === 1 ? "" : "i") + '</span></div><p class="ci-hint" style="margin-top:0.3rem">' + list.join(", ") + '</p></div>';
+          var ministerLines = list.map(function (ministry) {
+            var a = cabinet.assignments && cabinet.assignments[ministry];
+            var articled = MINISTRY_ARTICLED[ministry] || ministry;
+            return a
+              ? '<div class="ci-hint" style="margin-top:0.2rem"><strong>' + a.name + '</strong> — Ministro ' + articled + (a.source ? " (" + a.source + ")" : "") + '</div>'
+              : '<div class="ci-hint" style="margin-top:0.2rem">Ministro ' + articled + ' — <em>ancora da assegnare</em></div>';
+          }).join("");
+          return '<div class="stat-tile"><div class="label">' + name + (id === cabinet.premierId ? " (Presidenza)" : "") + '</div><div class="row"><span class="value">' + list.length + " ministero" + (list.length === 1 ? "" : "i") + '</span></div>' + ministerLines + '</div>';
         }).join("") + '</div>';
+      if (state.pendingCabinetFormation && state.pendingCabinetFormation.remainingMinistries.length) {
+        html += '<p class="ci-hint">La formazione del governo è ancora in corso: scegli i ministri mancanti dal dossier della settimana.</p>';
+      }
     }
     if (p.inParliament) {
       var roleGood = p.parliamentRole === "governo";
@@ -10187,6 +10316,27 @@
       } else if (dossier.id === "eu_group_choice") {
         state.player.euGroup = choice.groupId;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "cabinet_formation") {
+        var pcf = state.pendingCabinetFormation;
+        var ministryAssigned = pcf.remainingMinistries.shift();
+        var chosenCandidate = pcf.candidates.filter(function (c) { return c.id === choice.cabinetCandidateId; })[0];
+        if (chosenCandidate) {
+          if (!state.cabinet) state.cabinet = { turn: state.turn, premierId: "player", ministries: {}, assignments: {} };
+          if (!state.cabinet.assignments) state.cabinet.assignments = {};
+          state.cabinet.assignments[ministryAssigned] = { holderId: "player", name: chosenCandidate.name, source: chosenCandidate.source };
+          // Chi ha già ricevuto un ministero non può riceverne un secondo: lo togliamo dal pool prima del
+          // prossimo giro, così la stessa persona non finisce a capo di due dicasteri diversi.
+          pcf.candidates = pcf.candidates.filter(function (c) { return c.id !== chosenCandidate.id; });
+        }
+        if (!pcf.remainingMinistries.length) {
+          state.pendingCabinetFormation = null;
+          state.log.unshift({
+            week: state.turn, title: "Governo Formato", choiceLabel: "Squadra di governo al completo",
+            result: "La squadra ministeriale del partito è ora al completo: il nuovo governo può iniziare davvero a lavorare.",
+            headlines: [], type: "dossier", cat: "Governo"
+          });
+        }
+        state.resultData = { resultText: choice.result, headlines: [] };
       } else if (dossier.id === "gov_uscita_nato") {
         state.natoDecided = true;
         if (choice.exitNato) state.leftNato = true;
@@ -10991,6 +11141,12 @@
       return;
     }
 
+    if (state.pendingCabinetFormation && state.pendingCabinetFormation.remainingMinistries.length) {
+      state.currentDossierId = "cabinet_formation";
+      state.phase = "building";
+      return;
+    }
+
     var proposedReferendumDossier = resolvePendingReferendumIfDue();
     if (proposedReferendumDossier) {
       state.aiDynamicDossier = proposedReferendumDossier;
@@ -11242,6 +11398,36 @@
     };
     reader.readAsText(file);
   });
+
+  // Migrazione una tantum: la squadra di governo con nomi reali è una funzione nuova — un salvataggio già
+  // a metà legislatura (governo insediato da tempo) non ha mai avuto occasione di formarla. Se il partito
+  // del giocatore è già al governo, gli viene comunque data la scelta vera sui SUOI ministeri tramite il
+  // dossier di formazione (vedi cabinetFormationDossier, si attiva al prossimo avanzamento); per gli
+  // alleati/avversari CPU i nomi vengono generati subito, esattamente come a una nuova elezione. Va
+  // eseguita QUI, appena prima della prima render() e non più in alto vicino a "var state = load()":
+  // computeCabinetAllocation dipende da MINISTRIES, dichiarato con "var" molto più sotto nel file — un
+  // "var" viene issato solo nel nome, non nel valore, quindi chiamarla prima che quella riga sia stata
+  // eseguita davvero avrebbe letto MINISTRIES ancora undefined.
+  if (state.player && !state.cabinet && state.govEntity && state.lastElectionTurn > 0) {
+    var migCabinetAlloc = computeCabinetAllocation();
+    if (migCabinetAlloc) {
+      var migAssignments = {};
+      Object.keys(migCabinetAlloc.ministries).forEach(function (holderId) {
+        if (holderId === "player") return;
+        migCabinetAlloc.ministries[holderId].forEach(function (ministry, idx) {
+          migAssignments[ministry] = { holderId: holderId, name: cabinetHolderNamedPerson(holderId, ministry, idx === 0) };
+        });
+      });
+      state.cabinet = { turn: state.lastElectionTurn, premierId: migCabinetAlloc.premierId, ministries: migCabinetAlloc.ministries, assignments: migAssignments };
+      var migPlayerMinistries = migCabinetAlloc.ministries.player;
+      if (migPlayerMinistries && migPlayerMinistries.length) {
+        state.pendingCabinetFormation = {
+          remainingMinistries: migPlayerMinistries.slice(),
+          candidates: buildPlayerCabinetCandidatePool(migPlayerMinistries.length)
+        };
+      }
+    }
+  }
 
   render();
 })();
