@@ -4727,6 +4727,44 @@
     state.partyArcs[party.id] = arc;
   }
 
+  // ---------- Cronaca casuale sul partito del giocatore ----------
+  // I partiti CPU hanno da tempo la loro "cronaca" settimanale (RIVAL_EVENTS sopra), che li fa muovere
+  // nei sondaggi anche senza alcuna scelta esplicita del giocatore. Il partito del giocatore no: tutto
+  // quello che gli succede passa SEMPRE da una scelta deliberata (un dossier, un evento di partito) o
+  // dal lento motore organico — mai un imprevisto indipendente dalle sue scelte, come capita invece a
+  // ogni partito vero. Risultato: un giocatore che gioca "bene" con costanza vede solo salire, perché
+  // nulla lo tira mai giù da solo. Questa cronaca colma il vuoto: piccoli imprevisti, buoni o cattivi,
+  // che toccano reputazione e visibilità indipendentemente da cosa il giocatore ha scelto quella
+  // settimana — esattamente come la stampa e l'opinione pubblica trattano un vero partito.
+  var PLAYER_NEWS_EVENTS = [
+    { text: "Un editoriale indipendente elogia la coerenza della linea del partito nelle ultime settimane.", reputazione: [0.4, 1.3], visibilita: [0.5, 2] },
+    { text: "Un sondaggio d'opinione segnala un buon gradimento del leader tra gli elettori indecisi.", reputazione: [0.3, 1], visibilita: [1, 3] },
+    { text: "Una intervista del leader sui media nazionali viene accolta positivamente.", reputazione: [0.2, 0.8], visibilita: [1.5, 4] },
+    { text: "Un'iniziativa territoriale del partito ottiene una copertura mediatica inaspettatamente favorevole.", reputazione: [0.3, 1.1], visibilita: [1, 3] },
+    { text: "Alcuni osservatori politici indicano il partito come una realtà in crescita da tenere d'occhio.", reputazione: [0.2, 0.9], visibilita: [0.8, 2.5] },
+    { text: "Una gaffe di un dirigente locale del partito finisce sui social e sui talk show.", reputazione: [-1.1, -0.3], visibilita: [0.5, 1.5] },
+    { text: "Un sondaggio interno rivela malumori tra gli iscritti sulla linea recente del partito.", reputazione: [-0.9, -0.2], visibilita: [-0.5, 0.3] },
+    { text: "Un'inchiesta giornalistica solleva dubbi sulla gestione di alcune sezioni locali.", reputazione: [-1.4, -0.4], visibilita: [0.3, 1.2] },
+    { text: "Un editoriale critico mette in discussione la coerenza della linea politica del partito.", reputazione: [-0.8, -0.2], visibilita: [-0.3, 0.4] },
+    { text: "Tensioni interne tra dirigenti del partito trapelano sulla stampa.", reputazione: [-1, -0.3], visibilita: [0.2, 1] },
+    { text: "Il partito resta ai margini dell'agenda mediatica per tutta la settimana, senza infamia né lode.", reputazione: [-0.2, 0.2], visibilita: [-0.8, -0.1] }
+  ];
+  function triggerPlayerNewsEvent() {
+    var p = state.player;
+    if (!p) return;
+    if (Math.random() > 0.22) return;
+    var tpl = PLAYER_NEWS_EVENTS[Math.floor(Math.random() * PLAYER_NEWS_EVENTS.length)];
+    var repDelta = tpl.reputazione[0] + Math.random() * (tpl.reputazione[1] - tpl.reputazione[0]);
+    var visDelta = tpl.visibilita[0] + Math.random() * (tpl.visibilita[1] - tpl.visibilita[0]);
+    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    p.visibilita = clamp(p.visibilita + visDelta, 0, 100);
+    state.log.unshift({
+      week: state.turn, title: "Cronaca politica", choiceLabel: p.short || p.name,
+      result: tpl.text, headlines: [], type: "cronaca",
+      deltas: { reputazione: Math.round(repDelta * 10) / 10, visibilita: Math.round(visDelta * 10) / 10 }
+    });
+  }
+
   // ---------- Nascita e scioglimento dei partiti: solo come seguito di una storia già iniziata ----------
   // Non è un sistema a probabilità fisse scollegato dal resto: un partito nasce o si scioglie solo come
   // prosecuzione narrativa di una serie di eventi reali già accaduti a QUEL partito specifico (la sua
@@ -7360,6 +7398,15 @@
     // dissesto finanziario: i debiti prolungati logorano la credibilità del partito
     if (p.fondi < 0) p.reputazione = clamp(p.reputazione - Math.min(2, Math.abs(p.fondi) / 6000), 0, 100);
 
+    // La reputazione, prima, non aveva alcuna forza che la riportasse verso un valore medio: una volta
+    // spinta vicino al tetto da una serie di scelte fortunate ci restava per sempre, finché il giocatore
+    // non sbagliava qualcosa di suo — e con essa restava fermo anche il bersaglio dei sondaggi, sempre
+    // uguale o in salita, mai in calo "da solo". Nella realtà la reputazione di un partito si affievolisce
+    // se non viene rialimentata (i cicli di notizie passano, l'attenzione pubblica si sposta): una lenta
+    // deriva verso un valore medio (55, leggermente sopra il centro) restituisce quel respiro, senza
+    // annullare l'effetto delle scelte, che restano molto più forti di questa deriva settimanale.
+    p.reputazione = clamp(p.reputazione + (55 - p.reputazione) * 0.015, 0, 100);
+
     // La reputazione ora agisce da vero TETTO moltiplicativo, non solo da piccolo bonus/malus additivo:
     // un partito con base ristretta ma coerente può restare con iscritti/visibilità alti anche facendo
     // cose gravi (es. violenza), ma senza legittimità pubblica quell'entusiasmo di nicchia non si traduce
@@ -7391,8 +7438,19 @@
     // saliva troppo poco (0.02/punto, quasi nullo tra 60 e 100 dove repCeiling è già saturo) — portato a
     // 0.032, così mantenere una reputazione alta continua a dare un ritorno reale anche a lungo termine,
     // non solo nella fascia bassa dove sblocca repCeiling.
+    // Clima nazionale: prima il paese pesava sui sondaggi SOLO tramite il trend settimana-su-settimana
+    // (countrySondaggiEffect più sotto), un segnale che si spegne appena la Scheda Paese smette di
+    // muoversi — un paese che resta stabilmente messo male (o benissimo) per mesi non lasciava alcuna
+    // traccia strutturale sul bersaglio. Qui invece pesa il LIVELLO assoluto di un piccolo paniere di
+    // indicatori-chiave (economia, occupazione, felicità, sicurezza): sopra la media nazionale (5.5) dà
+    // una piccola spinta continua, sotto la media un piccolo freno continuo — indipendente dalle scelte
+    // del partito, la stessa pressione per tutti, giocatore compreso, esattamente come un elettorato che
+    // guarda anche a come stanno oggettivamente le cose, non solo a chi ha fatto cosa questa settimana.
+    var cp = state.countryProfile;
+    var countryMoodAvg = (cp.economia + cp.disoccupazione + cp.felicita + cp.sicurezza) / 4;
+    var countryMoodBonus = clamp((countryMoodAvg - 5.5) * 0.55, -2, 2);
     var organicTarget = clamp(
-      (0.12 + Math.sqrt(p.iscritti) * 0.034 + p.sezioni * 0.12 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.032) * style.growthMult * repCeiling * nicheMult,
+      (0.12 + Math.sqrt(p.iscritti) * 0.034 + p.sezioni * 0.12 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.032 + countryMoodBonus) * style.growthMult * repCeiling * nicheMult,
       0, 40
     );
     // La formula organica sopra è tarata su un partito che parte da zero e cresce sul campo: usata da
@@ -7410,8 +7468,11 @@
     // il paese peggiora (voto di protesta) e un piccolo svantaggio quando il paese migliora (il governo
     // in carica ne raccoglie il merito) — un effetto più tenue di quello diretto sul governo, come
     // capita davvero nel "voto economico".
+    // Effetto rafforzato (moltiplicatore 0.4 -> 0.6, tetto 1.5 -> 2.6): un paese che peggiora o migliora
+    // sul serio deve potersi vedere davvero nei sondaggi settimana dopo settimana, non solo come una
+    // spinta cosmetica sovrastata dal resto della formula.
     var isGovernoNow = p.parliamentRole === "governo";
-    var countrySondaggiEffect = clamp(countryTrendDelta * 0.4 * (isGovernoNow ? 1 : -0.4), -1.5, 1.5);
+    var countrySondaggiEffect = clamp(countryTrendDelta * 0.6 * (isGovernoNow ? 1 : -0.4), -2.6, 2.6);
     target = clamp(target + countrySondaggiEffect, 0, 40);
     // Salvato solo per mostrarlo in UI (vedi renderPollGrid): prima il giocatore vedeva salire o scendere
     // i sondaggi settimana dopo settimana senza alcuna indicazione del PERCHÉ — nessun modo di capire se
@@ -11242,6 +11303,7 @@
     updateCpuOnlyCoalitionTrust();
     updateLeaderTrust();
     triggerRivalPartyEvent();
+    triggerPlayerNewsEvent();
     triggerGovernmentCrisisContagion();
     triggerPartyLifecycleFollowup();
     triggerSpontaneousPartyFormation();
