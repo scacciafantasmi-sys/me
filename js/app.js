@@ -12,6 +12,8 @@ const audioName = $('#audio-name');
 const audioBpm = $('#audio-bpm');
 const rangeReadout = $('#range-readout');
 const waveformCanvas = $('#waveform');
+const rangeStartInput = $('#range-start-input');
+const rangeEndInput = $('#range-end-input');
 
 const clipsDrop = $('#clips-drop');
 const clipsInput = $('#clips-input');
@@ -50,6 +52,28 @@ function fmtTime(s) {
   return `${m}:${sec.padStart(4, '0')}`;
 }
 
+function fmtMMSS(s) {
+  s = Math.max(0, Math.round(s));
+  const m = Math.floor(s / 60);
+  const sec = s - m * 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+/** Accepts "1:23", "83" or "1:23.5" and returns seconds, or null if unparseable. */
+function parseTimeInput(str) {
+  str = (str || '').trim();
+  if (!str) return null;
+  const parts = str.split(':');
+  if (parts.length === 2) {
+    const m = parseFloat(parts[0]);
+    const s = parseFloat(parts[1]);
+    if (Number.isNaN(m) || Number.isNaN(s)) return null;
+    return m * 60 + s;
+  }
+  const v = parseFloat(str);
+  return Number.isNaN(v) ? null : v;
+}
+
 function updateGenerateEnabled() {
   generateBtn.disabled = !(audioAnalysis && clips.length > 0);
 }
@@ -69,6 +93,27 @@ function setupDropzone(zone, input, onFiles) {
   input.addEventListener('change', () => { onFiles(input.files); input.value = ''; });
 }
 
+function commitRangeStart() {
+  if (!audioAnalysis) return;
+  const v = parseTimeInput(rangeStartInput.value);
+  const range = waveform.getRange();
+  if (v == null) { rangeStartInput.value = fmtMMSS(range.start); return; }
+  waveform.setRange(v, range.end);
+}
+
+function commitRangeEnd() {
+  if (!audioAnalysis) return;
+  const v = parseTimeInput(rangeEndInput.value);
+  const range = waveform.getRange();
+  if (v == null) { rangeEndInput.value = fmtMMSS(range.end); return; }
+  waveform.setRange(range.start, v);
+}
+
+rangeStartInput.addEventListener('change', commitRangeStart);
+rangeStartInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') rangeStartInput.blur(); });
+rangeEndInput.addEventListener('change', commitRangeEnd);
+rangeEndInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') rangeEndInput.blur(); });
+
 setupDropzone(audioDrop, audioInput, async (files) => {
   const file = files?.[0];
   if (!file) return;
@@ -82,6 +127,8 @@ setupDropzone(audioDrop, audioInput, async (files) => {
     waveform.setAudio(audioAnalysis);
     waveform.onRangeChange = (range) => {
       rangeReadout.textContent = `${fmtTime(range.start)} — ${fmtTime(range.end)} (${fmtTime(range.end - range.start)})`;
+      rangeStartInput.value = fmtMMSS(range.start);
+      rangeEndInput.value = fmtMMSS(range.end);
     };
     waveform.onRangeChange(waveform.getRange());
   } catch (err) {
