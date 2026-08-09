@@ -1,5 +1,7 @@
 # Politis-IT — Fonda il Tuo Partito
 
+> Questo repository ospita più mini-giochi statici indipendenti. Il gioco descritto qui sotto (`index.html`) è il primo; vedi anche [`piscina.html`](piscina.html) — **Vestiti in Piscina**, un dress-up game in cui vesti un personaggio con moltissimi costumi e accessori e poi lo tuffi a nuotare in piscina.
+
 Gioco di simulazione politica italiana, interamente client-side: un unico file HTML, nessun server, nessun backend, nessuna dipendenza da installare.
 
 Vesti i panni del fondatore di un nuovo partito politico italiano, partendo da zero: scegli tra oltre una dozzina di filiazioni ideologiche e otto stili di leadership, gestisci fondi/iscritti/sezioni, assumi lo staff del partito, affronta situazioni settimanali sempre diverse e conduci il partito fino alle elezioni — con soglie reali del 3% (liste singole) e 10% (coalizioni). Il gioco è pensato per essere **endless**: dopo ogni elezione la simulazione continua.
@@ -25,3 +27,15 @@ Questo repository è pubblicato tramite **GitHub Pages** direttamente da questo 
 
 - Nessun dato di gioco viene mai inviato a server propri: tutto vive nel browser dell'utente.
 - Il gioco è dichiaratamente uno scenario-planning ipotetico/fittizio e non rappresenta fatti reali o dichiarazioni reali di persone viventi.
+
+---
+
+## Vestiti in Piscina — dress-up game (`piscina.html`)
+
+Un secondo gioco, anch'esso interamente client-side in un unico file HTML (`piscina.html`), indipendente da Politis-IT.
+
+Vesti un personaggio femminile disegnato in stile vettoriale scegliendo tra moltissime combinazioni: 6 acconciature (ognuna con 12 colori), 7 stili di top costume, 4 stili di slip, 13 colori/fantasie per il costume (tinte unite, righe, pois, fiori), 5 copricostume, 5 copricapi, 3 occhiali, 4 set di gioielli, 3 tipi di scarpe e 4 accessori da piscina (braccioli, salvagente, ecc.) — decine di migliaia di outfit possibili. Un pulsante "Sorprendimi" genera un outfit casuale, e l'outfit scelto viene salvato automaticamente nel browser (`localStorage`).
+
+Premendo "Tuffati in piscina" il personaggio si immerge in acqua con un'animazione di nuotata (bracciate, gambe, increspature, bollicine) mantenendo i vestiti indossati, per l'appunto per poter "nuotare vestiti" in piscina.
+
+Apri semplicemente `piscina.html` in un browser: nessuna build, nessun server, nessuna dipendenza esterna.
