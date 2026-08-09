@@ -26,6 +26,11 @@ const ytUrlInput = $('#yt-url-input');
 const ytImportBtn = $('#yt-import-btn');
 const ytStatus = $('#yt-status');
 
+const audioYtBackendInput = $('#audio-yt-backend-input');
+const audioYtUrlInput = $('#audio-yt-url-input');
+const audioYtImportBtn = $('#audio-yt-import-btn');
+const audioYtStatus = $('#audio-yt-status');
+
 const generateBtn = $('#generate-btn');
 const paceSelect = $('#pace-select');
 const styleSelect = $('#style-select');
@@ -134,9 +139,7 @@ rangeStartInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') rang
 rangeEndInput.addEventListener('change', commitRangeEnd);
 rangeEndInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') rangeEndInput.blur(); });
 
-setupDropzone(audioDrop, audioInput, async (files) => {
-  const file = files?.[0];
-  if (!file) return;
+async function loadAudioFile(file) {
   audioFile = file;
   audioName.textContent = file.name;
   audioInfo.classList.remove('hidden');
@@ -156,6 +159,11 @@ setupDropzone(audioDrop, audioInput, async (files) => {
     audioBpm.textContent = 'Errore nell\'analisi audio';
   }
   updateGenerateEnabled();
+}
+
+setupDropzone(audioDrop, audioInput, async (files) => {
+  const file = files?.[0];
+  if (file) await loadAudioFile(file);
 });
 
 // ---------- Clips / scenes ----------
@@ -341,63 +349,96 @@ clipsList.addEventListener('drop', (e) => {
 
 // ---------- YouTube import ----------
 
-ytBackendInput.value = localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '';
-ytBackendInput.addEventListener('change', () => {
-  localStorage.setItem(BACKEND_URL_STORAGE_KEY, ytBackendInput.value.trim());
-});
+function syncBackendInputs(value) {
+  ytBackendInput.value = value;
+  audioYtBackendInput.value = value;
+}
+
+function bindBackendInput(input) {
+  input.addEventListener('change', () => {
+    const value = input.value.trim();
+    localStorage.setItem(BACKEND_URL_STORAGE_KEY, value);
+    syncBackendInputs(value);
+  });
+}
+
+syncBackendInputs(localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '');
+bindBackendInput(ytBackendInput);
+bindBackendInput(audioYtBackendInput);
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function importFromYouTube() {
-  const backendUrl = ytBackendInput.value.trim().replace(/\/+$/, '');
-  const url = ytUrlInput.value.trim();
+/**
+ * Starts a YouTube download job on the backend, polls it to completion and
+ * returns the downloaded file. `kind` is 'video' or 'audio' (audio-only
+ * extraction, used for importing just the song).
+ */
+async function fetchYoutubeFile({ backendUrl, url, kind, onStatus }) {
+  const startResp = await fetch(`${backendUrl}/api/youtube/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, kind }),
+  });
+  const startData = await startResp.json().catch(() => ({}));
+  if (!startResp.ok) throw new Error(startData.error || `Errore del server (${startResp.status})`);
+  const { jobId } = startData;
+
+  let job = null;
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await sleep(1200);
+    const statusResp = await fetch(`${backendUrl}/api/youtube/status/${jobId}`);
+    const statusData = await statusResp.json().catch(() => ({}));
+    if (!statusResp.ok) throw new Error(statusData.error || `Errore del server (${statusResp.status})`);
+    job = statusData;
+    if (job.status === 'downloading') {
+      onStatus?.(`Scaricamento da YouTube… ${Math.round((job.progress || 0) * 100)}%`);
+    } else if (job.status === 'ready' || job.status === 'error') {
+      break;
+    }
+  }
+  if (!job || job.status === 'downloading') throw new Error('Timeout: il download sta impiegando troppo tempo.');
+  if (job.status === 'error') throw new Error(job.error || 'Download fallito.');
+
+  onStatus?.(kind === 'audio' ? 'Trasferimento dell\'audio nel browser…' : 'Trasferimento del video nel browser…');
+  const fileResp = await fetch(`${backendUrl}/api/youtube/file/${jobId}`);
+  if (!fileResp.ok) throw new Error('Impossibile scaricare il file dal server.');
+  const blob = await fileResp.blob();
+  const ext = job.ext || (kind === 'audio' ? 'm4a' : 'mp4');
+  const fileName = `${(job.title || (kind === 'audio' ? 'audio' : 'video')).replace(/[^a-z0-9\-_ ]/gi, '_').slice(0, 60)}.${ext}`;
+  const file = new File([blob], fileName, { type: blob.type || (kind === 'audio' ? 'audio/mp4' : 'video/mp4') });
+  return { file, fileName };
+}
+
+function requireBackendAndUrl(backendInput, urlInput, statusEl) {
+  const backendUrl = backendInput.value.trim().replace(/\/+$/, '');
+  const url = urlInput.value.trim();
   if (!backendUrl) {
-    ytStatus.textContent = 'Imposta prima l\'URL del server di importazione (vedi server/README.md).';
-    return;
+    statusEl.textContent = 'Imposta prima l\'URL del server di importazione (vedi server/README.md).';
+    return null;
   }
   if (!url) {
-    ytStatus.textContent = 'Incolla un link YouTube.';
-    return;
+    statusEl.textContent = 'Incolla un link YouTube.';
+    return null;
   }
+  return { backendUrl, url };
+}
+
+async function importFromYouTube() {
+  const params = requireBackendAndUrl(ytBackendInput, ytUrlInput, ytStatus);
+  if (!params) return;
 
   ytImportBtn.disabled = true;
   ytStatus.textContent = 'Avvio del download…';
 
   try {
-    const startResp = await fetch(`${backendUrl}/api/youtube/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+    const { file, fileName } = await fetchYoutubeFile({
+      ...params,
+      kind: 'video',
+      onStatus: (msg) => { ytStatus.textContent = msg; },
     });
-    const startData = await startResp.json().catch(() => ({}));
-    if (!startResp.ok) throw new Error(startData.error || `Errore del server (${startResp.status})`);
-    const { jobId } = startData;
-
-    let job = null;
-    const deadline = Date.now() + 10 * 60 * 1000;
-    while (Date.now() < deadline) {
-      await sleep(1200);
-      const statusResp = await fetch(`${backendUrl}/api/youtube/status/${jobId}`);
-      const statusData = await statusResp.json().catch(() => ({}));
-      if (!statusResp.ok) throw new Error(statusData.error || `Errore del server (${statusResp.status})`);
-      job = statusData;
-      if (job.status === 'downloading') {
-        ytStatus.textContent = `Scaricamento da YouTube… ${Math.round((job.progress || 0) * 100)}%`;
-      } else if (job.status === 'ready' || job.status === 'error') {
-        break;
-      }
-    }
-    if (!job || job.status === 'downloading') throw new Error('Timeout: il download sta impiegando troppo tempo.');
-    if (job.status === 'error') throw new Error(job.error || 'Download fallito.');
-
-    ytStatus.textContent = 'Trasferimento del video nel browser…';
-    const fileResp = await fetch(`${backendUrl}/api/youtube/file/${jobId}`);
-    if (!fileResp.ok) throw new Error('Impossibile scaricare il file dal server.');
-    const blob = await fileResp.blob();
-    const fileName = `${(job.title || 'youtube').replace(/[^a-z0-9\-_ ]/gi, '_').slice(0, 60)}.mp4`;
-    const file = new File([blob], fileName, { type: 'video/mp4' });
 
     ytStatus.textContent = 'Analisi del video importato…';
     const scene = await addSource(file);
@@ -420,8 +461,36 @@ async function importFromYouTube() {
   }
 }
 
+async function importAudioFromYouTube() {
+  const params = requireBackendAndUrl(audioYtBackendInput, audioYtUrlInput, audioYtStatus);
+  if (!params) return;
+
+  audioYtImportBtn.disabled = true;
+  audioYtStatus.textContent = 'Avvio del download…';
+
+  try {
+    const { file, fileName } = await fetchYoutubeFile({
+      ...params,
+      kind: 'audio',
+      onStatus: (msg) => { audioYtStatus.textContent = msg; },
+    });
+
+    audioYtStatus.textContent = 'Analisi del ritmo…';
+    await loadAudioFile(file);
+    audioYtStatus.textContent = `Importato "${fileName}".`;
+    audioYtUrlInput.value = '';
+  } catch (err) {
+    console.error(err);
+    audioYtStatus.textContent = `Errore: ${err.message || err}`;
+  } finally {
+    audioYtImportBtn.disabled = false;
+  }
+}
+
 ytImportBtn.addEventListener('click', importFromYouTube);
 ytUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') importFromYouTube(); });
+audioYtImportBtn.addEventListener('click', importAudioFromYouTube);
+audioYtUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') importAudioFromYouTube(); });
 
 // ---------- Generate ----------
 

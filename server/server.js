@@ -34,7 +34,12 @@ await fsp.mkdir(TMP_DIR, { recursive: true });
 
 const YOUTUBE_URL_RE = /^https?:\/\/(www\.|m\.|music\.)?(youtube\.com|youtube-nocookie\.com|youtu\.be)\//i;
 
-/** @type {Map<string, {status:'downloading'|'ready'|'error', progress:number, title:string, error:string, filePath:string, createdAt:number}>} */
+const MIME_BY_EXT = {
+  mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska',
+  m4a: 'audio/mp4', mp3: 'audio/mpeg', opus: 'audio/opus', ogg: 'audio/ogg', aac: 'audio/aac',
+};
+
+/** @type {Map<string, {status:'downloading'|'ready'|'error', progress:number, title:string, error:string, filePath:string, ext:string, kind:'video'|'audio', createdAt:number}>} */
 const jobs = new Map();
 let activeDownloads = 0;
 
@@ -50,6 +55,7 @@ app.get('/api/health', (req, res) => {
 
 app.post('/api/youtube/start', (req, res) => {
   const url = String(req.body?.url || '').trim();
+  const kind = req.body?.kind === 'audio' ? 'audio' : 'video';
   if (!YOUTUBE_URL_RE.test(url)) {
     return res.status(400).json({ error: 'Incolla un link YouTube valido (youtube.com o youtu.be).' });
   }
@@ -58,7 +64,7 @@ app.post('/api/youtube/start', (req, res) => {
   }
 
   const jobId = randomUUID();
-  const job = { status: 'downloading', progress: 0, title: '', error: '', filePath: '', createdAt: Date.now() };
+  const job = { status: 'downloading', progress: 0, title: '', error: '', filePath: '', ext: '', kind, createdAt: Date.now() };
   jobs.set(jobId, job);
   activeDownloads++;
 
@@ -72,7 +78,7 @@ app.post('/api/youtube/start', (req, res) => {
 app.get('/api/youtube/status/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ error: 'Job non trovato (scaduto o mai esistito).' });
-  res.json({ status: job.status, progress: job.progress, title: job.title, error: job.error });
+  res.json({ status: job.status, progress: job.progress, title: job.title, ext: job.ext, error: job.error });
 });
 
 app.get('/api/youtube/file/:jobId', (req, res) => {
@@ -80,9 +86,10 @@ app.get('/api/youtube/file/:jobId', (req, res) => {
   if (!job) return res.status(404).json({ error: 'Job non trovato.' });
   if (job.status !== 'ready' || !job.filePath) return res.status(409).json({ error: 'Il file non è ancora pronto.' });
 
-  res.setHeader('Content-Type', 'video/mp4');
-  const safeName = (job.title || 'video').replace(/[^a-z0-9\-_ ]/gi, '_').slice(0, 60) || 'video';
-  res.setHeader('Content-Disposition', `attachment; filename="${safeName}.mp4"`);
+  const ext = job.ext || (job.kind === 'audio' ? 'm4a' : 'mp4');
+  res.setHeader('Content-Type', MIME_BY_EXT[ext] || 'application/octet-stream');
+  const safeName = (job.title || (job.kind === 'audio' ? 'audio' : 'video')).replace(/[^a-z0-9\-_ ]/gi, '_').slice(0, 60) || 'file';
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}.${ext}"`);
   const stream = fs.createReadStream(job.filePath);
   stream.on('error', () => res.destroy());
   stream.pipe(res);
@@ -91,12 +98,14 @@ app.get('/api/youtube/file/:jobId', (req, res) => {
 async function runDownload(jobId, url, job) {
   try {
     const outTemplate = path.join(TMP_DIR, `${jobId}__%(title).60s.%(ext)s`);
+    const formatArgs = job.kind === 'audio'
+      ? ['-f', 'bestaudio[ext=m4a]/bestaudio/best']
+      : ['-f', 'bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/b', '--merge-output-format', 'mp4'];
     const args = [
       '--no-playlist',
       '--no-warnings',
       '--match-filter', `duration<${MAX_DURATION_SECONDS} & !is_live`,
-      '-f', 'bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/b',
-      '--merge-output-format', 'mp4',
+      ...formatArgs,
       '--newline',
       '-o', outTemplate,
       url,
@@ -131,8 +140,9 @@ async function runDownload(jobId, url, job) {
     }
     const fileName = files[0];
     job.filePath = path.join(TMP_DIR, fileName);
-    const titleMatch = /^.+?__(.+)\.[^.]+$/.exec(fileName);
-    job.title = titleMatch ? titleMatch[1] : 'video';
+    const titleMatch = /^.+?__(.+)\.([^.]+)$/.exec(fileName);
+    job.title = titleMatch ? titleMatch[1] : (job.kind === 'audio' ? 'audio' : 'video');
+    job.ext = (titleMatch ? titleMatch[2] : (job.kind === 'audio' ? 'm4a' : 'mp4')).toLowerCase();
     job.progress = 1;
     job.status = 'ready';
   } catch (err) {

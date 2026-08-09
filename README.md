@@ -4,7 +4,7 @@ Editor video automatico in stile TikTok: l'app di per sé è interamente client-
 
 ## Come funziona
 
-1. **Carichi una canzone** (MP3/WAV/…): l'app la decodifica con la Web Audio API e ne rileva il **BPM** e la griglia dei beat tramite un algoritmo di *spectral flux* + autocorrelazione (implementato da zero in JS, senza librerie esterne). Puoi scegliere quale porzione della canzone usare trascinando le due maniglie sulla forma d'onda, oppure scrivendo direttamente il minutaggio di inizio/fine.
+1. **Carichi una canzone** (MP3/WAV/…) **oppure incolli il link YouTube della canzone**: l'app la decodifica con la Web Audio API e ne rileva il **BPM** e la griglia dei beat tramite un algoritmo di *spectral flux* + autocorrelazione (implementato da zero in JS, senza librerie esterne). Puoi scegliere quale porzione della canzone usare trascinando le due maniglie sulla forma d'onda, oppure scrivendo direttamente il minutaggio di inizio/fine.
 2. **Carichi le clip video** (una o più, in qualsiasi risoluzione/framerate) **oppure incolli un link YouTube** (es. un video/"scene pack" già montato da altri, di cui hai i diritti d'uso) — vedi [Importare da YouTube](#importare-da-youtube) qui sotto. Puoi riordinare le clip trascinandole. Vengono riciclate automaticamente se l'edit richiede più tagli di quante clip hai caricato, continuando ogni volta da dove la clip era rimasta.
 3. **Rilevamento automatico delle scene**: per le clip più lunghe di qualche secondo (e sempre per i video importati da YouTube abbastanza lunghi) l'app individua da sola i cambi di scena/inquadratura — lo stesso punteggio di "scene change" di ffmpeg, che in pratica scatta sui tagli netti e sui movimenti/cambi rapidi di inquadratura — e divide quella clip in più scene indipendenti, ciascuna poi trattata come una sorgente a sé nel montaggio.
 4. **L'app costruisce l'Edit Decision List**: i tagli cadono sui beat rilevati, con un **ritmo dinamico** (tagli più rapidi nei momenti di picco energetico del brano, tagli più lenti nelle parti calme — modalità "Automatico"), o con un ritmo fisso a scelta. Ad ogni taglio viene scelta una transizione da un pool di ~40 transizioni ffmpeg `xfade` (circleopen, radial, pixelize, wipe, slide, diagonali, slice, squeeze…), pesate in base all'energia del beat, così da alternare tagli puliti e momenti più "flashy" come nei veri edit TikTok.
@@ -14,11 +14,11 @@ Nessuna clip o traccia audio lascia mai il tuo dispositivo per il montaggio: ana
 
 ## Importare da YouTube
 
-I browser non possono scaricare video da YouTube via JavaScript (CORS + Termini di Servizio di YouTube), quindi serve un piccolo **server separato** che faccia solo questo: scaricare il video con `yt-dlp` e passarlo all'app, che poi fa tutto il resto (rilevamento scene, montaggio, rendering) come per una clip caricata a mano. Il codice di questo server è in [`server/`](server/README.md), con istruzioni per farlo girare in locale, con Docker, o su Render/Railway/una VPS.
+I browser non possono scaricare da YouTube via JavaScript (CORS + Termini di Servizio di YouTube), quindi serve un piccolo **server separato** che faccia solo questo: scaricare con `yt-dlp` (video o solo audio) e passare il file all'app, che poi fa tutto il resto (rilevamento scene, analisi del ritmo, montaggio, rendering) come per un file caricato a mano. Il codice di questo server è in [`server/`](server/README.md), con istruzioni per farlo girare in locale, con Docker, o su Render/Railway/una VPS.
 
-Una volta che il server gira da qualche parte, incolla il suo URL nel campo "URL del server di importazione" nella sezione clip dell'app (viene ricordato nel browser) e poi incolla il link YouTube da importare.
+Una volta che il server gira da qualche parte, incolla il suo URL nel campo "URL del server di importazione" (viene ricordato nel browser e vale sia per la sezione canzone che per quella clip) e poi incolla il link YouTube — della canzone nella sezione 1, delle clip/scene pack nella sezione 2. Per la canzone il server scarica solo la traccia audio, senza video.
 
-⚠️ Usa questa funzione solo con video di cui hai i diritti d'uso.
+⚠️ Usa questa funzione solo con video/musica di cui hai i diritti d'uso.
 
 ## Come si usa
 

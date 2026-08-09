@@ -1,8 +1,8 @@
 # Server di importazione da YouTube
 
-Piccolo backend (Express + [yt-dlp](https://github.com/yt-dlp/yt-dlp)) che scarica un video YouTube e lo serve al [TikTok Auto Editor](../README.md). È l'**unico** pezzo del progetto che non gira su GitHub Pages: tutto il resto (analisi del ritmo, rilevamento scene, montaggio, rendering) resta interamente nel browser dell'utente. Questo server si limita a scaricare il video e restituirlo come file MP4 — non fa nessun montaggio.
+Piccolo backend (Express + [yt-dlp](https://github.com/yt-dlp/yt-dlp)) che scarica un video (o solo l'audio) da YouTube e lo serve al [TikTok Auto Editor](../README.md). È l'**unico** pezzo del progetto che non gira su GitHub Pages: tutto il resto (analisi del ritmo, rilevamento scene, montaggio, rendering) resta interamente nel browser dell'utente. Questo server si limita a scaricare e restituire il file — non fa nessun montaggio.
 
-⚠️ **Usa questa funzione solo con video di cui hai i diritti** (video tuoi, materiale con licenza libera, uso personale/fair use secondo le leggi della tua giurisdizione). Scaricare contenuti da YouTube può violare i suoi Termini di Servizio a seconda dell'uso: la responsabilità è di chi gestisce questo server e di chi incolla i link.
+⚠️ **Usa questa funzione solo con video/musica di cui hai i diritti** (contenuti tuoi, materiale con licenza libera, uso personale/fair use secondo le leggi della tua giurisdizione). Scaricare contenuti da YouTube può violare i suoi Termini di Servizio a seconda dell'uso: la responsabilità è di chi gestisce questo server e di chi incolla i link.
 
 ## Requisiti
 
@@ -18,7 +18,7 @@ npm install
 npm start
 ```
 
-Il server parte su `http://localhost:8787`. Nell'app (impostazioni della sezione "Clip video" → "Importa da YouTube") incolla questo indirizzo come "URL del server di importazione".
+Il server parte su `http://localhost:8787`. Nell'app incolla questo indirizzo nel campo "URL del server di importazione" (sezione "Colonna sonora" o "Clip video" — sono collegati, basta impostarlo una volta).
 
 ## Con Docker
 
@@ -42,9 +42,9 @@ Poi copi l'URL pubblico del servizio (es. `https://tuo-servizio.onrender.com`) e
 ## API
 
 - `GET /api/health` → `{ ok, activeDownloads, maxConcurrent }`
-- `POST /api/youtube/start` con body `{ "url": "https://www.youtube.com/watch?v=..." }` → `{ jobId }`
-- `GET /api/youtube/status/:jobId` → `{ status: 'downloading'|'ready'|'error', progress, title, error }`
-- `GET /api/youtube/file/:jobId` → stream del file MP4 (solo quando `status === 'ready'`)
+- `POST /api/youtube/start` con body `{ "url": "https://www.youtube.com/watch?v=...", "kind": "video" | "audio" }` (`kind` opzionale, default `video`) → `{ jobId }`. Con `kind: "audio"` scarica solo la traccia audio migliore disponibile (niente video), utile per importare la colonna sonora.
+- `GET /api/youtube/status/:jobId` → `{ status: 'downloading'|'ready'|'error', progress, title, ext, error }`
+- `GET /api/youtube/file/:jobId` → stream del file (video MP4 o audio, a seconda del `kind` richiesto; solo quando `status === 'ready'`)
 
 I job e i file temporanei vengono ripuliti automaticamente dopo 30 minuti.
 
