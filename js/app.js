@@ -412,15 +412,21 @@ async function fetchYoutubeFile({ backendUrl, url, kind, onStatus }) {
   return { file, fileName };
 }
 
+/** Shows a status line with a visible color/background so it can't be missed as "nothing happened". */
+function setYtStatus(el, text, kind = 'info') {
+  el.textContent = text;
+  el.className = text ? `hint yt-status-msg ${kind}` : 'hint';
+}
+
 function requireBackendAndUrl(backendInput, urlInput, statusEl) {
   const backendUrl = backendInput.value.trim().replace(/\/+$/, '');
   const url = urlInput.value.trim();
   if (!backendUrl) {
-    statusEl.textContent = 'Imposta prima l\'URL del server di importazione (vedi server/README.md).';
+    setYtStatus(statusEl, 'Imposta prima l\'URL del server di importazione (vedi server/README.md).', 'error');
     return null;
   }
   if (!url) {
-    statusEl.textContent = 'Incolla un link YouTube.';
+    setYtStatus(statusEl, 'Incolla un link YouTube.', 'error');
     return null;
   }
   return { backendUrl, url };
@@ -431,31 +437,31 @@ async function importFromYouTube() {
   if (!params) return;
 
   ytImportBtn.disabled = true;
-  ytStatus.textContent = 'Avvio del download…';
+  setYtStatus(ytStatus, 'Avvio del download…', 'info');
 
   try {
     const { file, fileName } = await fetchYoutubeFile({
       ...params,
       kind: 'video',
-      onStatus: (msg) => { ytStatus.textContent = msg; },
+      onStatus: (msg) => setYtStatus(ytStatus, msg, 'info'),
     });
 
-    ytStatus.textContent = 'Analisi del video importato…';
+    setYtStatus(ytStatus, 'Analisi del video importato…', 'info');
     const scene = await addSource(file);
 
     const source = sourceOf(scene);
     if (source.duration >= AUTO_SPLIT_MIN_SECONDS) {
-      ytStatus.textContent = 'Rilevamento automatico delle scene in corso…';
+      setYtStatus(ytStatus, 'Rilevamento automatico delle scene in corso…', 'info');
       await splitScene(scene.id);
       const count = scenes.filter((s) => s.sourceId === source.id).length;
-      ytStatus.textContent = `Importato "${fileName}": ${count} scene rilevate.`;
+      setYtStatus(ytStatus, `Importato "${fileName}": ${count} scene rilevate.`, 'success');
     } else {
-      ytStatus.textContent = `Importato "${fileName}".`;
+      setYtStatus(ytStatus, `Importato "${fileName}".`, 'success');
     }
     ytUrlInput.value = '';
   } catch (err) {
     console.error(err);
-    ytStatus.textContent = `Errore: ${err.message || err}`;
+    setYtStatus(ytStatus, `Errore: ${err.message || err}`, 'error');
   } finally {
     ytImportBtn.disabled = false;
   }
@@ -466,22 +472,22 @@ async function importAudioFromYouTube() {
   if (!params) return;
 
   audioYtImportBtn.disabled = true;
-  audioYtStatus.textContent = 'Avvio del download…';
+  setYtStatus(audioYtStatus, 'Avvio del download…', 'info');
 
   try {
     const { file, fileName } = await fetchYoutubeFile({
       ...params,
       kind: 'audio',
-      onStatus: (msg) => { audioYtStatus.textContent = msg; },
+      onStatus: (msg) => setYtStatus(audioYtStatus, msg, 'info'),
     });
 
-    audioYtStatus.textContent = 'Analisi del ritmo…';
+    setYtStatus(audioYtStatus, 'Analisi del ritmo…', 'info');
     await loadAudioFile(file);
-    audioYtStatus.textContent = `Importato "${fileName}".`;
+    setYtStatus(audioYtStatus, `Importato "${fileName}".`, 'success');
     audioYtUrlInput.value = '';
   } catch (err) {
     console.error(err);
-    audioYtStatus.textContent = `Errore: ${err.message || err}`;
+    setYtStatus(audioYtStatus, `Errore: ${err.message || err}`, 'error');
   } finally {
     audioYtImportBtn.disabled = false;
   }
