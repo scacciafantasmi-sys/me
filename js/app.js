@@ -253,8 +253,14 @@ function removeScene(id) {
   updateGenerateEnabled();
 }
 
-/** Adds a new source file + one scene spanning it entirely. Returns the created scene. */
-async function addSource(file) {
+/**
+ * Adds a new source file + one scene spanning it entirely, then auto-splits
+ * it into scenes if it's long enough (same threshold and mechanism whether
+ * the file came from a manual upload or a YouTube import — the site doesn't
+ * care how the file got onto the device, only how long it is).
+ * Returns the (first) created scene.
+ */
+async function addSource(file, { onStatus } = {}) {
   const source = { id: sourceIdSeq++, file, duration: 0 };
   sources.push(source);
   const scene = { id: sceneIdSeq++, sourceId: source.id, windowStart: 0, windowEnd: 0, label: '', thumb: null, splitting: false, el: document.createElement('li') };
@@ -267,6 +273,10 @@ async function addSource(file) {
   scene.thumb = thumb;
   renderScenesList();
   updateGenerateEnabled();
+  if (duration >= AUTO_SPLIT_MIN_SECONDS) {
+    onStatus?.('Rilevamento automatico delle scene in corso…');
+    await splitScene(scene.id);
+  }
   return scene;
 }
 
@@ -288,7 +298,11 @@ async function splitScene(sceneId) {
   try {
     const cuts = await detectSceneCuts(source.file);
     const windows = cutsToWindows(cuts, source.duration);
-    if (windows.length <= 1) return; // nothing meaningful detected, leave as-is
+    if (windows.length <= 1) {
+      scene.splitting = false;
+      renderScenesList();
+      return; // nothing meaningful detected, leave as-is
+    }
     const idx = scenes.indexOf(scene);
     const newScenes = windows.map((w, i) => ({
       id: sceneIdSeq++,
@@ -447,17 +461,11 @@ async function importFromYouTube() {
     });
 
     setYtStatus(ytStatus, 'Analisi del video importato…', 'info');
-    const scene = await addSource(file);
+    const scene = await addSource(file, { onStatus: (msg) => setYtStatus(ytStatus, msg, 'info') });
 
     const source = sourceOf(scene);
-    if (source.duration >= AUTO_SPLIT_MIN_SECONDS) {
-      setYtStatus(ytStatus, 'Rilevamento automatico delle scene in corso…', 'info');
-      await splitScene(scene.id);
-      const count = scenes.filter((s) => s.sourceId === source.id).length;
-      setYtStatus(ytStatus, `Importato "${fileName}": ${count} scene rilevate.`, 'success');
-    } else {
-      setYtStatus(ytStatus, `Importato "${fileName}".`, 'success');
-    }
+    const count = scenes.filter((s) => s.sourceId === source.id).length;
+    setYtStatus(ytStatus, count > 1 ? `Importato "${fileName}": ${count} scene rilevate.` : `Importato "${fileName}".`, 'success');
     ytUrlInput.value = '';
   } catch (err) {
     console.error(err);
