@@ -4968,6 +4968,44 @@
       return;
     }
 
+    // Scioglimento/fusione per pressione demografica, indipendente da arc.negativeStreak: lo
+    // scioglimento "da crisi" qui sopra soffriva della stessa diluizione appena corretta per le
+    // scissioni (dipende dalla lotteria "un partito a caso alla settimana"), quindi con una scena
+    // affollata restava troppo raro perché la popolazione tornasse mai a scendere — cresceva fino al
+    // tetto di 30 e ci restava incollata. Questo secondo canale, del tutto indipendente, dà ai partiti
+    // più piccoli e marginali (sotto l'1.2%) una probabilità di sparire che sale mano a mano che la
+    // scena si affolla (da zero sotto i 18 partiti attivi, sensibile già verso i 24-25): è quello che
+    // tiene l'equilibrio naturale ben sotto il tetto massimo, intorno ai 25-26 partiti attivi, con 30
+    // toccato solo di rado.
+    var populationPressure = clamp((candidates.length - 18) / 12, 0, 1);
+    var marginalCandidates = candidates.filter(function (p) { return state.parties[p.id] < 1.2; });
+    if (populationPressure > 0 && marginalCandidates.length && Math.random() < 0.05 * populationPressure * volMult) {
+      var shrinking = marginalCandidates[Math.floor(Math.random() * marginalCandidates.length)];
+      var absorber2 = candidates.filter(function (p) {
+        return p.id !== shrinking.id && p.familyId === shrinking.familyId && state.parties[p.id] > 2;
+      }).sort(function (a, b) { return state.parties[b.id] - state.parties[a.id]; })[0];
+      state.dissolvedPartyIds.push(shrinking.id);
+      removePartyFromCoalitions(shrinking.id);
+      delete state.partyArcs[shrinking.id];
+      if (absorber2 && Math.random() < 0.25) {
+        state.parties[absorber2.id] += state.parties[shrinking.id];
+        state.log.unshift({
+          week: state.turn, title: "Fusione tra due partiti", choiceLabel: shrinking.short + " → " + absorber2.short,
+          result: shrinking.name + ", ormai ridotto a una forza marginale, confluisce in " + absorber2.name +
+            ": le due linee politiche, vicinissime, si uniscono in un solo soggetto per contare di più.",
+          headlines: [], type: "cronaca"
+        });
+      } else {
+        state.parties[shrinking.id] = 0.3;
+        state.log.unshift({
+          week: state.turn, title: "Scioglimento di un partito", choiceLabel: shrinking.short,
+          result: shrinking.name + " non riesce più a reggere il peso di una scena politica sempre più affollata: i vertici annunciano lo scioglimento, con la base residua che si disperde tra astensione e altre forze politiche.",
+          headlines: [], type: "cronaca"
+        });
+      }
+      return;
+    }
+
     // Le scissioni erano finora legate solo alla stessa lotteria "un partito a caso ogni settimana"
     // usata per la cronaca CPU (triggerRivalPartyEvent, arc.positiveStreak): con un roster che ora può
     // arrivare a 20-25+ partiti attivi, la probabilità che uno specifico partito accumulasse 3 buone
