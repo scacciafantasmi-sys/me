@@ -1,6 +1,7 @@
 import { analyzeAudioFile } from './beatDetector.js';
 import { buildEDL } from './edl.js';
 import { renderEdit } from './ffmpegEngine.js';
+import { detectSceneCuts, cutsToWindows } from './sceneDetect.js';
 import { Waveform, CLIP_COLORS } from './waveform.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -20,6 +21,11 @@ const clipsInput = $('#clips-input');
 const clipsList = $('#clips-list');
 const clipsWarning = $('#clips-warning');
 
+const ytBackendInput = $('#yt-backend-input');
+const ytUrlInput = $('#yt-url-input');
+const ytImportBtn = $('#yt-import-btn');
+const ytStatus = $('#yt-status');
+
 const generateBtn = $('#generate-btn');
 const paceSelect = $('#pace-select');
 const styleSelect = $('#style-select');
@@ -38,11 +44,25 @@ const regenerateBtn = $('#regenerate-btn');
 
 const waveform = new Waveform(waveformCanvas);
 
+const SPLIT_THRESHOLD_SECONDS = 6;
+const AUTO_SPLIT_MIN_SECONDS = 20; // long imports (scene packs) get auto-split without asking
+const BACKEND_URL_STORAGE_KEY = 'tiktokAutoEditor.backendUrl';
+
 let audioFile = null;
 let audioAnalysis = null;
-/** @type {{id:number, file:File, duration:number, thumb:string|null, el:HTMLLIElement}[]} */
-let clips = [];
-let clipIdSeq = 0;
+
+/** One physical uploaded/imported video file. @type {{id:number, file:File, duration:number}[]} */
+let sources = [];
+let sourceIdSeq = 0;
+
+/**
+ * One row the user sees/reorders: a window into some source's footage.
+ * Several scenes can share the same sourceId (auto-split from one long video).
+ * @type {{id:number, sourceId:number, windowStart:number, windowEnd:number, label:string, thumb:string|null, splitting:boolean, el:HTMLLIElement}[]}
+ */
+let scenes = [];
+let sceneIdSeq = 0;
+
 let currentOutputUrl = null;
 
 function fmtTime(s) {
@@ -75,7 +95,7 @@ function parseTimeInput(str) {
 }
 
 function updateGenerateEnabled() {
-  generateBtn.disabled = !(audioAnalysis && clips.length > 0);
+  generateBtn.disabled = !(audioAnalysis && scenes.length > 0);
 }
 
 // ---------- Audio ----------
@@ -138,9 +158,9 @@ setupDropzone(audioDrop, audioInput, async (files) => {
   updateGenerateEnabled();
 });
 
-// ---------- Clips ----------
+// ---------- Clips / scenes ----------
 
-function captureThumb(file) {
+function captureThumb(file, atTime = 0.3) {
   return new Promise((resolve) => {
     const video = document.createElement('video');
     video.preload = 'metadata';
@@ -158,7 +178,7 @@ function captureThumb(file) {
     video.addEventListener('loadedmetadata', () => {
       const duration = video.duration;
       if (!isFinite(duration) || duration <= 0) { finish(0, null); return; }
-      video.currentTime = Math.min(0.3, duration / 2);
+      video.currentTime = Math.min(Math.max(0, atTime), Math.max(0, duration - 0.05));
     });
     video.addEventListener('seeked', () => {
       try {
@@ -176,28 +196,41 @@ function captureThumb(file) {
   });
 }
 
-function renderClipRow(clip, index) {
-  const li = clip.el;
-  li.className = 'clip-row';
-  li.draggable = true;
-  li.dataset.id = String(clip.id);
-  const color = CLIP_COLORS[index % CLIP_COLORS.length];
-  li.innerHTML = `
-    <span class="clip-swatch" style="background:${color}"></span>
-    <span class="clip-thumb">${clip.thumb ? `<img src="${clip.thumb}" alt="">` : ''}</span>
-    <span class="clip-meta">
-      <strong>${clip.file.name}</strong>
-      <span class="clip-duration">${clip.duration ? clip.duration.toFixed(1) + 's' : '…'}</span>
-    </span>
-    <button class="clip-remove" title="Rimuovi" aria-label="Rimuovi clip">✕</button>
-  `;
-  li.querySelector('.clip-remove').addEventListener('click', () => removeClip(clip.id));
+function sourceById(id) {
+  return sources.find((s) => s.id === id);
 }
 
-function renderClipsList() {
+function sourceOf(scene) {
+  return sourceById(scene.sourceId);
+}
+
+function renderSceneRow(scene, index) {
+  const li = scene.el;
+  li.className = 'clip-row';
+  li.draggable = true;
+  li.dataset.id = String(scene.id);
+  const color = CLIP_COLORS[index % CLIP_COLORS.length];
+  const duration = scene.windowEnd - scene.windowStart;
+  const source = sourceOf(scene);
+  const canSplit = duration > SPLIT_THRESHOLD_SECONDS;
+  li.innerHTML = `
+    <span class="clip-swatch" style="background:${color}"></span>
+    <span class="clip-thumb">${scene.thumb ? `<img src="${scene.thumb}" alt="">` : ''}</span>
+    <span class="clip-meta">
+      <strong>${source?.file.name || '…'}${scene.label ? ` <span class="clip-scene-label">${scene.label}</span>` : ''}</strong>
+      <span class="clip-duration">${duration ? duration.toFixed(1) + 's' : '…'}</span>
+    </span>
+    ${canSplit ? `<button class="clip-split" title="Dividi automaticamente in scene" ${scene.splitting ? 'disabled' : ''}>${scene.splitting ? '…' : '✂️'}</button>` : ''}
+    <button class="clip-remove" title="Rimuovi" aria-label="Rimuovi scena">✕</button>
+  `;
+  li.querySelector('.clip-remove').addEventListener('click', () => removeScene(scene.id));
+  li.querySelector('.clip-split')?.addEventListener('click', () => splitScene(scene.id));
+}
+
+function renderScenesList() {
   clipsList.innerHTML = '';
-  clips.forEach((clip, i) => { renderClipRow(clip, i); clipsList.appendChild(clip.el); });
-  const totalBytes = clips.reduce((s, c) => s + c.file.size, 0);
+  scenes.forEach((scene, i) => { renderSceneRow(scene, i); clipsList.appendChild(scene.el); });
+  const totalBytes = sources.reduce((s, src) => s + src.file.size, 0);
   if (totalBytes > 300 * 1024 * 1024) {
     clipsWarning.textContent = `Attenzione: ${(totalBytes / 1024 / 1024).toFixed(0)}MB totali di video possono rallentare molto il rendering nel browser.`;
     clipsWarning.classList.remove('hidden');
@@ -206,28 +239,73 @@ function renderClipsList() {
   }
 }
 
-function removeClip(id) {
-  clips = clips.filter((c) => c.id !== id);
-  renderClipsList();
+function removeScene(id) {
+  scenes = scenes.filter((s) => s.id !== id);
+  renderScenesList();
   updateGenerateEnabled();
+}
+
+/** Adds a new source file + one scene spanning it entirely. Returns the created scene. */
+async function addSource(file) {
+  const source = { id: sourceIdSeq++, file, duration: 0 };
+  sources.push(source);
+  const scene = { id: sceneIdSeq++, sourceId: source.id, windowStart: 0, windowEnd: 0, label: '', thumb: null, splitting: false, el: document.createElement('li') };
+  scenes.push(scene);
+  renderScenesList();
+  updateGenerateEnabled();
+  const { duration, thumb } = await captureThumb(file);
+  source.duration = duration;
+  scene.windowEnd = duration;
+  scene.thumb = thumb;
+  renderScenesList();
+  updateGenerateEnabled();
+  return scene;
 }
 
 async function addClipFiles(fileList) {
   const files = Array.from(fileList || []).filter((f) => f.type.startsWith('video/'));
-  for (const file of files) {
-    const clip = { id: clipIdSeq++, file, duration: 0, thumb: null, el: document.createElement('li') };
-    clips.push(clip);
-    renderClipsList();
-    updateGenerateEnabled();
-    const { duration, thumb } = await captureThumb(file);
-    clip.duration = duration;
-    clip.thumb = thumb;
-    renderClipsList();
-    updateGenerateEnabled();
-  }
+  for (const file of files) await addSource(file);
 }
 
 setupDropzone(clipsDrop, clipsInput, addClipFiles);
+
+/** Runs scene detection on the given scene's source and replaces it with N scene windows. */
+async function splitScene(sceneId) {
+  const scene = scenes.find((s) => s.id === sceneId);
+  if (!scene || scene.splitting) return;
+  const source = sourceOf(scene);
+  if (!source) return;
+  scene.splitting = true;
+  renderScenesList();
+  try {
+    const cuts = await detectSceneCuts(source.file);
+    const windows = cutsToWindows(cuts, source.duration);
+    if (windows.length <= 1) return; // nothing meaningful detected, leave as-is
+    const idx = scenes.indexOf(scene);
+    const newScenes = windows.map((w, i) => ({
+      id: sceneIdSeq++,
+      sourceId: source.id,
+      windowStart: w.start,
+      windowEnd: w.end,
+      label: `scena ${i + 1}/${windows.length}`,
+      thumb: null,
+      splitting: false,
+      el: document.createElement('li'),
+    }));
+    scenes.splice(idx, 1, ...newScenes);
+    renderScenesList();
+    updateGenerateEnabled();
+    for (const s of newScenes) {
+      const { thumb } = await captureThumb(source.file, s.windowStart + Math.min(0.3, (s.windowEnd - s.windowStart) / 2));
+      s.thumb = thumb;
+      renderScenesList();
+    }
+  } catch (err) {
+    console.error(err);
+    scene.splitting = false;
+    renderScenesList();
+  }
+}
 
 let dragSrcId = null;
 clipsList.addEventListener('dragstart', (e) => {
@@ -253,13 +331,97 @@ clipsList.addEventListener('drop', (e) => {
   if (!row || dragSrcId == null) return;
   const targetId = Number(row.dataset.id);
   if (targetId === dragSrcId) return;
-  const srcIdx = clips.findIndex((c) => c.id === dragSrcId);
-  const tgtIdx = clips.findIndex((c) => c.id === targetId);
-  const [moved] = clips.splice(srcIdx, 1);
-  clips.splice(tgtIdx, 0, moved);
+  const srcIdx = scenes.findIndex((s) => s.id === dragSrcId);
+  const tgtIdx = scenes.findIndex((s) => s.id === targetId);
+  const [moved] = scenes.splice(srcIdx, 1);
+  scenes.splice(tgtIdx, 0, moved);
   dragSrcId = null;
-  renderClipsList();
+  renderScenesList();
 });
+
+// ---------- YouTube import ----------
+
+ytBackendInput.value = localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '';
+ytBackendInput.addEventListener('change', () => {
+  localStorage.setItem(BACKEND_URL_STORAGE_KEY, ytBackendInput.value.trim());
+});
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function importFromYouTube() {
+  const backendUrl = ytBackendInput.value.trim().replace(/\/+$/, '');
+  const url = ytUrlInput.value.trim();
+  if (!backendUrl) {
+    ytStatus.textContent = 'Imposta prima l\'URL del server di importazione (vedi server/README.md).';
+    return;
+  }
+  if (!url) {
+    ytStatus.textContent = 'Incolla un link YouTube.';
+    return;
+  }
+
+  ytImportBtn.disabled = true;
+  ytStatus.textContent = 'Avvio del download…';
+
+  try {
+    const startResp = await fetch(`${backendUrl}/api/youtube/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    const startData = await startResp.json().catch(() => ({}));
+    if (!startResp.ok) throw new Error(startData.error || `Errore del server (${startResp.status})`);
+    const { jobId } = startData;
+
+    let job = null;
+    const deadline = Date.now() + 10 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await sleep(1200);
+      const statusResp = await fetch(`${backendUrl}/api/youtube/status/${jobId}`);
+      const statusData = await statusResp.json().catch(() => ({}));
+      if (!statusResp.ok) throw new Error(statusData.error || `Errore del server (${statusResp.status})`);
+      job = statusData;
+      if (job.status === 'downloading') {
+        ytStatus.textContent = `Scaricamento da YouTube… ${Math.round((job.progress || 0) * 100)}%`;
+      } else if (job.status === 'ready' || job.status === 'error') {
+        break;
+      }
+    }
+    if (!job || job.status === 'downloading') throw new Error('Timeout: il download sta impiegando troppo tempo.');
+    if (job.status === 'error') throw new Error(job.error || 'Download fallito.');
+
+    ytStatus.textContent = 'Trasferimento del video nel browser…';
+    const fileResp = await fetch(`${backendUrl}/api/youtube/file/${jobId}`);
+    if (!fileResp.ok) throw new Error('Impossibile scaricare il file dal server.');
+    const blob = await fileResp.blob();
+    const fileName = `${(job.title || 'youtube').replace(/[^a-z0-9\-_ ]/gi, '_').slice(0, 60)}.mp4`;
+    const file = new File([blob], fileName, { type: 'video/mp4' });
+
+    ytStatus.textContent = 'Analisi del video importato…';
+    const scene = await addSource(file);
+
+    const source = sourceOf(scene);
+    if (source.duration >= AUTO_SPLIT_MIN_SECONDS) {
+      ytStatus.textContent = 'Rilevamento automatico delle scene in corso…';
+      await splitScene(scene.id);
+      const count = scenes.filter((s) => s.sourceId === source.id).length;
+      ytStatus.textContent = `Importato "${fileName}": ${count} scene rilevate.`;
+    } else {
+      ytStatus.textContent = `Importato "${fileName}".`;
+    }
+    ytUrlInput.value = '';
+  } catch (err) {
+    console.error(err);
+    ytStatus.textContent = `Errore: ${err.message || err}`;
+  } finally {
+    ytImportBtn.disabled = false;
+  }
+}
+
+ytImportBtn.addEventListener('click', importFromYouTube);
+ytUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') importFromYouTube(); });
 
 // ---------- Generate ----------
 
@@ -270,7 +432,7 @@ function computeSize(aspect, quality) {
 }
 
 async function generate() {
-  if (!audioAnalysis || clips.length === 0) return;
+  if (!audioAnalysis || scenes.length === 0) return;
   generateBtn.disabled = true;
   renderSection.classList.remove('hidden');
   outputSection.classList.add('hidden');
@@ -280,10 +442,20 @@ async function generate() {
   renderSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   try {
+    // Dedup source files: several scenes may share the same underlying file
+    // (auto-split), each unique source is only ever handed to ffmpeg once.
+    const usedSourceIds = [...new Set(scenes.map((s) => s.sourceId))];
+    const sourceFiles = usedSourceIds.map((id) => sourceById(id).file);
+    const edlScenes = scenes.map((s) => ({
+      duration: s.windowEnd - s.windowStart,
+      sourceIndex: usedSourceIds.indexOf(s.sourceId),
+      windowStart: s.windowStart,
+    }));
+
     const range = waveform.getRange();
     const edl = buildEDL({
       beatInfo: audioAnalysis,
-      clips: clips.map((c) => ({ duration: c.duration })),
+      scenes: edlScenes,
       songRange: { start: range.start, end: range.end },
       pace: paceSelect.value,
       stylePool: styleSelect.value,
@@ -295,7 +467,7 @@ async function generate() {
 
     const blob = await renderEdit({
       edl,
-      clipFiles: clips.map((c) => c.file),
+      sourceFiles,
       audioFile,
       quality: { width, height, fps: 30, crf: qualitySelect.value === '1080' ? 24 : 23, preset: 'veryfast' },
       onProgress: (ratio) => {

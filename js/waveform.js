@@ -130,7 +130,7 @@ export class Waveform {
         const x1 = this._timeToX(t, w);
         const segDur = seg.duration - (i < this.edl.transitions.length ? this.edl.transitions[i].duration : 0);
         const x2 = this._timeToX(t + Math.max(0, segDur), w);
-        ctx.fillStyle = CLIP_COLORS[seg.clipIndex % CLIP_COLORS.length];
+        ctx.fillStyle = CLIP_COLORS[seg.sceneIndex % CLIP_COLORS.length];
         ctx.globalAlpha = 0.75;
         ctx.fillRect(x1, 4, Math.max(1, x2 - x1), 6);
         ctx.globalAlpha = 1;

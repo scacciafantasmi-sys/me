@@ -67,27 +67,35 @@ function buildBeatSegments(beatInfo, songRange, pace) {
 
 /**
  * Assigns real footage to each beat-synced cut, cycling through the supplied
- * clips and continuing playback position within a clip across reuses so the
- * same clip shown three times shows three different moments of itself.
+ * scenes and continuing playback position within a scene across reuses so the
+ * same scene shown three times shows three different moments of itself.
+ *
+ * A "scene" is a window [windowStart, windowStart+duration) inside some
+ * underlying source file (sourceIndex = which ffmpeg -i input it lives in).
+ * Several scenes can share the same sourceIndex (e.g. one long imported
+ * video auto-split into many scenes) — the source file is only ever passed
+ * to ffmpeg once, no matter how many scenes reference it.
  */
-function assignFootage(cuts, clips) {
-  const playheads = clips.map(() => 0);
+function assignFootage(cuts, scenes) {
+  const playheads = scenes.map(() => 0);
   let ptr = 0;
   const segments = [];
   for (const cut of cuts) {
     const want = cut.end - cut.start;
-    const ci = ptr % clips.length;
+    const si = ptr % scenes.length;
     ptr++;
-    const clip = clips[ci];
-    let inPoint = playheads[ci];
-    if (clip.duration - inPoint < 0.08) inPoint = 0;
-    const take = Math.min(want, clip.duration - inPoint);
-    const outPoint = inPoint + Math.max(take, Math.min(0.08, clip.duration));
-    playheads[ci] = outPoint >= clip.duration - 0.03 ? 0 : outPoint;
+    const scene = scenes[si];
+    let inPoint = playheads[si];
+    if (scene.duration - inPoint < 0.08) inPoint = 0;
+    const take = Math.min(want, scene.duration - inPoint);
+    const outPoint = inPoint + Math.max(take, Math.min(0.08, scene.duration));
+    playheads[si] = outPoint >= scene.duration - 0.03 ? 0 : outPoint;
+    const windowStart = scene.windowStart || 0;
     segments.push({
-      clipIndex: ci,
-      inPoint,
-      outPoint,
+      sceneIndex: si,
+      sourceIndex: scene.sourceIndex ?? si,
+      inPoint: inPoint + windowStart,
+      outPoint: outPoint + windowStart,
       duration: outPoint - inPoint,
       energy: cut.energy,
     });
@@ -101,16 +109,16 @@ function assignFootage(cuts, clips) {
  *
  * @param {object} args
  * @param {{beatTimes:number[], beatEnergy:number[], periodSeconds:number}} args.beatInfo
- * @param {{duration:number}[]} args.clips - only the included clips, in play order
+ * @param {{duration:number, sourceIndex?:number, windowStart?:number}[]} args.scenes - only the included scenes, in play order
  * @param {{start:number,end:number}} args.songRange
  * @param {'auto'|'fast'|'medium'|'chill'} args.pace
  * @param {string} args.stylePool - 'mix' | 'subtle' | 'flashy' | 'all' | a fixed transition name
  */
-export function buildEDL({ beatInfo, clips, songRange, pace = 'auto', stylePool = 'mix', rng = Math.random }) {
-  if (!clips || clips.length === 0) throw new Error('Nessuna clip disponibile per generare l\'edit.');
+export function buildEDL({ beatInfo, scenes, songRange, pace = 'auto', stylePool = 'mix', rng = Math.random }) {
+  if (!scenes || scenes.length === 0) throw new Error('Nessuna clip disponibile per generare l\'edit.');
 
   const cuts = buildBeatSegments(beatInfo, songRange, pace);
-  const segments = assignFootage(cuts, clips);
+  const segments = assignFootage(cuts, scenes);
 
   // Transition durations, clamped so xfade always has enough overlap on both sides.
   const transitionDurations = [];
