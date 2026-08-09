@@ -21,16 +21,6 @@ const clipsInput = $('#clips-input');
 const clipsList = $('#clips-list');
 const clipsWarning = $('#clips-warning');
 
-const ytBackendInput = $('#yt-backend-input');
-const ytUrlInput = $('#yt-url-input');
-const ytImportBtn = $('#yt-import-btn');
-const ytStatus = $('#yt-status');
-
-const audioYtBackendInput = $('#audio-yt-backend-input');
-const audioYtUrlInput = $('#audio-yt-url-input');
-const audioYtImportBtn = $('#audio-yt-import-btn');
-const audioYtStatus = $('#audio-yt-status');
-
 const generateBtn = $('#generate-btn');
 const paceSelect = $('#pace-select');
 const styleSelect = $('#style-select');
@@ -50,8 +40,7 @@ const regenerateBtn = $('#regenerate-btn');
 const waveform = new Waveform(waveformCanvas);
 
 const SPLIT_THRESHOLD_SECONDS = 6;
-const AUTO_SPLIT_MIN_SECONDS = 20; // long imports (scene packs) get auto-split without asking
-const BACKEND_URL_STORAGE_KEY = 'tiktokAutoEditor.backendUrl';
+const AUTO_SPLIT_MIN_SECONDS = 20; // long clips get auto-split into scenes without asking
 
 let audioFile = null;
 let audioAnalysis = null;
@@ -255,12 +244,9 @@ function removeScene(id) {
 
 /**
  * Adds a new source file + one scene spanning it entirely, then auto-splits
- * it into scenes if it's long enough (same threshold and mechanism whether
- * the file came from a manual upload or a YouTube import — the site doesn't
- * care how the file got onto the device, only how long it is).
- * Returns the (first) created scene.
+ * it into scenes if it's long enough. Returns the (first) created scene.
  */
-async function addSource(file, { onStatus } = {}) {
+async function addSource(file) {
   const source = { id: sourceIdSeq++, file, duration: 0 };
   sources.push(source);
   const scene = { id: sceneIdSeq++, sourceId: source.id, windowStart: 0, windowEnd: 0, label: '', thumb: null, splitting: false, el: document.createElement('li') };
@@ -274,7 +260,6 @@ async function addSource(file, { onStatus } = {}) {
   renderScenesList();
   updateGenerateEnabled();
   if (duration >= AUTO_SPLIT_MIN_SECONDS) {
-    onStatus?.('Rilevamento automatico delle scene in corso…');
     await splitScene(scene.id);
   }
   return scene;
@@ -360,151 +345,6 @@ clipsList.addEventListener('drop', (e) => {
   dragSrcId = null;
   renderScenesList();
 });
-
-// ---------- YouTube import ----------
-
-function syncBackendInputs(value) {
-  ytBackendInput.value = value;
-  audioYtBackendInput.value = value;
-}
-
-function bindBackendInput(input) {
-  input.addEventListener('change', () => {
-    const value = input.value.trim();
-    localStorage.setItem(BACKEND_URL_STORAGE_KEY, value);
-    syncBackendInputs(value);
-  });
-}
-
-syncBackendInputs(localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '');
-bindBackendInput(ytBackendInput);
-bindBackendInput(audioYtBackendInput);
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-/**
- * Starts a YouTube download job on the backend, polls it to completion and
- * returns the downloaded file. `kind` is 'video' or 'audio' (audio-only
- * extraction, used for importing just the song).
- */
-async function fetchYoutubeFile({ backendUrl, url, kind, onStatus }) {
-  const startResp = await fetch(`${backendUrl}/api/youtube/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, kind }),
-  });
-  const startData = await startResp.json().catch(() => ({}));
-  if (!startResp.ok) throw new Error(startData.error || `Errore del server (${startResp.status})`);
-  const { jobId } = startData;
-
-  let job = null;
-  const deadline = Date.now() + 10 * 60 * 1000;
-  while (Date.now() < deadline) {
-    await sleep(1200);
-    const statusResp = await fetch(`${backendUrl}/api/youtube/status/${jobId}`);
-    const statusData = await statusResp.json().catch(() => ({}));
-    if (!statusResp.ok) throw new Error(statusData.error || `Errore del server (${statusResp.status})`);
-    job = statusData;
-    if (job.status === 'downloading') {
-      onStatus?.(`Scaricamento da YouTube… ${Math.round((job.progress || 0) * 100)}%`);
-    } else if (job.status === 'ready' || job.status === 'error') {
-      break;
-    }
-  }
-  if (!job || job.status === 'downloading') throw new Error('Timeout: il download sta impiegando troppo tempo.');
-  if (job.status === 'error') throw new Error(job.error || 'Download fallito.');
-
-  onStatus?.(kind === 'audio' ? 'Trasferimento dell\'audio nel browser…' : 'Trasferimento del video nel browser…');
-  const fileResp = await fetch(`${backendUrl}/api/youtube/file/${jobId}`);
-  if (!fileResp.ok) throw new Error('Impossibile scaricare il file dal server.');
-  const blob = await fileResp.blob();
-  const ext = job.ext || (kind === 'audio' ? 'm4a' : 'mp4');
-  const fileName = `${(job.title || (kind === 'audio' ? 'audio' : 'video')).replace(/[^a-z0-9\-_ ]/gi, '_').slice(0, 60)}.${ext}`;
-  const file = new File([blob], fileName, { type: blob.type || (kind === 'audio' ? 'audio/mp4' : 'video/mp4') });
-  return { file, fileName };
-}
-
-/** Shows a status line with a visible color/background so it can't be missed as "nothing happened". */
-function setYtStatus(el, text, kind = 'info') {
-  el.textContent = text;
-  el.className = text ? `hint yt-status-msg ${kind}` : 'hint';
-}
-
-function requireBackendAndUrl(backendInput, urlInput, statusEl) {
-  const backendUrl = backendInput.value.trim().replace(/\/+$/, '');
-  const url = urlInput.value.trim();
-  if (!backendUrl) {
-    setYtStatus(statusEl, 'Imposta prima l\'URL del server di importazione (vedi server/README.md).', 'error');
-    return null;
-  }
-  if (!url) {
-    setYtStatus(statusEl, 'Incolla un link YouTube.', 'error');
-    return null;
-  }
-  return { backendUrl, url };
-}
-
-async function importFromYouTube() {
-  const params = requireBackendAndUrl(ytBackendInput, ytUrlInput, ytStatus);
-  if (!params) return;
-
-  ytImportBtn.disabled = true;
-  setYtStatus(ytStatus, 'Avvio del download…', 'info');
-
-  try {
-    const { file, fileName } = await fetchYoutubeFile({
-      ...params,
-      kind: 'video',
-      onStatus: (msg) => setYtStatus(ytStatus, msg, 'info'),
-    });
-
-    setYtStatus(ytStatus, 'Analisi del video importato…', 'info');
-    const scene = await addSource(file, { onStatus: (msg) => setYtStatus(ytStatus, msg, 'info') });
-
-    const source = sourceOf(scene);
-    const count = scenes.filter((s) => s.sourceId === source.id).length;
-    setYtStatus(ytStatus, count > 1 ? `Importato "${fileName}": ${count} scene rilevate.` : `Importato "${fileName}".`, 'success');
-    ytUrlInput.value = '';
-  } catch (err) {
-    console.error(err);
-    setYtStatus(ytStatus, `Errore: ${err.message || err}`, 'error');
-  } finally {
-    ytImportBtn.disabled = false;
-  }
-}
-
-async function importAudioFromYouTube() {
-  const params = requireBackendAndUrl(audioYtBackendInput, audioYtUrlInput, audioYtStatus);
-  if (!params) return;
-
-  audioYtImportBtn.disabled = true;
-  setYtStatus(audioYtStatus, 'Avvio del download…', 'info');
-
-  try {
-    const { file, fileName } = await fetchYoutubeFile({
-      ...params,
-      kind: 'audio',
-      onStatus: (msg) => setYtStatus(audioYtStatus, msg, 'info'),
-    });
-
-    setYtStatus(audioYtStatus, 'Analisi del ritmo…', 'info');
-    await loadAudioFile(file);
-    setYtStatus(audioYtStatus, `Importato "${fileName}".`, 'success');
-    audioYtUrlInput.value = '';
-  } catch (err) {
-    console.error(err);
-    setYtStatus(audioYtStatus, `Errore: ${err.message || err}`, 'error');
-  } finally {
-    audioYtImportBtn.disabled = false;
-  }
-}
-
-ytImportBtn.addEventListener('click', importFromYouTube);
-ytUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') importFromYouTube(); });
-audioYtImportBtn.addEventListener('click', importAudioFromYouTube);
-audioYtUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') importAudioFromYouTube(); });
 
 // ---------- Generate ----------
 

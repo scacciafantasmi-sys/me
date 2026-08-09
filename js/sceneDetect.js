@@ -1,5 +1,5 @@
-// Automatic scene-cut detection for long source videos (e.g. a "scene pack"
-// imported from YouTube): reuses ffmpeg.wasm's own scene-change score
+// Automatic scene-cut detection for long uploaded source videos (e.g. a
+// "scene pack"): reuses ffmpeg.wasm's own scene-change score
 // (the same heuristic native ffmpeg uses for `select='gt(scene,T)'`, driven
 // by frame-to-frame pixel difference — in practice this fires on hard cuts
 // and on fast/large motion, which is exactly the "cut on movement" behaviour
