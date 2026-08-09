@@ -4911,6 +4911,28 @@
       deathCandidates.sort(function (a, b) { return state.partyArcs[b.id].negativeStreak - state.partyArcs[a.id].negativeStreak; });
       var dying = deathCandidates[0];
       var lastEvent = state.partyArcs[dying.id].lastEventText || (dying.name + " attraversa una lunga crisi interna.");
+      // Nella grande maggioranza dei casi il partito si scioglie e basta (sotto). Solo di rado, se
+      // esiste un altro partito ATTIVO della sua STESSA area ideologica (familyId identico) abbastanza
+      // solido da accoglierlo, la crisi si risolve invece con una vera fusione: il partito in difficoltà
+      // confluisce per intero in quello più forte, che ne eredita i consensi. Va tenuta rara di proposito
+      // (roll 0.16 qui sotto, annidato dentro un evento già raro di suo) — una fusione tra due soggetti
+      // distinti deve restare un fatto eccezionale, non la norma.
+      var absorber = candidates.filter(function (p) {
+        return p.id !== dying.id && p.familyId === dying.familyId && state.parties[p.id] > state.parties[dying.id] * 1.5;
+      }).sort(function (a, b) { return state.parties[b.id] - state.parties[a.id]; })[0];
+      if (absorber && Math.random() < 0.16) {
+        state.parties[absorber.id] += state.parties[dying.id];
+        state.dissolvedPartyIds.push(dying.id);
+        removePartyFromCoalitions(dying.id);
+        delete state.partyArcs[dying.id];
+        state.log.unshift({
+          week: state.turn, title: "Fusione tra due partiti", choiceLabel: dying.short + " → " + absorber.short,
+          result: "Dopo l'ultimo episodio (\"" + lastEvent + "\") e mesi di difficoltà, i vertici di " + dying.name +
+            " annunciano la fusione con " + absorber.name + ": le due linee politiche, praticamente identiche, confluiscono in un unico soggetto.",
+          headlines: [], type: "cronaca"
+        });
+        return;
+      }
       state.parties[dying.id] = 0.3;
       state.dissolvedPartyIds.push(dying.id);
       removePartyFromCoalitions(dying.id);
@@ -7092,7 +7114,7 @@
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
     reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
-    coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, geopoliticaCooldowns: {},
+    coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
@@ -7185,7 +7207,13 @@
     state.dynamicCoalitions.slice().forEach(function (c) {
       var alive = c.members.filter(function (mid) { return dissolvedIds.indexOf(mid) === -1; });
       if (alive.length !== c.members.length) c.members = alive;
-      if (c.members.length < 2) {
+      // Il giocatore, se è lui il fondatore/membro di questa coalizione, non compare MAI dentro
+      // c.members (la sua appartenenza vive solo in state.player.allianceId) — va contato qui a parte,
+      // altrimenti ogni coalizione player+1 solo alleato CPU (il caso più comune, creata con "Invita
+      // partito") risultava con c.members.length=1 "sotto soglia" e veniva sciolta a ogni caricamento
+      // della partita, anche se in realtà aveva 2 membri effettivi vivi e vegeti.
+      var effectiveCount = alive.length + (state.player.allianceId === c.id ? 1 : 0);
+      if (effectiveCount < 2) {
         dissolveCoalition(c.id, "Con lo scioglimento di uno dei partner, " + c.label + " resta con un solo membro effettivo e si scioglie.");
       }
     });
@@ -8284,7 +8312,10 @@
     state.lastElectionTurn = state.turn;
     state.nextElectionTurn = state.turn + 260;
     state.legislature++;
-    p.allianceId = null;
+    // p.allianceId NON va azzerato qui: un'alleanza che ha retto fino al voto (e non si è sciolta nel
+    // frattempo, vedi dissolveCoalition/updateCoalitionTrust) resta in piedi anche nella nuova legislatura
+    // — prima veniva cancellata a ogni elezione, "espellendo" il giocatore dalla propria stessa coalizione
+    // e costringendolo a rinegoziarla da capo (con rischio di rifiuto) anche se non era mai stata rotta.
     state.coalitionTrust = {};
     state.allianceOffered = false;
     state.snapElectionPending = false;
@@ -9590,7 +9621,13 @@
       var idx = c.members.indexOf(partyId);
       if (idx === -1) return;
       c.members.splice(idx, 1);
-      if (c.members.length < 2) {
+      // Come nella migrazione di caricamento sopra: il giocatore, se membro di questa coalizione, non
+      // compare in c.members (la sua appartenenza vive in state.player.allianceId) e va contato a parte,
+      // altrimenti una coalizione player+1 solo alleato CPU risultava sempre "sotto soglia" (1 < 2) non
+      // appena quell'unico alleato cambiava idea o si scioglieva, anche quando il giocatore stesso
+      // restava un membro perfettamente valido.
+      var effectiveCount = c.members.length + (state.player && state.player.allianceId === c.id ? 1 : 0);
+      if (effectiveCount < 2) {
         dissolveCoalition(c.id, "Con lo scioglimento di uno dei partner, " + c.label + " resta con un solo membro effettivo e si scioglie.");
       }
     });
@@ -9935,24 +9972,56 @@
   function renderReunificationPanel() {
     var p = state.player;
     if (!p.reunificationCooldowns) p.reunificationCooldowns = {};
+    if (!p.mergeCooldowns) p.mergeCooldowns = {};
     var activeIds = activeParties().map(function (party) { return party.id; });
     var splinters = (state.dynamicParties || []).filter(function (dp) {
       return dp.parentId === "player" && activeIds.indexOf(dp.id) !== -1;
     });
-    if (!splinters.length) return "";
-    var html = '<section aria-label="Trattative di Riunificazione"><p class="eyebrow">Trattative di Riunificazione</p>' +
-      '<p class="ci-hint">Una corrente che hai lasciato andare ha fondato un proprio partito. Puoi provare a riportarla nel tuo, ma dopo una scissione le trattative partono sempre in salita.</p><div class="option-grid">';
-    splinters.forEach(function (sp) {
-      var rel = Math.round(state.partyRelations && state.partyRelations[sp.id] !== undefined ? state.partyRelations[sp.id] : 18);
-      var cd = p.reunificationCooldowns[sp.id] || 0;
-      var weeksLeft = cd - state.turn;
-      var disabled = weeksLeft > 0;
-      var statusText = disabled ? "Riprova tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
-        : "Vicinanza: " + relationLabel(rel).text.toLowerCase() + " (" + rel + "/100) — trattativa difficile";
-      html += '<button type="button" class="option-card" data-reunify="' + sp.id + '"' + (disabled ? " disabled" : "") +
-        '><span class="olabel">Proponi la riunificazione con ' + sp.name + '</span><span class="odesc">' + statusText + "</span></button>";
+    // Oltre alle tue ex correnti (sopra), anche un partito TERZO — mai stato parte del tuo — può,
+    // in teoria, essere assorbito nel tuo: ma solo se è della tua STESSA area ideologica e sta
+    // davvero per sparire da solo (in crisi da settimane, sotto la soglia minima), non semplicemente
+    // "un po' più piccolo". Va tenuta un'eventualità rara e difficile per costruzione (vedi la
+    // probabilità bassa in bindInteractions, [data-propose-merge]) — una fusione tra due soggetti
+    // politici distinti, senza legami di scissione, deve restare un fatto eccezionale.
+    var splinterIds = splinters.map(function (sp) { return sp.id; });
+    var mergeCandidates = activeParties().filter(function (party) {
+      if (party.familyId !== p.family || splinterIds.indexOf(party.id) !== -1) return false;
+      var arc = state.partyArcs && state.partyArcs[party.id];
+      return arc && arc.negativeStreak >= 3 && state.parties[party.id] < 2.5;
     });
-    html += "</div></section>";
+    if (!splinters.length && !mergeCandidates.length) return "";
+    var html = '<section aria-label="Trattative di Riunificazione"><p class="eyebrow">Trattative di Riunificazione</p>';
+    if (splinters.length) {
+      html += '<p class="ci-hint">Una corrente che hai lasciato andare ha fondato un proprio partito. Puoi provare a riportarla nel tuo, ma dopo una scissione le trattative partono sempre in salita.</p><div class="option-grid">';
+      splinters.forEach(function (sp) {
+        var rel = Math.round(state.partyRelations && state.partyRelations[sp.id] !== undefined ? state.partyRelations[sp.id] : 18);
+        var cd = p.reunificationCooldowns[sp.id] || 0;
+        var weeksLeft = cd - state.turn;
+        var disabled = weeksLeft > 0;
+        var statusText = disabled ? "Riprova tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+          : "Vicinanza: " + relationLabel(rel).text.toLowerCase() + " (" + rel + "/100) — trattativa difficile";
+        html += '<button type="button" class="option-card" data-reunify="' + sp.id + '"' + (disabled ? " disabled" : "") +
+          '><span class="olabel">Proponi la riunificazione con ' + sp.name + '</span><span class="odesc">' + statusText + "</span></button>";
+      });
+      html += "</div>";
+    }
+    if (mergeCandidates.length) {
+      html += '<p class="ci-hint">' + (splinters.length ? "Anche " : "") + mergeCandidates.map(function (c) { return c.name; }).join(", ") +
+        (mergeCandidates.length === 1 ? " è" : " sono") + ' della tua stessa area politica e ' + (mergeCandidates.length === 1 ? "rischia" : "rischiano") +
+        ' lo scioglimento: puoi proporre di farl' + (mergeCandidates.length === 1 ? "o" : "i") + ' confluire nel tuo partito, ma è un\'eventualità rara.</p><div class="option-grid">';
+      mergeCandidates.forEach(function (mc) {
+        var rel = Math.round(state.partyRelations && state.partyRelations[mc.id] !== undefined ? state.partyRelations[mc.id] : 50);
+        var cd = p.mergeCooldowns[mc.id] || 0;
+        var weeksLeft = cd - state.turn;
+        var disabled = weeksLeft > 0;
+        var statusText = disabled ? "Riprova tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+          : "Vicinanza: " + relationLabel(rel).text.toLowerCase() + " (" + rel + "/100) — proposta improbabile";
+        html += '<button type="button" class="option-card" data-propose-merge="' + mc.id + '"' + (disabled ? " disabled" : "") +
+          '><span class="olabel">Proponi la fusione con ' + mc.name + '</span><span class="odesc">' + statusText + "</span></button>";
+      });
+      html += "</div>";
+    }
+    html += "</section>";
     return html;
   }
   function renderCoalitionPanel() {
@@ -11065,6 +11134,52 @@
             headlines: [], type: "cronaca"
           });
           showSaveStatus("Le trattative con " + sp.name + " falliscono, per ora.", true);
+        }
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-propose-merge]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-propose-merge");
+        var target = partyById(id);
+        if (!target) return;
+        var p = state.player;
+        if (!p.mergeCooldowns) p.mergeCooldowns = {};
+        var rel = state.partyRelations && state.partyRelations[id] !== undefined ? state.partyRelations[id] : 50;
+        // Niente legame di scissione a facilitare le cose (a differenza della riunificazione sopra):
+        // tetto di accettazione volutamente basso, un partito terzo che accetta di sparire dentro un
+        // altro deve restare un evento raro.
+        var prob = clamp((rel - 15) / 220, 0.02, 0.15);
+        var accepted = Math.random() < prob;
+        if (accepted) {
+          var gainedPolling = state.parties[id] || 0;
+          var gainedIscritti = Math.round(gainedPolling * 90);
+          p.iscritti += gainedIscritti;
+          p.reputazione = clamp(p.reputazione + rand(2, 5), 0, 100);
+          delete state.parties[id];
+          if (!state.dissolvedPartyIds) state.dissolvedPartyIds = [];
+          state.dissolvedPartyIds.push(id);
+          removePartyFromCoalitions(id);
+          state.dynamicParties = (state.dynamicParties || []).filter(function (dp) { return dp.id !== id; });
+          if (state.partyRelations) delete state.partyRelations[id];
+          if (state.partyArcs) delete state.partyArcs[id];
+          state.log.unshift({
+            week: state.turn, title: "Fusione riuscita", choiceLabel: target.name,
+            result: target.name + " accetta di confluire nel tuo partito, portando con sé la propria base residua.",
+            headlines: [], type: "cronaca"
+          });
+          showSaveStatus(target.name + " ha accettato: fusione riuscita!", false);
+        } else {
+          p.mergeCooldowns[id] = state.turn + 25 + Math.floor(Math.random() * 15);
+          p.reputazione = clamp(p.reputazione - 1, 0, 100);
+          if (state.partyRelations) state.partyRelations[id] = clamp(rel + rand(1, 4), 0, 100);
+          state.log.unshift({
+            week: state.turn, title: "Proposta di fusione rifiutata", choiceLabel: target.name,
+            result: target.name + " rifiuta di sciogliersi nel tuo partito: preferisce tentare da solo, nonostante le difficoltà.",
+            headlines: [], type: "cronaca"
+          });
+          showSaveStatus(target.name + " rifiuta la proposta di fusione, per ora.", true);
         }
         save();
         render();
