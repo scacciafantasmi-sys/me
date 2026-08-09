@@ -5222,21 +5222,27 @@
     var oldPollShare = Math.max(0.5, (p.sondaggi || 1) * stayShare);
     var newPollShare = Math.max(0.5, (p.sondaggi || 1) * leaveShare);
 
-    var oldPartyId = "dyn_" + p.name.toLowerCase().replace(/[^a-z0-9]+/g, "") + "_" + state.turn;
-    var oldParty = {
-      id: oldPartyId, name: p.name, short: p.short || p.name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase(),
-      color: p.color, coalition: "opposizione", dynamic: true, parentId: "player", familyId: p.family,
-      leader: challenger, famiglia: oldFam ? oldFam.label : "",
-      corrente: "Il partito storico, rimasto a " + challenger + " dopo la tua uscita (" + weekLabel(state.turn) + ")"
-    };
-    if (!state.dynamicParties) state.dynamicParties = [];
-    state.parties[oldParty.id] = oldPollShare;
-    state.dynamicParties.push(oldParty);
-    if (!state.partyRelations) state.partyRelations = {};
-    state.partyRelations[oldParty.id] = 20;
-    if (p.logoDataUrl) {
-      if (!state.partyLogoOverrides) state.partyLogoOverrides = {};
-      state.partyLogoOverrides[oldParty.id] = p.logoDataUrl;
+    // Il partito storico, rimasto nelle mani dello sfidante, diventa un vero nuovo soggetto attivo — ma
+    // solo se la scena politica non ha già raggiunto il tetto di PARTY_COUNT_CAP: stessa logica applicata
+    // alla scissione di corrente qui sopra, per lo stesso motivo (un'azione del giocatore non deve poter
+    // far superare il tetto promesso, che tutte le nascite guidate dalla CPU rispettano già).
+    if (activeParties().length < PARTY_COUNT_CAP) {
+      var oldPartyId = "dyn_" + p.name.toLowerCase().replace(/[^a-z0-9]+/g, "") + "_" + state.turn;
+      var oldParty = {
+        id: oldPartyId, name: p.name, short: p.short || p.name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase(),
+        color: p.color, coalition: "opposizione", dynamic: true, parentId: "player", familyId: p.family,
+        leader: challenger, famiglia: oldFam ? oldFam.label : "",
+        corrente: "Il partito storico, rimasto a " + challenger + " dopo la tua uscita (" + weekLabel(state.turn) + ")"
+      };
+      if (!state.dynamicParties) state.dynamicParties = [];
+      state.parties[oldParty.id] = oldPollShare;
+      state.dynamicParties.push(oldParty);
+      if (!state.partyRelations) state.partyRelations = {};
+      state.partyRelations[oldParty.id] = 20;
+      if (p.logoDataUrl) {
+        if (!state.partyLogoOverrides) state.partyLogoOverrides = {};
+        state.partyLogoOverrides[oldParty.id] = p.logoDataUrl;
+      }
     }
 
     var freshParty = generateSplinterParty(pseudoParent, state.turn);
@@ -10942,27 +10948,40 @@
           state.player.currents = othersS.length ? othersS : null;
           state.player.reputazione = clamp(state.player.reputazione + (choice.effects.reputazione || 0), 0, 100);
 
-          // La corrente uscente non sparisce nel nulla: fonda davvero un proprio partito, con cui in
-          // futuro si potranno aprire trattative di riunificazione (difficili: parte da rapporti molto
-          // tesi) — vedi renderReunificationPanel più sotto.
+          // La corrente uscente fonda davvero un proprio partito, con cui in futuro si potranno aprire
+          // trattative di riunificazione (difficili: parte da rapporti molto tesi) — vedi
+          // renderReunificationPanel più sotto. MA solo se la scena politica non ha già raggiunto il
+          // tetto di PARTY_COUNT_CAP partiti attivi: prima questa era l'unica via di nascita di un nuovo
+          // partito priva del controllo sul tetto (tutte le altre — scissioni CPU, movimenti spontanei —
+          // lo rispettano), ed essendo interamente guidata da una scelta del giocatore poteva far
+          // superare il limite promesso (es. 31 invece di 30). A tetto raggiunto la corrente se ne va lo
+          // stesso, ma si disperde invece di fondare un soggetto autonomo.
           var correnteLbl = correnteLabel(risky.id);
-          var pseudoParent = { id: "player_party", name: state.player.name, color: state.player.color, famiglia: familyById(state.player.family).label, familyId: state.player.family };
-          var splinter = generateSplinterParty(pseudoParent, state.turn);
-          splinter.parentId = "player";
-          splinter.exCorrenteId = risky.id;
-          splinter.corrente = "Nata dalla scissione della " + correnteLbl + " dal tuo partito (" + weekLabel(state.turn) + ")";
-          var carve = Math.max(0.4, (state.player.sondaggi || 1) * (risky.share / 100) * 0.55);
-          if (!state.dynamicParties) state.dynamicParties = [];
-          state.parties[splinter.id] = carve;
-          state.dynamicParties.push(splinter);
-          if (!state.partyRelations) state.partyRelations = {};
-          state.partyRelations[splinter.id] = 18;
-          state.log.unshift({
-            week: state.turn, title: "Nasce un nuovo soggetto politico", choiceLabel: splinter.short,
-            result: "La " + correnteLbl + " lascia il partito e fonda " + splinter.name + ", guidata da " + splinter.leader +
-              ": i rapporti restano molto tesi, ma in futuro una riunificazione non è impossibile.",
-            headlines: [], type: "cronaca"
-          });
+          if (activeParties().length < PARTY_COUNT_CAP) {
+            var pseudoParent = { id: "player_party", name: state.player.name, color: state.player.color, famiglia: familyById(state.player.family).label, familyId: state.player.family };
+            var splinter = generateSplinterParty(pseudoParent, state.turn);
+            splinter.parentId = "player";
+            splinter.exCorrenteId = risky.id;
+            splinter.corrente = "Nata dalla scissione della " + correnteLbl + " dal tuo partito (" + weekLabel(state.turn) + ")";
+            var carve = Math.max(0.4, (state.player.sondaggi || 1) * (risky.share / 100) * 0.55);
+            if (!state.dynamicParties) state.dynamicParties = [];
+            state.parties[splinter.id] = carve;
+            state.dynamicParties.push(splinter);
+            if (!state.partyRelations) state.partyRelations = {};
+            state.partyRelations[splinter.id] = 18;
+            state.log.unshift({
+              week: state.turn, title: "Nasce un nuovo soggetto politico", choiceLabel: splinter.short,
+              result: "La " + correnteLbl + " lascia il partito e fonda " + splinter.name + ", guidata da " + splinter.leader +
+                ": i rapporti restano molto tesi, ma in futuro una riunificazione non è impossibile.",
+              headlines: [], type: "cronaca"
+            });
+          } else {
+            state.log.unshift({
+              week: state.turn, title: "Una corrente lascia il partito", choiceLabel: correnteLbl,
+              result: "La " + correnteLbl + " lascia il partito, ma con la scena politica già affollatissima non trova spazio per fondare un soggetto autonomo: si disperde tra astensione e altre forze già esistenti.",
+              headlines: [], type: "cronaca"
+            });
+          }
         }
         state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "scissione" });
         state.resultData = { resultText: choice.result, headlines: [] };
