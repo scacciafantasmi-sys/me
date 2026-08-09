@@ -5178,7 +5178,12 @@
     // Nessun tetto al numero di coalizioni spontanee contemporaneamente in scena, sulla stessa linea
     // scelta per i partiti dinamici: nascono e si sciolgono (vedi updateCpuOnlyCoalitionTrust più sotto)
     // solo in base a chi è davvero disponibile e a come va la fiducia reciproca, non a un limite fisso.
-    if (Math.random() > 0.008) return;
+    // Probabilità alzata (0.008 -> 0.015): con solo poche coppie di partiti reali davvero idonee nel
+    // roster fisso (stessa famiglia ideologica, nessuno dei due già in una coalizione), lo 0.8% a
+    // settimana poteva restare senza esito per centinaia di settimane di fila anche quando una coppia
+    // idonea era disponibile fin dall'inizio partita — tecnicamente vivo, ma troppo raro da percepire
+    // come tale in una partita di lunghezza normale.
+    if (Math.random() > 0.015) return;
 
     var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
     state.dynamicCoalitions.forEach(function (c) { takenIds = takenIds.concat(c.members); });
@@ -7304,7 +7309,8 @@
     // scalda la base ma fa scendere la reputazione (lo schema tipico delle posizioni nette/radicali in
     // tutto il gioco) mette in imbarazzo gli alleati; una linea misurata e responsabile la rafforza.
     // Così un'alleanza tenuta insieme solo per i numeri, con un partito che continua a fare scelte
-    // incoerenti con chi ne fa parte, si logora e può sciogliersi da sola sotto il 30% di fiducia.
+    // incoerenti con chi ne fa parte, si logora e può sciogliersi da sola sotto la soglia di fiducia
+    // (vedi COALITION_DISSOLVE_THRESHOLD, la stessa usata per la deriva settimanale della fiducia).
     if (p.allianceId) {
       if (!state.coalitionTrust) state.coalitionTrust = {};
       if (state.coalitionTrust[p.allianceId] === undefined) state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId);
@@ -7315,7 +7321,7 @@
       } else if (statesmanlike) {
         state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] + Math.min(3, eff.reputazione * 0.6), 0, 100);
       }
-      if (state.coalitionTrust[p.allianceId] < 30) dissolveCoalition(p.allianceId);
+      if (state.coalitionTrust[p.allianceId] < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(p.allianceId);
     }
 
     return { resultText: choice.result, headlines: headlines, deltas: deltas };
@@ -9394,6 +9400,12 @@
   // partita, qualunque cosa succedesse ai rapporti reali tra i loro membri. Stessa logica di fiducia già
   // usata per la coalizione del giocatore (avgCoalitionRelation, soglia 30%), solo estesa a chi non lo
   // coinvolge.
+  // Soglia e ampiezza del rumore alzate leggermente (30 -> 34, ±0.75 -> ±0.9) insieme alla probabilità di
+  // formazione qui sopra: coalizioni che nascono un po' più spesso devono anche poter sciogliersi un
+  // po' più spesso quando la fiducia reciproca cala, altrimenti si accumulerebbero senza mai sfoltirsi.
+  // L'aumento resta contenuto: la deriva verso avgCoalitionRelation (8%/settimana) non cambia, quindi una
+  // coalizione tra partiti davvero vicini resta comunque stabile a lungo.
+  var COALITION_DISSOLVE_THRESHOLD = 34;
   function updateCpuOnlyCoalitionTrust() {
     if (!state.dynamicCoalitions || !state.dynamicCoalitions.length) return;
     if (!state.coalitionTrust) state.coalitionTrust = {};
@@ -9402,9 +9414,9 @@
       if (p.allianceId === c.id) return;
       if (state.coalitionTrust[c.id] === undefined) state.coalitionTrust[c.id] = initialCoalitionTrust(c.id);
       var avgRel = avgCoalitionRelation(c.id);
-      var trust = clamp(state.coalitionTrust[c.id] + (avgRel - state.coalitionTrust[c.id]) * 0.08 + (Math.random() - 0.5) * 1.5, 0, 100);
+      var trust = clamp(state.coalitionTrust[c.id] + (avgRel - state.coalitionTrust[c.id]) * 0.08 + (Math.random() - 0.5) * 1.8, 0, 100);
       state.coalitionTrust[c.id] = trust;
-      if (trust < 30) dissolveCoalition(c.id);
+      if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(c.id);
     });
   }
   function updateCoalitionTrust() {
@@ -9413,9 +9425,9 @@
     if (!state.coalitionTrust) state.coalitionTrust = {};
     if (state.coalitionTrust[p.allianceId] === undefined) state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId);
     var avgRel = avgCoalitionRelation(p.allianceId);
-    var trust = clamp(state.coalitionTrust[p.allianceId] + (avgRel - state.coalitionTrust[p.allianceId]) * 0.08 + (Math.random() - 0.5) * 1.5, 0, 100);
+    var trust = clamp(state.coalitionTrust[p.allianceId] + (avgRel - state.coalitionTrust[p.allianceId]) * 0.08 + (Math.random() - 0.5) * 1.8, 0, 100);
     state.coalitionTrust[p.allianceId] = trust;
-    if (trust < 30) dissolveCoalition(p.allianceId);
+    if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(p.allianceId);
   }
   function coalitionLabelForPartyId(id) {
     if (COALITIONS.centrodestra.members.indexOf(id) !== -1) return COALITIONS.centrodestra.label;
