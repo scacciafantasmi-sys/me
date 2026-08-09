@@ -1,10 +1,21 @@
-// Wraps ffmpeg.wasm (loaded lazily from a CDN, single-threaded core so it
-// runs on plain GitHub Pages without cross-origin-isolation headers) and
-// turns an Edit Decision List into one ffmpeg filter_complex render.
-
-const FFMPEG_JS = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12/dist/esm/index.js';
+// Wraps ffmpeg.wasm and turns an Edit Decision List into one ffmpeg
+// filter_complex render.
+//
+// `@ffmpeg/ffmpeg` is vendored in ./vendor/ffmpeg-wasm/ (same origin as this
+// page) rather than loaded from a CDN — see that folder's README for why:
+// in short, it internally creates a Web Worker, and browsers refuse to
+// construct a Worker whose script lives on a different origin than the
+// page, so loading it from a CDN throws (or, if you blob-URL your way
+// around that, its own relative imports break and it hangs forever
+// instead). Only the big ffmpeg-core binary (~30MB) still comes from a CDN,
+// which is fine since that's loaded via `import()` from inside the
+// (same-origin) worker, not used to construct one.
+const FFMPEG_JS = './vendor/ffmpeg-wasm/index.js';
 const FFMPEG_UTIL_JS = 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12/dist/esm/index.js';
-const FFMPEG_CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12/dist/umd';
+// Must be the `esm` build, not `umd`: the worker dynamically `import()`s
+// this and reads its `.default` export, which the umd build (a plain
+// script with no `export` statements) doesn't have.
+const FFMPEG_CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12/dist/esm';
 
 let ffmpegPromise = null;
 
@@ -19,7 +30,7 @@ export async function getFFmpeg() {
   if (!ffmpegPromise) {
     ffmpegPromise = (async () => {
       const [{ FFmpeg }, { toBlobURL }] = await Promise.all([
-        import(/* webpackIgnore: true */ FFMPEG_JS),
+        import(new URL(FFMPEG_JS, import.meta.url)),
         import(/* webpackIgnore: true */ FFMPEG_UTIL_JS),
       ]);
       const ffmpeg = new FFmpeg();

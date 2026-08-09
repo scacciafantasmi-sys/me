@@ -31,6 +31,7 @@ Questo repository è pubblicato tramite **GitHub Pages** direttamente da questo 
 - `js/edl.js` — costruzione dell'Edit Decision List: pacing dinamico, rotazione delle scene, durate/offset delle transizioni.
 - `js/sceneDetect.js` — rilevamento automatico dei cambi scena in un video lungo (usa ffmpeg.wasm).
 - `js/ffmpegEngine.js` — istanza condivisa di ffmpeg.wasm, generazione del grafo di filtri (`filter_complex`) ed esecuzione del rendering.
+- `js/vendor/ffmpeg-wasm/` — copia locale (stessa origine del sito) dei file `dist/esm` di `@ffmpeg/ffmpeg`: necessaria perché quella libreria crea un Web Worker, e i browser rifiutano di costruire un Worker con script su un'origine diversa dal sito — vedi il README in quella cartella per i dettagli.
 - `js/waveform.js` — visualizzazione interattiva della forma d'onda, della griglia dei beat e dell'anteprima dei tagli.
 - `js/app.js` — collegamento dell'interfaccia (upload, riordino/divisione clip, impostazioni, progresso, download).
 - `.nojekyll` — disabilita l'elaborazione Jekyll di GitHub Pages, non necessaria per un sito statico puro.
