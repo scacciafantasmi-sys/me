@@ -265,8 +265,16 @@ async function addSource(file) {
   return scene;
 }
 
+const VIDEO_EXT_RE = /\.(mp4|mov|webm|mkv|avi|m4v|3gp|3gpp|wmv|flv|ogv)$/i;
+
+/** Some browsers/OSes report no or an unexpected MIME type for less common
+ * containers, so fall back to checking the file extension before rejecting. */
+function looksLikeVideo(file) {
+  return file.type.startsWith('video/') || (!file.type && VIDEO_EXT_RE.test(file.name));
+}
+
 async function addClipFiles(fileList) {
-  const files = Array.from(fileList || []).filter((f) => f.type.startsWith('video/'));
+  const files = Array.from(fileList || []).filter(looksLikeVideo);
   for (const file of files) await addSource(file);
 }
 
