@@ -8081,23 +8081,48 @@
     if (playerInCd) cdVotes += p.sondaggi;
     if (playerInCl) clVotes += p.sondaggi;
 
-    entities.push({ id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes, members: cdMembers.concat(playerInCd ? ["player"] : []), isCoalition: true });
-    entities.push({ id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes, members: clMembers.concat(playerInCl ? ["player"] : []), isCoalition: true });
+    // Una coalizione (fissa o dinamica) che non raggiunge la soglia combinata del 10% non deve far
+    // sparire i suoi singoli membri dalle elezioni: come nella legge elettorale reale, un partito che
+    // da solo supera comunque la soglia individuale del 3% resta in corsa per conto proprio. Prima
+    // invece la coalizione veniva sempre inserita tra le entità (qualificasse o no) e i SUOI membri
+    // venivano comunque esclusi dal conteggio individuale più sotto — una coalizione appena nata che
+    // non arrivava al 10% (tipico per una coalizione piccola o giovane) cancellava i suoi partiti anche
+    // se singolarmente avrebbero avuto voti a sufficienza, giocatore compreso se ne faceva parte lui
+    // stesso: senza soglia raggiunta, restava del tutto invisibile ai seggi anche con sondaggi alti.
+    var coalitionMemberIds = [];
+    var playerCovered = false;
+    if (cdVotes >= 10) {
+      entities.push({ id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes, members: cdMembers.concat(playerInCd ? ["player"] : []), isCoalition: true });
+      coalitionMemberIds = coalitionMemberIds.concat(cdMembers);
+      if (playerInCd) playerCovered = true;
+    }
+    if (clVotes >= 10) {
+      entities.push({ id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes, members: clMembers.concat(playerInCl ? ["player"] : []), isCoalition: true });
+      coalitionMemberIds = coalitionMemberIds.concat(clMembers);
+      if (playerInCl) playerCovered = true;
+    }
     var dynamicCoalitions = (state.dynamicCoalitions || []).map(function (c) {
       var liveMembers = c.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
-      if (p.allianceId === c.id) liveMembers = liveMembers.concat(["player"]);
-      return { id: c.id, label: c.label, members: liveMembers };
+      var playerInThis = p.allianceId === c.id;
+      if (playerInThis) liveMembers = liveMembers.concat(["player"]);
+      return { id: c.id, label: c.label, members: liveMembers, playerInThis: playerInThis };
     }).filter(function (c) { return c.members.length >= 2; });
     dynamicCoalitions.forEach(function (c) {
       var votes = c.members.reduce(function (s, id) { return s + (id === "player" ? p.sondaggi : state.parties[id]); }, 0);
+      if (votes < 10) return;
       entities.push({ id: c.id, label: c.label, votes: votes, members: c.members.slice(), isCoalition: true });
+      coalitionMemberIds = coalitionMemberIds.concat(c.members.filter(function (id) { return id !== "player"; }));
+      if (c.playerInThis) playerCovered = true;
     });
-    var coalitionMemberIds = cdMembers.concat(clMembers).concat(dynamicCoalitions.reduce(function (acc, c) { return acc.concat(c.members); }, []));
     activeParties().forEach(function (party) {
       if (coalitionMemberIds.indexOf(party.id) !== -1) return;
       entities.push({ id: party.id, label: party.name, votes: state.parties[party.id], members: [party.id], isCoalition: false });
     });
-    if (!p.allianceId) {
+    // Il giocatore corre da solo se non ha alleanza, oppure se la coalizione a cui appartiene (fissa o
+    // dinamica) non ha raggiunto la soglia combinata: proprio come i partiti reali, torna in corsa per
+    // conto proprio, valutato sulla soglia individuale del 3% — prima restava escluso del tutto insieme
+    // alla coalizione fallita, qualunque fossero i suoi sondaggi.
+    if (!playerCovered) {
       entities.push({ id: "player", label: p.name, votes: p.sondaggi, members: ["player"], isCoalition: false });
     }
 
@@ -8183,9 +8208,12 @@
       state.consensoGoverno = 50;
     }
 
-    var playerQualified = p.allianceId
-      ? entities.filter(function (e) { return e.id === p.allianceId; })[0].qualifies
-      : entities.filter(function (e) { return e.id === "player"; })[0].qualifies;
+    // Trova l'entità che include davvero il giocatore tra i suoi membri, non più per id fisso
+    // (p.allianceId): da quando una coalizione che non raggiunge la soglia fa tornare il giocatore in
+    // corsa da solo (vedi computeQualifiedElectionEntities), l'id "player.allianceId" potrebbe non
+    // corrispondere a nessuna entità pubblicata — cercarla per id fisso avrebbe fatto crashare qui.
+    var playerEntity = entities.filter(function (e) { return e.members.indexOf("player") !== -1; })[0];
+    var playerQualified = playerEntity ? playerEntity.qualifies : false;
 
     p.seatsCamera = seatsById.player.camera;
     p.seatsSenato = seatsById.player.senato;
@@ -8214,8 +8242,13 @@
       var cabinetAssignments = {};
       Object.keys(cabinetAlloc.ministries).forEach(function (holderId) {
         if (holderId === "player") return;
+        // Il leader del partito più forte diventa Presidente del Consiglio (vedi premierId sotto): non
+        // può ANCHE tenere un ministero con portafoglio, sono due ruoli distinti. Prima gli veniva
+        // comunque assegnato il primo ministero del suo partito come chiunque altro — qui viene escluso
+        // esplicitamente, e quel ministero va invece a un esponente generato come tutti gli altri.
+        var isPremierHolder = holderId === cabinetAlloc.premierId;
         cabinetAlloc.ministries[holderId].forEach(function (ministry, idx) {
-          cabinetAssignments[ministry] = { holderId: holderId, name: cabinetHolderNamedPerson(holderId, ministry, idx === 0) };
+          cabinetAssignments[ministry] = { holderId: holderId, name: cabinetHolderNamedPerson(holderId, ministry, idx === 0 && !isPremierHolder) };
         });
       });
       state.cabinet = { turn: state.turn, premierId: cabinetAlloc.premierId, ministries: cabinetAlloc.ministries, assignments: cabinetAssignments };
@@ -10109,8 +10142,13 @@
     }
     var cabinet = state.cabinet;
     if (cabinet && cabinet.ministries) {
-      var premierParty = partyById(cabinet.premierId);
-      var premierName = cabinet.premierId === "player" ? p.name : (premierParty ? premierParty.name : cabinet.premierId);
+      // Il nome del Presidente del Consiglio: per un premier CPU è la PERSONA (il leader del partito più
+      // forte della coalizione, non solo il nome del partito) — prima mostrava solo il partito ("Partito
+      // Democratico esprime la Presidenza"), che sommato al fatto che quello stesso leader compariva
+      // ANCHE come primo ministro del suo partito dava l'impressione sbagliata di un'unica persona con
+      // due cariche insieme. Ora il Presidente è sempre e solo lui/lei, mai anche titolare di un dicastero.
+      var premierName = cabinet.premierId === "player" ? p.name
+        : ((state.partyLeaderOverrides && state.partyLeaderOverrides[cabinet.premierId]) || (function () { var pt = partyById(cabinet.premierId); return pt ? pt.leader : cabinet.premierId; })());
       var isCoalitionCabinet = Object.keys(cabinet.ministries).length > 1;
       html += '<p class="eyebrow" style="margin-top:0.9rem">' + (isCoalitionCabinet ? "Come si divide la coalizione di governo" : "Il Governo e i suoi ministri") + '</p>' +
         '<p class="ci-hint">' + premierName + ' esprime la Presidenza del Consiglio' + (isCoalitionCabinet ? ", come partito più forte della coalizione. I ministeri si dividono in proporzione ai seggi portati in dote da ciascun alleato:" : ":") + '</p><div class="stat-grid">' +
@@ -11826,8 +11864,9 @@
       var migAssignments = {};
       Object.keys(migCabinetAlloc.ministries).forEach(function (holderId) {
         if (holderId === "player") return;
+        var migIsPremierHolder = holderId === migCabinetAlloc.premierId;
         migCabinetAlloc.ministries[holderId].forEach(function (ministry, idx) {
-          migAssignments[ministry] = { holderId: holderId, name: cabinetHolderNamedPerson(holderId, ministry, idx === 0) };
+          migAssignments[ministry] = { holderId: holderId, name: cabinetHolderNamedPerson(holderId, ministry, idx === 0 && !migIsPremierHolder) };
         });
       });
       state.cabinet = { turn: state.lastElectionTurn, premierId: migCabinetAlloc.premierId, ministries: migCabinetAlloc.ministries, assignments: migAssignments };
