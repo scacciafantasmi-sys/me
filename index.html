@@ -4892,6 +4892,27 @@
     Object.keys(counts).forEach(function (fid) { if (counts[fid] > bestCount) { bestCount = counts[fid]; bestId = fid; } });
     return bestId;
   }
+  // ---------- Ritmo della scena politica nel tempo ----------
+  // Nella realtà una nuova legislatura parte relativamente stabile — le rotture, le nuove liste, le
+  // coalizioni che nascono o muoiono si materializzano via via, non tutte nei primi mesi. Questo
+  // moltiplicatore tiene la scena politica (nascite/scissioni/scioglimenti/fusioni di partiti, nascita di
+  // coalizioni) più ferma nei primi 3-4 anni di gioco, senza azzerarla del tutto (un fondo minimo resta
+  // sempre acceso), poi la sblocca gradualmente — non di colpo — fino al ritmo pieno intorno al quinto
+  // anno. Da lì in poi la modula anche, con un margine contenuto, in base a come sta andando il paese
+  // (Scheda Paese): un paese in difficoltà genera più instabilità politica, uno che va bene un po' meno,
+  // ma sempre entro un'oscillazione ridotta, per restare un'emulazione realistica e non sbandare mai
+  // troppo in una direzione o nell'altra.
+  var POLITICAL_STABILITY_RAMP_START = 40;
+  var POLITICAL_STABILITY_RAMP_WEEKS = 220;
+  var POLITICAL_STABILITY_FLOOR = 0.18;
+  function politicalVolatilityMultiplier() {
+    var t = clamp((state.turn - POLITICAL_STABILITY_RAMP_START) / POLITICAL_STABILITY_RAMP_WEEKS, 0, 1);
+    var rampMult = POLITICAL_STABILITY_FLOOR + (1 - POLITICAL_STABILITY_FLOOR) * t;
+    var cp = state.countryProfile;
+    var countryMoodAvg = cp ? (cp.economia + cp.disoccupazione + cp.felicita + cp.sicurezza) / 4 : 5.5;
+    var countryMult = clamp(1 + (5.5 - countryMoodAvg) * 0.05, 0.85, 1.15);
+    return rampMult * countryMult;
+  }
   function triggerPartyLifecycleFollowup() {
     if (!state.partyArcs) state.partyArcs = {};
     if (!state.dynamicParties) state.dynamicParties = [];
@@ -4906,7 +4927,8 @@
       var threshold = (atCap && dominantFam && p.familyId === dominantFam) ? 3.4 : 2.2;
       return arc && arc.negativeStreak >= 3 && state.parties[p.id] < threshold;
     });
-    var deathProb = (atCap && dominantFam) ? 0.3 : 0.22;
+    var volMult = politicalVolatilityMultiplier();
+    var deathProb = ((atCap && dominantFam) ? 0.3 : 0.22) * volMult;
     if (deathCandidates.length && Math.random() < deathProb) {
       deathCandidates.sort(function (a, b) { return state.partyArcs[b.id].negativeStreak - state.partyArcs[a.id].negativeStreak; });
       var dying = deathCandidates[0];
@@ -4946,13 +4968,19 @@
       return;
     }
 
+    // Le scissioni erano finora legate solo alla stessa lotteria "un partito a caso ogni settimana"
+    // usata per la cronaca CPU (triggerRivalPartyEvent, arc.positiveStreak): con un roster che ora può
+    // arrivare a 20-25+ partiti attivi, la probabilità che uno specifico partito accumulasse 3 buone
+    // notizie di fila prima di una cattiva era diventata trascurabile, e le scissioni erano di fatto
+    // sparite dal gioco. Il controllo ora è indipendente da quella lotteria: qualunque partito già solido
+    // (sopra il 6%) può scindersi con una piccola probabilità diretta ogni settimana, a prescindere da
+    // quale partito la cronaca abbia toccato di recente — così le scissioni tornano a comparire con
+    // regolarità anche quando la scena è affollata.
     var birthCandidates = atCap ? [] : candidates.filter(function (p) {
-      var arc = state.partyArcs[p.id];
-      return arc && arc.positiveStreak >= 3 && state.parties[p.id] > 4;
+      return state.parties[p.id] > 6;
     });
-    if (birthCandidates.length && Math.random() < 0.15) {
-      birthCandidates.sort(function (a, b) { return state.partyArcs[b.id].positiveStreak - state.partyArcs[a.id].positiveStreak; });
-      var parent = birthCandidates[0];
+    if (birthCandidates.length && Math.random() < 0.05 * volMult) {
+      var parent = birthCandidates[Math.floor(Math.random() * birthCandidates.length)];
       var carve = Math.min(state.parties[parent.id] * 0.3, 2.5 + Math.random() * 1.5);
       var born = generateSplinterParty(parent, state.turn);
       state.parties[parent.id] = Math.max(0.5, state.parties[parent.id] - carve);
@@ -4962,8 +4990,8 @@
       delete state.partyArcs[parent.id];
       state.log.unshift({
         week: state.turn, title: "Nasce un nuovo soggetto politico", choiceLabel: born.short,
-        result: "Forte del momento favorevole delle ultime settimane, una componente interna a " + parent.name +
-          " annuncia la scissione e la nascita di " + born.name + ", guidata da " + born.leader + ".",
+        result: "Una componente interna a " + parent.name + " annuncia la scissione e la nascita di " + born.name +
+          ", guidata da " + born.leader + ".",
         headlines: [], type: "cronaca"
       });
     }
@@ -5015,7 +5043,12 @@
     // soglia la scena è già abbastanza affollata, niente altri movimenti del tutto nuovi finché non si
     // sfoltisce da sola.
     if (activeParties().length >= PARTY_COUNT_CAP) return;
-    if (Math.random() >= 0.04) return;
+    // Leggermente ridotta (0.04 -> 0.032) da quando le scissioni (sopra) sono tornate a comparire con
+    // regolarità propria: la quantità TOTALE di nuovi soggetti politici (spontanei + scissioni) resta
+    // così sullo stesso ordine di grandezza di prima, solo con un'origine più varia. Anche qui vale il
+    // ritmo generale della scena politica (politicalVolatilityMultiplier): stabile nei primi anni,
+    // pieno regime più avanti.
+    if (Math.random() >= 0.032 * politicalVolatilityMultiplier()) return;
     var candidates = activeParties();
     var totalPoll = candidates.reduce(function (s, p) { return s + state.parties[p.id]; }, 0);
     if (totalPoll < 5) return; // campo troppo frammentato/debole per reggere un'ulteriore erosione
@@ -5320,7 +5353,9 @@
     // concorrenza nella propria area è tanta): un'ulteriore piccola spinta alla probabilità.
     var atCap = activeParties().length >= PARTY_COUNT_CAP;
     var overcrowdMult = atCap ? 1.4 : 1;
-    if (Math.random() > 0.025 * electionProximityMult * overcrowdMult) return;
+    // Anche la formazione di coalizioni segue lo stesso ritmo generale della scena politica: più rara
+    // nei primi anni di legislatura, a pieno regime più avanti (vedi politicalVolatilityMultiplier).
+    if (Math.random() > 0.025 * electionProximityMult * overcrowdMult * politicalVolatilityMultiplier()) return;
 
     var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
     state.dynamicCoalitions.forEach(function (c) { takenIds = takenIds.concat(c.members); });
@@ -5344,7 +5379,10 @@
     var famId = (atCap && dominantFam && candidateFamilyIds.indexOf(dominantFam) !== -1 && Math.random() < 0.6)
       ? dominantFam
       : candidateFamilyIds[Math.floor(Math.random() * candidateFamilyIds.length)];
-    var members = shuffleN(freeByFamily[famId], Math.min(freeByFamily[famId].length, 3));
+    // Nessun tetto al numero di membri: se nella stessa area ideologica ci sono anche 5, 6, 7 partiti
+    // liberi, possono unirsi tutti nella stessa alleanza elettorale — non solo 3 a caso, come capitava
+    // prima. Nella realtà una coalizione elettorale non ha un numero massimo di simboli sulla scheda.
+    var members = shuffleN(freeByFamily[famId], freeByFamily[famId].length);
     var fam = familyById(famId);
     var coalitionId = "dyn_coal_" + famId + "_" + state.turn;
     var memberNames = members.map(function (m) { return m.name; });
@@ -5670,10 +5708,17 @@
   function proposeReferendum(topic) {
     var p = state.player;
     if (p.sondaggi <= REFERENDUM_MIN_SONDAGGI) return null;
+    // Un solo referendum per mandato, non uno ogni 30 settimane per l'intera legislatura (260 settimane):
+    // nella realtà un partito non trascina il paese alle urne di continuo. state.legislature scatta a
+    // ogni elezione (vedi resolveElection), quindi confrontarlo con l'ultimo mandato in cui è stato usato
+    // basta a far scattare di nuovo la possibilità alla legislatura successiva, senza bisogno di un reset
+    // esplicito altrove.
+    if (p.referendumLegislatureUsed === state.legislature) return null;
     if (state.turn < (p.referendumCooldownTurn || 0)) return null;
     if (p.pendingReferendum) return null;
     if (p.fondi < REFERENDUM_PROPOSAL_COST) return null;
     p.fondi -= REFERENDUM_PROPOSAL_COST;
+    p.referendumLegislatureUsed = state.legislature;
     p.referendumCooldownTurn = state.turn + 30;
     p.pendingReferendum = { title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, resolveTurn: state.turn + 6 + Math.floor(Math.random() * 5) };
     p.referendumCandidates = null;
@@ -5803,6 +5848,10 @@
         : p.fondi < REFERENDUM_CAMPAIGN_COST ? "Fondi insufficienti (" + fmtEuro(REFERENDUM_CAMPAIGN_COST) + ")" : "Costo: " + fmtEuro(REFERENDUM_CAMPAIGN_COST);
       html += '<div class="option-grid"><button type="button" class="option-card" data-referendum-campaign="1"' + (campDisabled ? " disabled" : "") + '>' +
         '<span class="olabel">Fai campagna per il SÌ su questo referendum</span><span class="odesc">Alza reputazione e visibilità, e con esse la probabilità che passi. ' + campStatus + '</span></button></div></section>';
+      return html;
+    }
+    if (p.referendumLegislatureUsed === state.legislature) {
+      html += '<p class="ci-hint">Hai già usato il tuo unico referendum per questo mandato: potrai proporne un altro solo a partire dalla prossima legislatura.</p></section>';
       return html;
     }
     var weeksLeft = (p.referendumCooldownTurn || 0) - state.turn;
@@ -7113,7 +7162,7 @@
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
-    reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null,
+    reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
