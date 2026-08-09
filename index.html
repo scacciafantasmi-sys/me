@@ -5472,6 +5472,48 @@
     });
   }
 
+  // ---------- Deriva ideologica di lungo periodo ----------
+  // Non solo il giocatore può cambiare linea a metà partita (vedi il cambio di famiglia ideologica nel
+  // pannello "Ideologia e leader"): con gli anni, anche gli altri partiti possono spostarsi leggermente
+  // se una loro corrente interna prende il sopravvento su un'altra — es. il PD che si sposta verso una
+  // sinistra più netta se l'ala socialista guadagna peso sull'anima riformista storica, o un partito che
+  // si modera avvicinandosi al centro. Non è un salto a caso su un'ideologia qualunque: si sposta sempre
+  // verso la famiglia ideologicamente più VICINA sull'asse sinistra-destra (LEFT_RIGHT_POSITION, la
+  // stessa scala già usata per l'emiciclo e per il limite di compatibilità delle coalizioni) — o verso il
+  // centro (si modera) o verso l'estremo opposto (si radicalizza). Evento rarissimo di proposito: pensato
+  // per emergere solo nel lunghissimo periodo (anni di partita), quasi mai nei primi anni (vedi
+  // politicalVolatilityMultiplier) — un partito specifico ne vedrà al massimo uno, forse nessuno, in una
+  // partita di durata normale.
+  function nearestFamilyNeighbors(familyId) {
+    var pos = LEFT_RIGHT_POSITION[familyId];
+    if (pos === undefined) return [];
+    return Object.keys(LEFT_RIGHT_POSITION).filter(function (fid) { return fid !== familyId; })
+      .sort(function (a, b) { return Math.abs(LEFT_RIGHT_POSITION[a] - pos) - Math.abs(LEFT_RIGHT_POSITION[b] - pos); })
+      .slice(0, 2);
+  }
+  function triggerPartyIdeologicalDrift() {
+    if (Math.random() > 0.003 * politicalVolatilityMultiplier()) return;
+    var candidates = activeParties().filter(function (p) { return p.familyId && LEFT_RIGHT_POSITION[p.familyId] !== undefined; });
+    if (!candidates.length) return;
+    var party = candidates[Math.floor(Math.random() * candidates.length)];
+    var neighbors = nearestFamilyNeighbors(party.familyId);
+    if (!neighbors.length) return;
+    var newFamId = neighbors[Math.floor(Math.random() * neighbors.length)];
+    var newFam = familyById(newFamId);
+    if (!newFam) return;
+    var oldPos = LEFT_RIGHT_POSITION[party.familyId], newPos = LEFT_RIGHT_POSITION[newFamId];
+    var direction = Math.abs(newPos) > Math.abs(oldPos) ? "si radicalizza" : "si modera";
+    party.familyId = newFamId;
+    party.famiglia = newFam.label;
+    state.log.unshift({
+      week: state.turn, title: "Deriva ideologica interna", choiceLabel: party.short,
+      result: "Dopo anni di equilibri interni in movimento, dentro " + party.name + " l'anima legata a " +
+        newFam.label.toLowerCase() + " prende il sopravvento su quella storica: il partito " + direction +
+        ", spostandosi verso un'area più vicina a " + newFam.label.toLowerCase() + ".",
+      headlines: [], type: "cronaca"
+    });
+  }
+
   // ---------- Successione dei leader ----------
   // Nel lungo periodo è realistico che anche i leader degli altri partiti cambino (congressi interni,
   // uscite di scena, correnti che prendono il sopravvento): un evento raro, indipendente dalle scelte
@@ -11720,6 +11762,7 @@
     triggerSpontaneousPartyFormation();
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
+    triggerPartyIdeologicalDrift();
     triggerLeaderSuccession();
     updateForeignRelations();
     triggerEuMembershipShift();
