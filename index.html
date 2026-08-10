@@ -4427,6 +4427,7 @@
   function renderGovernmentReforms() {
     var p = state.player;
     if (!p || p.parliamentRole !== "governo") return "";
+    if (!p.completedReformDomains) p.completedReformDomains = [];
     var famLabel = (familyById(p.family) || {}).label || "";
     var famDomains = FAMILY_REFORM_DOMAINS[p.family] || [];
     // Un'unica riforma alla volta, comune o di ideologia che sia: il tetto è condiviso tra TUTTI i
@@ -4440,29 +4441,30 @@
     // pagina Parlamento, sembra che cliccare non faccia nulla, perché il vero risultato compare fuori
     // dallo schermo, in alto.
     var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "riforma" ? state.inlineExpandedTopic : null;
+    // Una volta realizzata, una riforma resta com'è: la materia esce definitivamente dal novero di
+    // quelle proponibili, non solo per il periodo di raffreddamento condiviso ma per il resto della
+    // partita — coerente con l'idea che una riforma "fatta" è ormai in vigore, non un'azione ripetibile.
+    function renderDomainButton(d) {
+      var completed = p.completedReformDomains.indexOf(d.id) !== -1;
+      var isOpen = !completed && expanded && expanded.domainId === d.id;
+      var disabled = completed || (onCooldown && !isOpen);
+      var status = completed ? "Già realizzata"
+        : disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+        : (isOpen ? "Chiudi" : "Proponi ora");
+      var out = '<button type="button" class="option-card' + (isOpen ? " selected" : "") + (completed ? " done" : "") + '" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+      if (isOpen) out += renderInlineTopicChoices(expanded);
+      return out;
+    }
     var html = '<section aria-label="Riforme di Governo"><details class="log"><summary>Riforme di Governo<span>▾</span></summary>' +
-      '<p class="ci-hint">Da governo puoi proporre una riforma vera su una di queste materie, al massimo una ogni ' + REFORM_COOLDOWN_TURNS + ' settimane in totale. Scegli una materia per aprire le 5 opzioni direttamente qui sotto.' +
+      '<p class="ci-hint">Da governo puoi proporre una riforma vera su una di queste materie, al massimo una ogni ' + REFORM_COOLDOWN_TURNS + ' settimane in totale. Scegli una materia per aprire le 5 opzioni direttamente qui sotto: una volta realizzata, la riforma resta in vigore e quella materia non è più proponibile per il resto della partita.' +
       (onCooldown ? ' Potrai proporre la prossima riforma tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.' : '') +
       '</p><p class="ci-hint"><strong>Riforme comuni a ogni governo</strong></p><div class="option-grid">';
-    REFORM_DOMAINS.forEach(function (d) {
-      var isOpen = expanded && expanded.domainId === d.id;
-      var disabled = onCooldown && !isOpen;
-      var status = disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Proponi ora");
-      html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
-        '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
-      if (isOpen) html += renderInlineTopicChoices(expanded);
-    });
+    REFORM_DOMAINS.forEach(function (d) { html += renderDomainButton(d); });
     html += "</div>";
     if (famDomains.length) {
       html += '<p class="ci-hint"><strong>Riforme esclusive della linea ' + famLabel + '</strong></p><div class="option-grid">';
-      famDomains.forEach(function (d) {
-        var isOpen = expanded && expanded.domainId === d.id;
-        var disabled = onCooldown && !isOpen;
-        var status = disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Proponi ora");
-        html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
-          '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
-        if (isOpen) html += renderInlineTopicChoices(expanded);
-      });
+      famDomains.forEach(function (d) { html += renderDomainButton(d); });
       html += "</div>";
     }
     html += "</details></section>";
@@ -7372,7 +7374,7 @@
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
-    reformCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
+    reformCooldownTurn: 0, completedReformDomains: [], referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
@@ -11679,6 +11681,8 @@
           p.geopoliticaCooldownTurn = state.turn + 15;
         } else if (topic.kind === "riforma") {
           p.reformCooldownTurn = state.turn + REFORM_COOLDOWN_TURNS;
+          if (!p.completedReformDomains) p.completedReformDomains = [];
+          if (p.completedReformDomains.indexOf(topic.domainId) === -1) p.completedReformDomains.push(topic.domainId);
         } else {
           p.euInitiativeCooldownTurn = state.turn + 11;
         }
