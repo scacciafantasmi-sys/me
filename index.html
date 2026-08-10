@@ -4518,12 +4518,53 @@
     return html;
   }
 
-  // Uscita dalla NATO e dall'Unione Europea (più, per un governo europeista, la federazione europea):
-  // le tre decisioni di politica estera più pesanti che un governo possa prendere. Prima erano
-  // raggiungibili solo per sorteggio, in mezzo a decine di altri dossier "Governo" nel pool settimanale
-  // — di fatto quasi introvabili nell'arco di una legislatura. Come le Riforme di Governo, ora sono
-  // un'azione che il governo può aprire da sé, quando vuole (non più un click, restano scelte pesanti
-  // con conseguenze reali, ma il giocatore può scegliere DI APRIRE il dibattito).
+  // Il dossier per instaurare un regime: dinamico perché il tipo dipende dalla famiglia ideologica del
+  // giocatore (fascista, comunista/comunismolusso, monarchico) — non c'è un unico testo statico come per
+  // NATO/UE. Include ora anche il Comunismo di Lusso: non fa più scattare nulla in automatico dopo
+  // un'elezione (vedi detectRegimeChange), ma il giocatore può comunque sceglierlo qui, quando vuole.
+  function generateRegimeEstablishDossier() {
+    var p = state.player;
+    var regimeType = REGIME_FAMILIES[p.family];
+    if (!regimeType) return null;
+    var labels = REGIME_LABELS[regimeType];
+    return {
+      id: "gov_instaura_regime", kind: "notizia", cat: "Governo",
+      title: "Instaura " + labels.name,
+      brief: "Con la maggioranza che hai in mano, il tuo partito potrebbe instaurare " + labels.name + ": " + labels.desc + " È una svolta enorme, non una scelta da prendere alla leggera.",
+      choices: [
+        { label: "Instaura " + labels.name, hint: "Svolta storica: fine della democrazia parlamentare così come la conosciamo", instauraRegime: true, regimeTypeChoice: regimeType,
+          effects: { reputazione: -2 }, result: labels.name + " viene instaurata: " + labels.desc },
+        { label: "Non ancora, resta prudente", hint: "La possibilità resta aperta per più avanti nella partita", effects: {},
+          result: "Il partito sceglie la prudenza, per ora: la possibilità resta sul tavolo, si potrà tornare a valutarla più avanti." }
+      ]
+    };
+  }
+  // Specularmente: uscire da un regime già instaurato (proprio o ereditato, non importa chi l'ha
+  // instaurato in origine) e tornare a una piena democrazia parlamentare, con libere elezioni.
+  function generateRegimeRestoreDossier() {
+    var r = state.regime;
+    if (!r) return null;
+    var labels = REGIME_LABELS[r.type];
+    return {
+      id: "gov_ripristina_democrazia", kind: "notizia", cat: "Governo",
+      title: "Ripristina la Democrazia",
+      brief: "Il tuo governo potrebbe smantellare " + labels.name + " e restituire il paese a una piena democrazia parlamentare, con libere elezioni.",
+      choices: [
+        { label: "Ripristina la piena democrazia", hint: "Fine del regime: si torna presto alle urne", ripristinaDemocrazia: true, effects: { reputazione: 4 },
+          result: labels.name + " viene smantellata: il paese torna a una democrazia parlamentare piena, con nuove elezioni all'orizzonte." },
+        { label: "Lascia tutto com'è", hint: "Il regime resta in piedi", effects: {},
+          result: "Il regime resta in piedi, per ora: nessun cambiamento." }
+      ]
+    };
+  }
+  // Uscita dalla NATO e dall'Unione Europea (più, per un governo europeista, la federazione europea) e
+  // le grandi scelte istituzionali sul regime: le decisioni più pesanti che un governo possa prendere.
+  // Prima quelle su NATO/UE erano raggiungibili solo per sorteggio, in mezzo a decine di altri dossier
+  // "Governo" nel pool settimanale — di fatto quasi introvabili nell'arco di una legislatura. Come le
+  // Riforme di Governo, ora sono un'azione che il governo può aprire da sé, quando vuole (non più un
+  // click, restano scelte pesanti con conseguenze reali, ma il giocatore può scegliere DI APRIRE il
+  // dibattito) — e, a differenza di prima, un regime non è più un evento a senso unico: si può
+  // instaurarlo o smantellarlo di nuovo anche più avanti nella partita, tutto da qui.
   function renderBigForeignPolicyChoices() {
     var p = state.player;
     if (!p || p.parliamentRole !== "governo") return "";
@@ -4541,9 +4582,15 @@
     if (p.family === "europeista" && !state.euFederalized && !state.leftEu && !state.euExitDecided) {
       items.push({ id: "gov_federalizza_ue", label: "Federazione Europea", desc: "Spingi per trasformare l'Unione Europea in una vera federazione politica", disabled: false });
     }
+    if (!state.regime && REGIME_FAMILIES[p.family]) {
+      items.push({ id: "gov_instaura_regime", label: "Instaura " + REGIME_LABELS[REGIME_FAMILIES[p.family]].name, desc: "Apri il dibattito sulla svolta di regime", disabled: false });
+    }
+    if (state.regime) {
+      items.push({ id: "gov_ripristina_democrazia", label: "Ripristina la Democrazia", desc: "Apri il dibattito per smantellare " + REGIME_LABELS[state.regime.type].name, disabled: false });
+    }
     if (!items.length) return "";
-    var html = '<section aria-label="Grandi Scelte di Politica Estera"><details class="log"><summary>Grandi Scelte di Politica Estera<span>▾</span></summary>' +
-      '<p class="ci-hint">Da governo puoi aprire tu stesso, quando vuoi, il dibattito sulle decisioni di politica estera più pesanti: non serve aspettare che capitino per caso. A differenza delle altre sezioni, le opzioni non compaiono qui sotto ma sostituiscono il dossier della settimana in cima alla pagina: dopo aver cliccato, torna su.</p><div class="option-grid">';
+    var html = '<section aria-label="Grandi Scelte di Governo"><details class="log"><summary>Grandi Scelte di Governo<span>▾</span></summary>' +
+      '<p class="ci-hint">Da governo puoi aprire tu stesso, quando vuoi, il dibattito sulle decisioni più pesanti: non serve aspettare che capitino per caso. A differenza delle altre sezioni, le opzioni non compaiono qui sotto ma sostituiscono il dossier della settimana in cima alla pagina: dopo aver cliccato, torna su.</p><div class="option-grid">';
     items.forEach(function (it) {
       html += '<button type="button" class="option-card" data-big-foreign-choice="' + it.id + '"' + (it.disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + it.label + '</span><span class="odesc">' + it.desc + '</span></button>';
@@ -7421,7 +7468,7 @@
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
-    reformCooldownTurn: 0, completedReformDomains: [], referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
+    reformCooldownTurn: 0, completedReformDomains: [], civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
@@ -8205,14 +8252,17 @@
 
   // ---------- Cambio di regime ----------
   // Se una forza politica di ideologia fascista, monarchica o comunista/socialista vince davvero le
-  // elezioni (prima forza qualificata, con un peso reale, non un exploit statistico), il paese cambia
-  // regime in modo permanente — vale sia per il giocatore sia per una qualunque forza CPU. Scatta una
-  // sola volta per partita: da quel momento in poi lo stato resta memorizzato in state.regime e
-  // condiziona il tema visivo e le situazioni settimanali. Il Comunismo di Lusso resta fuori di
-  // proposito: è un'ideologia post-scarsità tecno-ottimista, non un comunismo autoritario di stampo
-  // novecentesco — vincere con quella linea non fa deragliare la democrazia, si continua a votare come
-  // con qualunque altra forza politica.
-  var REGIME_FAMILIES = { fascista: "fascista", comunista: "comunista", sinistra: "comunista", monarchico: "monarchico" };
+  // elezioni (prima forza qualificata, con un peso reale, non un exploit statistico), il paese PUÒ
+  // cambiare regime — vale sia per il giocatore sia per una qualunque forza CPU. Il Comunismo di Lusso è
+  // qui incluso (mappato sullo stesso tipo "comunista") ma escluso ESPLICITAMENTE dal solo trigger
+  // automatico post-elettorale (vedi il controllo dedicato in detectRegimeChange): è un'ideologia
+  // post-scarsità tecno-ottimista, non un comunismo autoritario di stampo novecentesco, quindi vincere
+  // le elezioni con quella linea non fa deragliare la democrazia da sola — ma se il giocatore lo vuole
+  // davvero, può comunque scegliere di instaurarlo più avanti, da governo (vedi
+  // renderRegimeActionsPanel). Un regime, una volta instaurato in un modo o nell'altro, non è più un
+  // evento a senso unico: si può tornare alla democrazia (o instaurarne uno nuovo) anche più avanti
+  // nella partita, sempre da quello stesso pannello.
+  var REGIME_FAMILIES = { fascista: "fascista", comunista: "comunista", sinistra: "comunista", monarchico: "monarchico", comunismolusso: "comunista" };
   var REGIME_LABELS = {
     fascista: { name: "Repubblica Autoritaria", desc: "Lo Stato fascista assume il pieno controllo delle istituzioni: opposizioni sciolte o marginalizzate, libertà di stampa sospesa. L'Italia esce da NATO e Unione Europea e viene isolata diplomaticamente." },
     comunista: { name: "Repubblica Popolare Italiana", desc: "Le grandi imprese strategiche vengono nazionalizzate e l'economia passa sotto pianificazione statale, in un clima di forte tensione con i mercati e i partner internazionali." },
@@ -8236,6 +8286,10 @@
     if (winner.votes < 27) return null;
     var dominant = dominantMemberOf(winner);
     var famId = familyIdForMember(dominant);
+    // Il Comunismo di Lusso non fa scattare NULLA in automatico, a differenza delle altre famiglie in
+    // REGIME_FAMILIES (di cui pure fa parte, per il pannello manuale — vedi il commento sopra la
+    // tabella): vincere le elezioni con quella linea resta un normale, grande successo democratico.
+    if (famId === "comunismolusso") return null;
     var regimeType = REGIME_FAMILIES[famId];
     if (!regimeType) return null;
     return { type: regimeType, winnerLabel: winner.label, votes: winner.votes, isPlayer: dominant === "player" };
@@ -8262,6 +8316,82 @@
     }
     state.spreadHistory.push(state.spreadBps);
     if (state.spreadHistory.length > 12) state.spreadHistory.shift();
+  }
+  // ---------- Guerra civile contro il regime ----------
+  // Chi è all'opposizione sotto un regime attivo può provare a fomentare una rivolta popolare per
+  // rovesciarlo: più il paese è scontento (bassa felicità, in primis), più le probabilità di successo
+  // salgono, e un partito istituzionalmente più forte organizza meglio la resistenza. Non è un click a
+  // costo zero: fallire significa una dura repressione sul proprio stesso partito.
+  var CIVIL_WAR_COOLDOWN_FAIL_TURNS = 40;
+  var CIVIL_WAR_MIN_SONDAGGI = 5;
+  function civilWarSuccessProbability() {
+    var cp = state.countryProfile;
+    var discontento = clamp((6 - cp.felicita) / 5, 0, 1);
+    var p = state.player;
+    return clamp(0.08 + discontento * 0.55 + (institutionalPowerMultiplier(p) - 1) * 0.1, 0.05, 0.65);
+  }
+  function resolveCivilWarAttempt() {
+    var p = state.player;
+    var cp = state.countryProfile;
+    var prob = civilWarSuccessProbability();
+    var success = Math.random() < prob;
+    if (success) {
+      var fallenLabel = govEntityLabel() || "Il governo del regime";
+      var fallenIds = (state.govEntity && state.govEntity.memberIds) || [];
+      fallenIds.forEach(function (id) {
+        if (state.dissolvedPartyIds.indexOf(id) === -1) state.dissolvedPartyIds.push(id);
+        removePartyFromCoalitions(id);
+        delete state.partyArcs[id];
+      });
+      var regimeLabel = REGIME_LABELS[state.regime.type].name;
+      state.regime = null;
+      state.govEntity = null;
+      state.snapElectionPending = true;
+      state.nextElectionTurn = state.turn + 8;
+      cp.economia = Math.max(1, cp.economia - rand(1, 2));
+      cp.sicurezza = Math.max(1, cp.sicurezza - rand(1, 2));
+      state.spreadBps = clamp(state.spreadBps + Math.round(rand(150, 250)), 40, 400);
+      p.reputazione = clamp(p.reputazione + rand(15, 25), 0, 100);
+      p.sondaggi = clamp(p.sondaggi + rand(5, 12), 0, 40);
+      p.iscritti = Math.round(p.iscritti * (1 + rand(0.1, 0.3)));
+      state.log.unshift({
+        week: state.turn, title: "Cade il regime — la rivolta ha successo", choiceLabel: p.name + " guida la rivolta popolare",
+        result: "La rivolta popolare fomentata da " + p.name + " travolge " + regimeLabel + ": " + fallenLabel +
+          " cade, il partito che guidava il regime si scioglie, e il paese si prepara a tornare libero alle urne dopo una lunga notte.",
+        headlines: [], type: "regime"
+      });
+      return { resultText: "La rivolta ha successo: il regime cade, " + fallenLabel + " si scioglie, si torna presto al voto.", headlines: [] };
+    }
+    p.civilWarCooldownTurn = state.turn + CIVIL_WAR_COOLDOWN_FAIL_TURNS;
+    p.reputazione = clamp(p.reputazione - rand(15, 25), 0, 100);
+    p.iscritti = Math.max(0, Math.round(p.iscritti * (1 - rand(0.2, 0.35))));
+    p.sondaggi = clamp(p.sondaggi - rand(3, 8), 0, 40);
+    cp.corruzione = Math.min(10, cp.corruzione + rand(0.5, 1));
+    cp.felicita = Math.max(1, cp.felicita - rand(0.5, 1));
+    state.log.unshift({
+      week: state.turn, title: "La rivolta fallisce — il regime reprime", choiceLabel: p.name + " tenta la rivolta e fallisce",
+      result: "Il tentativo di rivolta popolare fomentato da " + p.name + " viene soffocato dagli apparati del regime: una dura repressione si abbatte sul partito, mentre il paese resta sotto controllo.",
+      headlines: [], type: "cronaca"
+    });
+    return { resultText: "La rivolta fallisce: il regime reprime duramente il partito.", headlines: [] };
+  }
+  function renderCivilWarPanel() {
+    var p = state.player;
+    if (!state.regime || !p.inParliament || p.parliamentRole === "governo") return "";
+    var weeksLeft = (p.civilWarCooldownTurn || 0) - state.turn;
+    var onCooldown = weeksLeft > 0;
+    var tooWeak = p.sondaggi < CIVIL_WAR_MIN_SONDAGGI;
+    var disabled = onCooldown || tooWeak;
+    var prob = Math.round(civilWarSuccessProbability() * 100);
+    var status = onCooldown ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+      : tooWeak ? "Serve almeno il " + CIVIL_WAR_MIN_SONDAGGI + "% nei sondaggi (ora: " + fmt1(p.sondaggi) + "%)"
+      : "Probabilità di successo stimata: circa " + prob + "%";
+    var html = '<section aria-label="Opposizione al Regime"><details class="log"><summary>Opposizione al Regime<span>▾</span></summary>';
+    html += '<p class="ci-hint">Il paese vive sotto ' + REGIME_LABELS[state.regime.type].name + ' e il tuo partito è all\'opposizione: puoi provare a fomentare una rivolta popolare contro il regime. Più il paese è scontento (in primis la felicità nella Scheda Paese), più le probabilità di successo salgono. Se riesci, il governo del regime cade e il partito che lo guidava si scioglie: si torna presto a votare. Se fallisci, il regime reagisce con una dura repressione contro il tuo partito, e dovrai aspettare a lungo prima di riprovare.</p>';
+    html += '<div class="option-grid"><button type="button" class="option-card" data-civil-war="1"' + (disabled ? " disabled" : "") + '>' +
+      '<span class="olabel">Fomenta una rivolta popolare</span><span class="odesc">' + status + '</span></button></div>';
+    html += "</details></section>";
+    return html;
   }
   // Situazioni dedicate alla vita sotto il nuovo regime: 3 per tipo, pescate occasionalmente al posto
   // del normale generatore di situazioni una volta che state.regime è impostato (vedi advanceTurnLogic).
@@ -10911,7 +11041,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
         return renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
@@ -11285,6 +11415,21 @@
           state.snapElectionPending = true;
           state.nextElectionTurn = state.turn + 8;
           applyGovernmentCollapseLeadershipShock();
+        }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_instaura_regime") {
+        if (choice.instauraRegime) {
+          applyRegimeConsequences({ type: choice.regimeTypeChoice, winnerLabel: state.player.name, votes: state.player.sondaggi, isPlayer: true });
+        }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_ripristina_democrazia") {
+        if (choice.ripristinaDemocrazia) {
+          // Non riporta indietro le conseguenze geopolitiche già avvenute sotto il regime (l'eventuale
+          // uscita da NATO/UE resta un fatto storico, non si "rientra" con un click): qui si smantella
+          // solo l'assetto istituzionale, ripristinando libere elezioni dopo un periodo di transizione.
+          state.regime = null;
+          state.snapElectionPending = true;
+          state.nextElectionTurn = state.turn + 52;
         }
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
@@ -11781,6 +11926,8 @@
         if (btn.disabled) return;
         var id = btn.getAttribute("data-big-foreign-choice");
         var dossier = GOVERNO_DOSSIERS.filter(function (d) { return d.id === id; })[0];
+        if (!dossier && id === "gov_instaura_regime") dossier = generateRegimeEstablishDossier();
+        if (!dossier && id === "gov_ripristina_democrazia") dossier = generateRegimeRestoreDossier();
         if (!dossier) return;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
@@ -11791,6 +11938,15 @@
         // cima alla pagina: senza riportare lo scroll su, da governo scrollati più in basso sembrerebbe
         // che il click non abbia fatto nulla, mentre in realtà il nuovo dossier è già lì, fuori vista.
         if (typeof window !== "undefined" && window.scrollTo) window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+      });
+    });
+    app.querySelectorAll("[data-civil-war]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var outcome = resolveCivilWarAttempt();
+        showSaveStatus(outcome.resultText, false);
+        save();
+        render();
       });
     });
     app.querySelectorAll("[data-eu-initiative]").forEach(function (btn) {
