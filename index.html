@@ -1327,6 +1327,53 @@
       state.partyRelations[id] = clamp(v + (50 - v) * 0.01, 0, 100);
     });
   }
+
+  // ---------- Attori sociali e istituzionali: orientamento "naturale" per ideologia ----------
+  // Ogni famiglia ha un'inclinazione (-1..+1) verso ciascun grande attore del paese: business (usato per
+  // Confindustria), unions (base per CGIL/CISL/USB, ciascuna con una propria intensità), chiesa, bce
+  // (Banca Centrale/mercati), ue (Commissione Europea) e judicial (quanto la linea del partito tende a
+  // sfiorare la magistratura — usato anche come base del rischio giudiziario). Guida sia la deriva
+  // settimanale di institutionalRelations verso un equilibrio coerente con l'identità del partito, sia il
+  // punto di partenza del rischio giudiziario.
+  var INSTITUTIONAL_LEAN_BY_FAMILY = {
+    sovranista:        { business: 0.2,  unions: -0.3, chiesa: 0.4,  bce: -0.3, ue: -0.5, judicial: 0.15 },
+    liberale:          { business: 0.7,  unions: -0.4, chiesa: 0.1,  bce: 0.5,  ue: 0.4,  judicial: -0.1 },
+    progressista:      { business: -0.1, unions: 0.3,  chiesa: -0.2, bce: 0.1,  ue: 0.4,  judicial: -0.15 },
+    movimentista:      { business: -0.3, unions: 0.2,  chiesa: -0.1, bce: -0.3, ue: -0.2, judicial: 0.1 },
+    sinistra:          { business: -0.5, unions: 0.6,  chiesa: -0.2, bce: -0.2, ue: 0.1,  judicial: -0.1 },
+    cattolico:         { business: 0.2,  unions: 0.1,  chiesa: 0.8,  bce: 0.2,  ue: 0.2,  judicial: -0.05 },
+    regionalista:      { business: 0.1,  unions: 0.0,  chiesa: 0.1,  bce: -0.2, ue: -0.1, judicial: 0.05 },
+    comunista:         { business: -0.8, unions: 0.7,  chiesa: -0.4, bce: -0.5, ue: -0.4, judicial: 0.1 },
+    nazionalpopolare:  { business: 0.0,  unions: -0.2, chiesa: 0.3,  bce: -0.4, ue: -0.6, judicial: 0.2 },
+    europeista:        { business: 0.3,  unions: 0.1,  chiesa: 0.1,  bce: 0.6,  ue: 0.8,  judicial: -0.2 },
+    libertario:        { business: 0.8,  unions: -0.6, chiesa: -0.2, bce: 0.3,  ue: 0.1,  judicial: 0.0 },
+    tecnoprogressista: { business: 0.3,  unions: 0.0,  chiesa: -0.3, bce: 0.3,  ue: 0.4,  judicial: -0.1 },
+    meridionalista:    { business: 0.0,  unions: 0.2,  chiesa: 0.3,  bce: -0.2, ue: -0.1, judicial: 0.05 },
+    fascista:          { business: 0.1,  unions: -0.5, chiesa: 0.3,  bce: -0.6, ue: -0.7, judicial: 0.35 },
+    monarchico:        { business: 0.3,  unions: -0.2, chiesa: 0.6,  bce: 0.0,  ue: -0.1, judicial: -0.05 },
+    gratuitista:       { business: -0.6, unions: 0.3,  chiesa: -0.1, bce: -0.3, ue: 0.0,  judicial: 0.05 },
+    comunismolusso:    { business: -0.7, unions: 0.4,  chiesa: -0.3, bce: -0.4, ue: -0.2, judicial: 0.15 }
+  };
+  function institutionalLean(p) {
+    return INSTITUTIONAL_LEAN_BY_FAMILY[p.family] || INSTITUTIONAL_LEAN_BY_FAMILY.sovranista;
+  }
+  function driftInstitutionalRelations() {
+    var p = state.player;
+    if (!p.institutionalRelations) return;
+    var lean = institutionalLean(p);
+    var targets = {
+      confindustria: 50 + lean.business * 28, cgil: 50 + lean.unions * 28, cisl: 50 + lean.unions * 18,
+      usb: 50 + lean.unions * 34, chiesa: 50 + lean.chiesa * 28, bce: 50 + lean.bce * 24, ue: 50 + lean.ue * 30,
+      magistratura: 50 - lean.judicial * 22
+    };
+    Object.keys(p.institutionalRelations).forEach(function (key) {
+      var v = p.institutionalRelations[key];
+      var t = targets[key] !== undefined ? targets[key] : 50;
+      p.institutionalRelations[key] = clamp(v + (t - v) * 0.012, 0, 100);
+    });
+    var riskTarget = clamp(8 + lean.judicial * 16 + (p.lobby && !p.lobby.exposed ? 12 : 0), 2, 90);
+    p.judicialRisk = clamp((p.judicialRisk || 8) + (riskTarget - (p.judicialRisk || 8)) * 0.03, 1, 95);
+  }
   var STORAGE_KEY = "politisit_founder_save_v2";
 
   var SWATCHES = ["#d6455c", "#3fa9dc", "#e0a53a", "#4a8f5c", "#8a5fc2", "#2f8f8f", "#b0468a", "#6b7280"];
@@ -4518,6 +4565,167 @@
     return html;
   }
 
+  // ---------- Vita pubblica: talk show serale e interviste ----------
+  // Due apparizioni mediatiche disponibili a chiunque, dentro o fuori dal Parlamento, ciascuna con un
+  // proprio raffreddamento indipendente: si apre come le Riforme di Governo (clic sul dominio -> 5
+  // varianti di stile qui sotto, non sostituiscono il dossier in cima alla pagina).
+  var VITA_PUBBLICA_DOMAINS = [
+    { id: "talkshow", label: "Talk Show Serale", cooldownField: "talkShowCooldownTurn", cooldown: 7, boldness: 1.3,
+      desc: "Un salotto televisivo in prima serata: platea ampia, ma il confronto diretto può sfuggire di mano." },
+    { id: "intervista", label: "Intervista", cooldownField: "intervistaCooldownTurn", cooldown: 5, boldness: 0.85,
+      desc: "Un'intervista su carta o online: meno platea, ma un controllo maggiore sul messaggio." }
+  ];
+  var VITA_PUBBLICA_STYLES = [
+    { id: "aggressivo", label: "Toni aggressivi e polarizzanti", hint: "Alto rischio, alta visibilità",
+      effects: function (b) { return { reputazione: rand(-4, 2) * (b > 1 ? 1.2 : 0.8), visibilita: rand(6, 12) * b, sondaggi: rand(-0.4, 0.7) }; } },
+    { id: "istituzionale", label: "Registro istituzionale e misurato", hint: "Basso rischio, credibilità in crescita",
+      effects: function (b) { return { reputazione: rand(1, 4), visibilita: rand(2, 5) * b }; } },
+    { id: "popolare", label: "Linguaggio diretto e popolare", hint: "Parla alla pancia della base",
+      effects: function (b) { return { iscritti: rand(25, 70) * b, visibilita: rand(4, 8) * b, reputazione: rand(-1, 2) }; } },
+    { id: "ironico", label: "Toni leggeri e ironici", hint: "Fa parlare di sé, risultato imprevedibile",
+      effects: function (b) { return { visibilita: rand(5, 10) * b, reputazione: rand(-2, 3) }; } },
+    { id: "evasivo", label: "Risposte caute ed evasive", hint: "Nessuna gaffe, ma nessuno slancio",
+      effects: function (b) { return { reputazione: rand(0, 2), visibilita: rand(1, 3) }; } }
+  ];
+  function generateVitaPubblicaDossier(domainId) {
+    var domain = VITA_PUBBLICA_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
+    if (!domain) return null;
+    var choices = VITA_PUBBLICA_STYLES.map(function (s) {
+      var eff = s.effects(domain.boldness);
+      Object.keys(eff).forEach(function (k) { eff[k] = Math.round(eff[k] * 10) / 10; });
+      return { label: s.label, hint: s.hint, effects: eff, result: "Nel " + domain.label.toLowerCase() + " scegli un registro " + s.label.toLowerCase() + ": il pubblico reagisce di conseguenza." };
+    });
+    return {
+      id: "vita_pubblica_" + domainId, kind: "vitapubblica", cat: "Vita Pubblica",
+      title: domain.label, brief: domain.desc + " Che registro tieni stavolta?",
+      choices: choices
+    };
+  }
+  function renderVitaPubblicaPanel() {
+    var p = state.player;
+    var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "vitapubblica" ? state.inlineExpandedTopic : null;
+    var html = '<section aria-label="Vita Pubblica"><details class="log"><summary>Vita Pubblica<span>▾</span></summary>' +
+      '<p class="ci-hint">Apparizioni mediatiche a disposizione del leader: ciascuna ha un proprio tempo di recupero indipendente. Scegli un formato per aprire le 5 varianti di stile direttamente qui sotto.</p><div class="option-grid">';
+    VITA_PUBBLICA_DOMAINS.forEach(function (d) {
+      var weeksLeft = (p[d.cooldownField] || 0) - state.turn;
+      var onCooldown = weeksLeft > 0;
+      var isOpen = expanded && expanded.domainId === d.id;
+      var disabled = onCooldown && !isOpen;
+      var status = disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Partecipa ora");
+      html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-vita-pubblica="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + d.label + '</span><span class="odesc">' + d.desc + " " + status + '</span></button>';
+      if (isOpen) html += renderInlineTopicChoices(expanded);
+    });
+    html += "</div></details></section>";
+    return html;
+  }
+
+  // ---------- Attori sociali e istituzionali ----------
+  // Confindustria, i tre grandi sindacati, la Chiesa, la BCE/Commissione UE e la magistratura: ciascuno
+  // ha un valore 0-100 (institutionalRelations) che deriva lentamente verso un equilibrio coerente con
+  // l'ideologia del partito (vedi driftInstitutionalRelations), ma il giocatore può intervenire di
+  // persona con un incontro dedicato ogni tot settimane, per domino, con conseguenze incrociate reali
+  // (una linea filo-impresa scontenta i sindacati, e viceversa).
+  var ISTITUZIONALI_DOMAINS = [
+    { id: "imprese_sindacati", label: "Tavolo con Imprese e Sindacati", cooldown: 9,
+      desc: "Un confronto diretto tra il partito, Confindustria e i grandi sindacati (CGIL, CISL, USB)." },
+    { id: "chiesa", label: "Udienza con la Chiesa Cattolica", cooldown: 12,
+      desc: "Un incontro istituzionale con i vertici della Chiesa Cattolica italiana." },
+    { id: "bce_ue", label: "Colloquio con BCE e Commissione UE", cooldown: 10,
+      desc: "Un confronto tecnico con la Banca Centrale e la Commissione Europea sui conti pubblici." },
+    { id: "magistratura", label: "Rapporti con la Magistratura", cooldown: 11,
+      desc: "Una presa di posizione pubblica sul rapporto tra il partito e il potere giudiziario." }
+  ];
+  function generateIstituzionaleDossier(domainId) {
+    if (domainId === "imprese_sindacati") {
+      return {
+        id: "ist_imprese_sindacati", kind: "istituzionale", cat: "Attori Istituzionali", title: "Tavolo con Imprese e Sindacati",
+        brief: "Confindustria e i grandi sindacati chiedono un chiarimento sulla linea economica del partito. Come ti posizioni?",
+        choices: [
+          { label: "Linea filo-impresa", hint: "Confindustria si avvicina, i sindacati si allontanano", instRelDeltas: { confindustria: 14, cgil: -9, cisl: -6, usb: -13 }, effects: { fondi: rand(300, 900) },
+            result: "Il tavolo si chiude con un'apertura netta al mondo delle imprese: Confindustria apprezza, i sindacati insorgono." },
+          { label: "Linea filo-lavoratori", hint: "I sindacati si avvicinano, Confindustria si allontana", instRelDeltas: { confindustria: -12, cgil: 13, cisl: 9, usb: 16 }, effects: { iscritti: rand(15, 45) },
+            result: "Il partito si schiera con i lavoratori: sindacati soddisfatti, imprese preoccupate per il clima economico." },
+          { label: "Mediazione equilibrata", hint: "Piccolo passo avanti con tutti, nessuno scontento", instRelDeltas: { confindustria: 4, cgil: 4, cisl: 4, usb: 2 }, effects: { reputazione: 2 },
+            result: "Una mediazione paziente lascia tutti moderatamente soddisfatti, senza vincitori né vinti netti." }
+        ]
+      };
+    }
+    if (domainId === "chiesa") {
+      return {
+        id: "ist_chiesa", kind: "istituzionale", cat: "Attori Istituzionali", title: "Udienza con la Chiesa Cattolica",
+        brief: "I vertici della Chiesa Cattolica italiana ricevono una delegazione del partito. Che tono tieni?",
+        choices: [
+          { label: "Dialogo aperto e rispettoso", hint: "Buoni rapporti, nessun costo elettorale", instRelDeltas: { chiesa: 15 }, effects: { reputazione: 1 },
+            result: "L'udienza si svolge in un clima disteso: la Chiesa apprezza il tono rispettoso della delegazione." },
+          { label: "Linea laica e distante", hint: "Rapporti più freddi, ma coerenza con la base laica", instRelDeltas: { chiesa: -14 }, effects: { iscritti: rand(10, 30) },
+            result: "Il partito ribadisce una linea laica: la Chiesa prende le distanze, ma la base più secolare apprezza la coerenza." },
+          { label: "Non prendere posizione", hint: "Nessun cambiamento", instRelDeltas: {}, effects: {},
+            result: "L'incontro resta sui convenevoli istituzionali, senza reali prese di posizione da nessuna delle due parti." }
+        ]
+      };
+    }
+    if (domainId === "bce_ue") {
+      return {
+        id: "ist_bce_ue", kind: "istituzionale", cat: "Attori Istituzionali", title: "Colloquio con BCE e Commissione UE",
+        brief: "Un colloquio tecnico sui conti pubblici italiani, tra Francoforte e Bruxelles. Come imposti il messaggio?",
+        choices: [
+          { label: "Rassicura i mercati e Bruxelles", hint: "Fiducia dei mercati in crescita, ma meno margine sovranista", instRelDeltas: { bce: 13, ue: 12 }, effects: { reputazione: 2 }, spreadDelta: -6,
+            result: "Il messaggio rassicurante viene accolto bene: lo spread si stringe leggermente, ma qualcuno in patria parla di sudditanza." },
+          { label: "Rivendica la sovranità economica", hint: "La base sovranista apprezza, i mercati si irrigidiscono", instRelDeltas: { bce: -13, ue: -12 }, effects: { iscritti: rand(15, 40) }, spreadDelta: 8,
+            result: "La rivendicazione di sovranità scalda la base, ma raffredda i rapporti con Francoforte e Bruxelles: lo spread ne risente." },
+          { label: "Dialogo tecnico e neutro", hint: "Piccolo passo avanti, nessuno scossone", instRelDeltas: { bce: 4, ue: 4 }, effects: {},
+            result: "Il colloquio resta su un binario tecnico, senza grandi annunci né grandi tensioni." }
+        ]
+      };
+    }
+    return {
+      id: "ist_magistratura", kind: "istituzionale", cat: "Attori Istituzionali", title: "Rapporti con la Magistratura",
+      brief: "Il partito è chiamato a chiarire pubblicamente il proprio rapporto con il potere giudiziario. Che linea tieni?",
+      choices: [
+        { label: "Sostieni l'indipendenza della magistratura", hint: "Meno rischio giudiziario, immagine istituzionale", instRelDeltas: { magistratura: 14 }, judicialRiskDelta: -6, effects: { reputazione: 2 },
+          result: "Il partito ribadisce pubblicamente il rispetto per l'indipendenza della magistratura: il rischio di attriti giudiziari si allenta." },
+        { label: "Denuncia un uso politico della giustizia", hint: "Rischio giudiziario più alto, ma la base si mobilita", instRelDeltas: { magistratura: -15 }, judicialRiskDelta: 9, effects: { iscritti: rand(20, 50), visibilita: rand(3, 7) },
+          result: "L'attacco frontale alla magistratura infiamma la base, ma peggiora sensibilmente i rapporti con le procure." },
+        { label: "Mantieni un basso profilo istituzionale", hint: "Nessun cambiamento", instRelDeltas: {}, effects: {},
+          result: "Il partito evita di esporsi pubblicamente sul tema, lasciando la situazione invariata." }
+      ]
+    };
+  }
+  function institutionalRelationLabel(v) {
+    return v >= 75 ? "Ottimo" : v >= 58 ? "Buono" : v >= 42 ? "Neutro" : v >= 25 ? "Teso" : "Pessimo";
+  }
+  function judicialRiskLabel(v) {
+    return v >= 60 ? "Molto alto" : v >= 35 ? "Alto" : v >= 18 ? "Moderato" : "Basso";
+  }
+  function renderIstituzionaliPanel() {
+    var p = state.player;
+    if (!p.institutionalRelations) p.institutionalRelations = { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 };
+    if (p.judicialRisk === undefined) p.judicialRisk = 8;
+    if (!p.institutionalActionCooldowns) p.institutionalActionCooldowns = {};
+    var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "istituzionale" ? state.inlineExpandedTopic : null;
+    var labels = { confindustria: "Confindustria", cgil: "CGIL", cisl: "CISL", usb: "USB", chiesa: "Chiesa Cattolica", bce: "BCE", ue: "Unione Europea", magistratura: "Magistratura" };
+    var html = '<section aria-label="Attori Sociali e Istituzionali"><details class="log"><summary>Attori Sociali e Istituzionali<span>▾</span></summary>' +
+      '<p class="ci-hint">Il rapporto del partito con i grandi corpi intermedi del paese: si muove lentamente da solo, in base alla linea ideologica, ma puoi intervenire di persona con un incontro dedicato.</p>' +
+      '<div class="correnti-row">' + Object.keys(labels).map(function (k) {
+        return "<span>" + labels[k] + " " + Math.round(p.institutionalRelations[k]) + "% (" + institutionalRelationLabel(p.institutionalRelations[k]) + ")</span>";
+      }).join("") + '</div>' +
+      '<p class="ci-hint">Rischio giudiziario: <strong>' + Math.round(p.judicialRisk) + "% (" + judicialRiskLabel(p.judicialRisk) + ")</strong> — cresce con scelte spregiudicate o azioni scoperte di una loggia, si riduce con una linea istituzionale trasparente.</p>" +
+      '<div class="option-grid">';
+    ISTITUZIONALI_DOMAINS.forEach(function (d) {
+      var weeksLeft = (p.institutionalActionCooldowns[d.id] || 0) - state.turn;
+      var onCooldown = weeksLeft > 0;
+      var isOpen = expanded && expanded.domainId === d.id;
+      var disabled = onCooldown && !isOpen;
+      var status = disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Convoca ora");
+      html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-istituzionale="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + d.label + '</span><span class="odesc">' + d.desc + " " + status + '</span></button>';
+      if (isOpen) html += renderInlineTopicChoices(expanded);
+    });
+    html += "</div></details></section>";
+    return html;
+  }
+
   // Il dossier per instaurare un regime: dinamico perché il tipo dipende dalla famiglia ideologica del
   // giocatore (fascista, comunista/comunismolusso, monarchico) — non c'è un unico testo statico come per
   // NATO/UE. Include ora anche il Comunismo di Lusso: non fa più scattare nulla in automatico dopo
@@ -4627,6 +4835,20 @@
           result: "Il ruolo di mediatore tra gli alleati rafforza la credibilità istituzionale del partito." },
         { label: "Non intrometterti nelle liti altrui", hint: "Nessun rischio, nessun guadagno", effects: {},
           result: "Il partito resta fuori dalle liti tra alleati, senza guadagnarci né perderci." }
+      ] },
+    { id: "gov_vitalizi_autoblu", kind: "notizia", cat: "Governo", title: "Proposta di Legge sulla Riduzione dei Vitalizi e delle Auto Blu",
+      brief: "Un'inchiesta giornalistica sui costi della politica riaccende il tema dei vitalizi degli ex parlamentari e dell'uso delle auto blu: il governo deve decidere come muoversi.",
+      choices: [
+        { label: "Taglia vitalizi e auto blu senza sconti", hint: "Impopolare tra la vecchia classe dirigente, molto popolare nel paese", effects: { reputazione: 5, visibilita: 6, iscritti: rand(30, 70), fondi: rand(200, 500), national: { corruzione: 0.4, felicita: 0.2 } },
+          result: "La legge passa senza sconti: vitalizi ricalcolati al ribasso, auto blu drasticamente ridotte. La vecchia classe dirigente insorge, il paese applaude." },
+        { label: "Una riduzione moderata e graduale", hint: "Meno scontri, meno impatto reale", effects: { reputazione: 2, national: { corruzione: 0.15 } },
+          result: "La riforma passa in versione annacquata: un taglio moderato, che accontenta a metà chi chiedeva un segnale forte e chi temeva un colpo di mano." },
+        { label: "Rinvia la riforma a un tavolo tecnico", hint: "Nessun rischio, ma il tema resta aperto e ti si ritorce contro", effects: { reputazione: -2, visibilita: 2 },
+          result: "Il rinvio a un tavolo tecnico viene letto come un modo per prendere tempo: cresce l'insofferenza dell'opinione pubblica sul tema." },
+        { label: "Difendi lo status quo attuale", hint: "Coerente con chi vede la proposta come demagogia, ma costa in immagine", effects: { reputazione: -5, iscritti: -rand(10, 25) },
+          result: "La difesa dello status quo viene percepita come autoreferenzialità della casta: il partito ne esce con l'immagine appannata." },
+        { label: "Proponi un tetto agli emolumenti pubblici collegato al reddito medio", hint: "Linea più radicale, effetto simbolico forte", effects: { reputazione: 6, visibilita: 8, iscritti: rand(40, 90), national: { corruzione: 0.5, felicita: 0.15 } },
+          result: "Il tetto agli emolumenti pubblici legato al reddito medio nazionale ha un forte effetto simbolico: la proposta fa scuola anche all'estero." }
       ] },
     // Le due decisioni più pesanti che un governo possa prendere: uscire dalla NATO o dall'UE. Rare
     // (compaiono solo mentre si è a governo e solo finché non sono state decise) e con conseguenze
@@ -5876,8 +6098,37 @@
       brief: "Un referendum chiede se introdurre un tetto amministrato ai prezzi di alcuni beni alimentari ed energetici di prima necessità.",
       metric: "inflazione", passDelta: 0.35, failDelta: -0.15,
       passText: "Il \"sì\" prevale: arriva un tetto ai prezzi sui beni essenziali, tra il sollievo delle famiglie e i moniti di economisti e imprese.",
-      failText: "Il \"no\" prevale: i prezzi restano affidati soltanto al libero mercato." }
+      failText: "Il \"no\" prevale: i prezzi restano affidati soltanto al libero mercato." },
+    { id: "leggeelettorale_maggioritario", title: "Referendum: passare a una legge elettorale maggioritaria?",
+      brief: "Un referendum costituzionale chiede se abbandonare il proporzionale a favore di un sistema maggioritario a collegi uninominali, con un premio implicito per chi arriva primo.",
+      metric: "corruzione", passDelta: -0.15, failDelta: 0.1, electoralSystem: "maggioritario",
+      passText: "Il \"sì\" prevale: l'Italia passa a una legge elettorale maggioritaria — governi più stabili e un premio di fatto per il blocco che arriva primo, ma meno voce alle forze minori.",
+      failText: "Il \"no\" prevale: il sistema elettorale resta quello attuale." },
+    { id: "leggeelettorale_proporzionale", title: "Referendum: tornare a un proporzionale puro?",
+      brief: "Un referendum chiede se abolire ogni soglia di sbarramento e premio di maggioranza, tornando a un proporzionale integrale che rispecchi fedelmente i voti in seggi.",
+      metric: "corruzione", passDelta: 0.2, failDelta: -0.1, electoralSystem: "proporzionale",
+      passText: "Il \"sì\" prevale: si torna al proporzionale puro — Parlamento più frammentato ma più fedele al voto reale, coalizioni più difficili da tenere insieme.",
+      failText: "Il \"no\" prevale: il sistema elettorale resta quello attuale." },
+    { id: "leggeelettorale_doppioturno", title: "Referendum: introdurre il doppio turno di collegio?",
+      brief: "Un referendum chiede se adottare un sistema a doppio turno di collegio, sul modello francese: chi non raggiunge la maggioranza al primo turno va al ballottaggio.",
+      metric: "corruzione", passDelta: -0.25, failDelta: 0.1, electoralSystem: "doppioturno",
+      passText: "Il \"sì\" prevale: arriva il doppio turno di collegio — premio ancora più forte per chi sa costruire alleanze da ballottaggio, meno spazio per i partiti isolati.",
+      failText: "Il \"no\" prevale: il sistema elettorale resta quello attuale." }
   ];
+  // Applica il "peso" del sistema elettorale in vigore (deciso da uno dei tre referendum sulla legge
+  // elettorale sopra) ai voti dei blocchi qualificati, PRIMA del riparto proporzionale dei seggi: il
+  // maggioritario e il doppio turno danno un premio implicito al blocco che arriva primo (più forte per
+  // il doppio turno, che storicamente amplifica la vittoria al ballottaggio), il proporzionale (o
+  // nessuna scelta fatta) non altera nulla — resta il riparto fedele di sempre.
+  function applyElectoralSystemWeights(weights) {
+    var sys = state.electoralSystem;
+    if (!sys || sys === "proporzionale" || !weights.length) return weights;
+    var bonus = sys === "doppioturno" ? 1.55 : sys === "maggioritario" ? 1.35 : 1;
+    if (bonus === 1) return weights;
+    var maxIdx = 0;
+    for (var i = 1; i < weights.length; i++) { if (weights[i] > weights[maxIdx]) maxIdx = i; }
+    return weights.map(function (w, i) { return i === maxIdx ? w * bonus : w; });
+  }
   function triggerReferendumIfDue() {
     if (state.turn < state.nextReferendumTurn) return null;
     if (state.pendingNationalReferendum) return null;
@@ -5924,6 +6175,7 @@
       if (!state.passedNationalReferendumIds) state.passedNationalReferendumIds = [];
       state.passedNationalReferendumIds.push(topic.id);
       recordEnactedPolicy(topic.title, esito + " Il paese prende atto del cambiamento: questo referendum non verrà riproposto.");
+      if (topic.electoralSystem) state.electoralSystem = topic.electoralSystem;
     }
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -5934,6 +6186,84 @@
       cat: "Referendum Nazionale", title: topic.title, brief: esito + stanceNote + " Come si posiziona il tuo partito su questo esito?",
       choices: choices
     };
+  }
+
+  // ---------- Elezione del Presidente della Repubblica ----------
+  // Ogni 364 settimane circa (un settennato) il Parlamento in seduta comune elegge un nuovo Capo dello
+  // Stato: 4 candidati inventati, uno per grande area (sinistra, destra, centro, tecnico), con un nome
+  // generato al momento e un passato che li rende più o meno vicini a un certo campo politico — proprio
+  // come nella realtà, dove il profilo del candidato pesa quanto e più della sua area di provenienza.
+  var PRESIDENT_ARCHETYPES = [
+    { leaning: "sinistra", label: "area progressista", roles: [
+      "già ministro del Lavoro e del Welfare, storica esponente delle battaglie sindacali",
+      "giurista che ha guidato importanti riforme sociali negli anni della sua carriera pubblica",
+      "già sindaco di una grande città, nota per le politiche di inclusione sociale" ] },
+    { leaning: "destra", label: "area conservatrice", roles: [
+      "già Prefetto e sottosegretario alla Difesa, figura di garanzia per il centrodestra storico",
+      "generale in congedo, già capo di stato maggiore, molto stimato negli ambienti sovranisti",
+      "magistrato noto per la linea dura sulla sicurezza e l'ordine pubblico" ] },
+    { leaning: "centro", label: "area centrista", roles: [
+      "presidente emerito della Corte Costituzionale, equidistante tra gli schieramenti",
+      "diplomatico di lungo corso, già ambasciatore a Bruxelles",
+      "accademico di diritto costituzionale, stimato da tutti gli schieramenti parlamentari" ] },
+    { leaning: "tecnico", label: "profilo tecnico", roles: [
+      "già Governatore della Banca Centrale, massima fiducia dei mercati internazionali",
+      "economista di fama internazionale, già commissario europeo agli Affari Economici",
+      "manager pubblico noto per il rigore assoluto nella gestione dei conti dello Stato" ] }
+  ];
+  function presidentLeaningLabel(leaning) {
+    var arch = PRESIDENT_ARCHETYPES.filter(function (a) { return a.leaning === leaning; })[0];
+    return arch ? arch.label : leaning;
+  }
+  function generatePresidentCandidates() {
+    return PRESIDENT_ARCHETYPES.map(function (a) {
+      return { id: a.leaning, leaning: a.leaning, name: generateStaffName(), background: a.roles[Math.floor(Math.random() * a.roles.length)] };
+    });
+  }
+  function presidentLeaningWeight(leaning) {
+    var govFam = currentGoverningFamilyId();
+    var govCd = CENTRODESTRA_ALIGNED_FAMILIES[govFam], govCl = CAMPOLARGO_ALIGNED_FAMILIES[govFam];
+    var w = leaning === "tecnico" ? 24 : 18;
+    if (leaning === "destra" && govCd) w += 32;
+    if (leaning === "sinistra" && govCl) w += 32;
+    if (leaning === "centro" && !govCd && !govCl) w += 16;
+    return w;
+  }
+  function generatePresidentDossier() {
+    var candidates = generatePresidentCandidates();
+    var choices = candidates.map(function (c) {
+      return { label: "Sostieni " + c.name, hint: presidentLeaningLabel(c.leaning) + " — " + c.background, candidateId: c.id, effects: {} };
+    });
+    choices.push({ label: "Non prendere posizione", hint: "Nessuna preferenza dichiarata dal partito", candidateId: null, effects: {} });
+    return {
+      id: "president_election", kind: "notizia", cat: "Istituzioni", title: "Elezione del Presidente della Repubblica",
+      brief: "Il Parlamento in seduta comune, con i delegati regionali, è chiamato a eleggere il nuovo Presidente della Repubblica. Chi sostiene il tuo partito?",
+      candidates: candidates, choices: choices
+    };
+  }
+  function resolvePresidentElection(dossier, choice) {
+    var candidates = dossier.candidates || generatePresidentCandidates();
+    var weights = candidates.map(function (c) {
+      var w = presidentLeaningWeight(c.leaning);
+      if (choice.candidateId && c.id === choice.candidateId) w += 22 + clamp(state.player.sondaggi, 0, 40) * 0.5;
+      return w;
+    });
+    var totalW = weights.reduce(function (a, b) { return a + b; }, 0);
+    var roll = Math.random() * totalW, idx = 0, acc = 0;
+    for (; idx < weights.length - 1; idx++) { acc += weights[idx]; if (roll <= acc) break; }
+    var winner = candidates[idx];
+    state.president = { name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn };
+    var pFam = state.player.family;
+    var playerCd = CENTRODESTRA_ALIGNED_FAMILIES[pFam], playerCl = CAMPOLARGO_ALIGNED_FAMILIES[pFam];
+    var aligned = (playerCd && winner.leaning === "destra") || (playerCl && winner.leaning === "sinistra") || winner.leaning === "centro" || winner.leaning === "tecnico";
+    var supportedWinner = choice.candidateId === winner.id;
+    var repDelta = supportedWinner ? rand(3, 7) : (aligned ? rand(0, 2) : rand(-3, 0));
+    state.player.reputazione = clamp(state.player.reputazione + repDelta, 0, 100);
+    if (winner.leaning === "tecnico") state.spreadBps = clamp(state.spreadBps - rand(5, 15), 40, 500);
+    var resultText = winner.name + " (" + presidentLeaningLabel(winner.leaning) + ", " + winner.background + ") viene elett" + (winner.name.indexOf("a ") === 0 ? "a" : "o/a") + " Presidente della Repubblica." +
+      (supportedWinner ? " Il partito lo aveva sostenuto fin dall'inizio: un piccolo capitale politico in più." : choice.candidateId ? " Il partito aveva sostenuto un altro candidato, ma prende atto dell'esito." : "");
+    state.log.unshift({ week: state.turn, title: "Elezione del Presidente della Repubblica", choiceLabel: choice.label, result: resultText, headlines: [], type: "dossier", cat: "Istituzioni" });
+    state.resultData = { resultText: resultText, headlines: [] };
   }
 
   // ---------- Referendum proposti dal giocatore ----------
@@ -7462,7 +7792,8 @@
     govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() },
     foreignRelations: {}, euMembershipOverrides: {}, euFederalized: false,
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
-    cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, euParliamentVoteCooldownTurn: 0
+    cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
+    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -7479,7 +7810,10 @@
     joinedBrics: false, organization: null,
     questionTimeCooldownTurn: 0, pendingQuestionTime: null,
     leggeCooldownTurn: 0, pendingLegge: null, leggeCandidates: null, acceptedLeggi: [],
-    amendmentCooldownTurn: 0, pendingAmendment: null, amendmentCandidates: null, acceptedAmendments: []
+    amendmentCooldownTurn: 0, pendingAmendment: null, amendmentCandidates: null, acceptedAmendments: [],
+    institutionalRelations: { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 },
+    judicialRisk: 8, institutionalActionCooldowns: {}, talkShowCooldownTurn: 0, intervistaCooldownTurn: 0,
+    lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -7880,6 +8214,8 @@
     driftCountryProfile();
     checkLongTermTrackMilestones();
     driftPartyRelations();
+    driftInstitutionalRelations();
+    if (!p.lobby && !p.lobbyOfferSeen && checkLobbyEligible(p) && Math.random() < 0.03) p.lobbyOfferSeen = true;
     driftBilancioStato();
     driftConsensoGoverno();
     driftYouthWing(p);
@@ -8393,6 +8729,79 @@
     html += "</details></section>";
     return html;
   }
+
+  // ---------- Loggia Riservata (P2-style) ----------
+  // Sblocco rarissimo e volutamente nascosto finché non ci si arriva davvero: serve un radicamento
+  // territoriale enorme (40+ comuni in giunta), sondaggi solidi (20%+) e una fiducia interna quasi
+  // totale (80%+ di leaderTrust) — anche raggiunta la soglia, l'offerta compare solo con una piccola
+  // probabilità settimanale (vedi il roll in recomputePeriodic), mai automaticamente. Una volta fondata,
+  // ogni azione della loggia è un vero rischio: se scoperta, il danno è enorme e permanente; se non
+  // scoperta, i benefici sono grandi ma il sospetto (judicialRisk) si accumula comunque nell'ombra.
+  function checkLobbyEligible(p) {
+    return (p.amministratoriLocali || 0) >= 40 && p.sondaggi >= 20 && (p.leaderTrust || 0) >= 80;
+  }
+  var LOBBY_ACTIONS = {
+    nomine: { label: "Manovra sulle Nomine Pubbliche", cooldown: 6, riskMult: 1,
+      desc: "Piazza uomini di fiducia in posizioni chiave della macchina dello Stato." },
+    appalti: { label: "Pilota un Grande Appalto Pubblico", cooldown: 7, riskMult: 1.3,
+      desc: "Orienta l'assegnazione di un grande appalto pubblico verso soggetti vicini alla loggia." },
+    inchiesta: { label: "Insabbia un'Inchiesta Scomoda", cooldown: 8, riskMult: 1.5,
+      desc: "Usa contatti riservati per rallentare o disinnescare un'inchiesta scomoda per il partito." },
+    media: { label: "Condiziona una Testata Amica", cooldown: 6, riskMult: 0.8,
+      desc: "Fa uscire, o sparire, una notizia attraverso una testata vicina alla loggia." }
+  };
+  function resolveLobbyAction(actionId) {
+    var p = state.player;
+    var a = LOBBY_ACTIONS[actionId];
+    if (!a || !p.lobby || p.lobby.exposed) return null;
+    p.lobbyActionCooldownTurn = state.turn + a.cooldown;
+    var magistratura = (p.institutionalRelations && p.institutionalRelations.magistratura !== undefined) ? p.institutionalRelations.magistratura : 50;
+    var discoverProb = clamp((0.1 + (p.judicialRisk || 8) / 220 + (100 - magistratura) / 260) * a.riskMult, 0.05, 0.55);
+    if (Math.random() < discoverProb) {
+      p.lobby.exposed = true;
+      p.lobby.exposedTurn = state.turn;
+      p.reputazione = clamp(p.reputazione - rand(35, 55), 0, 100);
+      p.iscritti = Math.max(0, Math.round(p.iscritti * (1 - rand(0.25, 0.4))));
+      p.sondaggi = clamp(p.sondaggi - rand(6, 14), 0, 45);
+      p.fondi = Math.max(0, p.fondi - rand(3000, 8000));
+      if (p.institutionalRelations) p.institutionalRelations.magistratura = clamp(p.institutionalRelations.magistratura - 30, 0, 100);
+      p.judicialRisk = clamp((p.judicialRisk || 8) + 35, 1, 95);
+      var textExp = "Scoppia lo scandalo: la loggia riservata creata dal partito viene scoperta durante \"" + a.label + "\". Tessere, nomi, verbali finiscono sui giornali: dirigenti coinvolti, credibilità a pezzi, procure al lavoro.";
+      state.log.unshift({ week: state.turn, title: "Scandalo: scoperta la Loggia Riservata", choiceLabel: a.label, result: textExp, headlines: [], type: "dossier", cat: "Loggia Riservata" });
+      return { resultText: textExp, headlines: [] };
+    }
+    var fondi = rand(2000, 8000) * a.riskMult;
+    p.fondi += fondi;
+    p.judicialRisk = clamp((p.judicialRisk || 8) + 2, 1, 95);
+    p.lobby.actionsCount = (p.lobby.actionsCount || 0) + 1;
+    var textOk = a.label + " va a segno senza essere scoperta: " + fmtEuro(Math.round(fondi)) + " entrano nelle casse riservate del partito. Il sospetto nell'ombra, però, si accumula comunque.";
+    state.log.unshift({ week: state.turn, title: "Loggia Riservata", choiceLabel: a.label, result: textOk, headlines: [], type: "dossier", cat: "Loggia Riservata" });
+    return { resultText: textOk, headlines: [] };
+  }
+  function renderLobbyPanel() {
+    var p = state.player;
+    if (!p.lobby && (!p.lobbyOfferSeen || !checkLobbyEligible(p))) return "";
+    var html = '<section aria-label="Loggia Riservata"><details class="log"><summary>Loggia Riservata<span>▾</span></summary>';
+    if (!p.lobby) {
+      html += '<p class="ci-hint">Il radicamento territoriale, i sondaggi e la fiducia interna del partito hanno raggiunto un livello tale da rendere possibile qualcosa di più riservato: una loggia informale capace di manovrare pezzi della macchina dello Stato, sul modello delle grandi logge occulte della storia repubblicana. Fondarla è una scelta irreversibile: se le sue azioni vengono scoperte, il danno per il partito e per chi ne fa parte è enorme; se restano nell\'ombra, i benefici sono altrettanto grandi.</p>' +
+        '<div class="option-grid"><button type="button" class="option-card" data-lobby-found="1"><span class="olabel">Fonda una Loggia Riservata</span><span class="odesc">Sblocca azioni riservate ad alto rischio e alto beneficio</span></button></div>';
+    } else if (p.lobby.exposed) {
+      html += '<p class="ci-hint">La loggia riservata è stata scoperta alla settimana ' + p.lobby.exposedTurn + ': lo scandalo resta un marchio permanente sulla storia del partito. Nessuna nuova azione riservata è più possibile.</p>';
+    } else {
+      var weeksLeft = (p.lobbyActionCooldownTurn || 0) - state.turn;
+      var onCooldown = weeksLeft > 0;
+      html += '<p class="ci-hint">Attiva dalla settimana ' + p.lobby.createdTurn + " (" + (p.lobby.actionsCount || 0) + ' azioni finora, mai scoperta). Ogni azione comporta un rischio reale di essere scoperti, che cresce con il rischio giudiziario del partito.' +
+        (onCooldown ? " Prossima azione disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + "." : "") + '</p><div class="option-grid">';
+      Object.keys(LOBBY_ACTIONS).forEach(function (id) {
+        var a = LOBBY_ACTIONS[id];
+        html += '<button type="button" class="option-card" data-lobby-action="' + id + '"' + (onCooldown ? " disabled" : "") + '>' +
+          '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " Raffreddamento: " + a.cooldown + " settimane.</span></button>";
+      });
+      html += "</div>";
+    }
+    html += "</details></section>";
+    return html;
+  }
   // Situazioni dedicate alla vita sotto il nuovo regime: 3 per tipo, pescate occasionalmente al posto
   // del normale generatore di situazioni una volta che state.regime è impostato (vedi advanceTurnLogic).
   var REGIME_SITUATIONS = {
@@ -8603,7 +9012,7 @@
   // sia dal voto vero (resolveElection) sia dalla proiezione live (projectRealParliamentSeats).
   function computeChamberSeatsById(qualified) {
     var p = state.player;
-    var weights = qualified.map(function (e) { return e.votes; });
+    var weights = applyElectoralSystemWeights(qualified.map(function (e) { return e.votes; }));
     var camSeats = hamiltonApportion(weights, 400);
     var senSeats = hamiltonApportion(weights, 200);
 
@@ -9652,9 +10061,33 @@
   // tasto salva. Un importo positivo è uno stanziamento, uno negativo un taglio deliberato: i tagli
   // liberano risorse (aumentano il residuo disponibile) ma peggiorano l'indicatore collegato. Sotto, il
   // resoconto dell'ultimo anno chiuso: cosa ha funzionato, cosa no, cosa è stato tagliato.
+  // Il bilancio pubblico è un atto pubblico per definizione: anche senza governare, chiunque deve poter
+  // vedere come il governo in carica (proprio o della CPU) ha speso il tesoretto annuale, voce per voce,
+  // con l'esito positivo/neutro/negativo di ciascuna — non solo chi siede al governo in quel momento.
+  function renderPublicBudgetReport() {
+    if (!state.budgetHistory || !state.budgetHistory.length) {
+      return '<section aria-label="Bilancio Pubblico dello Stato"><details class="log"><summary>Bilancio Pubblico dello Stato<span>▾</span></summary>' +
+        '<p class="ci-hint">Nessun bilancio annuale è ancora stato chiuso: il primo report pubblico arriverà dopo 52 settimane di governo.</p></details></section>';
+    }
+    var last = state.budgetHistory[0];
+    var html = '<section aria-label="Bilancio Pubblico dello Stato"><details class="log" open><summary>Bilancio Pubblico dello Stato<span>▾</span></summary>' +
+      '<p class="ci-hint">Il bilancio annuale degli investimenti pubblici è un atto pubblico: chiunque, al governo o all\'opposizione, può consultarne il dettaglio completo, voce per voce.</p>' +
+      '<p class="eyebrow" style="margin-top:0.6rem">Ultimo bilancio annuale chiuso (settimana ' + last.week + ') — ' + last.govLabel + '</p>' +
+      '<p class="ci-hint">Stanziati ' + fmtEuroMld(last.totalAllocated) + ': ' + last.positives + " investimenti riusciti, " + last.negatives + " sprechi o fallimenti" +
+      (last.totalCut ? ", e tagliati " + fmtEuroMld(last.totalCut) + " su " + (last.cuts || 0) + " voci" : "") + '.</p>' +
+      '<ul class="enacted-policy-list">' + last.lines.map(function (l) {
+        return '<li><strong>' + l.catLabel + ' — ' + l.subLabel + '</strong> <span class="ci-hint">(' + fmtEuroMld(l.amount) + ')</span> ' +
+          '<span class="budget-outcome ' + l.outcome + '">' + l.outcome.toUpperCase() + '</span><br>' + l.note + '</li>';
+      }).join("") + '</ul>';
+    if (state.budgetHistory.length > 1) {
+      html += '<p class="ci-hint">Bilanci degli anni precedenti conservati: ' + (state.budgetHistory.length - 1) + '.</p>';
+    }
+    html += "</details></section>";
+    return html;
+  }
   function renderBudgetAllocation() {
     var p = state.player;
-    if (!p || p.parliamentRole !== "governo") return "";
+    if (!p || p.parliamentRole !== "governo") return renderPublicBudgetReport();
     var pool = budgetPoolTotal();
     var allocations = state.budgetAllocations || {};
     var allocated = 0, cut = 0;
@@ -10051,6 +10484,19 @@
     if (!dossier) return false;
     if (dossier.id === "cabinet_formation" || dossier.id === "government_oath") return false;
     return dossier.cat === "Governo" || dossier.cat === "Riforme di Governo";
+  }
+  // ---------- Controllo di legittimità della Corte dei Conti ----------
+  // Dopo il via libera della coalizione, ogni vero atto di governo (decreto, riforma) passa anche dal
+  // controllo di legittimità della magistratura contabile: può bloccarlo per rischio di danno erariale.
+  // La probabilità resta bassa di base (il grosso dei provvedimenti passa), ma cresce con il rischio
+  // giudiziario del partito (institutionalRelations/judicialRisk, la stessa base usata dalla Loggia
+  // Riservata) — un partito che gioca sporco nell'ombra vede aumentare anche gli attriti "alla luce del
+  // sole" con gli organi di controllo dello Stato.
+  function resolveCorteDeiContiControl() {
+    var p = state.player;
+    var risk = p.judicialRisk || 8;
+    var blockProb = clamp(0.03 + risk / 400, 0.02, 0.22);
+    return { blocked: Math.random() < blockProb };
   }
   // Scioglie una coalizione qualunque, fissa o dinamica — usata sia quando è il giocatore a farne parte
   // (vedi updateCoalitionTrust) sia quando è una coalizione TUTTA tra partiti CPU, senza il giocatore
@@ -11035,7 +11481,7 @@
   // pagina lunghissima.
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
-        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderStaffPanel() + renderIdeologyProfile();
+        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
@@ -11279,6 +11725,16 @@
         state.resultData = { resultText: blockedText, headlines: [] };
         return;
       }
+      var corteControl = resolveCorteDeiContiControl();
+      if (corteControl.blocked) {
+        var corteText = "Dopo il parere favorevole dei ministeri competenti, la Corte dei Conti esercita il controllo di legittimità su \"" + dossier.title + "\" e lo blocca per rischio di danno erariale: il provvedimento resta sospeso, senza alcun effetto.";
+        state.log.unshift({
+          week: state.turn, title: dossier.title, choiceLabel: "Bloccata dalla Corte dei Conti", result: corteText,
+          headlines: [], type: "dossier", cat: dossier.cat
+        });
+        state.resultData = { resultText: corteText, headlines: [] };
+        return;
+      }
     }
     if (dossier.id === "alleanza_negoziato") {
         state.player.allianceId = choice.alliance;
@@ -11417,6 +11873,8 @@
           applyGovernmentCollapseLeadershipShock();
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "president_election") {
+        resolvePresidentElection(dossier, choice);
       } else if (dossier.id === "gov_instaura_regime") {
         if (choice.instauraRegime) {
           applyRegimeConsequences({ type: choice.regimeTypeChoice, winnerLabel: state.player.name, votes: state.player.sondaggi, isPlayer: true });
@@ -11940,6 +12398,29 @@
         if (typeof window !== "undefined" && window.scrollTo) window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
       });
     });
+    app.querySelectorAll("[data-lobby-found]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var p = state.player;
+        if (p.lobby || !checkLobbyEligible(p)) return;
+        p.lobby = { createdTurn: state.turn, exposed: false, actionsCount: 0 };
+        var text = "Nasce, nell'ombra, una loggia riservata legata al partito: un cerchio ristretto di dirigenti e contatti pronto a manovrare pezzi della macchina dello Stato.";
+        state.log.unshift({ week: state.turn, title: "Nasce una Loggia Riservata", choiceLabel: "Fondazione", result: text, headlines: [], type: "dossier", cat: "Loggia Riservata" });
+        showSaveStatus(text, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-lobby-action]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var actionId = btn.getAttribute("data-lobby-action");
+        var outcome = resolveLobbyAction(actionId);
+        if (!outcome) return;
+        showSaveStatus(outcome.resultText, false);
+        save();
+        render();
+      });
+    });
     app.querySelectorAll("[data-civil-war]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
@@ -11978,8 +12459,23 @@
           p.geopoliticaCooldownTurn = state.turn + 15;
         } else if (topic.kind === "riforma") {
           p.reformCooldownTurn = state.turn + REFORM_COOLDOWN_TURNS;
+        } else if (topic.kind === "vitapubblica") {
+          var vpDomain = VITA_PUBBLICA_DOMAINS.filter(function (d) { return d.id === topic.domainId; })[0];
+          if (vpDomain) p[vpDomain.cooldownField] = state.turn + vpDomain.cooldown;
+        } else if (topic.kind === "istituzionale") {
+          if (!p.institutionalActionCooldowns) p.institutionalActionCooldowns = {};
+          var istDomain = ISTITUZIONALI_DOMAINS.filter(function (d) { return d.id === topic.domainId; })[0];
+          p.institutionalActionCooldowns[topic.domainId] = state.turn + (istDomain ? istDomain.cooldown : 10);
         } else {
           p.euInitiativeCooldownTurn = state.turn + 11;
+        }
+        if (topic.kind === "istituzionale" && choice.instRelDeltas) {
+          if (!p.institutionalRelations) p.institutionalRelations = { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 };
+          Object.keys(choice.instRelDeltas).forEach(function (k) {
+            p.institutionalRelations[k] = clamp(p.institutionalRelations[k] + choice.instRelDeltas[k], 0, 100);
+          });
+          if (choice.judicialRiskDelta) p.judicialRisk = clamp((p.judicialRisk || 8) + choice.judicialRiskDelta, 1, 95);
+          if (choice.spreadDelta) state.spreadBps = clamp((state.spreadBps || 80) + choice.spreadDelta, 40, 500);
         }
         state.inlineExpandedTopic = null;
         // Una riforma è una scelta di governo vera e propria: se si governa in coalizione (che sia il
@@ -12002,6 +12498,18 @@
             render();
             return;
           }
+          var corteControl = resolveCorteDeiContiControl();
+          if (corteControl.blocked) {
+            var corteBlockedText = "Dopo il parere favorevole dei ministeri competenti, la Corte dei Conti esercita il controllo di legittimità sulla riforma su \"" + topic.dossier.title + "\" e la blocca per rischio di danno erariale: il provvedimento resta sospeso, senza alcun effetto.";
+            state.log.unshift({
+              week: state.turn, title: topic.dossier.title, choiceLabel: "Bloccata dalla Corte dei Conti", result: corteBlockedText,
+              headlines: [], type: "dossier", cat: topic.dossier.cat
+            });
+            showSaveStatus(corteBlockedText, true);
+            save();
+            render();
+            return;
+          }
         }
         if (topic.kind === "riforma") {
           if (!p.completedReformDomains) p.completedReformDomains = [];
@@ -12009,6 +12517,38 @@
         }
         var outcome = applyChoice(topic.dossier, choice);
         showSaveStatus(outcome.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-vita-pubblica]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var domainId = btn.getAttribute("data-vita-pubblica");
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "vitapubblica" && current.domainId === domainId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          var dossier = generateVitaPubblicaDossier(domainId);
+          if (!dossier) return;
+          state.inlineExpandedTopic = { kind: "vitapubblica", domainId: domainId, dossier: dossier };
+        }
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-istituzionale]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var domainId = btn.getAttribute("data-istituzionale");
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "istituzionale" && current.domainId === domainId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          var dossier = generateIstituzionaleDossier(domainId);
+          if (!dossier) return;
+          state.inlineExpandedTopic = { kind: "istituzionale", domainId: domainId, dossier: dossier };
+        }
         save();
         render();
       });
@@ -12448,6 +12988,14 @@
     var nationalReferendumDossier = resolveNationalReferendumIfDue();
     if (nationalReferendumDossier) {
       state.aiDynamicDossier = nationalReferendumDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (p.inParliament && state.turn >= (state.nextPresidentElectionTurn || 260)) {
+      state.nextPresidentElectionTurn = state.turn + 364;
+      state.aiDynamicDossier = generatePresidentDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
