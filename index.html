@@ -4456,9 +4456,11 @@
       if (isOpen) out += renderInlineTopicChoices(expanded);
       return out;
     }
+    var inCoalitionGov = !!((state.govEntity && state.govEntity.memberIds && state.govEntity.memberIds.length));
     var html = '<section aria-label="Riforme di Governo"><details class="log"><summary>Riforme di Governo<span>▾</span></summary>' +
       '<p class="ci-hint">Da governo puoi proporre una riforma vera su una di queste materie, al massimo una ogni ' + REFORM_COOLDOWN_TURNS + ' settimane in totale. Scegli una materia per aprire le 5 opzioni direttamente qui sotto: una volta realizzata, la riforma resta in vigore e quella materia non è più proponibile per il resto della partita.' +
       (onCooldown ? ' Potrai proporre la prossima riforma tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.' : '') +
+      (inCoalitionGov ? ' Governi in coalizione: la riforma va prima approvata dagli alleati di maggioranza, e può essere bocciata.' : '') +
       '</p><p class="ci-hint"><strong>Riforme comuni a ogni governo</strong></p><div class="option-grid">';
     REFORM_DOMAINS.forEach(function (d) { html += renderDomainButton(d); });
     html += "</div>";
@@ -11681,13 +11683,36 @@
           p.geopoliticaCooldownTurn = state.turn + 15;
         } else if (topic.kind === "riforma") {
           p.reformCooldownTurn = state.turn + REFORM_COOLDOWN_TURNS;
-          if (!p.completedReformDomains) p.completedReformDomains = [];
-          if (p.completedReformDomains.indexOf(topic.domainId) === -1) p.completedReformDomains.push(topic.domainId);
         } else {
           p.euInitiativeCooldownTurn = state.turn + 11;
         }
-        var outcome = applyChoice(topic.dossier, choice);
         state.inlineExpandedTopic = null;
+        // Una riforma è una scelta di governo vera e propria: se si governa in coalizione (che sia il
+        // giocatore a guidarla o solo un alleato minore di un governo CPU) serve la maggioranza degli
+        // alleati per farla passare, esattamente come per le altre decisioni "di Governo" — non basta più
+        // che il proprio partito sia d'accordo. Stessa logica già in uso altrove (resolveCoalitionApproval),
+        // qui riagganciata perché le riforme non passano più dal dossier in cima alla pagina.
+        if (topic.kind === "riforma" && p.parliamentRole === "governo" && isCoalitionGatedDossier(topic.dossier)) {
+          var coalitionApproval = resolveCoalitionApproval();
+          if (!coalitionApproval.approved) {
+            var blockedText = "La coalizione di governo non approva la riforma su \"" + topic.dossier.title + "\": " +
+              (coalitionApproval.allyNames || "gli alleati di maggioranza") +
+              " si oppongono, e la proposta resta bloccata, senza alcun effetto.";
+            state.log.unshift({
+              week: state.turn, title: topic.dossier.title, choiceLabel: "Bocciata dalla coalizione", result: blockedText,
+              headlines: [], type: "dossier", cat: topic.dossier.cat
+            });
+            showSaveStatus(blockedText, true);
+            save();
+            render();
+            return;
+          }
+        }
+        if (topic.kind === "riforma") {
+          if (!p.completedReformDomains) p.completedReformDomains = [];
+          if (p.completedReformDomains.indexOf(topic.domainId) === -1) p.completedReformDomains.push(topic.domainId);
+        }
+        var outcome = applyChoice(topic.dossier, choice);
         showSaveStatus(outcome.resultText, false);
         save();
         render();
