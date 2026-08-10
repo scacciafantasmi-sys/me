@@ -4457,6 +4457,40 @@
     return html;
   }
 
+  // Uscita dalla NATO e dall'Unione Europea (più, per un governo europeista, la federazione europea):
+  // le tre decisioni di politica estera più pesanti che un governo possa prendere. Prima erano
+  // raggiungibili solo per sorteggio, in mezzo a decine di altri dossier "Governo" nel pool settimanale
+  // — di fatto quasi introvabili nell'arco di una legislatura. Come le Riforme di Governo, ora sono
+  // un'azione che il governo può aprire da sé, quando vuole (non più un click, restano scelte pesanti
+  // con conseguenze reali, ma il giocatore può scegliere DI APRIRE il dibattito).
+  function renderBigForeignPolicyChoices() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return "";
+    var items = [];
+    if (!state.natoDecided) {
+      items.push({ id: "gov_uscita_nato", label: "Uscita dalla NATO", desc: "Apri il dibattito sulla permanenza nell'Alleanza Atlantica", disabled: false });
+    }
+    if (!state.euExitDecided && !state.leftEu) {
+      var lockedReason = p.pendingReferendum ? "C'è già un referendum in corso: attendi che si concluda"
+        : (state.euExitCooldownTurn && state.turn < state.euExitCooldownTurn) ? "Il tema è stato appena chiuso: riprova più avanti nella legislatura"
+        : (p.sondaggi < 35 || (p.seggiEuropei || 0) < EU_EXIT_MIN_SEATS) ? ("Serve almeno il 35% nei sondaggi e " + EU_EXIT_MIN_SEATS + " seggi al Parlamento Europeo (ora: " + fmt1(p.sondaggi) + "%, " + (p.seggiEuropei || 0) + " seggi)")
+        : null;
+      items.push({ id: "gov_uscita_ue", label: "Uscita dall'Unione Europea", desc: lockedReason || "Apri il dibattito più divisivo di tutti", disabled: !!lockedReason });
+    }
+    if (p.family === "europeista" && !state.euFederalized && !state.leftEu && !state.euExitDecided) {
+      items.push({ id: "gov_federalizza_ue", label: "Federazione Europea", desc: "Spingi per trasformare l'Unione Europea in una vera federazione politica", disabled: false });
+    }
+    if (!items.length) return "";
+    var html = '<section aria-label="Grandi Scelte di Politica Estera"><details class="log"><summary>Grandi Scelte di Politica Estera<span>▾</span></summary>' +
+      '<p class="ci-hint">Da governo puoi aprire tu stesso, quando vuoi, il dibattito sulle decisioni di politica estera più pesanti: non serve aspettare che capitino per caso.</p><div class="option-grid">';
+    items.forEach(function (it) {
+      html += '<button type="button" class="option-card" data-big-foreign-choice="' + it.id + '"' + (it.disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + it.label + '</span><span class="odesc">' + it.desc + '</span></button>';
+    });
+    html += "</div></details></section>";
+    return html;
+  }
+
   // ---------- Dossier di ruolo parlamentare: sbloccati solo una volta eletti, diversi tra governo e opposizione ----------
   var GOVERNO_DOSSIERS = [
     { id: "gov_manovra", kind: "notizia", cat: "Governo", title: "Sostegno alla Manovra di Bilancio",
@@ -5615,6 +5649,19 @@
     state.enactedPolicies.unshift({ week: state.turn, title: title, note: note });
     if (state.enactedPolicies.length > ENACTED_POLICIES_MAX) state.enactedPolicies.length = ENACTED_POLICIES_MAX;
   }
+  // Leggi, mozioni e referendum del giocatore pescano tutti dallo stesso bacino di "nouns" combinatori
+  // (vedi FAMILY_ANGLE_NOUNS/SITUATION_THEMES), solo con un involucro diverso ("Proposta di Legge su X",
+  // "Mozione di impegno su X", "Referendum per una nuova legge su X"...): finché un tema veniva già
+  // tracciato solo dentro il proprio meccanismo (acceptedLeggi/acceptedMozioni/acceptedReferendum), un
+  // referendum già vinto su un tema poteva ripresentarsi identico come proposta di legge o mozione, e
+  // viceversa — lo stesso cambiamento proposto due o tre volte come se non fosse mai avvenuto. Questo
+  // registro condiviso, per "noun" e non per titolo formattato, chiude il tema ovunque appena viene
+  // sancito da uno qualsiasi dei tre meccanismi.
+  function markTopicNounResolved(noun) {
+    if (!noun || !state.player) return;
+    if (!state.player.resolvedTopicNouns) state.player.resolvedTopicNouns = [];
+    if (state.player.resolvedTopicNouns.indexOf(noun) === -1) state.player.resolvedTopicNouns.push(noun);
+  }
 
   // ---------- Referendum nazionali ----------
   // Evento raro (una volta ogni 90-150 settimane circa): il paese vota, e l'esito reale (sì/no) resta
@@ -5819,8 +5866,10 @@
   }
   function generateReferendumCandidates(p) {
     var accepted = p.acceptedReferendum || [];
-    var familyTopics = referendumTopicsForFamily(p.family).filter(function (t) { return accepted.indexOf(t.title) === -1; });
-    var generalTopics = referendumTopicsGeneral().filter(function (t) { return accepted.indexOf(t.title) === -1; });
+    var resolvedNouns = p.resolvedTopicNouns || [];
+    var validTopic = function (t) { return accepted.indexOf(t.title) === -1 && resolvedNouns.indexOf(t.noun) === -1; };
+    var familyTopics = referendumTopicsForFamily(p.family).filter(validTopic);
+    var generalTopics = referendumTopicsGeneral().filter(validTopic);
     return shuffleN(familyTopics, Math.min(3, familyTopics.length)).concat(shuffleN(generalTopics, Math.min(2, generalTopics.length)));
   }
   var REFERENDUM_PROPOSAL_COST = 700;
@@ -5940,6 +5989,7 @@
       if (!p.acceptedReferendum) p.acceptedReferendum = [];
       p.acceptedReferendum.push(topic.title);
       recordEnactedPolicy(topic.title, "Referendum approvato: " + topic.noun + " cambia nella direzione richiesta. Il paese prende atto del cambiamento: non verrà riproposto.");
+      markTopicNounResolved(topic.noun);
     }
     if (governmentCrisisDossier) return governmentCrisisDossier;
     if (isEuExit && passed) return euAlternativeChoiceDossier();
@@ -6034,8 +6084,16 @@
   }
   function generateMozioneCandidates(p) {
     var accepted = p.acceptedMozioni || [];
-    var familyTopics = mozioneTopicsForFamily(p.family).filter(function (t) { return accepted.indexOf(t.title) === -1; });
-    var generalTopics = mozioneTopicsGeneral().filter(function (t) { return accepted.indexOf(t.title) === -1; });
+    var resolvedNouns = p.resolvedTopicNouns || [];
+    // Una "mozione di contrasto sul Governo" non ha senso se il governo, in questo momento, sei proprio
+    // tu: è pensata per chi sta all'opposizione e vuole criticare l'esecutivo, non per attaccare se stessi.
+    var isGoverno = p.parliamentRole === "governo";
+    var validTopic = function (t) {
+      return accepted.indexOf(t.title) === -1 && resolvedNouns.indexOf(t.noun) === -1 &&
+        (!isGoverno || t.title.indexOf("di contrasto sul Governo") === -1);
+    };
+    var familyTopics = mozioneTopicsForFamily(p.family).filter(validTopic);
+    var generalTopics = mozioneTopicsGeneral().filter(validTopic);
     return shuffleN(familyTopics, Math.min(3, familyTopics.length)).concat(shuffleN(generalTopics, Math.min(2, generalTopics.length)));
   }
   // ---------- Proposte di Legge: un livello sopra le mozioni (non un atto di indirizzo, ma una vera
@@ -6088,8 +6146,10 @@
   }
   function generateLawCandidates(p) {
     var accepted = p.acceptedLeggi || [];
-    var familyTopics = lawTopicsForFamily(p.family).filter(function (t) { return accepted.indexOf(t.title) === -1; });
-    var generalTopics = lawTopicsGeneral().filter(function (t) { return accepted.indexOf(t.title) === -1; });
+    var resolvedNouns = p.resolvedTopicNouns || [];
+    var validTopic = function (t) { return accepted.indexOf(t.title) === -1 && resolvedNouns.indexOf(t.noun) === -1; };
+    var familyTopics = lawTopicsForFamily(p.family).filter(validTopic);
+    var generalTopics = lawTopicsGeneral().filter(validTopic);
     return shuffleN(familyTopics, Math.min(3, familyTopics.length)).concat(shuffleN(generalTopics, Math.min(2, generalTopics.length)));
   }
   // ---------- Proposte di Modifica di Legge: non una legge nuova, un intervento su una legge già in
@@ -6210,6 +6270,16 @@
     });
     return { resultText: "Hai presentato una mozione su " + topic.noun + ". Il voto in Aula arriverà tra qualche settimana.", headlines: [] };
   }
+  // Vincere o perdere un voto in Aula (una mozione, una legge — propria o di un altro partito su cui ti
+  // sei schierato) ora lascia un segno, piccolo ma vero, anche sui sondaggi: chi si schiera con l'esito
+  // finale (ha proposto/votato a favore e passa, oppure ha votato contro e viene respinta) guadagna un
+  // filo di consenso; chi resta dalla parte sconfitta ne perde altrettanto poco. Non sposta la partita da
+  // solo, ma nel tempo, voto dopo voto, la coerenza tra le scelte fatte e come va a finire comincia a
+  // contare per davvero — non solo la reputazione o la fiducia di governo, come già accadeva.
+  function applyVoteOutcomeSondaggi(p, aligned) {
+    var delta = aligned ? rand(0.05, 0.15) : -rand(0.05, 0.15);
+    p.sondaggi = clamp(p.sondaggi + delta, 0, 40);
+  }
   function resolveMozioneIfDue() {
     var p = state.player;
     if (!p.pendingMozione) return null;
@@ -6223,6 +6293,7 @@
     if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
     var repDelta = passed ? rand(0.8, 2) : (isGoverno ? -rand(0.5, 1.5) : rand(0.2, 0.8));
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    applyVoteOutcomeSondaggi(p, passed);
     if (state.consensoGoverno !== undefined) {
       var cgDelta = isGoverno ? (passed ? rand(0.6, 1.6) : -rand(0.6, 1.6)) : (passed ? -rand(0.6, 1.6) : rand(0.6, 1.6));
       state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
@@ -6238,6 +6309,7 @@
       if (!p.acceptedMozioni) p.acceptedMozioni = [];
       p.acceptedMozioni.push(topic.title);
       recordEnactedPolicy(topic.title, "Mozione approvata: " + topic.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta.");
+      markTopicNounResolved(topic.noun);
     }
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -6292,6 +6364,7 @@
     if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
     var repDelta = passed ? rand(1.5, 3.5) : (isGoverno ? -rand(1, 3) : rand(0.3, 1.2));
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    applyVoteOutcomeSondaggi(p, passed);
     if (state.consensoGoverno !== undefined) {
       var cgDelta = isGoverno ? (passed ? rand(1.5, 3.2) : -rand(1.5, 3.2)) : (passed ? -rand(1.5, 3.2) : rand(1.5, 3.2));
       state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
@@ -6307,6 +6380,7 @@
       if (!p.acceptedLeggi) p.acceptedLeggi = [];
       p.acceptedLeggi.push(topic.title);
       recordEnactedPolicy(topic.title, "Legge approvata: " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.");
+      markTopicNounResolved(topic.noun);
     }
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -6508,6 +6582,7 @@
     var visDelta = choice.mozioneVote === "astensione" ? rand(0.8, 2) : rand(2, 4.5);
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     p.visibilita = clamp((p.visibilita || 0) + visDelta, 0, 100);
+    if (choice.mozioneVote !== "astensione") applyVoteOutcomeSondaggi(p, (choice.mozioneVote === "favore") === passed);
     if (state.consensoGoverno !== undefined) {
       var cg = meta.isGovProposer ? (passed ? rand(1.5, 3.2) : -rand(1.5, 3.2)) : (passed ? -rand(1.5, 3.2) : rand(1.5, 3.2));
       state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
@@ -6521,6 +6596,7 @@
       if (!p.acceptedLeggi) p.acceptedLeggi = [];
       p.acceptedLeggi.push(dossier.title.split(" (")[0]);
       recordEnactedPolicy(dossier.title.split(" (")[0], "Legge approvata (proposta da " + meta.proposerName + "): " + meta.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.");
+      markTopicNounResolved(meta.noun);
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
     state.resultData = { resultText: esito, headlines: [] };
@@ -6582,6 +6658,7 @@
     var visDelta = choice.mozioneVote === "astensione" ? rand(0.5, 1.5) : rand(1.5, 3.5);
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     p.visibilita = clamp((p.visibilita || 0) + visDelta, 0, 100);
+    if (choice.mozioneVote !== "astensione") applyVoteOutcomeSondaggi(p, (choice.mozioneVote === "favore") === passed);
     if (state.consensoGoverno !== undefined) {
       var cg = meta.isGovProposer ? (passed ? rand(0.6, 1.6) : -rand(0.6, 1.6)) : (passed ? -rand(0.6, 1.6) : rand(0.6, 1.6));
       state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
@@ -6595,6 +6672,7 @@
       if (!p.acceptedMozioni) p.acceptedMozioni = [];
       p.acceptedMozioni.push(dossier.title.split(" (")[0]);
       recordEnactedPolicy(dossier.title.split(" (")[0], "Mozione approvata (proposta da " + meta.proposerName + "): " + meta.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta.");
+      markTopicNounResolved(meta.noun);
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Mozione Parlamentare" });
     state.resultData = { resultText: esito, headlines: [] };
@@ -7288,7 +7366,7 @@
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
     campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
     sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0,
-    currentTermAllianceId: null, correntiLeaders: {}, acceptedMozioni: [], acceptedReferendum: [], logoDataUrl: null,
+    currentTermAllianceId: null, correntiLeaders: {}, acceptedMozioni: [], acceptedReferendum: [], resolvedTopicNouns: [], logoDataUrl: null,
     leaderTrust: 65, playerIsLeader: true, interimLeaderName: null, primariesCooldownTurn: 0, short: null,
     joinedBrics: false, organization: null,
     questionTimeCooldownTurn: 0, pendingQuestionTime: null,
@@ -8418,7 +8496,12 @@
     p.everElected = p.everElected || p.inParliament;
     // registrato ora perché allianceId viene azzerato qui sotto in vista del prossimo ciclo elettorale
     var playerEntityId = p.allianceId || "player";
+    var prevParliamentRole = p.parliamentRole;
     p.parliamentRole = p.inParliament ? (winner && playerEntityId === winner.id ? "governo" : "opposizione") : null;
+    // Alcune mozioni candidate hanno senso solo per chi sta all'opposizione (es. "di contrasto sul
+    // Governo"): se il ruolo cambia con questa elezione, le candidate già in cache vanno rigenerate,
+    // altrimenti resterebbero visibili quelle scelte con il ruolo precedente fino al prossimo reroll.
+    if (p.parliamentRole !== prevParliamentRole) p.mozioneCandidates = null;
     // Stesso motivo: senza salvarla qui, l'etichetta di coalizione del partito nell'elenco partiti
     // sparisce subito dopo ogni elezione, anche se il partito resta alleato per l'intera legislatura —
     // mentre gli altri membri di Centrodestra/Campo Largo la mostrano sempre, perché la loro appartenenza
@@ -10724,7 +10807,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
         return renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
@@ -11529,6 +11612,19 @@
         var dossier = generateReformDossier(domainId);
         if (!dossier) return;
         p.reformCooldowns[domainId] = state.turn + 16;
+        state.aiDynamicDossier = dossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-big-foreign-choice]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var id = btn.getAttribute("data-big-foreign-choice");
+        var dossier = GOVERNO_DOSSIERS.filter(function (d) { return d.id === id; })[0];
+        if (!dossier) return;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
         state.phase = "building";
