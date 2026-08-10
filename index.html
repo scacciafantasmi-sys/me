@@ -4423,20 +4423,24 @@
       choices: shape.choices(noun, domain.metric)
     };
   }
+  var REFORM_COOLDOWN_TURNS = 15;
   function renderGovernmentReforms() {
     var p = state.player;
     if (!p || p.parliamentRole !== "governo") return "";
-    if (!p.reformCooldowns) p.reformCooldowns = {};
     var famLabel = (familyById(p.family) || {}).label || "";
     var famDomains = FAMILY_REFORM_DOMAINS[p.family] || [];
+    // Un'unica riforma alla volta, comune o di ideologia che sia: il tetto è condiviso tra TUTTI i
+    // domini, non uno scadenzario indipendente per materia — altrimenti un governo poteva proporre
+    // Sanità, Scuola e Sicurezza tutte nella stessa settimana, una raffica poco realistica di riforme
+    // vere in parallelo.
+    var weeksLeft = (p.reformCooldownTurn || 0) - state.turn;
+    var disabled = weeksLeft > 0;
+    var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Proponi ora";
     var html = '<section aria-label="Riforme di Governo"><details class="log"><summary>Riforme di Governo<span>▾</span></summary>' +
-      '<p class="ci-hint">Da governo puoi proporre una riforma vera su ciascuna di queste materie, in qualsiasi momento: sostituisce il dossier della settimana con una scelta reale, in 5 varianti diverse, su come e con che orientamento intervenire.</p>' +
-      '<p class="ci-hint"><strong>Riforme comuni a ogni governo</strong></p><div class="option-grid">';
+      '<p class="ci-hint">Da governo puoi proporre una riforma vera su una di queste materie, al massimo una ogni ' + REFORM_COOLDOWN_TURNS + ' settimane in totale: sostituisce il dossier della settimana con una scelta reale, in 5 varianti diverse, su come e con che orientamento intervenire.' +
+      (weeksLeft > 0 ? ' Potrai proporre la prossima riforma tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.' : '') +
+      '</p><p class="ci-hint"><strong>Riforme comuni a ogni governo</strong></p><div class="option-grid">';
     REFORM_DOMAINS.forEach(function (d) {
-      var cd = p.reformCooldowns[d.id] || 0;
-      var weeksLeft = cd - state.turn;
-      var disabled = weeksLeft > 0;
-      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Proponi ora";
       html += '<button type="button" class="option-card" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
     });
@@ -4444,10 +4448,6 @@
     if (famDomains.length) {
       html += '<p class="ci-hint"><strong>Riforme esclusive della linea ' + famLabel + '</strong></p><div class="option-grid">';
       famDomains.forEach(function (d) {
-        var cd = p.reformCooldowns[d.id] || 0;
-        var weeksLeft = cd - state.turn;
-        var disabled = weeksLeft > 0;
-        var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Proponi ora";
         html += '<button type="button" class="option-card" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
           '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
       });
@@ -7360,7 +7360,7 @@
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
-    reformCooldowns: {}, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
+    reformCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
@@ -11605,13 +11605,13 @@
     });
     app.querySelectorAll("[data-gov-reform]").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        if (btn.disabled) return;
         var domainId = btn.getAttribute("data-gov-reform");
         var p = state.player;
-        if (!p.reformCooldowns) p.reformCooldowns = {};
-        if (state.turn < (p.reformCooldowns[domainId] || 0)) return;
+        if (state.turn < (p.reformCooldownTurn || 0)) return;
         var dossier = generateReformDossier(domainId);
         if (!dossier) return;
-        p.reformCooldowns[domainId] = state.turn + 16;
+        p.reformCooldownTurn = state.turn + REFORM_COOLDOWN_TURNS;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
         state.phase = "building";
