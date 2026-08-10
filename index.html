@@ -6220,7 +6220,31 @@
       return { id: a.leaning, leaning: a.leaning, name: generateStaffName(), background: a.roles[Math.floor(Math.random() * a.roles.length)] };
     });
   }
+  // Se il referendum "presidenzialismo" (vedi REFERENDUM_TOPICS) è stato approvato durante la partita,
+  // il Presidente della Repubblica non è più eletto dal Parlamento in seduta comune ma direttamente dai
+  // cittadini: cambia sia il testo del dossier sia il criterio con cui si pesano i candidati (i sondaggi
+  // reali dei due schieramenti, non solo chi guida il governo del momento).
+  function presidentElectionIsPopular() {
+    return !!(state.passedNationalReferendumIds && state.passedNationalReferendumIds.indexOf("presidenzialismo") !== -1);
+  }
+  function campPollingShare(campCheckFn) {
+    var p = state.player;
+    var sum = campCheckFn(p.family) ? p.sondaggi : 0;
+    activeParties().forEach(function (party) {
+      if (party.familyId && campCheckFn(party.familyId)) sum += state.parties[party.id] || 0;
+    });
+    return sum;
+  }
   function presidentLeaningWeight(leaning) {
+    if (presidentElectionIsPopular()) {
+      var cdShare = campPollingShare(function (f) { return !!CENTRODESTRA_ALIGNED_FAMILIES[f]; });
+      var clShare = campPollingShare(function (f) { return !!CAMPOLARGO_ALIGNED_FAMILIES[f]; });
+      var wPop = leaning === "tecnico" ? 20 : 14;
+      if (leaning === "destra") wPop += cdShare * 0.9;
+      if (leaning === "sinistra") wPop += clShare * 0.9;
+      if (leaning === "centro") wPop += Math.max(0, 100 - cdShare - clShare) * 0.5;
+      return wPop;
+    }
     var govFam = currentGoverningFamilyId();
     var govCd = CENTRODESTRA_ALIGNED_FAMILIES[govFam], govCl = CAMPOLARGO_ALIGNED_FAMILIES[govFam];
     var w = leaning === "tecnico" ? 24 : 18;
@@ -6231,14 +6255,18 @@
   }
   function generatePresidentDossier() {
     var candidates = generatePresidentCandidates();
+    var popular = presidentElectionIsPopular();
     var choices = candidates.map(function (c) {
       return { label: "Sostieni " + c.name, hint: presidentLeaningLabel(c.leaning) + " — " + c.background, candidateId: c.id, effects: {} };
     });
     choices.push({ label: "Non prendere posizione", hint: "Nessuna preferenza dichiarata dal partito", candidateId: null, effects: {} });
     return {
-      id: "president_election", kind: "notizia", cat: "Istituzioni", title: "Elezione del Presidente della Repubblica",
-      brief: "Il Parlamento in seduta comune, con i delegati regionali, è chiamato a eleggere il nuovo Presidente della Repubblica. Chi sostiene il tuo partito?",
-      candidates: candidates, choices: choices
+      id: "president_election", kind: "notizia", cat: "Istituzioni",
+      title: popular ? "Elezione Diretta del Presidente della Repubblica" : "Elezione del Presidente della Repubblica",
+      brief: popular
+        ? "Da quando il referendum sul presidenzialismo è passato, il Presidente della Repubblica è eletto direttamente dai cittadini: è il voto popolare, non più le aule parlamentari, a decidere chi sale al Colle. Chi sostiene il tuo partito?"
+        : "Il Parlamento in seduta comune, con i delegati regionali, è chiamato a eleggere il nuovo Presidente della Repubblica. Chi sostiene il tuo partito?",
+      candidates: candidates, popular: popular, choices: choices
     };
   }
   function resolvePresidentElection(dossier, choice) {
@@ -6252,7 +6280,8 @@
     var roll = Math.random() * totalW, idx = 0, acc = 0;
     for (; idx < weights.length - 1; idx++) { acc += weights[idx]; if (roll <= acc) break; }
     var winner = candidates[idx];
-    state.president = { name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn };
+    var popular = dossier.popular !== undefined ? dossier.popular : presidentElectionIsPopular();
+    state.president = { name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn, popular: popular };
     var pFam = state.player.family;
     var playerCd = CENTRODESTRA_ALIGNED_FAMILIES[pFam], playerCl = CAMPOLARGO_ALIGNED_FAMILIES[pFam];
     var aligned = (playerCd && winner.leaning === "destra") || (playerCl && winner.leaning === "sinistra") || winner.leaning === "centro" || winner.leaning === "tecnico";
@@ -6260,9 +6289,10 @@
     var repDelta = supportedWinner ? rand(3, 7) : (aligned ? rand(0, 2) : rand(-3, 0));
     state.player.reputazione = clamp(state.player.reputazione + repDelta, 0, 100);
     if (winner.leaning === "tecnico") state.spreadBps = clamp(state.spreadBps - rand(5, 15), 40, 500);
-    var resultText = winner.name + " (" + presidentLeaningLabel(winner.leaning) + ", " + winner.background + ") viene elett" + (winner.name.indexOf("a ") === 0 ? "a" : "o/a") + " Presidente della Repubblica." +
+    var electedBy = popular ? " dal voto popolare diretto" : " dal Parlamento in seduta comune";
+    var resultText = winner.name + " (" + presidentLeaningLabel(winner.leaning) + ", " + winner.background + ") viene elett" + (winner.name.indexOf("a ") === 0 ? "a" : "o/a") + " Presidente della Repubblica" + electedBy + "." +
       (supportedWinner ? " Il partito lo aveva sostenuto fin dall'inizio: un piccolo capitale politico in più." : choice.candidateId ? " Il partito aveva sostenuto un altro candidato, ma prende atto dell'esito." : "");
-    state.log.unshift({ week: state.turn, title: "Elezione del Presidente della Repubblica", choiceLabel: choice.label, result: resultText, headlines: [], type: "dossier", cat: "Istituzioni" });
+    state.log.unshift({ week: state.turn, title: popular ? "Elezione Diretta del Presidente della Repubblica" : "Elezione del Presidente della Repubblica", choiceLabel: choice.label, result: resultText, headlines: [], type: "dossier", cat: "Istituzioni" });
     state.resultData = { resultText: resultText, headlines: [] };
   }
 
