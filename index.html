@@ -7404,7 +7404,7 @@
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
     cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false,
-    natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0,
+    natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0,
     usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
@@ -8208,8 +8208,11 @@
   // elezioni (prima forza qualificata, con un peso reale, non un exploit statistico), il paese cambia
   // regime in modo permanente — vale sia per il giocatore sia per una qualunque forza CPU. Scatta una
   // sola volta per partita: da quel momento in poi lo stato resta memorizzato in state.regime e
-  // condiziona il tema visivo e le situazioni settimanali.
-  var REGIME_FAMILIES = { fascista: "fascista", comunista: "comunista", sinistra: "comunista", monarchico: "monarchico", comunismolusso: "comunista" };
+  // condiziona il tema visivo e le situazioni settimanali. Il Comunismo di Lusso resta fuori di
+  // proposito: è un'ideologia post-scarsità tecno-ottimista, non un comunismo autoritario di stampo
+  // novecentesco — vincere con quella linea non fa deragliare la democrazia, si continua a votare come
+  // con qualunque altra forza politica.
+  var REGIME_FAMILIES = { fascista: "fascista", comunista: "comunista", sinistra: "comunista", monarchico: "monarchico" };
   var REGIME_LABELS = {
     fascista: { name: "Repubblica Autoritaria", desc: "Lo Stato fascista assume il pieno controllo delle istituzioni: opposizioni sciolte o marginalizzate, libertà di stampa sospesa. L'Italia esce da NATO e Unione Europea e viene isolata diplomaticamente." },
     comunista: { name: "Repubblica Popolare Italiana", desc: "Le grandi imprese strategiche vengono nazionalizzate e l'economia passa sotto pianificazione statale, in un clima di forte tensione con i mercati e i partner internazionali." },
@@ -8634,17 +8637,27 @@
     state.snapElectionPending = false;
 
     if (regimeInfo) {
-      applyRegimeConsequences(regimeInfo);
-      state.log.unshift({
-        week: state.turn, title: "Cambio di regime — " + REGIME_LABELS[regimeInfo.type].name,
-        choiceLabel: regimeInfo.winnerLabel + " vince le elezioni", result: REGIME_LABELS[regimeInfo.type].desc,
-        headlines: [], type: "regime"
-      });
-      // Il cambio di regime non deve saltare la schermata dei risultati elettorali: prima si vede
-      // sempre la classifica completa dell'elezione appena avvenuta (chi ha vinto, con quanti seggi),
-      // e solo DOPO, proseguendo, la svolta storica del nuovo regime — non l'una al posto dell'altra.
-      state.pendingRegimeTransition = true;
+      if (regimeInfo.isPlayer) {
+        // Quando è il PARTITO DEL GIOCATORE a vincere con un margine da regime, la svolta autoritaria
+        // non scatta più in automatico: è lui a decidere se instaurarla o restare nella cornice
+        // democratica nonostante la maggioranza schiacciante (vedi la schermata "regime_choice", subito
+        // dopo la classifica elettorale). Per una vittoria CPU, invece, resta automatica come prima —
+        // non c'è un giocatore lì a scegliere.
+        state.pendingRegimeChoice = regimeInfo;
+      } else {
+        applyRegimeConsequences(regimeInfo);
+        state.log.unshift({
+          week: state.turn, title: "Cambio di regime — " + REGIME_LABELS[regimeInfo.type].name,
+          choiceLabel: regimeInfo.winnerLabel + " vince le elezioni", result: REGIME_LABELS[regimeInfo.type].desc,
+          headlines: [], type: "regime"
+        });
+        state.pendingRegimeTransition = true;
+      }
     }
+    // Il cambio di regime (o la scelta di instaurarlo) non deve saltare la schermata dei risultati
+    // elettorali: prima si vede sempre la classifica completa dell'elezione appena avvenuta (chi ha
+    // vinto, con quanti seggi), e solo DOPO, proseguendo, la svolta storica — non l'una al posto
+    // dell'altra.
     state.phase = "election_result";
   }
 
@@ -10836,6 +10849,23 @@
     return html;
   }
 
+  // Quando è il partito DEL GIOCATORE a vincere con un margine da regime, la svolta non scatta più in
+  // automatico (a differenza di una vittoria CPU, dove non c'è nessuno "al tavolo" a decidere): è lui a
+  // scegliere se instaurarlo davvero o restare nella cornice democratica nonostante la maggioranza
+  // schiacciante.
+  function renderRegimeChoice() {
+    var info = state.pendingRegimeChoice;
+    var labels = REGIME_LABELS[info.type];
+    var html = '<div class="election-card regime-card regime-' + info.type + '"><p class="eyebrow">Svolta storica — Legislatura ' + (state.legislature - 1) + "</p>";
+    html += "<h2>Un margine enorme, una scelta storica</h2>";
+    html += "<p><strong>" + info.winnerLabel + "</strong> vince le elezioni con il <strong>" + fmt1(info.votes) + "%</strong> dei consensi, guidato da te.</p>";
+    html += "<p>Con questi numeri il tuo partito potrebbe instaurare " + labels.name + ": " + labels.desc + "</p>";
+    html += "<p>Oppure puoi scegliere di restare nella cornice democratica, rispettando i limiti costituzionali nonostante la maggioranza schiacciante: si continuerà a votare regolarmente come sempre.</p>";
+    html += '<button class="primary-btn" id="regime-choice-instaura-btn" type="button">Instaura ' + labels.name + '</button> ' +
+      '<button class="primary-btn" id="regime-choice-democrazia-btn" type="button" style="margin-left:0.6rem">Resta nella democrazia</button></div>';
+    return html;
+  }
+
   // ---------- Tema visivo dinamico ----------
   // Determina la classe da applicare a <body> in base allo stato attuale della partita. L'ordine dei
   // controlli è la priorità: un cambio di regime sovrasta tutto, poi la settimana delle elezioni
@@ -10844,7 +10874,7 @@
   function computeGameTheme() {
     if (!state.player) return "gt-noseats";
     if (state.regime) return "gt-regime-" + state.regime.type;
-    if (state.phase === "election_result") return "gt-election";
+    if (state.phase === "election_result" || state.phase === "regime_choice") return "gt-election";
     var lastLog = state.log && state.log[0];
     if (lastLog && lastLog.week === state.turn) {
       if (lastLog.title === "Elezioni Europee") return "gt-eu-election";
@@ -10935,7 +10965,15 @@
       continueBtn.addEventListener("click", async function () {
         // Vista la classifica completa, se questa stessa elezione ha anche fatto scattare un cambio di
         // regime, il passo successivo è la schermata di svolta storica (non ancora l'avanzamento del
-        // turno): il turno vero e proprio avanza solo dopo aver proseguito anche da lì.
+        // turno): il turno vero e proprio avanza solo dopo aver proseguito anche da lì. Se invece è il
+        // giocatore stesso ad aver vinto con un margine da regime, il passo successivo è la sua scelta
+        // (instaurarlo o restare in democrazia), non ancora la svolta stessa.
+        if (state.pendingRegimeChoice) {
+          state.phase = "regime_choice";
+          save();
+          render();
+          return;
+        }
         if (state.pendingRegimeTransition) {
           state.pendingRegimeTransition = false;
           state.phase = "regime_transition";
@@ -10955,6 +10993,49 @@
           if (window.console && console.error) console.error("advanceTurnLogic ha lanciato un errore imprevisto:", e);
           var fallbackChosen = DOSSIERS[Math.floor(Math.random() * DOSSIERS.length)];
           state.currentDossierId = fallbackChosen.id;
+          state.phase = "building";
+        }
+        save();
+        render();
+      });
+      return;
+    }
+
+    if (state.phase === "regime_choice") {
+      app.innerHTML = renderRegimeChoice();
+      var instauraBtn = document.getElementById("regime-choice-instaura-btn");
+      var democraziaBtn = document.getElementById("regime-choice-democrazia-btn");
+      instauraBtn.addEventListener("click", function () {
+        var info = state.pendingRegimeChoice;
+        applyRegimeConsequences(info);
+        state.log.unshift({
+          week: state.turn, title: "Cambio di regime — " + REGIME_LABELS[info.type].name,
+          choiceLabel: info.winnerLabel + " instaura il regime", result: REGIME_LABELS[info.type].desc,
+          headlines: [], type: "regime"
+        });
+        state.pendingRegimeChoice = null;
+        state.phase = "regime_transition";
+        save();
+        render();
+      });
+      democraziaBtn.addEventListener("click", async function () {
+        democraziaBtn.disabled = true;
+        democraziaBtn.textContent = "Preparazione della prossima settimana…";
+        var info = state.pendingRegimeChoice;
+        state.log.unshift({
+          week: state.turn, title: "La democrazia prosegue", choiceLabel: info.winnerLabel + " rinuncia al regime",
+          result: "Nonostante il margine schiacciante, " + info.winnerLabel + " sceglie di rispettare la cornice democratica: niente svolta autoritaria, il paese resta una repubblica parlamentare a pieno titolo, e si tornerà regolarmente al voto.",
+          headlines: [], type: "cronaca"
+        });
+        state.pendingRegimeChoice = null;
+        state.turn++;
+        state.phase = "building";
+        try {
+          await advanceTurnLogic();
+        } catch (e) {
+          if (window.console && console.error) console.error("advanceTurnLogic ha lanciato un errore imprevisto:", e);
+          var fallbackChosen3 = DOSSIERS[Math.floor(Math.random() * DOSSIERS.length)];
+          state.currentDossierId = fallbackChosen3.id;
           state.phase = "building";
         }
         save();
