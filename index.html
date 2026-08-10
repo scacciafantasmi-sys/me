@@ -4434,22 +4434,34 @@
     // Sanità, Scuola e Sicurezza tutte nella stessa settimana, una raffica poco realistica di riforme
     // vere in parallelo.
     var weeksLeft = (p.reformCooldownTurn || 0) - state.turn;
-    var disabled = weeksLeft > 0;
-    var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Proponi ora";
+    var onCooldown = weeksLeft > 0;
+    // Come Iniziative UE/Geopolitica: cliccare una materia apre le 5 opzioni direttamente qui sotto,
+    // non sostituisce il dossier in cima alla pagina — altrimenti, se si è scrollati più in basso sulla
+    // pagina Parlamento, sembra che cliccare non faccia nulla, perché il vero risultato compare fuori
+    // dallo schermo, in alto.
+    var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "riforma" ? state.inlineExpandedTopic : null;
     var html = '<section aria-label="Riforme di Governo"><details class="log"><summary>Riforme di Governo<span>▾</span></summary>' +
-      '<p class="ci-hint">Da governo puoi proporre una riforma vera su una di queste materie, al massimo una ogni ' + REFORM_COOLDOWN_TURNS + ' settimane in totale: sostituisce il dossier della settimana con una scelta reale, in 5 varianti diverse, su come e con che orientamento intervenire.' +
-      (weeksLeft > 0 ? ' Potrai proporre la prossima riforma tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.' : '') +
+      '<p class="ci-hint">Da governo puoi proporre una riforma vera su una di queste materie, al massimo una ogni ' + REFORM_COOLDOWN_TURNS + ' settimane in totale. Scegli una materia per aprire le 5 opzioni direttamente qui sotto.' +
+      (onCooldown ? ' Potrai proporre la prossima riforma tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.' : '') +
       '</p><p class="ci-hint"><strong>Riforme comuni a ogni governo</strong></p><div class="option-grid">';
     REFORM_DOMAINS.forEach(function (d) {
-      html += '<button type="button" class="option-card" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
+      var isOpen = expanded && expanded.domainId === d.id;
+      var disabled = onCooldown && !isOpen;
+      var status = disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Proponi ora");
+      html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+      if (isOpen) html += renderInlineTopicChoices(expanded);
     });
     html += "</div>";
     if (famDomains.length) {
       html += '<p class="ci-hint"><strong>Riforme esclusive della linea ' + famLabel + '</strong></p><div class="option-grid">';
       famDomains.forEach(function (d) {
-        html += '<button type="button" class="option-card" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
+        var isOpen = expanded && expanded.domainId === d.id;
+        var disabled = onCooldown && !isOpen;
+        var status = disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : (isOpen ? "Chiudi" : "Proponi ora");
+        html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-gov-reform="' + d.id + '"' + (disabled ? " disabled" : "") + '>' +
           '<span class="olabel">' + d.label + '</span><span class="odesc">' + status + '</span></button>';
+        if (isOpen) html += renderInlineTopicChoices(expanded);
       });
       html += "</div>";
     }
@@ -4482,7 +4494,7 @@
     }
     if (!items.length) return "";
     var html = '<section aria-label="Grandi Scelte di Politica Estera"><details class="log"><summary>Grandi Scelte di Politica Estera<span>▾</span></summary>' +
-      '<p class="ci-hint">Da governo puoi aprire tu stesso, quando vuoi, il dibattito sulle decisioni di politica estera più pesanti: non serve aspettare che capitino per caso.</p><div class="option-grid">';
+      '<p class="ci-hint">Da governo puoi aprire tu stesso, quando vuoi, il dibattito sulle decisioni di politica estera più pesanti: non serve aspettare che capitino per caso. A differenza delle altre sezioni, le opzioni non compaiono qui sotto ma sostituiscono il dossier della settimana in cima alla pagina: dopo aver cliccato, torna su.</p><div class="option-grid">';
     items.forEach(function (it) {
       html += '<button type="button" class="option-card" data-big-foreign-choice="' + it.id + '"' + (it.disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + it.label + '</span><span class="odesc">' + it.desc + '</span></button>';
@@ -11608,13 +11620,15 @@
         if (btn.disabled) return;
         var domainId = btn.getAttribute("data-gov-reform");
         var p = state.player;
-        if (state.turn < (p.reformCooldownTurn || 0)) return;
-        var dossier = generateReformDossier(domainId);
-        if (!dossier) return;
-        p.reformCooldownTurn = state.turn + REFORM_COOLDOWN_TURNS;
-        state.aiDynamicDossier = dossier;
-        state.currentDossierId = "ai_dynamic";
-        state.phase = "building";
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "riforma" && current.domainId === domainId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          if (state.turn < (p.reformCooldownTurn || 0)) return;
+          var dossier = generateReformDossier(domainId);
+          if (!dossier) return;
+          state.inlineExpandedTopic = { kind: "riforma", domainId: domainId, dossier: dossier };
+        }
         save();
         render();
       });
@@ -11659,6 +11673,8 @@
         var p = state.player;
         if (topic.kind === "geopolitica") {
           p.geopoliticaCooldownTurn = state.turn + 15;
+        } else if (topic.kind === "riforma") {
+          p.reformCooldownTurn = state.turn + REFORM_COOLDOWN_TURNS;
         } else {
           p.euInitiativeCooldownTurn = state.turn + 11;
         }
