@@ -6054,6 +6054,18 @@
     if (!state.player.resolvedTopicNouns) state.player.resolvedTopicNouns = [];
     if (state.player.resolvedTopicNouns.indexOf(noun) === -1) state.player.resolvedTopicNouns.push(noun);
   }
+  // Le mozioni/leggi proposte dai partiti CPU (buildCpuMozioneDossier, buildCpuLeggeDossier) pescavano da
+  // tutto topicPool senza mai consultare questo registro: su una partita lunga (centinaia di proposte CPU
+  // pescate da un pool finito di temi) capitava, prima o poi, che lo STESSO tema già passato in Aula e già
+  // sancito venisse ripescato e riproposto identico, come se non fosse mai avvenuto. Applicata subito dopo
+  // aver costruito topicPool in ciascuno dei tre generatori CPU, con fallback sul pool intero se il filtro
+  // lo svuota del tutto (meglio un tema ripetuto raro che nessuna proposta).
+  function filterUnresolvedTopics(topicPool) {
+    var resolvedNouns = (state.player && state.player.resolvedTopicNouns) || [];
+    if (!resolvedNouns.length) return topicPool;
+    var filtered = topicPool.filter(function (t) { return resolvedNouns.indexOf(t.noun) === -1; });
+    return filtered.length ? filtered : topicPool;
+  }
 
   // ---------- Referendum nazionali ----------
   // Evento raro (una volta ogni 90-150 settimane circa): il paese vota, e l'esito reale (sì/no) resta
@@ -7001,6 +7013,14 @@
     var topicPool = proposer.familyId ? amendmentTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = amendmentTopicsGeneral();
     if (!topicPool.length) return null;
+    // Una legge già in vigore può essere modificata più volte nel corso della partita (a differenza di
+    // mozioni/leggi nuove, qui non si consulta resolvedTopicNouns): quello che va evitato è solo la
+    // proposta IDENTICA già accettata in passato, non ogni futuro intervento sulla stessa norma.
+    var acceptedTitles = (state.player && state.player.acceptedAmendments) || [];
+    if (acceptedTitles.length) {
+      var freshTopics = topicPool.filter(function (t) { return acceptedTitles.indexOf(t.title) === -1; });
+      if (freshTopics.length) topicPool = freshTopics;
+    }
     var topic = topicPool[Math.floor(Math.random() * topicPool.length)];
     var baseProb;
     if (isGovProposer) {
@@ -7072,6 +7092,7 @@
     var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = lawTopicsGeneral();
     if (!topicPool.length) return null;
+    topicPool = filterUnresolvedTopics(topicPool);
     var topic = topicPool[Math.floor(Math.random() * topicPool.length)];
     var baseProb;
     if (isGovProposer) {
@@ -7148,6 +7169,7 @@
     var topicPool = proposer.familyId ? mozioneTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = mozioneTopicsGeneral();
     if (!topicPool.length) return null;
+    topicPool = filterUnresolvedTopics(topicPool);
     var topic = topicPool[Math.floor(Math.random() * topicPool.length)];
     var baseProb;
     if (isGovProposer) {
