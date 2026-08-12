@@ -1423,6 +1423,7 @@
     var p = state.player;
     if (!p.institutionalRelations) return;
     var lean = institutionalLean(p);
+    var style = effectiveLeaderStyle(p);
     var targets = {
       confindustria: 50 + lean.business * 28, cgil: 50 + lean.unions * 28, cisl: 50 + lean.unions * 18,
       usb: 50 + lean.unions * 34, chiesa: 50 + lean.chiesa * 28, bce: 50 + lean.bce * 24, ue: 50 + lean.ue * 30,
@@ -1431,9 +1432,9 @@
     Object.keys(p.institutionalRelations).forEach(function (key) {
       var v = p.institutionalRelations[key];
       var t = targets[key] !== undefined ? targets[key] : 50;
-      p.institutionalRelations[key] = clamp(v + (t - v) * 0.012, 0, 100);
+      p.institutionalRelations[key] = clamp(v + (t - v) * 0.012 * style.institRelMult, 0, 100);
     });
-    var riskTarget = clamp(8 + lean.judicial * 16 + (p.lobby && !p.lobby.exposed ? 12 : 0), 2, 90);
+    var riskTarget = clamp((8 + lean.judicial * 16 + (p.lobby && !p.lobby.exposed ? 12 : 0)) * style.judicialRiskMult, 2, 90);
     p.judicialRisk = clamp((p.judicialRisk || 8) + (riskTarget - (p.judicialRisk || 8)) * 0.03, 1, 95);
   }
   var STORAGE_KEY = "politisit_founder_save_v2";
@@ -1477,6 +1478,50 @@
     { id: "polemista_aggressivo", label: "Polemista Aggressivo", desc: "Attacca sempre gli avversari: alta visibilità, ma ogni scivolone si paga caro.", visMult: 1.5, repVolatility: 1.5, iscrittiMult: 1.1, fondiMult: 1, growthMult: 1 },
     { id: "mediatore_silenzioso", label: "Mediatore Silenzioso", desc: "Evita gli scontri e negozia dietro le quinte: poca visibilità, reputazione molto stabile.", visMult: 0.6, repVolatility: 0.5, iscrittiMult: 0.9, fondiMult: 1.05, growthMult: 0.9 }
   ];
+
+  // Tratti personali del leader: a differenza dello stile di leadership (un "modo di fare politica"),
+  // i tratti descrivono la persona in sé e restano più contenuti come effetto (si sommano allo stile,
+  // non lo sostituiscono) — scelti in coppia alla fondazione, non più modificabili in seguito. Oltre ai
+  // 5 moltiplicatori già usati dallo stile di leadership (vis/rep/iscritti/fondi/growth), due campi
+  // dedicati: institRelMult (relazioni con Attori Sociali e Istituzionali) e judicialRiskMult (rischio
+  // giudiziario di base) e privateScandalMult (probabilità di eventi di vita privata negativi).
+  var LEADER_TRAITS = [
+    { id: "integerrimo", label: "Integerrimo", desc: "Non si piega a pressioni indebite: pochi favori, poche scorciatoie, ma anche meno rischi.",
+      fondiMult: 0.93, judicialRiskMult: 0.6, repVolatility: 0.85, privateScandalMult: 0.6 },
+    { id: "impulsivo", label: "Impulsivo", desc: "Colpisce dritto al cuore del dibattito, ma qualche uscita se la ritrova contro.",
+      visMult: 1.15, repVolatility: 1.3, privateScandalMult: 1.6 },
+    { id: "magnetico", label: "Magnetico", desc: "Conquista simpatie ovunque metta piede, quasi senza sforzo.",
+      iscrittiMult: 1.15, visMult: 1.1 },
+    { id: "pragmatico", label: "Pragmatico", desc: "Più interessato ai risultati concreti che ai principi astratti.",
+      fondiMult: 1.08, growthMult: 1.05, repVolatility: 0.9 },
+    { id: "ambizioso", label: "Ambizioso", desc: "Non si accontenta mai, spinge sempre un passo oltre.",
+      growthMult: 1.18, repVolatility: 1.15 },
+    { id: "umile", label: "Umile", desc: "Lascia parlare i fatti più delle parole: meno riflettori, ma meno passi falsi.",
+      repVolatility: 0.7, growthMult: 0.9, judicialRiskMult: 0.8 },
+    { id: "combattivo", label: "Combattivo", desc: "Non arretra mai davanti a uno scontro, in Aula come sui social.",
+      visMult: 1.2, institRelMult: 0.8, repVolatility: 1.15 },
+    { id: "diplomatico", label: "Diplomatico", desc: "Preferisce il tavolo negoziale allo scontro pubblico.",
+      institRelMult: 1.3, fondiMult: 1.05, visMult: 0.88 }
+  ];
+  function leaderTraitById(id) {
+    for (var i = 0; i < LEADER_TRAITS.length; i++) if (LEADER_TRAITS[i].id === id) return LEADER_TRAITS[i];
+    return null;
+  }
+  var LEADER_STYLE_FIELDS = ["visMult", "repVolatility", "iscrittiMult", "fondiMult", "growthMult", "institRelMult", "judicialRiskMult", "privateScandalMult"];
+  // Combina lo stile di leadership (il "modo di fare politica") con i tratti personali scelti (la
+  // "persona"): stesso set di campi, moltiplicati insieme, con 1 come default per i campi che uno stile
+  // o un tratto non tocca. Usata ovunque prima si consultava direttamente leadershipById(p.leadership).
+  function effectiveLeaderStyle(p) {
+    var base = leadershipById(p.leadership);
+    var traits = (p.leaderTraits || []).map(leaderTraitById).filter(Boolean);
+    var out = {};
+    LEADER_STYLE_FIELDS.forEach(function (f) {
+      var v = base[f] !== undefined ? base[f] : 1;
+      traits.forEach(function (t) { if (t[f] !== undefined) v *= t[f]; });
+      out[f] = v;
+    });
+    return out;
+  }
 
   var STAFF_FIRST_NAMES = [
     "Giulia", "Marco", "Chiara", "Alessandro", "Francesca", "Luca", "Valentina", "Matteo", "Sara", "Davide",
@@ -4682,6 +4727,79 @@
     return html;
   }
 
+  // ---------- Vita privata del leader ----------
+  // Eventi rari e involontari (non scelti dal giocatore come le apparizioni di Vita Pubblica sopra):
+  // la vita privata del leader irrompe ogni tanto nella carriera politica, nel bene e nel male. La
+  // probabilità di pescare dal bacino "negativo" invece che da quello "positivo" dipende dal tratto
+  // privateScandalMult (Impulsivo la alza, Integerrimo la abbassa) — la stessa logica dei tratti già
+  // usata per gli altri moltiplicatori dello stile di leadership (vedi effectiveLeaderStyle).
+  var PRIVATE_LIFE_COOLDOWN_TURNS = 20;
+  var PRIVATE_LIFE_EVENTS_POSITIVE = [
+    { title: "Pubblichi un libro-memoriale", brief: "Il tuo memoriale politico esce in libreria e riscuote più attenzione del previsto.",
+      choices: [
+        { label: "Fai un tour di presentazioni", hint: "Più visibilità, meno tempo per la politica quotidiana", effects: { visibilita: rand(4, 8), fondi: rand(300, 700) }, result: "Il tour di presentazioni ti porta in giro per il paese, con buona affluenza e qualche titolo in più." },
+        { label: "Lascialo circolare senza promuoverlo troppo", hint: "Effetto più contenuto, meno rischio di sovraesposizione", effects: { visibilita: rand(1, 3), reputazione: 1 }, result: "Il libro trova comunque il suo pubblico, senza bisogno di grandi campagne promozionali." }
+      ] },
+    { title: "Un lieto evento in famiglia", brief: "Una nascita, o un matrimonio, in famiglia ti riporta per una settimana a essere prima di tutto una persona.",
+      choices: [
+        { label: "Condividilo pubblicamente", hint: "Umanizza la tua immagine pubblica", effects: { reputazione: 3, visibilita: 3 }, result: "La notizia, condivisa con naturalezza, avvicina anche chi di solito non ti segue." },
+        { label: "Mantieni la sfera privata riservata", hint: "Coerente con chi vuole tenere separate le due vite", effects: { reputazione: 1 }, result: "Scegli di proteggere la sfera privata: pochi ne sanno qualcosa, ma chi lo sa apprezza la discrezione." }
+      ] },
+    { title: "Una tua passione privata diventa di dominio pubblico", brief: "Un tuo vecchio hobby — musica, sport, cucina — viene scoperto dai media e diventa un piccolo caso simpatico.",
+      choices: [
+        { label: "Giocaci sopra pubblicamente", hint: "Simpatia immediata, rischio di apparire poco serio", effects: { visibilita: rand(3, 7), reputazione: -1 }, result: "Ti presti al gioco con ironia: la cosa fa simpatia, anche se qualcuno storce il naso." },
+        { label: "Minimizza con garbo", hint: "Meno esposizione, immagine più sobria", effects: { visibilita: rand(1, 3) }, result: "Rispondi con garbo e senza esagerare: la curiosità si spegne in fretta." }
+      ] },
+    { title: "Un tuo gesto privato di generosità viene scoperto", brief: "Una donazione o un aiuto dato privatamente a qualcuno in difficoltà finisce, senza che tu lo volessi, sui giornali.",
+      choices: [
+        { label: "Confermalo senza vergogna", hint: "Immagine autentica, anche se sembra calcolato", effects: { reputazione: 4 }, result: "Confermi il gesto con naturalezza: la sincerità paga, anche se qualcuno resta scettico." },
+        { label: "Rifiuta di commentare la propria vita privata", hint: "Coerente, ma sembra sfuggente", effects: { reputazione: 1, visibilita: 1 }, result: "Il rifiuto di commentare lascia un alone di mistero, più che di sospetto." }
+      ] },
+    { title: "Fai da mentore a un giovane talento del partito", brief: "Decidi di dedicare tempo personale a far crescere un giovane emergente all'interno del partito.",
+      choices: [
+        { label: "Investici tempo ed energie vere", hint: "Rafforza il partito nel lungo periodo", effects: { iscritti: rand(15, 35), reputazione: 2 }, result: "Il tempo investito nel mentoring rafforza silenziosamente la squadra, oltre la tua persona." },
+        { label: "Delega il compito a qualcun altro", hint: "Meno impegno personale, meno legame diretto", effects: { iscritti: rand(5, 12) }, result: "Deleghi il compito: il risultato arriva comunque, ma senza il tuo tocco personale." }
+      ] }
+  ];
+  var PRIVATE_LIFE_EVENTS_NEGATIVE = [
+    { title: "Uno spavento per la salute", brief: "Un controllo medico di routine si trasforma in uno spavento reale: niente di grave, ma abbastanza da farti fermare a riflettere.",
+      choices: [
+        { label: "Comunicalo con trasparenza", hint: "Onestà apprezzata, ma genera preoccupazione", effects: { reputazione: 2, visibilita: -2 }, result: "La trasparenza sulla salute viene apprezzata, anche se genera qualche titolo allarmistico." },
+        { label: "Tienilo riservato e rallenta in silenzio", hint: "Meno esposizione, ma rischio di voci incontrollate", effects: { reputazione: -1 }, result: "Scegli il riserbo: il ritmo rallenta per qualche settimana, e qualche voce comincia comunque a circolare." }
+      ] },
+    { title: "Uno scandalo personale, non di partito", brief: "Emergono dettagli scomodi sulle tue finanze personali, slegati dal partito ma comunque imbarazzanti.",
+      choices: [
+        { label: "Chiarisci pubblicamente ogni dettaglio", hint: "Costa in immagine nell'immediato, chiude prima la vicenda", effects: { reputazione: -4, visibilita: 2 }, judicialRiskDelta: -3, result: "La linea della trasparenza totale costa caro nell'immediato, ma chiude la vicenda più in fretta di quanto avrebbe fatto il silenzio." },
+        { label: "Nega e minimizza", hint: "Meno danno immediato, ma il sospetto resta aperto", effects: { reputazione: -2 }, judicialRiskDelta: 5, result: "Neghi e minimizzi: il danno immediato è minore, ma il sospetto resta aperto, e con esso il rischio." }
+      ] },
+    { title: "Una crisi familiare privata", brief: "Una crisi nella tua vita familiare — una separazione, un lutto, un conflitto — ti tiene lontano dai riflettori per qualche settimana.",
+      choices: [
+        { label: "Prenditi il tempo che serve, apertamente", hint: "Onesto, rischia di sembrare debole", effects: { reputazione: 1, visibilita: -4 }, result: "Ti prendi apertamente il tempo che serve: la maggior parte capisce, qualcuno ne approfitta politicamente." },
+        { label: "Vai avanti come se nulla fosse", hint: "Nessuna esposizione, ma il costo personale resta", effects: { visibilita: 1, reputazione: -1 }, result: "Vai avanti senza fermarti: all'esterno non cambia nulla, ma il prezzo personale lo paghi comunque." }
+      ] },
+    { title: "Una tua vecchia esternazione privata riemerge", brief: "Una tua dichiarazione privata di anni fa, mai pensata per il pubblico, riemerge e fa discutere.",
+      choices: [
+        { label: "Scusati apertamente", hint: "Costa nell'immediato, chiude la vicenda", effects: { reputazione: -3, visibilita: 3 }, result: "Le scuse pubbliche chiudono la vicenda, anche se lasciano un segno." },
+        { label: "Difendi il contesto originale", hint: "Meno resa, più rischio che la vicenda si prolunghi", effects: { reputazione: -1, visibilita: 4 }, result: "Difendi il contesto originale della frase: la polemica si prolunga qualche giorno in più, ma non ti pieghi." }
+      ] },
+    { title: "Il ritmo comincia a farsi sentire", brief: "Settimane senza sosta iniziano a pesare: stanchezza, irritabilità, qualche errore di troppo.",
+      choices: [
+        { label: "Fermati una settimana, apertamente", hint: "Costa in visibilità, ma recuperi lucidità", effects: { visibilita: -3, reputazione: 2 }, result: "Ti fermi una settimana: la macchina del partito rallenta un po', ma torni più lucido." },
+        { label: "Ignora il segnale e continua a spingere", hint: "Nessun costo immediato, rischio più alto nel tempo", effects: { reputazione: -1 }, result: "Ignori il segnale e continui a spingere: nessun costo oggi, ma il conto arriva sempre, prima o poi." }
+      ] }
+  ];
+  function buildPrivateLifeDossier() {
+    var p = state.player;
+    var style = effectiveLeaderStyle(p);
+    var negProb = clamp(0.35 * (style.privateScandalMult || 1), 0.1, 0.75);
+    var pool = Math.random() < negProb ? PRIVATE_LIFE_EVENTS_NEGATIVE : PRIVATE_LIFE_EVENTS_POSITIVE;
+    var tpl = pool[Math.floor(Math.random() * pool.length)];
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Vita Privata del Leader",
+      cat: "Vita Privata", title: tpl.title, brief: tpl.brief, choices: tpl.choices
+    };
+  }
+
   // ---------- Attori sociali e istituzionali ----------
   // Confindustria, i tre grandi sindacati, la Chiesa, la BCE/Commissione UE e la magistratura: ciascuno
   // ha un valore 0-100 (institutionalRelations) che deriva lentamente verso un equilibrio coerente con
@@ -5701,6 +5819,24 @@
     });
     state.resultData = { resultText: resultText, headlines: [] };
   }
+  // Dimissioni volontarie: a differenza della sconfitta alle primarie (subita), qui è una scelta del
+  // giocatore. Riusa esattamente la stessa infrastruttura di playerIsLeader/interimLeaderName — il
+  // partito prosegue sotto un dirigente interno, i dossier si auto-risolvono, e la primaria per
+  // riconquistare la guida (primarieLeadershipDossier) scatta comunque, agli stessi tempi di sempre.
+  function resolveResignation() {
+    var p = state.player;
+    if (!p.playerIsLeader) return;
+    var successor = primariesChallengerName(p);
+    p.playerIsLeader = false;
+    p.interimLeaderName = successor;
+    p.leaderTrust = clamp(40 + Math.random() * 15, 0, 100);
+    p.primariesCooldownTurn = state.turn + PRIMARIES_RETRY_COOLDOWN_TURNS;
+    var resultText = "Dai le dimissioni da leader di " + p.name + ": " + successor + " prende in mano la guida del partito da questa settimana. Potrai provare a riconquistarla alla prossima primaria, oppure lasciare che sia " + successor + " a portare avanti il progetto.";
+    state.log.unshift({ week: state.turn, title: "Dimissioni da leader", choiceLabel: "Dimissioni volontarie", result: resultText, headlines: [], type: "cronaca", cat: "Primarie di Partito" });
+    addDiaryEntry("Faccio un passo indietro", "Ho deciso di lasciare la guida, almeno per ora. Non è una resa — è la sensazione che in questo momento il partito abbia bisogno d'altro. " + successor + " prende il timone: vedremo cosa ne farà.");
+    save();
+    render();
+  }
   function resolvePrimariesChoice(dossier, choice) {
     var p = state.player;
     var challenger = choice.primariesChallenger || primariesChallengerName(p);
@@ -6053,6 +6189,18 @@
   // viceversa — lo stesso cambiamento proposto due o tre volte come se non fosse mai avvenuto. Questo
   // registro condiviso, per "noun" e non per titolo formattato, chiude il tema ovunque appena viene
   // sancito da uno qualsiasi dei tre meccanismi.
+  // ---------- Diario del Leader ----------
+  // Poche righe in prima persona ai momenti di vera svolta della carriera politica (fondazione, prima
+  // vittoria, primo governo, crollo del governo, scissione subita, svolta di regime, rivolta vinta,
+  // dimissioni...): un filo narrativo personale distinto dal log cronaca, che elenca invece OGNI singolo
+  // evento della partita senza gerarchia. Non ha un tetto: sono al massimo una manciata di voci a
+  // legislatura, mai un problema di crescita illimitata come lo era enactedPolicies.
+  function addDiaryEntry(title, text) {
+    var p = state.player;
+    if (!p) return;
+    if (!p.diaryEntries) p.diaryEntries = [];
+    p.diaryEntries.unshift({ week: state.turn, title: title, text: text });
+  }
   function markTopicNounResolved(noun) {
     if (!noun || !state.player) return;
     if (!state.player.resolvedTopicNouns) state.player.resolvedTopicNouns = [];
@@ -7940,7 +8088,8 @@
     foreignRelations: {}, euMembershipOverrides: {}, euFederalized: false,
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
     cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, cpuQuestionTimeCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
-    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null
+    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null,
+    countryEpochs: [], currentEpoch: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -7960,7 +8109,8 @@
     amendmentCooldownTurn: 0, pendingAmendment: null, amendmentCandidates: null, acceptedAmendments: [],
     institutionalRelations: { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 },
     judicialRisk: 8, institutionalActionCooldowns: {}, talkShowCooldownTurn: 0, intervistaCooldownTurn: 0,
-    lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false
+    lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
+    leaderTraits: [], privateLifeCooldownTurn: 0, diaryEntries: []
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -8255,7 +8405,7 @@
     var eff = choice.effects || {};
     var p = state.player;
     var before = { iscritti: p.iscritti, fondi: p.fondi, reputazione: p.reputazione, visibilita: p.visibilita, sondaggi: p.sondaggi };
-    var style = leadershipById(p.leadership);
+    var style = effectiveLeaderStyle(p);
     var isPolicy = dossier.cat && dossier.cat.indexOf("Politica") === 0;
     var entiBoost = isPolicy ? staffBonus("responsabile_enti_locali", 0.2) : 1;
     var strategicoDamp = staffDamp("consigliere_strategico", 0.25);
@@ -8355,13 +8505,14 @@
   function recomputePeriodic() {
     var p = state.player;
     if (!p) return;
-    var style = leadershipById(p.leadership);
+    var style = effectiveLeaderStyle(p);
     var countryTrendDelta = computeCountryTrendDelta();
     driftConsensoGovernoByCountryTrend(countryTrendDelta);
     driftCountryProfile();
     checkLongTermTrackMilestones();
     driftPartyRelations();
     driftInstitutionalRelations();
+    sampleCurrentEpochMood();
     if (!p.lobby && !p.lobbyOfferSeen && checkLobbyEligible(p) && Math.random() < 0.03) p.lobbyOfferSeen = true;
     driftBilancioStato();
     driftConsensoGoverno();
@@ -8843,6 +8994,7 @@
           " cade, il partito che guidava il regime si scioglie, e il paese si prepara a tornare libero alle urne dopo una lunga notte.",
         headlines: [], type: "regime"
       });
+      addDiaryEntry("Abbiamo vinto, e non ci credo ancora", "Ce l'abbiamo fatta. " + regimeLabel + " è caduta, e con essa una notte che sembrava non dover finire mai. Ora ricomincia tutto, ma stavolta si riparte liberi.");
       return { resultText: "La rivolta ha successo: il regime cade, " + fallenLabel + " si scioglie, si torna presto al voto.", headlines: [] };
     }
     p.civilWarCooldownTurn = state.turn + CIVIL_WAR_COOLDOWN_FAIL_TURNS;
@@ -9231,6 +9383,7 @@
       // valore ereditato dalla legislatura precedente: la fiducia racconta il rapporto tra QUESTO
       // governo e il paese, non un contatore che continua a scendere elezione dopo elezione.
       state.consensoGoverno = 50;
+      openNewEpoch();
     }
 
     // Trova l'entità che include davvero il giocatore tra i suoi membri, non più per id fisso
@@ -9243,11 +9396,20 @@
     p.seatsCamera = seatsById.player.camera;
     p.seatsSenato = seatsById.player.senato;
     p.inParliament = p.seatsCamera > 0 || p.seatsSenato > 0;
+    var wasEverElectedBefore = p.everElected;
     p.everElected = p.everElected || p.inParliament;
     // registrato ora perché allianceId viene azzerato qui sotto in vista del prossimo ciclo elettorale
     var playerEntityId = p.allianceId || "player";
     var prevParliamentRole = p.parliamentRole;
     p.parliamentRole = p.inParliament ? (winner && playerEntityId === winner.id ? "governo" : "opposizione") : null;
+    if (!wasEverElectedBefore && p.inParliament) {
+      addDiaryEntry("Entriamo in Parlamento", p.name + " ce l'ha fatta: " + fmt1(p.seatsCamera + p.seatsSenato) + " seggi tra Camera e Senato. Non è la vittoria finale, ma da oggi la nostra voce conta davvero in Aula.");
+    }
+    if (prevParliamentRole !== "governo" && p.parliamentRole === "governo") {
+      addDiaryEntry("Andiamo al governo", "Non ci speravo fino all'ultimo. Da questa settimana " + p.name + " è al governo: ora tocca a noi rispondere delle scelte, non solo criticare quelle degli altri.");
+    } else if (prevParliamentRole === "governo" && p.parliamentRole !== "governo") {
+      addDiaryEntry("Torniamo all'opposizione", "Il governo è finito, e con esso il nostro tempo al comando. Si ricomincia dai banchi dell'opposizione — non è la fine, solo un capitolo diverso.");
+    }
     // Alcune mozioni candidate hanno senso solo per chi sta all'opposizione (es. "di contrasto sul
     // Governo"): se il ruolo cambia con questa elezione, le candidate già in cache vanno rigenerate,
     // altrimenti resterebbero visibili quelle scelte con il ruolo precedente fino al prossimo reroll.
@@ -9500,6 +9662,13 @@
         return '<button type="button" class="option-card' + (d.leadership === l.id ? " selected" : "") + '" data-leadership="' + l.id + '">' +
           '<span class="olabel">' + l.label + '</span><span class="odesc">' + l.desc + '</span></button>';
       }).join("") + "</div></div>" +
+      '<div class="field"><label class="field-label">Tratti personali del leader (scegline esattamente 2)</label><div class="option-grid">' +
+      LEADER_TRAITS.map(function (t) {
+        var selected = (d.leaderTraits || []).indexOf(t.id) !== -1;
+        return '<button type="button" class="option-card' + (selected ? " selected" : "") + '" data-trait="' + t.id + '">' +
+          '<span class="olabel">' + t.label + '</span><span class="odesc">' + t.desc + '</span></button>';
+      }).join("") + "</div>" +
+      '<p class="field-hint">A differenza dello stile di leadership (il modo di fare politica), i tratti descrivono la persona: restano fissi per tutta la partita, con un effetto più contenuto, che si somma allo stile scelto sopra.</p></div>' +
       '<div class="field"><label class="field-label" for="leader-character-input">Carattere del leader (facoltativo)</label>' +
       '<textarea id="leader-character-input" maxlength="250" placeholder="Es. Cauto, parla poco ma pesa le parole, evita gli scontri diretti in TV">' +
       (d.leaderCharacter || "").replace(/</g, "&lt;") + '</textarea>' +
@@ -9565,6 +9734,21 @@
         renderSetup();
       });
     });
+    app.querySelectorAll("[data-trait]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-trait");
+        if (!state.setupDraft.leaderTraits) state.setupDraft.leaderTraits = [];
+        var traits = state.setupDraft.leaderTraits;
+        var idx = traits.indexOf(id);
+        if (idx !== -1) {
+          traits.splice(idx, 1);
+        } else {
+          if (traits.length >= 2) traits.shift();
+          traits.push(id);
+        }
+        renderSetup();
+      });
+    });
     var setupLogoInput = document.getElementById("setup-logo-input");
     if (setupLogoInput) {
       setupLogoInput.addEventListener("change", function () {
@@ -9590,14 +9774,23 @@
       var name = (d.name || "").trim() || "Nuovo Movimento";
       if (!d.family) { showSaveStatus("Scegli un'area politica per il tuo partito.", true); return; }
       if (!d.leadership) { showSaveStatus("Scegli uno stile di leadership per il tuo partito.", true); return; }
+      if (!d.leaderTraits || d.leaderTraits.length !== 2) { showSaveStatus("Scegli esattamente 2 tratti personali per il leader.", true); return; }
       state.player = Object.assign({
         name: name, motto: (d.motto || "").trim(), color: d.color, family: d.family, leadership: d.leadership,
         ideologyText: (d.ideologyText || "").trim(), leaderCharacter: (d.leaderCharacter || "").trim(),
         iscritti: 80, sezioni: 1, fondi: 6000, reputazione: 55, visibilita: 0,
         sondaggi: 0, sondaggiHistory: [0]
       }, JSON.parse(JSON.stringify(PLAYER_FIELD_DEFAULTS)));
+      // Va assegnato DOPO l'Object.assign, non dentro l'oggetto letterale sopra: PLAYER_FIELD_DEFAULTS è
+      // il secondo argomento di Object.assign, quindi le sue chiavi (leaderTraits incluso) sovrascrivono
+      // sempre quelle del primo oggetto, azzerando altrimenti i tratti appena scelti in fase di setup.
+      state.player.leaderTraits = d.leaderTraits.slice();
       state.player.logoDataUrl = d.logoDataUrl || null;
       state.player.short = (d.short || "").trim() || null;
+      addDiaryEntry(isTakeover ? "Prendo il comando" : "Il primo giorno",
+        isTakeover
+          ? "Da oggi " + state.player.name + " è nelle mie mani. Eredito una storia che non ho scritto io, ma da qui in avanti la direzione la do io."
+          : "Oggi nasce " + state.player.name + ". Non abbiamo ancora nulla — solo un nome, un'idea, e la voglia di provarci sul serio.");
       if (isTakeover) {
         // Prendere il comando di un partito reale significa ereditarne davvero la forza attuale, non
         // ripartire da zero: consensi, iscritti stimati e radicamento territoriale proporzionati ai
@@ -10117,10 +10310,23 @@
   function renderIdeologyProfile() {
     var p = state.player;
     var fam = familyById(p.family);
+    var traitsHtml = (p.leaderTraits && p.leaderTraits.length)
+      ? '<div class="field"><label class="field-label">Tratti personali del leader</label><p class="ci-hint">' +
+        p.leaderTraits.map(function (id) {
+          var t = leaderTraitById(id);
+          return t ? "<strong>" + t.label + "</strong> — " + t.desc : "";
+        }).join(" · ") + " Fissi per tutta la partita.</p></div>"
+      : "";
+    var resignHtml = p.playerIsLeader
+      ? '<div class="field"><label class="field-label">Guida del partito</label>' +
+        '<p class="ci-hint">Puoi lasciare la guida del partito in qualsiasi momento: un dirigente interno prenderà il tuo posto, e potrai provare a riconquistarla a una prossima primaria, oppure lasciare che sia lui a portare avanti il progetto.</p>' +
+        '<button type="button" class="staff-btn" id="resign-btn">Dai le dimissioni da leader</button></div>'
+      : "";
     var html = '<section aria-label="Profilo ideologico"><details class="log">' +
       '<summary>Ideologia e leader<span>▾</span></summary>' +
       '<div class="staff-grid" style="grid-template-columns:1fr">' +
       renderLogoUploadField(p.logoDataUrl, p.color, p.name, "logo-upload-input", "logo-remove-btn") +
+      traitsHtml +
       '<div class="field"><label class="field-label" for="party-name-edit-input">Nome del partito</label>' +
       '<input type="text" id="party-name-edit-input" maxlength="40" placeholder="Es. Alleanza Civica Italiana" value="' + (p.name || "").replace(/"/g, "&quot;") + '">' +
       '<p class="field-hint">Il nome per esteso, sempre visibile nella scheda "Partiti politici".</p></div>' +
@@ -10141,7 +10347,25 @@
       '<textarea id="leader-character-edit-input" maxlength="250" placeholder="Es. Cauto, parla poco, evita gli scontri diretti in TV">' +
       (p.leaderCharacter || "").replace(/</g, "&lt;") + '</textarea></div>' +
       '<button class="save-bar-btn primary" id="save-ideology-btn" type="button" style="align-self:flex-start">Salva</button>' +
+      resignHtml +
       "</div></details></section>";
+    return html;
+  }
+
+  // Diario del Leader: il filo narrativo personale, distinto dal log cronaca (che elenca tutto senza
+  // gerarchia) — solo i momenti che il leader stesso, con la sua voce, sceglierebbe di ricordare.
+  function renderLeaderDiary() {
+    var p = state.player;
+    var entries = p.diaryEntries || [];
+    if (!entries.length) {
+      return '<section aria-label="Diario del Leader"><details class="log"><summary>Diario del Leader<span>▾</span></summary>' +
+        '<p class="ci-hint">Il diario resta vuoto finché non arriva il primo vero momento di svolta — la fondazione del partito è già registrata, il resto lo scriverà la partita.</p></details></section>';
+    }
+    var html = '<section aria-label="Diario del Leader"><details class="log"><summary>Diario del Leader<span>▾</span></summary>' +
+      '<p class="ci-hint">Poche righe in prima persona ai momenti che hanno davvero segnato la carriera politica — non un resoconto di tutto, solo quello che conta ricordare.</p>' +
+      '<ul class="enacted-policy-list">' + entries.map(function (e) {
+        return '<li><strong>' + e.title + '</strong> <span class="ci-hint">(' + weekLabel(e.week) + ')</span><br><em>' + e.text + '</em></li>';
+      }).join("") + '</ul></details></section>';
     return html;
   }
 
@@ -10397,6 +10621,66 @@
     var party = partyById(ge.id);
     if (party) return party.name;
     return ge.id;
+  }
+  // ---------- Storia del Paese: epoche di governo ----------
+  // Un'epoca comincia a ogni nuova legislatura (vedi resolveElection) e si chiude quando la successiva
+  // inizia: durante l'epoca si raccolgono periodicamente campioni dell'umore nazionale (stesso paniere
+  // economia/occupazione/felicità/sicurezza già usato altrove), così alla chiusura si può dare all'epoca
+  // un nome coerente con come è andata davvero, non solo con chi ha governato. Comincia a raccontare la
+  // storia solo da qui in avanti: non c'è modo di ricostruire con precisione le epoche di una partita già
+  // avviata prima di questa funzionalità (a differenza di mozioni/leggi/referendum, non esiste un
+  // registro storico di countryProfile per ogni settimana passata).
+  function sampleCurrentEpochMood() {
+    if (!state.currentEpoch) return;
+    var cp = state.countryProfile;
+    var mood = (cp.economia + cp.disoccupazione + cp.felicita + cp.sicurezza) / 4;
+    if (!state.currentEpoch.moodSamples) state.currentEpoch.moodSamples = [];
+    state.currentEpoch.moodSamples.push(mood);
+    if (state.currentEpoch.moodSamples.length > 60) state.currentEpoch.moodSamples.shift();
+  }
+  function epochMoodDescriptor(avg) {
+    if (avg >= 8) return "Prosperi";
+    if (avg >= 6.5) return "Sereni";
+    if (avg >= 5) return "Ordinari";
+    if (avg >= 3.5) return "Difficili";
+    return "Bui";
+  }
+  function closeCurrentEpoch() {
+    var e = state.currentEpoch;
+    if (!e) return;
+    var samples = e.moodSamples && e.moodSamples.length ? e.moodSamples : [5.5];
+    var avgMood = samples.reduce(function (s, v) { return s + v; }, 0) / samples.length;
+    var name = e.regimeType
+      ? "Gli Anni di " + REGIME_LABELS[e.regimeType].name
+      : "Gli Anni " + epochMoodDescriptor(avgMood) + " " + (e.govLabel ? "del " + e.govLabel : "");
+    var summary = (e.govLabel || "Nessun governo definito") + " ha guidato il paese dalla settimana " + e.startWeek +
+      " alla " + state.turn + " (" + (state.turn - e.startWeek) + " settimane, Legislatura " + e.legislature + "), con un clima nazionale medio " +
+      epochMoodDescriptor(avgMood).toLowerCase() + " (" + fmt1(avgMood) + "/10)" + (e.regimeType ? ", sotto " + REGIME_LABELS[e.regimeType].name + "." : ".");
+    if (!state.countryEpochs) state.countryEpochs = [];
+    state.countryEpochs.unshift({ startWeek: e.startWeek, endWeek: state.turn, legislature: e.legislature, govLabel: e.govLabel, name: name, summary: summary });
+    state.currentEpoch = null;
+  }
+  function openNewEpoch() {
+    closeCurrentEpoch();
+    state.currentEpoch = { startWeek: state.turn, legislature: state.legislature, govLabel: govEntityLabel(), regimeType: state.regime ? state.regime.type : null, moodSamples: [] };
+  }
+  function renderCountryHistory() {
+    var epochs = state.countryEpochs || [];
+    var html = '<section aria-label="Storia del Paese"><details class="log"><summary>Storia del Paese<span>▾</span></summary>' +
+      '<p class="ci-hint">Una cronaca delle grandi epoche di governo, con un nome che riassume come sono andate davvero — comincia a registrarle da qui in avanti, non ricostruisce il passato di una partita già avviata.</p>';
+    if (state.currentEpoch) {
+      html += '<p class="eyebrow" style="margin-top:0.6rem">Epoca in corso</p><p class="ci-hint"><strong>' + (state.currentEpoch.govLabel || "Nessun governo definito") +
+        '</strong> guida il paese dalla settimana ' + state.currentEpoch.startWeek + " (Legislatura " + state.currentEpoch.legislature + ").</p>";
+    }
+    if (epochs.length) {
+      html += '<ul class="enacted-policy-list">' + epochs.map(function (e) {
+        return '<li><strong>' + e.name + '</strong> <span class="ci-hint">(settimane ' + e.startWeek + '–' + e.endWeek + ')</span><br>' + e.summary + '</li>';
+      }).join("") + '</ul>';
+    } else {
+      html += '<p class="ci-hint">Nessuna epoca ancora chiusa: la prima verrà registrata alla prossima elezione.</p>';
+    }
+    html += "</details></section>";
+    return html;
   }
   // Chi vincerebbe SE si votasse oggi, sui sondaggi attuali — non è chi governa davvero (quello resta
   // fisso a chi ha vinto l'ultima elezione reale, vedi state.govEntity in resolveElection, fino al voto
@@ -11636,7 +11920,7 @@
   // pagina lunghissima.
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
-        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderIdeologyProfile();
+        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
@@ -11651,7 +11935,7 @@
         return renderReunificationPanel() + renderCoalitionPanel();
       } },
     { id: "paese", label: "Scheda Paese e Bilancio dello Stato", render: function () {
-        return renderNationalStrip() + renderCountryProfile() + renderBilancioStato() + renderBudgetAllocation();
+        return renderNationalStrip() + renderCountryProfile() + renderCountryHistory() + renderBilancioStato() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -11670,6 +11954,7 @@
   // "state"), così non finisce mai nel salvataggio ma resta comunque coerente ad ogni render(), che
   // ricostruisce sempre l'intero DOM da zero.
   var navDrawerOpen = false;
+  var resignArmed = false;
   function renderPageNav() {
     var current = activePageDef().id;
     var items = PAGE_DEFS.map(function (pg) {
@@ -11954,6 +12239,7 @@
           // superare il limite promesso (es. 31 invece di 30). A tetto raggiunto la corrente se ne va lo
           // stesso, ma si disperde invece di fondare un soggetto autonomo.
           var correnteLbl = correnteLabel(risky.id);
+          addDiaryEntry("Una ferita interna", "La " + correnteLbl + " se n'è andata. Non è mai facile vedere andar via chi ha camminato con te — anche quando lo strappo è, in fondo, inevitabile.");
           if (activeParties().length < PARTY_COUNT_CAP) {
             var pseudoParent = { id: "player_party", name: state.player.name, color: state.player.color, famiglia: familyById(state.player.family).label, familyId: state.player.family };
             var splinter = generateSplinterParty(pseudoParent, state.turn);
@@ -12033,10 +12319,12 @@
       } else if (dossier.id === "gov_instaura_regime") {
         if (choice.instauraRegime) {
           applyRegimeConsequences({ type: choice.regimeTypeChoice, winnerLabel: state.player.name, votes: state.player.sondaggi, isPlayer: true });
+          addDiaryEntry("Il giorno che ho cambiato tutto", "Oggi ho scelto di rompere con la democrazia parlamentare così come la conoscevamo. So cosa significa, e so che la storia mi giudicherà per questo — ma non torno indietro.");
         }
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_ripristina_democrazia") {
         if (choice.ripristinaDemocrazia) {
+          addDiaryEntry("Restituiamo la parola al popolo", "Smantelliamo quello che avevamo costruito. Che sia stata la scelta giusta o no, da oggi il paese torna a decidere da solo, con libere elezioni.");
           // Non riporta indietro le conseguenze geopolitiche già avvenute sotto il regime (l'eventuale
           // uscita da NATO/UE resta un fatto storico, non si "rientra" con un click): qui si smantella
           // solo l'assetto istituzionale, ripristinando libere elezioni dopo un periodo di transizione.
@@ -12076,6 +12364,12 @@
         resolveCpuLeggeChoice(dossier, choice);
       } else if (dossier.cpuAmendmentMeta) {
         resolveCpuAmendmentChoice(dossier, choice);
+      } else if (dossier.cat === "Vita Privata") {
+        var plRes = applyChoice(dossier, choice);
+        if (choice.judicialRiskDelta && state.player.judicialRisk !== undefined) {
+          state.player.judicialRisk = clamp(state.player.judicialRisk + choice.judicialRiskDelta, 1, 95);
+        }
+        state.resultData = plRes;
       } else {
         var res = applyChoice(dossier, choice);
         state.resultData = res;
@@ -12759,6 +13053,20 @@
         render();
       });
     }
+    var resignBtn = document.getElementById("resign-btn");
+    if (resignBtn) {
+      resignBtn.addEventListener("click", function () {
+        if (!resignArmed) {
+          resignArmed = true;
+          resignBtn.textContent = "Confermi le dimissioni?";
+          resignBtn.classList.add("confirm");
+          setTimeout(function () { resignArmed = false; resignBtn.textContent = "Dai le dimissioni da leader"; resignBtn.classList.remove("confirm"); }, 4000);
+          return;
+        }
+        resignArmed = false;
+        resolveResignation();
+      });
+    }
     // Apre il selettore file cliccando un bottone vero invece di affidarsi al solo abbinamento
     // <label for="..."> con l'input nascosto: su alcuni browser mobili (in particolare Safari su iOS)
     // quell'abbinamento può non aprire in modo affidabile il selettore file quando l'input ha
@@ -13162,6 +13470,14 @@
     if (p.inParliament && state.turn >= (state.nextPresidentElectionTurn || 260)) {
       state.nextPresidentElectionTurn = state.turn + 364;
       state.aiDynamicDossier = generatePresidentDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (state.turn >= (p.privateLifeCooldownTurn || 0) && Math.random() < 0.05) {
+      p.privateLifeCooldownTurn = state.turn + PRIVATE_LIFE_COOLDOWN_TURNS;
+      state.aiDynamicDossier = buildPrivateLifeDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
