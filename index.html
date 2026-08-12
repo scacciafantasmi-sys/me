@@ -6218,6 +6218,18 @@
     var filtered = topicPool.filter(function (t) { return resolvedNouns.indexOf(t.noun) === -1; });
     return filtered.length ? filtered : topicPool;
   }
+  // Su partite molto lunghe il pool di argomenti di una singola famiglia (o della proposta generale) può
+  // esaurirsi del tutto: a quel punto filterUnresolvedTopics ripesca da tutto il pool, comprese le voci già
+  // risolte. Prima questo produceva mozioni/leggi CPU identiche a quelle già approvate, come se il tema non
+  // fosse mai stato affrontato — la stessa sensazione di un "reset" del progresso. pickCpuTopic segnala
+  // esplicitamente quando sta ripescando un tema già chiuso, così chi costruisce il dossier può inquadrarlo
+  // come un intervento successivo su un tema già affrontato, non come una proposta inedita.
+  function pickCpuTopic(topicPool) {
+    var resolvedNouns = (state.player && state.player.resolvedTopicNouns) || [];
+    var fresh = resolvedNouns.length ? topicPool.filter(function (t) { return resolvedNouns.indexOf(t.noun) === -1; }) : topicPool;
+    if (fresh.length) return { topic: fresh[Math.floor(Math.random() * fresh.length)], isRevisit: false };
+    return { topic: topicPool[Math.floor(Math.random() * topicPool.length)], isRevisit: true };
+  }
 
   // ---------- Referendum nazionali ----------
   // Evento raro (una volta ogni 90-150 settimane circa): il paese vota, e l'esito reale (sì/no) resta
@@ -7244,8 +7256,8 @@
     var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = lawTopicsGeneral();
     if (!topicPool.length) return null;
-    topicPool = filterUnresolvedTopics(topicPool);
-    var topic = topicPool[Math.floor(Math.random() * topicPool.length)];
+    var picked = pickCpuTopic(topicPool);
+    var topic = picked.topic;
     var baseProb;
     if (isGovProposer) {
       baseProb = 0.72 + Math.random() * 0.15;
@@ -7254,14 +7266,17 @@
       var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
       baseProb = (myPos === undefined || govPos === undefined) ? 0.2 : clamp(0.55 - (Math.abs(myPos - govPos) / 6) * 0.5, 0.03, 0.55);
     }
-    var brief = proposer.name + " deposita in Parlamento una proposta di legge su " + topic.noun +
-      (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") +
-      " Come si schiera il tuo gruppo sul voto finale?";
+    var brief = picked.isRevisit
+      ? proposer.name + " torna in Parlamento con un ulteriore intervento legislativo su " + topic.noun + ", a distanza di tempo dal primo intervento su questo tema" +
+        (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") + " Come si schiera il tuo gruppo sul voto finale?"
+      : proposer.name + " deposita in Parlamento una proposta di legge su " + topic.noun +
+        (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") +
+        " Come si schiera il tuo gruppo sul voto finale?";
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
       eyebrow: (isGovProposer ? "Proposta di legge della maggioranza di governo" : "Proposta di legge di un partito d'opposizione") + " — vota anche il tuo gruppo",
-      cat: "Proposta di Legge", title: topic.title + " (" + proposer.short + ")", brief: brief,
-      cpuLeggeMeta: { proposerId: proposer.id, proposerName: proposer.name, metric: topic.metric, noun: topic.noun, baseProb: baseProb, isGovProposer: isGovProposer },
+      cat: "Proposta di Legge", title: (picked.isRevisit ? topic.title + " — Nuovo Intervento" : topic.title) + " (" + proposer.short + ")", brief: brief,
+      cpuLeggeMeta: { proposerId: proposer.id, proposerName: proposer.name, metric: topic.metric, noun: topic.noun, baseProb: baseProb, isGovProposer: isGovProposer, isRevisit: picked.isRevisit },
       choices: [
         { label: "Vota a favore", mozioneVote: "favore", effects: {}, result: "" },
         { label: "Vota contro", mozioneVote: "contro", effects: {}, result: "" },
@@ -7293,12 +7308,16 @@
     var voteNote = choice.mozioneVote === "favore" ? "con il voto favorevole anche del tuo gruppo"
       : choice.mozioneVote === "contro" ? "nonostante il voto contrario del tuo gruppo" : "con il tuo gruppo astenuto";
     var esito = passed
-      ? "La proposta di legge di " + meta.proposerName + " su " + meta.noun + " viene approvata in via definitiva dall'Aula, " + voteNote + ": " + meta.noun + " diventa legge dello Stato."
+      ? (meta.isRevisit
+        ? "La proposta di legge di " + meta.proposerName + " su " + meta.noun + " viene approvata in via definitiva dall'Aula, " + voteNote + ": un ulteriore intervento normativo si aggiunge a quanto già stabilito in passato su " + meta.noun + "."
+        : "La proposta di legge di " + meta.proposerName + " su " + meta.noun + " viene approvata in via definitiva dall'Aula, " + voteNote + ": " + meta.noun + " diventa legge dello Stato.")
       : "La proposta di legge di " + meta.proposerName + " su " + meta.noun + " viene respinta dall'Aula, " + voteNote + ": il tema resta comunque acceso nel dibattito pubblico.";
     if (passed) {
       if (!p.acceptedLeggi) p.acceptedLeggi = [];
       p.acceptedLeggi.push(dossier.title.split(" (")[0]);
-      recordEnactedPolicy(dossier.title.split(" (")[0], "Legge approvata (proposta da " + meta.proposerName + "): " + meta.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.");
+      recordEnactedPolicy(dossier.title.split(" (")[0], meta.isRevisit
+        ? ("Ulteriore intervento legislativo (proposta da " + meta.proposerName + "): un nuovo intervento normativo si aggiunge a quanto già stabilito su " + meta.noun + ".")
+        : ("Legge approvata (proposta da " + meta.proposerName + "): " + meta.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta."));
       markTopicNounResolved(meta.noun);
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
@@ -7321,8 +7340,8 @@
     var topicPool = proposer.familyId ? mozioneTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = mozioneTopicsGeneral();
     if (!topicPool.length) return null;
-    topicPool = filterUnresolvedTopics(topicPool);
-    var topic = topicPool[Math.floor(Math.random() * topicPool.length)];
+    var picked = pickCpuTopic(topicPool);
+    var topic = picked.topic;
     var baseProb;
     if (isGovProposer) {
       baseProb = 0.8 + Math.random() * 0.12;
@@ -7331,14 +7350,17 @@
       var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
       baseProb = (myPos === undefined || govPos === undefined) ? 0.35 : clamp(0.78 - (Math.abs(myPos - govPos) / 6) * 0.68, 0.06, 0.78);
     }
-    var brief = proposer.name + " presenta in Aula una mozione su " + topic.noun +
-      (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") +
-      " Come si schiera il tuo gruppo?";
+    var brief = picked.isRevisit
+      ? proposer.name + " torna in Aula con una nuova mozione su " + topic.noun + ", a distanza di tempo dalla prima presentata su questo tema" +
+        (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") + " Come si schiera il tuo gruppo?"
+      : proposer.name + " presenta in Aula una mozione su " + topic.noun +
+        (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") +
+        " Come si schiera il tuo gruppo?";
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
       eyebrow: (isGovProposer ? "Mozione della maggioranza di governo" : "Mozione di un partito d'opposizione") + " — vota anche il tuo gruppo",
-      cat: "Mozione Parlamentare", title: topic.title + " (" + proposer.short + ")", brief: brief,
-      cpuMozioneMeta: { proposerId: proposer.id, proposerName: proposer.name, metric: topic.metric, noun: topic.noun, baseProb: baseProb, isGovProposer: isGovProposer },
+      cat: "Mozione Parlamentare", title: (picked.isRevisit ? topic.title + " — Nuova Mozione" : topic.title) + " (" + proposer.short + ")", brief: brief,
+      cpuMozioneMeta: { proposerId: proposer.id, proposerName: proposer.name, metric: topic.metric, noun: topic.noun, baseProb: baseProb, isGovProposer: isGovProposer, isRevisit: picked.isRevisit },
       choices: [
         { label: "Vota a favore", mozioneVote: "favore", effects: {}, result: "" },
         { label: "Vota contro", mozioneVote: "contro", effects: {}, result: "" },
@@ -7370,12 +7392,16 @@
     var voteNote = choice.mozioneVote === "favore" ? "con il voto favorevole anche del tuo gruppo"
       : choice.mozioneVote === "contro" ? "nonostante il voto contrario del tuo gruppo" : "con il tuo gruppo astenuto";
     var esito = passed
-      ? "La mozione di " + meta.proposerName + " su " + meta.noun + " viene approvata dall'Aula, " + voteNote + ": entra ufficialmente nell'agenda del paese."
+      ? (meta.isRevisit
+        ? "La mozione di " + meta.proposerName + " su " + meta.noun + " viene approvata dall'Aula, " + voteNote + ": un ulteriore atto di indirizzo si aggiunge a quanto già deciso in passato su " + meta.noun + "."
+        : "La mozione di " + meta.proposerName + " su " + meta.noun + " viene approvata dall'Aula, " + voteNote + ": entra ufficialmente nell'agenda del paese.")
       : "La mozione di " + meta.proposerName + " su " + meta.noun + " viene respinta dall'Aula, " + voteNote + ": il tema resta comunque acceso nel dibattito pubblico.";
     if (passed) {
       if (!p.acceptedMozioni) p.acceptedMozioni = [];
       p.acceptedMozioni.push(dossier.title.split(" (")[0]);
-      recordEnactedPolicy(dossier.title.split(" (")[0], "Mozione approvata (proposta da " + meta.proposerName + "): " + meta.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta.");
+      recordEnactedPolicy(dossier.title.split(" (")[0], meta.isRevisit
+        ? ("Ulteriore atto parlamentare (proposta da " + meta.proposerName + "): un nuovo atto di indirizzo si aggiunge a quanto già deciso su " + meta.noun + ".")
+        : ("Mozione approvata (proposta da " + meta.proposerName + "): " + meta.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta."));
       markTopicNounResolved(meta.noun);
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Mozione Parlamentare" });
