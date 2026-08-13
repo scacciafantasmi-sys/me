@@ -346,10 +346,22 @@
   .option-card {
     text-align: left; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
     padding: 0.75rem 0.9rem; color: var(--text); min-height: 44px;
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
   }
+  .option-card:hover:not([disabled]), .option-card:focus-visible:not([disabled]) { border-color: var(--accent); background: var(--accent-soft); }
+  .option-card:active:not([disabled]) { transform: scale(0.99); }
+  .option-card[disabled] { opacity: 0.5; cursor: not-allowed; }
   .option-card.selected { border-color: var(--accent); background: var(--accent-soft); }
   .option-card .olabel { font-weight: 600; display: block; margin-bottom: 0.2rem; font-size: 0.92rem; }
   .option-card .odesc { font-size: 0.78rem; color: var(--text-dim); line-height: 1.4; }
+  .fiscal-input {
+    width: 5.5rem; padding: 0.4rem 0.5rem; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); font-family: var(--font-mono); font-size: 1rem;
+    text-align: right; transition: border-color 0.15s ease;
+  }
+  .fiscal-input:focus-visible { outline: none; border-color: var(--accent); }
+  .fiscal-input[disabled] { opacity: 0.5; }
+  .fiscal-input::-webkit-outer-spin-button, .fiscal-input::-webkit-inner-spin-button { opacity: 0.6; }
   /* Espansione inline di una presa di posizione (Geopolitica / Iniziative UE): appare direttamente
      sotto la scheda cliccata, dentro la stessa griglia, invece di sostituire il dossier in cima alla
      pagina — vedi grid-column:1/-1 inline nel markup per farla occupare tutta la riga. */
@@ -963,6 +975,154 @@
     state.deficitPil = clamp(-saldo / 2100 * 100, -1, 12);
     state.debitoPil = clamp(state.debitoPil + (saldo < 0 ? 0.04 : -0.03), 80, 220);
   }
+  // ---------- Tensione Geopolitica, Conflitti Regionali e Guerra Mondiale ----------
+  // Un termometro globale (0-100) che sale e scende lentamente nel tempo, con scatti improvvisi legati
+  // a crisi che scoppiano da sole (non solo per scelte del giocatore): più sale, più cresce il rischio
+  // che scoppi un vero conflitto regionale da qualche parte nel mondo, e nei casi più estremi — tensione
+  // fuori scala E più conflitti regionali aperti insieme — che degeneri in una guerra mondiale vera e
+  // propria. La reazione dell'Italia (belligerante al fianco della NATO/Occidente, neutralità assoluta,
+  // o una linea autonoma se già fuori dalla NATO) è una scelta del giocatore quando governa, con
+  // conseguenze reali e durature su difesa, economia e relazioni diplomatiche — non un'esito a senso
+  // unico, ma un esito che si scopre solo dopo settimane vere di sviluppo, come il Programma Spaziale.
+  function driftGeopoliticalTension() {
+    var baseline = 35;
+    var drift = (baseline - state.geopoliticalTension) * 0.03 + (Math.random() - 0.5) * 2;
+    if (Math.random() < 0.06) drift += rand(3, 10);
+    state.geopoliticalTension = clamp(state.geopoliticalTension + drift, 0, 100);
+  }
+  var REGIONAL_WAR_TENSION_THRESHOLD = 62;
+  var REGIONAL_WAR_COOLDOWN_TURNS = 50;
+  var CONFLICT_REGIONS = [
+    "il Caucaso", "il Corno d'Africa", "l'Asia Centrale", "i Balcani", "il Golfo Persico",
+    "il Mar Cinese Meridionale", "il Sahel", "la penisola coreana", "l'Europa dell'Est", "il Nord Africa"
+  ];
+  function checkRegionalWarTrigger() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return false;
+    if (state.turn < (state.regionalWarCooldownTurn || 0)) return false;
+    if (state.geopoliticalTension < REGIONAL_WAR_TENSION_THRESHOLD) return false;
+    return Math.random() < 0.05;
+  }
+  function buildRegionalWarDossier() {
+    state.regionalWarCooldownTurn = state.turn + REGIONAL_WAR_COOLDOWN_TURNS;
+    var region = CONFLICT_REGIONS[Math.floor(Math.random() * CONFLICT_REGIONS.length)];
+    var involvedA = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
+    var involvedB = WORLD_NATIONS.filter(function (n) { return n.id !== involvedA.id; })[Math.floor(Math.random() * (WORLD_NATIONS.length - 1))];
+    var conflict = { id: "conflict_" + state.turn, region: region, sideA: involvedA.name, sideB: involvedB.name, startWeek: state.turn };
+    state.activeConflicts.push(conflict);
+    state.geopoliticalTension = clamp(state.geopoliticalTension + rand(5, 12), 0, 100);
+    return {
+      id: "geo_regional_war", kind: "notizia", cat: "Politica Estera",
+      eyebrow: "Scoppia un nuovo conflitto regionale", title: "Guerra in " + region,
+      brief: "La crisi in " + region + " degenera in un conflitto armato aperto tra " + involvedA.name + " e " + involvedB.name + ". Il mondo osserva con apprensione: come si posiziona il governo italiano?",
+      geoConflictId: conflict.id,
+      choices: [
+        { label: "Invia aiuti umanitari alla popolazione civile", hint: "Postura equilibrata, costo contenuto", effects: { fondi: -400, reputazione: 2, national: { relazioniDiplomatiche: 0.4, felicita: 0.2 } },
+          result: "L'Italia invia aiuti umanitari alla popolazione colpita dal conflitto, senza schierarsi apertamente con una delle parti." },
+        { label: "Fornisci supporto militare a " + involvedA.name, hint: "Schieramento netto, rischio di ritorsioni", effects: { fondi: -900, national: { relazioniDiplomatiche: -0.3, difesa: 0.3, economia: -0.3 } },
+          result: "Il governo sceglie di fornire supporto militare a " + involvedA.name + ": un passo che rafforza quell'alleanza ma espone l'Italia a possibili ritorsioni diplomatiche ed economiche." },
+        { label: "Contribuisci a una missione di pace NATO/ONU", hint: "Linea multilaterale, costo maggiore", effects: { fondi: -1500, reputazione: 3, national: { relazioniDiplomatiche: 0.7, difesa: 0.2 } },
+          result: "L'Italia partecipa a una missione di pace internazionale nella regione, rafforzando il proprio ruolo multilaterale." },
+        { label: "Mantieni una neutralità assoluta", hint: "Nessun coinvolgimento, nessun rischio immediato", effects: { national: { relazioniDiplomatiche: -0.2 } },
+          result: "Il governo sceglie di non intervenire in alcun modo: una postura prudente, che però lascia il paese ai margini della crisi." }
+      ]
+    };
+  }
+  var WORLD_WAR_TENSION_THRESHOLD = 88;
+  var WORLD_WAR_MIN_ACTIVE_CONFLICTS = 2;
+  var WORLD_WAR_DURATION_TURNS = 70;
+  function checkWorldWarTrigger() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return false;
+    if (state.worldWarActive || state.worldWar) return false;
+    if (state.geopoliticalTension < WORLD_WAR_TENSION_THRESHOLD) return false;
+    if (state.activeConflicts.length < WORLD_WAR_MIN_ACTIVE_CONFLICTS) return false;
+    return Math.random() < 0.02;
+  }
+  function buildWorldWarDossier() {
+    var choices = [
+      { label: "Intervento a fianco della NATO e dell'Occidente", hint: "Guerra vera: costosa, ma rafforza gli alleati storici", stance: "belligerante",
+        effects: { national: { difesa: 0.8, economia: -1.2, felicita: -1, relazioniDiplomatiche: 0.6 } },
+        result: "L'Italia entra formalmente in guerra al fianco della NATO e dell'Occidente: mobilitazione militare, spesa per la difesa alle stelle, un paese in tensione." },
+      { label: "Neutralità assoluta, sul modello svizzero", hint: "Fuori dal conflitto, ma isolamento economico e diplomatico", stance: "neutrale",
+        effects: { national: { difesa: 0.3, economia: -0.6, sicurezza: 0.3, relazioniDiplomatiche: -0.8 } },
+        result: "Il governo dichiara la neutralità assoluta dell'Italia: nessuna truppa, nessuna arma inviata, ma l'isolamento dai blocchi in guerra pesa su commercio e diplomazia." }
+    ];
+    if (state.leftNato) {
+      choices.push({ label: "Linea autonoma e non allineata", hint: "Fuori dai blocchi per scelta, da tempo", stance: "non_allineata",
+        effects: { national: { difesa: 0.5, relazioniDiplomatiche: -0.3, economia: -0.3 } },
+        result: "Coerente con la scelta di anni fa di lasciare la NATO, l'Italia sceglie una linea autonoma e non allineata, fuori da entrambi i blocchi in guerra." });
+    }
+    return {
+      id: "geo_world_war", kind: "notizia", cat: "Politica Estera",
+      eyebrow: "Il mondo sull'orlo del baratro", title: "Guerra Mondiale",
+      brief: "La tensione internazionale, alimentata da " + state.activeConflicts.length + " conflitti regionali aperti in contemporanea, degenera: le grandi potenze si mobilitano, le alleanze si attivano. È guerra mondiale. Il governo italiano deve decidere, in poche ore, quale sarà la collocazione del paese in questo conflitto epocale.",
+      choices: choices
+    };
+  }
+  function resolveWorldWarIfDue() {
+    var w = state.worldWar;
+    if (!w) return null;
+    if (state.turn < w.resolveTurn) return null;
+    state.worldWar = null;
+    state.worldWarActive = false;
+    var cp = state.countryProfile;
+    var strengthScore = (cp.difesa + cp.relazioniDiplomatiche + cp.economia) / 3;
+    var favorable = Math.random() < clamp(0.3 + (strengthScore - 5) / 12, 0.15, 0.8);
+    var esito;
+    if (w.stance === "neutrale") {
+      esito = "Dopo mesi durissimi, la guerra mondiale si conclude con un armistizio generale: la neutralità italiana ha retto, il paese non ha versato sangue in battaglia, ma l'isolamento economico e diplomatico lascia cicatrici profonde nel tessuto produttivo del paese.";
+      cp.economia = clamp(cp.economia + (favorable ? 0.8 : -0.5), 1, 10);
+      cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + (favorable ? 0.6 : -0.4), 1, 10);
+    } else if (favorable) {
+      esito = w.stance === "belligerante"
+        ? "La guerra mondiale si conclude con la vittoria del blocco occidentale e della NATO: l'Italia, che ha combattuto al loro fianco, esce dal conflitto con il prestigio internazionale rafforzato, ma con un conto durissimo in vite e risorse."
+        : "La linea autonoma dell'Italia si rivela lungimirante: il paese evita il peggio del conflitto e, a guerra finita, viene corteggiato da entrambi i blocchi come mediatore credibile.";
+      cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 1.2, 1, 10);
+      cp.difesa = clamp(cp.difesa + 0.6, 1, 10);
+      cp.felicita = clamp(cp.felicita + 0.4, 1, 10);
+      state.player.reputazione = clamp(state.player.reputazione + 6, 0, 100);
+    } else {
+      esito = w.stance === "belligerante"
+        ? "La guerra mondiale si conclude con una vittoria di Pirro per il blocco occidentale: l'Italia, che ha combattuto in prima linea, paga un prezzo altissimo in vite umane ed economia, senza i benefici sperati."
+        : "La linea autonoma dell'Italia, a guerra finita, viene letta da molti come un'assenza colpevole: il paese fatica a farsi ascoltare nel nuovo ordine mondiale che emerge dal conflitto.";
+      cp.economia = clamp(cp.economia - 1.5, 1, 10);
+      cp.felicita = clamp(cp.felicita - 1.2, 1, 10);
+      cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche - 0.5, 1, 10);
+      state.player.reputazione = clamp(state.player.reputazione - 5, 0, 100);
+    }
+    state.geopoliticalTension = clamp(state.geopoliticalTension - rand(35, 55), 0, 100);
+    state.activeConflicts = [];
+    state.regionalWarCooldownTurn = state.turn + 150;
+    addDiaryEntry("La fine della Guerra Mondiale", esito);
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var choices = buildSituationChoices({ noun: "la fine della guerra mondiale", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "relazioniDiplomatiche", themeId: METRIC_TO_THEME_ID.relazioniDiplomatiche, inParliament: !!state.player.inParliament }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: favorable ? "La guerra mondiale è finita" : "La guerra mondiale è finita, a caro prezzo",
+      cat: "Politica Estera", title: "La fine della Guerra Mondiale", brief: esito + " Come reagisce il paese?",
+      choices: choices
+    };
+  }
+  function renderGeopoliticalTensionPanel() {
+    var p = state.player;
+    if (!p) return "";
+    var t = state.geopoliticalTension;
+    var levelLabel = t >= WORLD_WAR_TENSION_THRESHOLD ? "Critica" : t >= REGIONAL_WAR_TENSION_THRESHOLD ? "Alta" : t >= 40 ? "Moderata" : "Bassa";
+    var html = '<section aria-label="Tensione Geopolitica Globale"><p class="eyebrow">Tensione Geopolitica Globale</p><div class="stat-grid">' +
+      '<div class="stat-tile"><div class="label">Livello di tensione</div><div class="row"><span class="value">' + fmt1(t) + "/100 (" + levelLabel + ')</span></div></div>' +
+      '<div class="stat-tile"><div class="label">Conflitti regionali aperti</div><div class="row"><span class="value">' + state.activeConflicts.length + '</span></div></div>' +
+      '<div class="stat-tile"><div class="label">Postura militare italiana</div><div class="row"><span class="value">' + (state.italyMilitaryStance === "belligerante" ? "Belligerante" : state.italyMilitaryStance === "non_allineata" ? "Non allineata" : state.italyMilitaryStance === "neutrale" ? "Neutrale" : "Membro NATO") + '</span></div></div>' +
+      "</div>";
+    if (state.activeConflicts.length) {
+      html += '<p class="ci-hint">In corso: ' + state.activeConflicts.map(function (c) { return c.sideA + " contro " + c.sideB + " (" + c.region + ")"; }).join("; ") + '.</p>';
+    }
+    html += "</section>";
+    return html;
+  }
+
   // ---------- Politica Fiscale: aliquote reali italiane, modulabili da chi governa ----------
   // Parte dai valori veri (IRPEF a scaglioni, IVA, IRES) e ogni intervento ha due effetti distinti: uno
   // immediato e piccolo su reputazione/consenso (alzare le tasse scontenta un po' di più che accontenti
@@ -978,44 +1138,69 @@
     var irpefBaseAvg = base.irpef.reduce(function (s, br) { return s + br.aliquota; }, 0) / base.irpef.length;
     return (irpefAvg - irpefBaseAvg) * 0.4 + (fp.ires - base.ires) * 0.3 + (fp.ivaOrdinaria - base.ivaOrdinaria) * 0.2 + (fp.patrimoniale - base.patrimoniale) * 0.1;
   }
-  var FISCAL_STEP = { irpef: 1, iva: 1, ires: 1, patrimoniale: 0.5 };
   var FISCAL_BOUNDS = { irpef: [0, 70], iva: [0, 27], ires: [0, 50], patrimoniale: [0, 5] };
-  var FISCAL_COOLDOWN_TURNS = 8;
-  function adjustFiscalRate(target, direction) {
+  // Prima ogni aliquota si spostava di un punto alla volta, un solo campo a settimana: realistico per
+  // un piccolo aggiustamento, assurdo per una vera manovra fiscale, che nella realtà tocca insieme più
+  // aliquote in un solo provvedimento. Ora tutti i campi si modificano liberamente nel modulo e si
+  // salvano insieme con un solo intervento: il raffreddamento (più lungo, essendo un intervento più
+  // ampio) si applica alla manovra nel suo complesso, non a ogni singola aliquota.
+  var FISCAL_BATCH_COOLDOWN_TURNS = 15;
+  function saveFiscalPolicyBatch(values) {
     var p = state.player;
     if (!p || p.parliamentRole !== "governo" || state.currencyAbolished) return null;
     if (state.turn < (state.fiscalCooldownTurn || 0)) return null;
     var fp = state.fiscalPolicy;
-    var label, delta;
-    if (target.indexOf("irpef_") === 0) {
-      var idx = parseInt(target.split("_")[1], 10);
-      var bracket = fp.irpef[idx];
-      if (!bracket) return null;
-      delta = FISCAL_STEP.irpef * direction;
-      bracket.aliquota = clamp(bracket.aliquota + delta, FISCAL_BOUNDS.irpef[0], FISCAL_BOUNDS.irpef[1]);
-      label = idx === fp.irpef.length - 1 ? ("IRPEF oltre " + fmtEuro(fp.irpef[idx - 1].soglia)) : ("IRPEF fino a " + fmtEuro(bracket.soglia));
-    } else if (target === "iva") {
-      delta = FISCAL_STEP.iva * direction;
-      fp.ivaOrdinaria = clamp(fp.ivaOrdinaria + delta, FISCAL_BOUNDS.iva[0], FISCAL_BOUNDS.iva[1]);
-      label = "IVA ordinaria";
-    } else if (target === "ires") {
-      delta = FISCAL_STEP.ires * direction;
-      fp.ires = clamp(fp.ires + delta, FISCAL_BOUNDS.ires[0], FISCAL_BOUNDS.ires[1]);
-      label = "IRES sulle imprese";
-    } else if (target === "patrimoniale") {
-      delta = FISCAL_STEP.patrimoniale * direction;
-      fp.patrimoniale = clamp(fp.patrimoniale + delta, FISCAL_BOUNDS.patrimoniale[0], FISCAL_BOUNDS.patrimoniale[1]);
-      label = "imposta patrimoniale";
-    } else return null;
-    if (!delta) return null;
-    state.fiscalCooldownTurn = state.turn + FISCAL_COOLDOWN_TURNS;
-    var raising = delta > 0;
-    var repDelta = raising ? -rand(0.3, 1) : rand(0.2, 0.7);
+    var before = { irpef: fp.irpef.map(function (br) { return br.aliquota; }), iva: fp.ivaOrdinaria, ires: fp.ires, patrimoniale: fp.patrimoniale };
+    var newIrpef = fp.irpef.map(function (br, i) {
+      var v = parseFloat(values["irpef_" + i]);
+      return isFinite(v) ? clamp(v, FISCAL_BOUNDS.irpef[0], FISCAL_BOUNDS.irpef[1]) : br.aliquota;
+    });
+    var newIva = isFinite(parseFloat(values.iva)) ? clamp(parseFloat(values.iva), FISCAL_BOUNDS.iva[0], FISCAL_BOUNDS.iva[1]) : fp.ivaOrdinaria;
+    var newIres = isFinite(parseFloat(values.ires)) ? clamp(parseFloat(values.ires), FISCAL_BOUNDS.ires[0], FISCAL_BOUNDS.ires[1]) : fp.ires;
+    var newPatrimoniale = isFinite(parseFloat(values.patrimoniale)) ? clamp(parseFloat(values.patrimoniale), FISCAL_BOUNDS.patrimoniale[0], FISCAL_BOUNDS.patrimoniale[1]) : fp.patrimoniale;
+    var totalDelta = newIrpef.reduce(function (s, v, i) { return s + (v - before.irpef[i]); }, 0) + (newIva - before.iva) + (newIres - before.ires) + (newPatrimoniale - before.patrimoniale);
+    if (!totalDelta) return null;
+    fp.irpef.forEach(function (br, i) { br.aliquota = newIrpef[i]; });
+    fp.ivaOrdinaria = newIva;
+    fp.ires = newIres;
+    fp.patrimoniale = newPatrimoniale;
+    state.fiscalCooldownTurn = state.turn + FISCAL_BATCH_COOLDOWN_TURNS;
+    var raising = totalDelta > 0;
+    var magnitude = clamp(Math.abs(totalDelta) / 8, 0.3, 3);
+    var repDelta = (raising ? -rand(0.3, 1) : rand(0.2, 0.7)) * magnitude;
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
-    if (state.consensoGoverno !== undefined) state.consensoGoverno = clamp(state.consensoGoverno + (raising ? -rand(0.3, 1) : rand(0.3, 1)), 0, 100);
-    var resultText = (raising ? "Il governo alza l'" : "Il governo abbassa l'") + label + (raising ? ", per aumentare il gettito dello Stato." : ", per alleggerire il carico su cittadini e imprese.");
-    state.log.unshift({ week: state.turn, title: "Manovra fiscale: " + label, choiceLabel: raising ? "Alza" : "Abbassa", result: resultText, headlines: [], type: "dossier", cat: "Fisco" });
+    if (state.consensoGoverno !== undefined) state.consensoGoverno = clamp(state.consensoGoverno + (raising ? -rand(0.3, 1) : rand(0.3, 1)) * magnitude, 0, 100);
+    var resultText = "Il governo vara una manovra fiscale che " + (raising ? "alza nel complesso la pressione fiscale" : "abbassa nel complesso la pressione fiscale") +
+      ": IRPEF " + fp.irpef.map(function (br) { return fmt1(br.aliquota) + "%"; }).join("/") + ", IVA " + fmt1(fp.ivaOrdinaria) + "%, IRES " + fmt1(fp.ires) + "%" +
+      (fp.patrimoniale ? ", patrimoniale " + fmt1(fp.patrimoniale) + "%" : "") + ".";
+    state.log.unshift({ week: state.turn, title: "Manovra fiscale", choiceLabel: raising ? "Aliquote in aumento" : "Aliquote in calo", result: resultText, headlines: [], type: "dossier", cat: "Fisco" });
     return { resultText: resultText, headlines: [] };
+  }
+  // ---------- Effetto indiretto di mozioni, proposte di legge e riforme a tema fiscale ----------
+  // Le aliquote non si muovono solo dal pannello dedicato: se il Parlamento approva una mozione, una
+  // legge o una riforma che parla esplicitamente di fisco (rilevata per parole chiave nel testo/tema,
+  // non serve marcare a mano ogni singola voce dei pool combinatori esistenti), le aliquote si spostano
+  // davvero, nella direzione coerente con l'orientamento di chi l'ha proposta — sinistra verso l'alto su
+  // imprese e patrimoniale, destra/centro verso il basso — non in una direzione a caso.
+  var FISCAL_KEYWORDS = ["fiscal", "tasse", "tassazione", "irpef", " iva", "ires", "patrimonial", "cuneo fiscale", "flat tax", "pressione fiscale", "aliquot"];
+  function isFiscalTopic(text) {
+    if (!text) return false;
+    var t = text.toLowerCase();
+    return FISCAL_KEYWORDS.some(function (k) { return t.indexOf(k) !== -1; });
+  }
+  function applyIndirectFiscalNudge(familyId, magnitude) {
+    if (state.currencyAbolished) return;
+    var pos = LEFT_RIGHT_POSITION[familyId];
+    if (pos === undefined) return;
+    var dir = pos >= 0 ? -1 : 1;
+    var fp = state.fiscalPolicy;
+    fp.irpef.forEach(function (br, i) {
+      var w = (i + 1) / fp.irpef.length;
+      br.aliquota = clamp(br.aliquota + dir * magnitude * w, FISCAL_BOUNDS.irpef[0], FISCAL_BOUNDS.irpef[1]);
+    });
+    fp.ires = clamp(fp.ires + dir * magnitude * 0.8, FISCAL_BOUNDS.ires[0], FISCAL_BOUNDS.ires[1]);
+    fp.ivaOrdinaria = clamp(fp.ivaOrdinaria + dir * magnitude * 0.4, FISCAL_BOUNDS.iva[0], FISCAL_BOUNDS.iva[1]);
+    if (pos <= -1.5) fp.patrimoniale = clamp(fp.patrimoniale + magnitude * 0.3, FISCAL_BOUNDS.patrimoniale[0], FISCAL_BOUNDS.patrimoniale[1]);
   }
   function renderFiscalPolicyPanel() {
     var p = state.player;
@@ -1029,21 +1214,20 @@
     var cd = (state.fiscalCooldownTurn || 0) - state.turn;
     var onCooldown = cd > 0;
     var html = '<section aria-label="Politica Fiscale"><details class="log"><summary>Politica Fiscale<span>▾</span></summary>' +
-      '<p class="ci-hint">Puoi modulare le aliquote fiscali reali del paese: ogni intervento ha un piccolo effetto immediato su reputazione e consenso, più uno strutturale e continuo sul gettito dello Stato e sulla salute delle imprese private.' +
-      (onCooldown ? " Prossimo intervento possibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + '</p><div class="stat-grid">';
-    function tile(label, val, key) {
-      return '<div class="stat-tile"><div class="label">' + label + '</div><div class="row"><span class="value">' + fmt1(val) + '%</span>' +
-        '<button type="button" class="staff-btn" data-fiscal-adjust="' + key + ':1"' + (onCooldown ? " disabled" : "") + '>+</button>' +
-        '<button type="button" class="staff-btn" data-fiscal-adjust="' + key + ':-1"' + (onCooldown ? " disabled" : "") + '>-</button></div></div>';
+      '<p class="ci-hint">Modifica liberamente le aliquote qui sotto e salva tutte le modifiche insieme, in un\'unica manovra: l\'effetto sul gettito e sulla salute delle imprese è continuo nel tempo. Le aliquote si muovono anche da sole quando il Parlamento approva mozioni o leggi a tema fiscale.' +
+      (onCooldown ? " Prossima manovra possibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + '</p><div class="stat-grid">';
+    function field(label, val, key) {
+      return '<div class="stat-tile"><div class="label">' + label + '</div><div class="row">' +
+        '<input type="number" step="0.1" min="0" class="fiscal-input" data-fiscal-input="' + key + '" value="' + fmt1(val) + '"' + (onCooldown ? " disabled" : "") + '>%</div></div>';
     }
     fp.irpef.forEach(function (br, i) {
       var label = i === fp.irpef.length - 1 ? "IRPEF oltre " + fmtEuro(fp.irpef[i - 1].soglia) : "IRPEF fino a " + fmtEuro(br.soglia);
-      html += tile(label, br.aliquota, "irpef_" + i);
+      html += field(label, br.aliquota, "irpef_" + i);
     });
-    html += tile("IVA ordinaria", fp.ivaOrdinaria, "iva");
-    html += tile("IRES sulle imprese", fp.ires, "ires");
-    html += tile("Imposta patrimoniale", fp.patrimoniale, "patrimoniale");
-    html += '</div></details></section>';
+    html += field("IVA ordinaria", fp.ivaOrdinaria, "iva");
+    html += field("IRES sulle imprese", fp.ires, "ires");
+    html += field("Imposta patrimoniale", fp.patrimoniale, "patrimoniale");
+    html += '</div><button type="button" class="staff-btn hire" id="save-fiscal-btn"' + (onCooldown ? " disabled" : "") + '>Salva la manovra fiscale</button></details></section>';
     return html;
   }
   // ---------- Programma Spaziale Nazionale ----------
@@ -7290,6 +7474,7 @@
       p.acceptedMozioni.push(topic.title);
       recordEnactedPolicy(topic.title, "Mozione approvata: " + topic.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta.");
       markTopicNounResolved(topic.noun);
+      if (isFiscalTopic(topic.noun) || isFiscalTopic(topic.title)) applyIndirectFiscalNudge(p.family, 0.6);
     }
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -7361,6 +7546,7 @@
       p.acceptedLeggi.push(topic.title);
       recordEnactedPolicy(topic.title, "Legge approvata: " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.");
       markTopicNounResolved(topic.noun);
+      if (isFiscalTopic(topic.noun) || isFiscalTopic(topic.title)) applyIndirectFiscalNudge(p.family, 1);
     }
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -7593,6 +7779,10 @@
         ? ("Ulteriore intervento legislativo (proposta da " + meta.proposerName + "): un nuovo intervento normativo si aggiunge a quanto già stabilito su " + meta.noun + ".")
         : ("Legge approvata (proposta da " + meta.proposerName + "): " + meta.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta."));
       markTopicNounResolved(meta.noun);
+      if (isFiscalTopic(meta.noun) || isFiscalTopic(dossier.title)) {
+        var leggeProposer = partyById(meta.proposerId);
+        if (leggeProposer && leggeProposer.familyId) applyIndirectFiscalNudge(leggeProposer.familyId, 1);
+      }
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
     state.resultData = { resultText: esito, headlines: [] };
@@ -7677,6 +7867,10 @@
         ? ("Ulteriore atto parlamentare (proposta da " + meta.proposerName + "): un nuovo atto di indirizzo si aggiunge a quanto già deciso su " + meta.noun + ".")
         : ("Mozione approvata (proposta da " + meta.proposerName + "): " + meta.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta."));
       markTopicNounResolved(meta.noun);
+      if (isFiscalTopic(meta.noun) || isFiscalTopic(dossier.title)) {
+        var mozioneProposer = partyById(meta.proposerId);
+        if (mozioneProposer && mozioneProposer.familyId) applyIndirectFiscalNudge(mozioneProposer.familyId, 0.6);
+      }
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Mozione Parlamentare" });
     state.resultData = { resultText: esito, headlines: [] };
@@ -8407,7 +8601,9 @@
     electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null,
     countryEpochs: [], currentEpoch: null,
     fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
-    spaceProgram: freshSpaceProgram()
+    spaceProgram: freshSpaceProgram(),
+    mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
+    worldWarActive: false, worldWar: null, italyMilitaryStance: "nato"
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -8429,7 +8625,8 @@
     judicialRisk: 8, institutionalActionCooldowns: {}, talkShowCooldownTurn: 0, intervistaCooldownTurn: 0,
     lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
     leaderTraits: [], privateLifeCooldownTurn: 0, diaryEntries: [],
-    candidateList: null, allyListChoicesCache: null
+    candidateList: null, allyListChoicesCache: null,
+    intelActionCooldowns: {}
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -8834,6 +9031,7 @@
     sampleCurrentEpochMood();
     if (!p.lobby && !p.lobbyOfferSeen && checkLobbyEligible(p) && Math.random() < 0.03) p.lobbyOfferSeen = true;
     driftBilancioStato();
+    driftGeopoliticalTension();
     driftConsensoGoverno();
     driftYouthWing(p);
 
@@ -9348,6 +9546,127 @@
     return html;
   }
 
+  // ---------- Criminalità Organizzata: appalti, partiti, scandali ----------
+  // A differenza della Loggia Riservata (una scelta deliberata e rarissima del giocatore), questi sono
+  // pericoli che arrivano DA FUORI, indipendentemente da cosa il partito ha scelto di fare: appalti
+  // pubblici sospetti, finanziamenti occulti, candidati con presunti legami, racket sulle imprese,
+  // riciclaggio attraverso sponsor vicini al partito. Più il paese ha bassa integrità istituzionale
+  // (corruzione bassa nella Scheda Paese), più il rischio settimanale sale — un paese pulito non è
+  // immune, ma ci finisce molto meno spesso in mezzo. Ogni episodio è una scelta reale con conseguenze
+  // reali: insabbiare conviene nell'immediato ma alza il rischio giudiziario e, nel tempo, la
+  // probabilità di un vero scandalo; la linea dura costa postura e qualche consenso locale ma protegge
+  // l'integrità del partito e del paese.
+  var MAFIA_COOLDOWN_TURNS = 35;
+  function mafiaEventProbability() {
+    var cp = state.countryProfile;
+    var integrityGap = clamp((7 - cp.corruzione) / 7, 0, 1);
+    return clamp(0.08 + integrityGap * 0.16, 0.04, 0.24);
+  }
+  var MAFIA_ORG_NAMES = ["un clan di stampo mafioso", "una cosca di 'ndrangheta", "un'organizzazione camorristica", "un'associazione a delinquere di stampo mafioso"];
+  function mafiaFlavorContext() {
+    var loc = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)];
+    var org = MAFIA_ORG_NAMES[Math.floor(Math.random() * MAFIA_ORG_NAMES.length)];
+    return { city: loc.name, region: loc.region, org: org };
+  }
+  function buildMafiaDossier() {
+    var p = state.player;
+    var ctx = mafiaFlavorContext();
+    var templates = [];
+    templates.push({
+      title: "Appalto pubblico sospetto a " + ctx.city,
+      brief: "Un grande appalto pubblico nella regione di " + ctx.city + " viene assegnato a un'impresa su cui la stampa locale solleva sospetti di legami con " + ctx.org + ". Il tuo partito è coinvolto nella filiera decisionale: come ti muovi?",
+      choices: [
+        { label: "Blocca l'appalto e chiedi un'indagine", hint: "Linea dura: costa consenso locale, protegge l'integrità", effects: { reputazione: 4, iscritti: -8, national: { corruzione: 0.5 } },
+          result: "L'appalto viene bloccato e trasmesso agli inquirenti: una scelta che scontenta alcuni interessi locali ma rafforza la credibilità del partito." },
+        { label: "Lascia procedere senza fare domande", hint: "Nessun costo immediato, rischio nell'ombra", effects: { fondi: rand(1500, 4000), national: { corruzione: -0.6 } }, judicialRiskDelta: 6,
+          result: "L'appalto procede senza intoppi: nel breve termine non cambia nulla, ma il sospetto resta, silenzioso, sul partito." },
+        { label: "Chiedi una due diligence approfondita prima di procedere", hint: "Via di mezzo, costa tempo e qualche fondo", effects: { fondi: -800, national: { corruzione: 0.25 } },
+          result: "La due diligence rallenta l'appalto ma chiarisce la situazione, senza scontri frontali con nessuno." }
+      ]
+    });
+    templates.push({
+      title: "Finanziamento sospetto a una sezione locale",
+      brief: "Una sezione locale del partito a " + ctx.city + " riceve un finanziamento consistente da un'azienda su cui gli inquirenti indagano per presunti legami con " + ctx.org + ". La notizia rischia di uscire da un giorno all'altro.",
+      choices: [
+        { label: "Restituisci pubblicamente i fondi", hint: "Trasparenza totale", effects: { fondi: -1200, reputazione: 5, national: { corruzione: 0.4 } },
+          result: "La restituzione pubblica dei fondi viene accolta come un segnale di serietà, anche da chi di solito è critico verso il partito." },
+        { label: "Tieni i fondi e nega ogni legame", hint: "Rischioso se la notizia esce comunque", effects: { fondi: 1000 }, judicialRiskDelta: 8,
+          result: "Il partito tiene i fondi e nega pubblicamente ogni legame: una scommessa che, se la verità emergerà, potrebbe costare molto cara." },
+        { label: "Apri un'inchiesta interna e sospendi i responsabili locali", hint: "Costoso ma corretto", effects: { fondi: -600, reputazione: 3, iscritti: -5, national: { corruzione: 0.3 } },
+          result: "L'inchiesta interna e la sospensione dei responsabili locali limitano il danno, anche se creano tensioni nella sezione." }
+      ]
+    });
+    templates.push({
+      title: "Racket alle imprese di " + ctx.city,
+      brief: "Un gruppo di piccoli imprenditori di " + ctx.city + " denuncia pubblicamente pressioni estorsive da parte di " + ctx.org + ". Chiedono una presa di posizione netta da tutte le forze politiche, incluso il tuo partito.",
+      choices: [
+        { label: "Istituisci un fondo di solidarietà per le vittime", hint: "Costoso, molto apprezzato", effects: { fondi: -1000, reputazione: 4, national: { corruzione: 0.3, felicita: 0.2 } },
+          result: "Il fondo di solidarietà per gli imprenditori vittime di estorsioni viene accolto con favore, anche fuori dalla base tradizionale del partito." },
+        { label: "Esprimi pieno sostegno pubblico alle forze dell'ordine", hint: "Nessun costo diretto", effects: { reputazione: 2, national: { corruzione: 0.15 } },
+          result: "Il sostegno pubblico alle forze dell'ordine è un gesto simbolico, apprezzato ma senza un impatto concreto immediato." },
+        { label: "Non esporti, per non inimicarti realtà locali", hint: "Prudente, ma il silenzio si nota", effects: { reputazione: -3, national: { corruzione: -0.2 } },
+          result: "Il silenzio del partito viene notato e criticato dalla stampa locale, che lo interpreta come mancanza di coraggio." }
+      ]
+    });
+    templates.push({
+      title: "Riciclaggio attraverso uno sponsor del partito",
+      brief: "Un'azienda che ha sponsorizzato eventi del partito a " + ctx.city + " finisce sotto indagine per riciclaggio di denaro riconducibile a " + ctx.org + ".",
+      choices: [
+        { label: "Rompi pubblicamente ogni rapporto con l'azienda", hint: "Netto, protegge l'immagine", effects: { fondi: -500, reputazione: 4, national: { corruzione: 0.35 } },
+          result: "La rottura pubblica del rapporto con l'azienda mette in chiaro la posizione del partito, anche a costo di qualche sponsor in meno in futuro." },
+        { label: "Mantieni il rapporto, in silenzio", hint: "Nessun costo immediato, rischio se emerge", effects: { fondi: 400 }, judicialRiskDelta: 7,
+          result: "Il rapporto con l'azienda prosegue senza clamore: una scelta che potrebbe rivelarsi molto costosa se l'indagine avanzasse." },
+        { label: "Collabora attivamente con gli inquirenti", hint: "Costoso in tempo, protegge davvero", effects: { fondi: -300, reputazione: 3, national: { corruzione: 0.45 } },
+          result: "La collaborazione attiva con gli inquirenti costa tempo e risorse, ma mette il partito dalla parte giusta, in modo verificabile." }
+      ]
+    });
+    templates.push({
+      title: "Infiltrazione in un ente locale",
+      brief: "Un amministratore locale legato al tuo partito a " + ctx.city + " finisce coinvolto in un'inchiesta per presunti legami con " + ctx.org + " nella gestione di appalti comunali.",
+      choices: [
+        { label: "Sospendilo subito dagli incarichi di partito", hint: "Rapido, protegge l'immagine nazionale", effects: { reputazione: 4, iscritti: -6, national: { corruzione: 0.3 } },
+          result: "La sospensione immediata dell'amministratore protegge l'immagine nazionale del partito, anche se crea malumore nella sezione locale." },
+        { label: "Attendi l'esito delle indagini prima di agire", hint: "Prudente, garantista", effects: { reputazione: 0 },
+          result: "L'attesa dell'esito delle indagini è una scelta garantista, che però lascia il partito esposto a critiche nel frattempo." },
+        { label: "Difendilo pubblicamente come vittima di un attacco politico", hint: "Rischioso se le accuse si confermano", effects: { iscritti: 10 }, judicialRiskDelta: 10,
+          result: "La difesa pubblica compatta la base locale, ma se le accuse si confermeranno il costo politico sarà molto più alto." }
+      ]
+    });
+    if (p.candidateList && p.candidateList.deputati && p.candidateList.deputati.length) {
+      var candidate = p.candidateList.deputati[Math.floor(Math.random() * p.candidateList.deputati.length)];
+      templates.push({
+        title: "Sospetti su un candidato della lista",
+        brief: "Un'inchiesta giornalistica solleva sospetti su presunti legami familiari tra " + candidate.name + ", candidato di punta della tua lista elettorale, e ambienti vicini a " + ctx.org + " nella zona di " + ctx.city + ".",
+        choices: [
+          { label: "Rimuovilo subito dalla lista", hint: "Netto, costa consenso locale", effects: { reputazione: 4, iscritti: -10, national: { corruzione: 0.3 } },
+            result: candidate.name + " viene rimosso dalla lista con effetto immediato: una scelta netta che protegge l'immagine del partito." },
+          { label: "Difendilo pubblicamente in attesa di chiarimenti", hint: "Rischioso se le accuse si confermano", effects: { iscritti: 8 }, judicialRiskDelta: 9,
+            result: "Il partito difende " + candidate.name + " pubblicamente, in attesa di chiarimenti: una scommessa che potrebbe costare cara." },
+          { label: "Chiedigli un passo indietro volontario", hint: "Via di mezzo, salva la faccia a tutti", effects: { reputazione: 2, iscritti: -3 },
+            result: candidate.name + " fa un passo indietro volontario dalla lista, in attesa di chiarire la propria posizione: una via d'uscita che limita il danno." }
+        ]
+      });
+    }
+    templates.push({
+      title: "Operazione antimafia riuscita",
+      brief: "Le forze dell'ordine sgominano " + ctx.org + " attivo da anni nel controllo di appalti pubblici nella zona di " + ctx.city + ": una vittoria importante per lo Stato.",
+      choices: [
+        { label: "Rivendica pubblicamente la linea dura del partito", hint: "Visibilità alta, un po' di rischio se sembra strumentale", effects: { visibilita: 6, reputazione: 2 },
+          result: "La rivendicazione pubblica della linea dura porta visibilità, anche se qualcuno la legge come un cavalcare mediaticamente il successo altrui." },
+        { label: "Sostieni le forze dell'ordine con discrezione", hint: "Misurato, apprezzato da chi segue da vicino", effects: { reputazione: 3, national: { corruzione: 0.2 } },
+          result: "Il sostegno discreto e sobrio alle forze dell'ordine viene apprezzato da chi segue da vicino il tema della lotta alla criminalità organizzata." },
+        { label: "Chiedi più fondi per la magistratura antimafia", hint: "Costoso, ma coerente e concreto", effects: { fondi: -700, reputazione: 3, national: { corruzione: 0.35 } },
+          result: "La richiesta di più fondi per la magistratura antimafia è un impegno concreto, coerente con il successo appena ottenuto." }
+      ]
+    });
+    var chosen = templates[Math.floor(Math.random() * templates.length)];
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: "Criminalità organizzata", cat: "Criminalità Organizzata",
+      title: chosen.title, brief: chosen.brief, choices: chosen.choices
+    };
+  }
+
   // ---------- Loggia Riservata (P2-style) ----------
   // Sblocco rarissimo e volutamente nascosto finché non ci si arriva davvero: serve un radicamento
   // territoriale enorme (40+ comuni in giunta), sondaggi solidi (20%+) e una fiducia interna quasi
@@ -9418,6 +9737,109 @@
       html += "</div>";
     }
     html += "</details></section>";
+    return html;
+  }
+
+  // ---------- Servizi di Intelligence ----------
+  // A differenza della Loggia Riservata (illegale, nascosta, scoperta = scandalo enorme), questa è
+  // l'azione ISTITUZIONALE e legittima dei servizi segreti dello Stato sotto la direzione del governo in
+  // carica: sempre disponibile a chi governa, senza soglie di sblocco nascoste. Resta comunque un'azione
+  // rischiosa — un'operazione può fallire, e un'operazione coperta all'estero scoperta è un incidente
+  // diplomatico vero, non solo un brutto titolo di giornale.
+  var INTELLIGENCE_ACTIONS = {
+    antiterrorismo: { label: "Sventa una Minaccia Terroristica", cost: 1200, cooldown: 10,
+      desc: "I servizi seguono una cellula sospettata di preparare un attentato sul suolo nazionale." },
+    controspionaggio: { label: "Contrasta lo Spionaggio Industriale", cost: 1000, cooldown: 10,
+      desc: "Un'indagine di controspionaggio su tentativi di furto di segreti industriali da aziende strategiche italiane." },
+    interferenze_elettorali: { label: "Contrasta Interferenze Elettorali Straniere", cost: 900, cooldown: 12,
+      desc: "I servizi monitorano e contrastano tentativi di ingerenza straniera nel processo elettorale italiano." },
+    operazione_coperta: { label: "Conduci un'Operazione Coperta all'Estero", cost: 2500, cooldown: 16,
+      desc: "Un'operazione riservata condotta all'estero per un obiettivo strategico del governo: il rischio più alto di tutti." }
+  };
+  function intelligenceActionSuccessProb(id) {
+    var base = { antiterrorismo: 0.72, controspionaggio: 0.68, interferenze_elettorali: 0.7, operazione_coperta: 0.55 }[id] || 0.65;
+    var cp = state.countryProfile;
+    return clamp(base + (cp.ricercaSviluppo - 5) * 0.02, 0.25, 0.92);
+  }
+  function resolveIntelligenceAction(id) {
+    var p = state.player;
+    var a = INTELLIGENCE_ACTIONS[id];
+    if (!a || !p || p.parliamentRole !== "governo") return null;
+    if (!p.intelActionCooldowns) p.intelActionCooldowns = {};
+    if (state.turn < (p.intelActionCooldowns[id] || 0)) return null;
+    if (p.fondi < a.cost) return null;
+    p.fondi -= a.cost;
+    p.intelActionCooldowns[id] = state.turn + a.cooldown;
+    var success = Math.random() < intelligenceActionSuccessProb(id);
+    var cp = state.countryProfile;
+    var resultText;
+    if (id === "antiterrorismo") {
+      if (success) {
+        cp.sicurezza = clamp(cp.sicurezza + 0.6, 1, 10);
+        p.reputazione = clamp(p.reputazione + 2, 0, 100);
+        resultText = "I servizi sventano l'attentato prima che possa essere messo in atto: un'operazione silenziosa, ma efficace, che rafforza la sicurezza del paese.";
+      } else {
+        cp.sicurezza = clamp(cp.sicurezza - 1, 1, 10);
+        cp.felicita = clamp(cp.felicita - 0.8, 1, 10);
+        resultText = "L'operazione antiterrorismo arriva tardi: un incidente si verifica comunque, seppure contenuto grazie all'allerta già scattata. Il paese resta scosso.";
+      }
+    } else if (id === "controspionaggio") {
+      if (success) {
+        cp.ricercaSviluppo = clamp(cp.ricercaSviluppo + 0.5, 1, 10);
+        cp.aziende = clamp(cp.aziende + 0.3, 1, 10);
+        resultText = "Il tentativo di spionaggio industriale viene individuato e neutralizzato: i segreti delle imprese strategiche italiane restano al sicuro.";
+      } else {
+        cp.ricercaSviluppo = clamp(cp.ricercaSviluppo - 0.6, 1, 10);
+        cp.aziende = clamp(cp.aziende - 0.4, 1, 10);
+        resultText = "L'operazione di controspionaggio fallisce: informazioni industriali sensibili finiscono comunque nelle mani sbagliate.";
+      }
+    } else if (id === "interferenze_elettorali") {
+      if (success) {
+        cp.corruzione = clamp(cp.corruzione + 0.4, 1, 10);
+        p.reputazione = clamp(p.reputazione + 1.5, 0, 100);
+        resultText = "Un tentativo di interferenza elettorale straniera viene individuato e neutralizzato prima di poter incidere sul dibattito pubblico.";
+      } else {
+        cp.corruzione = clamp(cp.corruzione - 0.6, 1, 10);
+        resultText = "L'interferenza elettorale straniera passa inosservata: solo mesi dopo emergeranno i primi indizi di una campagna di disinformazione mirata.";
+      }
+    } else if (id === "operazione_coperta") {
+      var targetNation = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
+      if (success) {
+        state.foreignRelations = state.foreignRelations || {};
+        if (state.foreignRelations[targetNation.id] === undefined) state.foreignRelations[targetNation.id] = 50;
+        cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 0.4, 1, 10);
+        p.reputazione = clamp(p.reputazione + 1, 0, 100);
+        resultText = "L'operazione coperta condotta in territorio straniero raggiunge il proprio obiettivo strategico senza lasciare tracce: nessuno, fuori da una ristrettissima cerchia, saprà mai che è avvenuta.";
+      } else {
+        state.foreignRelations = state.foreignRelations || {};
+        if (state.foreignRelations[targetNation.id] === undefined) state.foreignRelations[targetNation.id] = 50;
+        state.foreignRelations[targetNation.id] = clamp(state.foreignRelations[targetNation.id] - rand(15, 30), 0, 100);
+        cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche - 0.8, 1, 10);
+        p.reputazione = clamp(p.reputazione - rand(4, 9), 0, 100);
+        p.judicialRisk = clamp((p.judicialRisk || 8) + 10, 1, 95);
+        resultText = "L'operazione coperta viene scoperta: un incidente diplomatico serio con " + targetNation.name + ", che protesta ufficialmente. Il governo nega tutto, ma il danno è fatto.";
+      }
+    }
+    state.log.unshift({ week: state.turn, title: a.label, choiceLabel: success ? "Operazione riuscita" : "Operazione fallita", result: resultText, headlines: [], type: "dossier", cat: "Servizi di Intelligence" });
+    return { resultText: resultText, headlines: [] };
+  }
+  function renderIntelligencePanel() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return "";
+    if (!p.intelActionCooldowns) p.intelActionCooldowns = {};
+    var html = '<section aria-label="Servizi di Intelligence"><details class="log"><summary>Servizi di Intelligence<span>▾</span></summary>' +
+      '<p class="ci-hint">Come governo, dirigi le agenzie di sicurezza dello Stato: minacce terroristiche, spionaggio industriale, interferenze elettorali straniere, o operazioni coperte all\'estero. Ogni operazione può riuscire o fallire, e un fallimento ha un costo reale.</p><div class="option-grid">';
+    Object.keys(INTELLIGENCE_ACTIONS).forEach(function (id) {
+      var a = INTELLIGENCE_ACTIONS[id];
+      var cd = p.intelActionCooldowns[id] || 0;
+      var weeksLeft = cd - state.turn;
+      var disabled = weeksLeft > 0 || p.fondi < a.cost;
+      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+        : p.fondi < a.cost ? "Fondi insufficienti (" + fmtEuro(a.cost) + ")" : "Costo: " + fmtEuro(a.cost);
+      html += '<button type="button" class="option-card" data-intel-action="' + id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
+    });
+    html += "</div></details></section>";
     return html;
   }
   // Situazioni dedicate alla vita sotto il nuovo regime: 3 per tipo, pescate occasionalmente al posto
@@ -12428,10 +12850,10 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderIntelligencePanel() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
-        return renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
+        return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
       } },
     { id: "coalizioni", label: "Coalizioni e Alleanze", render: function () {
         return renderReunificationPanel() + renderCoalitionPanel();
@@ -12864,6 +13286,14 @@
           }
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "geo_world_war") {
+        if (choice.stance) {
+          state.worldWarActive = true;
+          state.italyMilitaryStance = choice.stance;
+          state.worldWar = { stance: choice.stance, startTurn: state.turn, resolveTurn: state.turn + WORLD_WAR_DURATION_TURNS };
+          addDiaryEntry("Il mondo è in guerra", "Oggi il governo ha scelto la collocazione dell'Italia nella guerra mondiale: " + choice.label.toLowerCase() + ". Qualunque cosa succeda da qui in avanti, questa scelta segnerà il paese per una generazione.");
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
         state.natoDecided = true;
         if (choice.exitNato) state.leftNato = true;
@@ -12895,14 +13325,11 @@
         resolveCpuLeggeChoice(dossier, choice);
       } else if (dossier.cpuAmendmentMeta) {
         resolveCpuAmendmentChoice(dossier, choice);
-      } else if (dossier.cat === "Vita Privata") {
-        var plRes = applyChoice(dossier, choice);
+      } else {
+        var res = applyChoice(dossier, choice);
         if (choice.judicialRiskDelta && state.player.judicialRisk !== undefined) {
           state.player.judicialRisk = clamp(state.player.judicialRisk + choice.judicialRiskDelta, 1, 95);
         }
-        state.resultData = plRes;
-      } else {
-        var res = applyChoice(dossier, choice);
         state.resultData = res;
       }
   }
@@ -13046,16 +13473,30 @@
         render();
       });
     });
-    app.querySelectorAll("[data-fiscal-adjust]").forEach(function (btn) {
+    app.querySelectorAll("[data-intel-action]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var raw = btn.getAttribute("data-fiscal-adjust").split(":");
-        var res = adjustFiscalRate(raw[0], parseInt(raw[1], 10));
-        if (!res) { showSaveStatus("Non puoi ancora intervenire sulle aliquote (tempo di recupero).", true); return; }
+        var id = btn.getAttribute("data-intel-action");
+        var res = resolveIntelligenceAction(id);
+        if (!res) { showSaveStatus("Non puoi ancora avviare questa operazione (fondi o tempo di recupero insufficienti).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
       });
     });
+    var saveFiscalBtn = document.getElementById("save-fiscal-btn");
+    if (saveFiscalBtn) {
+      saveFiscalBtn.addEventListener("click", function () {
+        var values = {};
+        app.querySelectorAll("[data-fiscal-input]").forEach(function (input) {
+          values[input.getAttribute("data-fiscal-input")] = input.value;
+        });
+        var res = saveFiscalPolicyBatch(values);
+        if (!res) { showSaveStatus("Nessuna modifica da salvare, o manovra non ancora disponibile (tempo di recupero).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    }
     app.querySelectorAll("[data-campaign-activity]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-campaign-activity");
@@ -13963,6 +14404,39 @@
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
+    }
+
+    var worldWarResolveDossier = resolveWorldWarIfDue();
+    if (worldWarResolveDossier) {
+      state.aiDynamicDossier = worldWarResolveDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkWorldWarTrigger()) {
+      state.aiDynamicDossier = buildWorldWarDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkRegionalWarTrigger()) {
+      state.aiDynamicDossier = buildRegionalWarDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (p.inParliament && state.turn >= (state.mafiaCooldownTurn || 0) && Math.random() < mafiaEventProbability()) {
+      var mafiaDossier = buildMafiaDossier();
+      if (mafiaDossier) {
+        state.mafiaCooldownTurn = state.turn + MAFIA_COOLDOWN_TURNS;
+        state.aiDynamicDossier = mafiaDossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
     }
 
     var questionTimeDue = resolveQuestionTimeIfDue();
