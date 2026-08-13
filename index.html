@@ -975,6 +975,41 @@
     state.deficitPil = clamp(-saldo / 2100 * 100, -1, 12);
     state.debitoPil = clamp(state.debitoPil + (saldo < 0 ? 0.04 : -0.03), 80, 220);
   }
+  // ---------- Economia causale: spread, occupazione, inflazione e crescita si parlano tra loro ----------
+  // Prima questi quattro indicatori erano quasi indipendenti: lo spread si muoveva solo per eventi
+  // scriptati (una crisi di governo, un discorso, mai per il debito in sé), l'occupazione era un
+  // semplice random walk scollegato dalla salute reale dell'economia, e l'inflazione non rifletteva in
+  // alcun modo la politica fiscale del governo. Il risultato era una "Scheda Paese" che sembrava viva ma
+  // in realtà non aveva una vera economia sotto — solo tanti numeri indipendenti. Qui si chiude il
+  // cerchio, va eseguita SUBITO DOPO driftBilancioStato (da cui legge debitoPil/deficitPil già
+  // aggiornati di questa settimana):
+  //  1) lo spread insegue un bersaglio determinato da debito/deficit (più alti = spread più alto) e
+  //     dalla salute dell'economia (più bassa = spread più alto), non solo eventi scriptati;
+  //  2) l'occupazione insegue un bersaglio determinato dalla salute reale dell'economia/imprese/PIL;
+  //  3) l'inflazione (il cui valore alto = prezzi STABILI, coerente con MINOR_COUNTRY_EVENTS) peggiora
+  //     con la spesa in deficit e con un'economia "surriscaldata" (occupazione altissima + crescita
+  //     forte insieme, il classico compromesso da curva di Phillips);
+  //  4) uno spread molto alto frena a sua volta economia/PIL (il costo del debito che scoraggia
+  //     investimenti) — l'ultimo anello che chiude il ciclo, non un effetto a senso unico.
+  function driftMacroeconomy() {
+    var cp = state.countryProfile;
+    var debtSignal = clamp((state.debitoPil - 100) / 40, -1, 3);
+    var deficitSignal = clamp(state.deficitPil / 3, -1, 3);
+    var spreadTarget = clamp(60 + debtSignal * 40 + deficitSignal * 25 - (cp.economia - 5) * 8, 30, 450);
+    state.spreadBps = clamp(state.spreadBps + (spreadTarget - state.spreadBps) * 0.04 + (Math.random() - 0.5) * 3, 30, 500);
+
+    var occupTarget = clamp((cp.economia + cp.aziende + cp.pil) / 3, 1, 10);
+    cp.disoccupazione = clamp(cp.disoccupazione + (occupTarget - cp.disoccupazione) * 0.03, 1, 10);
+
+    var deficitPressure = clamp(state.deficitPil / 4, -0.5, 2.5);
+    var overheating = clamp((cp.disoccupazione - 6) * 0.15, 0, 1.2);
+    var inflationTarget = clamp(5 - deficitPressure - overheating + (cp.energia - 5) * 0.15, 1, 10);
+    cp.inflazione = clamp(cp.inflazione + (inflationTarget - cp.inflazione) * 0.05 + (Math.random() - 0.5) * 0.15, 1, 10);
+
+    var debtDrag = clamp((state.spreadBps - 150) / 400, 0, 0.4);
+    cp.economia = clamp(cp.economia - debtDrag * 0.05, 1, 10);
+    cp.pil = clamp(cp.pil - debtDrag * 0.04, 1, 10);
+  }
   // ---------- Tensione Geopolitica, Conflitti Regionali e Guerra Mondiale ----------
   // Un termometro globale (0-100) che sale e scende lentamente nel tempo, con scatti improvvisi legati
   // a crisi che scoppiano da sole (non solo per scelte del giocatore): più sale, più cresce il rischio
@@ -6663,6 +6698,72 @@
     if (!p.diaryEntries) p.diaryEntries = [];
     p.diaryEntries.unshift({ week: state.turn, title: title, text: text });
   }
+  // ---------- Memoria storica: la stampa e i rivali che ricordano il passato ----------
+  // Prima ogni evento del diario di partito (addDiaryEntry, sopra) restava lì, visibile solo scorrendo
+  // indietro nella propria storia — non tornava mai a bussare. Nella realtà, invece, la carriera di un
+  // politico è piena di momenti in cui qualcosa detto o fatto anni prima riemerge: un giornalista che lo
+  // ricorda in un'intervista, un rivale che lo rispolvera in un comizio. Qui si pesca a caso da un
+  // episodio del proprio diario abbastanza vecchio (almeno MEMORY_CALLBACK_MIN_AGE settimane) e MAI
+  // ancora richiamato in precedenza (state.player.memoryCallbackUsedTitles), e si costruisce un dossier
+  // che lo riporta a galla — in tono amichevole (coerenza premiata) o ostile (messo alle strette), a
+  // sorte. Un episodio richiamato una volta non torna una seconda.
+  var MEMORY_CALLBACK_MIN_AGE = 40;
+  var MEMORY_CALLBACK_COOLDOWN_TURNS = 55;
+  function eligibleMemoryCallbackEntries() {
+    var p = state.player;
+    if (!p || !p.diaryEntries || !p.diaryEntries.length) return [];
+    var used = p.memoryCallbackUsedTitles || [];
+    return p.diaryEntries.filter(function (d) {
+      return (state.turn - d.week) >= MEMORY_CALLBACK_MIN_AGE && used.indexOf(d.title) === -1;
+    });
+  }
+  function checkMemoryCallbackTrigger() {
+    var p = state.player;
+    if (!p || !p.inParliament) return false;
+    if (state.turn < (p.memoryCallbackCooldownTurn || 0)) return false;
+    if (!eligibleMemoryCallbackEntries().length) return false;
+    return Math.random() < 0.035;
+  }
+  function buildMemoryCallbackDossier() {
+    var p = state.player;
+    var eligible = eligibleMemoryCallbackEntries();
+    var entry = eligible[Math.floor(Math.random() * eligible.length)];
+    p.memoryCallbackCooldownTurn = state.turn + MEMORY_CALLBACK_COOLDOWN_TURNS;
+    var weeksAgo = state.turn - entry.week;
+    var isFriendly = Math.random() < 0.5;
+    var choices;
+    if (isFriendly) {
+      choices = [
+        { label: "Rivendica con orgoglio quella scelta", hint: "La coerenza paga: consenso e reputazione in crescita", memoryCallbackTitle: entry.title,
+          effects: { reputazione: rand(2, 5), iscritti: rand(8, 20) },
+          result: "Il partito rivendica pubblicamente quella scelta, senza tentennamenti: la coerenza nel tempo viene premiata dall'opinione pubblica." },
+        { label: "Minimizza, era un'altra fase politica", hint: "Nessun rischio, ma neanche alcun guadagno", memoryCallbackTitle: entry.title,
+          effects: {}, result: "Il partito preferisce non rivendicare troppo quella scelta, derubricandola a una fase politica ormai superata." }
+      ];
+    } else {
+      choices = [
+        { label: "Difendi con convinzione quella scelta", hint: "Rischioso: paga se la reputazione è già solida, costa se è debole", memoryCallbackTitle: entry.title,
+          effects: { reputazione: (p.reputazione >= 55 ? rand(1, 4) : -rand(2, 6)) },
+          result: "Il partito difende senza esitazioni quella scelta del passato, nel bene e nel male." },
+        { label: "Ammetti che oggi faresti diversamente", hint: "Costa in coerenza, ma disinnesca l'attacco", memoryCallbackTitle: entry.title,
+          effects: { reputazione: -rand(1, 3), visibilita: rand(2, 5) },
+          result: "Il partito ammette che, con il senno di poi, oggi affronterebbe quella situazione in modo diverso: onestà che disinnesca l'attacco, ma costa qualcosa in coerenza." },
+        { label: "Attacca la fonte, senza rispondere nel merito", hint: "La base fedele apprezza l'aggressività, il resto meno", memoryCallbackTitle: entry.title,
+          effects: { reputazione: -rand(2, 5), iscritti: rand(5, 15) },
+          result: "Il partito risponde attaccando chi ha sollevato la questione, senza mai entrare nel merito: la base più fedele apprezza il piglio combattivo." }
+      ];
+    }
+    return {
+      id: "memory_callback", kind: "notizia", cat: "Cronaca",
+      eyebrow: isFriendly ? "Un giornalista ricorda un vecchio episodio" : "Un rivale rispolvera un vecchio episodio",
+      title: "Torna a galla: \"" + entry.title + "\"",
+      brief: (isFriendly
+        ? "Durante un'intervista, un giornalista riporta alla luce un episodio di " + weeksAgo + " settimane fa: \""
+        : "In un comizio, un avversario politico rispolvera polemicamente un episodio di " + weeksAgo + " settimane fa: \"") +
+        entry.title + "\" — " + entry.text + " Come reagisce il partito?",
+      choices: choices
+    };
+  }
   function markTopicNounResolved(noun) {
     if (!noun || !state.player) return;
     if (!state.player.resolvedTopicNouns) state.player.resolvedTopicNouns = [];
@@ -8647,7 +8748,9 @@
     lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
     leaderTraits: [], privateLifeCooldownTurn: 0, diaryEntries: [],
     candidateList: null, allyListChoicesCache: null,
-    intelActionCooldowns: {}, intelSituationCooldownTurn: 0
+    intelActionCooldowns: {}, intelSituationCooldownTurn: 0,
+    memoryCallbackCooldownTurn: 0, memoryCallbackUsedTitles: [],
+    whistleblowerCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -9052,6 +9155,7 @@
     sampleCurrentEpochMood();
     if (!p.lobby && !p.lobbyOfferSeen && checkLobbyEligible(p) && Math.random() < 0.03) p.lobbyOfferSeen = true;
     driftBilancioStato();
+    driftMacroeconomy();
     driftGeopoliticalTension();
     driftConsensoGoverno();
     driftYouthWing(p);
@@ -9238,6 +9342,7 @@
     if (state.currentDossierId === "formazione_correnti") return formazioneCorrentiDossier();
     if (state.currentDossierId === "rischio_scissione") return rischioScissioneDossier();
     if (state.currentDossierId === "eu_group_choice") return euGroupDossier();
+    if (state.currentDossierId === "coalition_ministry_demand") return coalitionMinistryDemandDossier();
     if (state.currentDossierId === "cabinet_formation") return cabinetFormationDossier();
     if (state.currentDossierId === "government_oath") return governmentOathDossier();
     if (state.currentDossierId === "gov_emendamento") return decretoDinamicoDossier();
@@ -9572,6 +9677,44 @@
     return html;
   }
 
+  // ---------- Fughe di notizie e whistleblower interni ----------
+  // Distinto dagli scandali di criminalità organizzata qui sotto (minacce che arrivano da fuori): questo
+  // è un rischio che nasce DENTRO il partito stesso — un dirigente scontento, prossimo a passare
+  // documenti riservati alla stampa. La probabilità sale con il rischio giudiziario già accumulato
+  // (judicialRisk, segno che in giro ci sono cose da nascondere) e con una leadership poco solida
+  // (leaderTrust basso, segno di malumore interno); richiede almeno un membro dello staff assunto, la
+  // "fonte" concreta della fuga. Il giocatore ha ancora una finestra per intervenire PRIMA che i
+  // documenti escano davvero: un vero costo in fondi per comprare il silenzio (rischio reale di
+  // fallimento), un allontanamento immediato e duro del dirigente sospetto, o l'inazione, che lascia
+  // che le cose vadano come devono andare.
+  var WHISTLEBLOWER_COOLDOWN_TURNS = 45;
+  function checkWhistleblowerTrigger() {
+    var p = state.player;
+    if (!p || !p.staff || !p.staff.length) return false;
+    if (state.turn < (p.whistleblowerCooldownTurn || 0)) return false;
+    var riskFactor = clamp(((p.judicialRisk || 8) - 20) / 100, 0, 0.6) + clamp((60 - (p.leaderTrust === undefined ? 65 : p.leaderTrust)) / 300, 0, 0.25);
+    return Math.random() < clamp(0.01 + riskFactor * 0.06, 0.01, 0.07);
+  }
+  function buildWhistleblowerDossier() {
+    var p = state.player;
+    var staffer = p.staff[Math.floor(Math.random() * p.staff.length)];
+    var role = roleById(staffer.id);
+    var roleLabel = role ? role.label : "dirigente di partito";
+    p.whistleblowerCooldownTurn = state.turn + WHISTLEBLOWER_COOLDOWN_TURNS;
+    return {
+      id: "whistleblower_leak", kind: "notizia", cat: "Interno di Partito", staffLeakName: staffer.name,
+      eyebrow: "Una fuga di notizie in arrivo", title: "Un dirigente pronto a parlare con la stampa",
+      brief: staffer.name + " (" + roleLabel + ") starebbe per passare documenti interni riservati a un giornalista, secondo una soffiata arrivata alla segreteria di partito. C'è ancora una finestra per intervenire, ma non è lunga: come gestisci la situazione?",
+      choices: [
+        { label: "Cerca un accordo riservato con " + staffer.name, hint: "Costa in fondi, rischio reale che l'accordo non tenga", whistleblowerStrategy: "accordo",
+          effects: { fondi: -rand(1500, 3000) }, result: "" },
+        { label: "Silura " + staffer.name + " su due piedi", hint: "Ferma la fuga sul nascere, ma il partito perde un dirigente", whistleblowerStrategy: "silura",
+          effects: {}, result: "" },
+        { label: "Ignora la soffiata", hint: "Nessun costo immediato, rischio concreto che la fuga avvenga comunque", whistleblowerStrategy: "ignora",
+          effects: {}, result: "" }
+      ]
+    };
+  }
   // ---------- Criminalità Organizzata: appalti, partiti, scandali ----------
   // A differenza della Loggia Riservata (una scelta deliberata e rarissima del giocatore), questi sono
   // pericoli che arrivano DA FUORI, indipendentemente da cosa il partito ha scelto di fare: appalti
@@ -10379,6 +10522,7 @@
           remainingMinistries: playerMinistries.slice(),
           candidates: buildPlayerCabinetCandidatePool(playerMinistries.length)
         };
+        maybeAddCoalitionMinistryDemand(state.pendingCabinetFormation);
       }
     }
     // Dopo aver scelto i ministri (se ce n'erano da scegliere), il governo nel suo insieme deve ancora
@@ -11852,6 +11996,7 @@
     "Economia e Finanze", "Interno", "Esteri", "Difesa", "Giustizia", "Istruzione",
     "Salute", "Ambiente e Transizione Ecologica", "Infrastrutture e Trasporti", "Lavoro e Politiche Sociali"
   ];
+  var KEY_MINISTRIES = ["Economia e Finanze", "Interno", "Esteri", "Difesa"];
   var MINISTRY_ARTICLED = {
     "Economia e Finanze": "dell'Economia e delle Finanze", "Interno": "dell'Interno", "Esteri": "degli Affari Esteri",
     "Difesa": "della Difesa", "Giustizia": "della Giustizia", "Istruzione": "dell'Istruzione", "Salute": "della Salute",
@@ -11937,6 +12082,48 @@
     if (p.giovanile) pushName(generateStaffName(), "Responsabile della Sezione Giovanile");
     while (names.length < neededCount + 2) pushName(generateStaffName(), "Dirigenza nazionale del partito");
     return names;
+  }
+  // ---------- Trattativa di coalizione: la richiesta di un ministero chiave ----------
+  // Prima la ripartizione dei ministeri (computeCabinetAllocation) era puramente meccanica: un algoritmo
+  // proporzionale ai seggi decideva tutto, senza che un alleato potesse davvero far pesare la propria
+  // presenza in coalizione. Nella realtà, però, un partner di governo con un peso reale in Parlamento
+  // spesso pone la titolarità di un dicastero chiave (Economia, Interno, Esteri, Difesa) come condizione
+  // per entrare nella maggioranza, non semplicemente accetta quello che gli tocca dal calcolo. Se il
+  // partito del giocatore governa in coalizione (non da solo) e tra i propri ministeri in attesa di
+  // assegnazione c'è almeno un dicastero chiave, un alleato può avanzare questa richiesta esplicita prima
+  // che la formazione del governo prosegua: il giocatore può cederlo (la coalizione parte più solida) o
+  // tenerselo (la coalizione parte già tesa, con un vero rischio di rottura più avanti, non solo un
+  // malumore a parole).
+  function maybeAddCoalitionMinistryDemand(pcf) {
+    var ge = state.govEntity;
+    if (!ge || !ge.memberIds) return;
+    var allies = ge.memberIds.filter(function (id) { return id !== "player"; });
+    if (!allies.length) return;
+    var keyHeld = pcf.remainingMinistries.filter(function (m) { return KEY_MINISTRIES.indexOf(m) !== -1; });
+    if (!keyHeld.length) return;
+    if (Math.random() > 0.55) return;
+    var allyId = allies[Math.floor(Math.random() * allies.length)];
+    var ministry = keyHeld[Math.floor(Math.random() * keyHeld.length)];
+    pcf.demand = { allyId: allyId, ministry: ministry };
+  }
+  function coalitionMinistryDemandDossier() {
+    var pcf = state.pendingCabinetFormation;
+    var d = pcf.demand;
+    var allyParty = partyById(d.allyId);
+    var allyName = allyParty ? allyParty.name : d.allyId;
+    var articled = MINISTRY_ARTICLED[d.ministry] || ("di " + d.ministry);
+    return {
+      id: "coalition_ministry_demand", kind: "situazione", localDynamic: false,
+      eyebrow: "Trattativa di coalizione", cat: "Governo",
+      title: allyName + " chiede il Ministero " + articled,
+      brief: "Prima ancora che la squadra di governo sia al completo, " + allyName + " fa sapere con chiarezza che considera il Ministero " + articled + " condizione essenziale per sostenere la maggioranza: senza quel dicastero, minaccia di far mancare l'appoggio. Come rispondi?",
+      choices: [
+        { label: "Concedi il ministero all'alleato", hint: "Il partito perde quel dicastero, ma la coalizione parte più solida", coalitionDemandChoice: "concedi", effects: {},
+          result: "Il Ministero " + articled + " viene ceduto a " + allyName + ": una concessione che consolida subito i rapporti nella maggioranza." },
+        { label: "Rifiuta e tieni il ministero per il partito", hint: "Il partito mantiene il dicastero, ma la coalizione parte già tesa", coalitionDemandChoice: "rifiuta", effects: {},
+          result: "Il partito rifiuta di cedere il Ministero " + articled + ": " + allyName + " incassa il rifiuto senza romperla subito, ma la tensione tra gli alleati si fa sentire fin dai primi giorni di governo." }
+      ]
+    };
   }
   // Un ministero alla volta, come una vera trattativa di governo: il giocatore vede 3 candidati reali
   // (pescati dal pool costruito in resolveElection) per il PRIMO ministero ancora da assegnare, sceglie,
@@ -12033,7 +12220,7 @@
   // degli alleati.
   function isCoalitionGatedDossier(dossier) {
     if (!dossier) return false;
-    if (dossier.id === "cabinet_formation" || dossier.id === "government_oath") return false;
+    if (dossier.id === "cabinet_formation" || dossier.id === "government_oath" || dossier.id === "coalition_ministry_demand") return false;
     return dossier.cat === "Governo" || dossier.cat === "Riforme di Governo";
   }
   // ---------- Controllo di legittimità della Corte dei Conti ----------
@@ -13395,6 +13582,73 @@
       } else if (dossier.id === "eu_group_choice") {
         state.player.euGroup = choice.groupId;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "whistleblower_leak") {
+        var pw = state.player;
+        var cpw = state.countryProfile;
+        var strategyW = choice.whistleblowerStrategy;
+        var leaked;
+        if (strategyW === "silura") {
+          leaked = false;
+          pw.staff = pw.staff.filter(function (s) { return s.name !== dossier.staffLeakName; });
+        } else if (strategyW === "accordo") {
+          var dealProb = clamp(0.55 + (pw.leaderTrust !== undefined ? (pw.leaderTrust - 50) / 200 : 0), 0.25, 0.85);
+          leaked = Math.random() >= dealProb;
+        } else {
+          leaked = Math.random() < 0.65;
+        }
+        var esitoW;
+        if (!leaked) {
+          if (strategyW === "silura") {
+            pw.reputazione = clamp(pw.reputazione - rand(1, 3), 0, 100);
+            esitoW = "La fuga viene fermata sul nascere: il dirigente lascia immediatamente il partito. Una decisione dura, presa in silenzio, che non arriva mai alla stampa.";
+          } else if (strategyW === "accordo") {
+            esitoW = "L'accordo riservato tiene: i documenti non escono mai dal partito, e la vicenda resta confinata a pochissime persone.";
+          } else {
+            esitoW = "La soffiata, alla fine, si rivela infondata: nessun documento arriva mai alla stampa.";
+          }
+        } else {
+          pw.reputazione = clamp(pw.reputazione - rand(4, 10), 0, 100);
+          pw.visibilita = clamp(pw.visibilita + rand(3, 8), 0, 100);
+          pw.judicialRisk = clamp((pw.judicialRisk || 8) + rand(3, 8), 1, 95);
+          cpw.corruzione = clamp(cpw.corruzione - rand(0.2, 0.5), 1, 10);
+          esitoW = strategyW === "accordo"
+            ? "L'accordo riservato salta: i documenti finiscono comunque alla stampa, un vero scandalo interno con conseguenze immediate sull'immagine del partito."
+            : "I documenti riservati finiscono alla stampa: un vero scandalo interno, con conseguenze immediate sull'immagine del partito.";
+        }
+        choice.result = esitoW;
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "memory_callback") {
+        var pm = state.player;
+        if (choice.memoryCallbackTitle) {
+          if (!pm.memoryCallbackUsedTitles) pm.memoryCallbackUsedTitles = [];
+          pm.memoryCallbackUsedTitles.push(choice.memoryCallbackTitle);
+        }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "coalition_ministry_demand") {
+        var pcfDem = state.pendingCabinetFormation;
+        var demand = pcfDem && pcfDem.demand;
+        if (demand) {
+          var demAllianceId = state.govEntity.id;
+          if (!state.coalitionTrust) state.coalitionTrust = {};
+          if (state.coalitionTrust[demAllianceId] === undefined) state.coalitionTrust[demAllianceId] = initialCoalitionTrust(demAllianceId);
+          if (choice.coalitionDemandChoice === "concedi") {
+            pcfDem.remainingMinistries = pcfDem.remainingMinistries.filter(function (m) { return m !== demand.ministry; });
+            if (state.cabinet && state.cabinet.ministries) {
+              if (state.cabinet.ministries.player) {
+                state.cabinet.ministries.player = state.cabinet.ministries.player.filter(function (m) { return m !== demand.ministry; });
+              }
+              if (!state.cabinet.ministries[demand.allyId]) state.cabinet.ministries[demand.allyId] = [];
+              state.cabinet.ministries[demand.allyId].push(demand.ministry);
+              if (!state.cabinet.assignments) state.cabinet.assignments = {};
+              state.cabinet.assignments[demand.ministry] = { holderId: demand.allyId, name: cabinetHolderNamedPerson(demand.allyId, demand.ministry, false) };
+            }
+            state.coalitionTrust[demAllianceId] = clamp(state.coalitionTrust[demAllianceId] + rand(8, 15), 0, 100);
+          } else {
+            state.coalitionTrust[demAllianceId] = clamp(state.coalitionTrust[demAllianceId] - rand(12, 22), 0, 100);
+          }
+          pcfDem.demand = null;
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "cabinet_formation") {
         var pcf = state.pendingCabinetFormation;
         var ministryAssigned = pcf.remainingMinistries.shift();
@@ -14692,6 +14946,12 @@
       return;
     }
 
+    if (state.pendingCabinetFormation && state.pendingCabinetFormation.demand) {
+      state.currentDossierId = "coalition_ministry_demand";
+      state.phase = "building";
+      return;
+    }
+
     if (state.pendingCabinetFormation && state.pendingCabinetFormation.remainingMinistries.length) {
       state.currentDossierId = "cabinet_formation";
       state.phase = "building";
@@ -14809,6 +15069,20 @@
     var intelSituationId = checkIntelSituationTrigger();
     if (intelSituationId) {
       state.aiDynamicDossier = buildIntelSituationDossier(intelSituationId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkMemoryCallbackTrigger()) {
+      state.aiDynamicDossier = buildMemoryCallbackDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkWhistleblowerTrigger()) {
+      state.aiDynamicDossier = buildWhistleblowerDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
