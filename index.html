@@ -8750,7 +8750,8 @@
     candidateList: null, allyListChoicesCache: null,
     intelActionCooldowns: {}, intelSituationCooldownTurn: 0,
     memoryCallbackCooldownTurn: 0, memoryCallbackUsedTitles: [],
-    whistleblowerCooldownTurn: 0
+    whistleblowerCooldownTurn: 0,
+    foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -9141,6 +9142,80 @@
     return { resultText: choice.result, headlines: headlines, deltas: deltas };
   }
 
+  // ---------- Colpi di scena: exploit mediatici e crolli improvvisi ----------
+  // La crescita organica sopra e sotto (organicTarget in recomputePeriodic) è deliberatamente lenta e
+  // liscia — settimana dopo settimana, in proporzione a iscritti/sezioni/reputazione/visibilità. Ma i
+  // partiti reali, specie quelli nuovi, non crescono quasi mai SOLO così: quasi sempre restano piatti per
+  // anni, a meno di un vero momento di rottura — un video virale, un endorsement inatteso, un dibattito
+  // che li porta ovunque — che nessuna sequenza di buone scelte "normali" può garantire, solo la sorte
+  // (più o meno assecondata). Simmetricamente, un crollo improvviso (una gaffe, uno scandalo, una
+  // spaccatura interna che esplode in pubblico) può colpire chiunque, indipendentemente da quanto sia
+  // stato bravo il giocatore fino a quel momento — la "casualità della storia" che la sola formula
+  // organica non può mai produrre da sola. Entrambi sono rari (raffreddamento lungo) e presentati come
+  // veri dossier con scelte reali, non semplici bump silenziosi: il giocatore reagisce al momento, non lo
+  // subisce soltanto.
+  var EARLY_GROWTH_CEILING_VALUE = 3.0;
+  var EARLY_GROWTH_CEILING_TURNS = 150;
+  var BREAKTHROUGH_COOLDOWN_TURNS = 180;
+  var BREAKTHROUGH_FLAVORS = [
+    { title: "Un video del comizio diventa virale", brief: "Un frammento di un tuo comizio inizia a circolare online e in poche ore totalizza milioni di visualizzazioni: per la prima volta, il partito è sulla bocca di tutti." },
+    { title: "Un lungo ritratto sulla stampa nazionale", brief: "Un grande giornale nazionale dedica un lungo ritratto al leader del partito, raccontandone la storia a un pubblico che fino a ieri non sapeva nemmeno chi fosse." },
+    { title: "Un acceso confronto televisivo", brief: "Un dibattito televisivo particolarmente acceso porta il partito in prima serata su tutte le reti, con clip che rimbalzano ovunque nei giorni successivi." },
+    { title: "Un endorsement inatteso", brief: "Una personalità pubblica molto seguita si schiera a sorpresa con il partito, portando con sé una nuova ondata di attenzione." },
+    { title: "Una battaglia locale diventa un caso nazionale", brief: "Una battaglia portata avanti dal partito esplode a livello nazionale, trasformando una vicenda di cronaca in un caso politico che tiene banco per giorni." }
+  ];
+  function checkBreakthroughTrigger() {
+    var p = state.player;
+    if (!p) return false;
+    if (state.turn < (p.breakthroughCooldownTurn || 0)) return false;
+    var charismaBonus = (p.leaderTraits && p.leaderTraits.indexOf("magnetico") !== -1) ? 1.6 : 1;
+    return Math.random() < clamp(0.004 * charismaBonus, 0.002, 0.01);
+  }
+  function buildBreakthroughDossier() {
+    var p = state.player;
+    p.breakthroughCooldownTurn = state.turn + BREAKTHROUGH_COOLDOWN_TURNS;
+    var flavor = BREAKTHROUGH_FLAVORS[Math.floor(Math.random() * BREAKTHROUGH_FLAVORS.length)];
+    return {
+      id: "breakthrough_moment", kind: "notizia", cat: "Cronaca",
+      eyebrow: "Un colpo di scena mediatico", title: flavor.title,
+      brief: flavor.brief + " È un'occasione più unica che rara: come intende sfruttarla il partito?",
+      choices: [
+        { label: "Cavalca l'onda con una campagna mediatica aggressiva", hint: "Guadagno più alto, ma rischia di apparire opportunistico", breakthroughStrategy: "aggressiva", effects: {}, result: "" },
+        { label: "Gestisci il momento con misura, senza esagerare", hint: "Guadagno più contenuto, ma più stabile nel tempo", breakthroughStrategy: "misurata", effects: {}, result: "" }
+      ]
+    };
+  }
+  var COLLAPSE_COOLDOWN_TURNS = 180;
+  var COLLAPSE_FLAVORS = [
+    { title: "Una gaffe del leader diventa virale", brief: "Una frase infelice pronunciata dal leader durante un'uscita pubblica viene tagliata fuori contesto e diventa immediatamente virale, rimbalzando su ogni telegiornale." },
+    { title: "Un video imbarazzante riemerge dal passato", brief: "Un vecchio video del leader, dimenticato da anni, riemerge improvvisamente sui social e scatena un'ondata di critiche e ironia." },
+    { title: "Una spaccatura interna esplode in pubblico", brief: "Un contrasto interno al partito, tenuto finora sotto controllo, esplode pubblicamente con dichiarazioni contrastanti che arrivano subito alla stampa." },
+    { title: "Un sondaggio impietoso fa notizia", brief: "Un sondaggio dai numeri particolarmente severi diventa esso stesso una notizia, alimentando la narrazione di un partito in piena crisi." },
+    { title: "Una promessa mancata torna a galla", brief: "Una promessa fatta e mai mantenuta torna prepotentemente al centro del dibattito pubblico, con avversari e stampa che ne fanno un caso." }
+  ];
+  function checkCollapseTrigger() {
+    var p = state.player;
+    if (!p) return false;
+    if (state.turn < (p.collapseCooldownTurn || 0)) return false;
+    var repProtection = clamp((p.reputazione - 50) / 100, -0.3, 0.5);
+    var riskFactor = clamp(((p.judicialRisk || 8) - 20) / 150, 0, 0.3);
+    return Math.random() < clamp(0.006 - repProtection * 0.006 + riskFactor * 0.004, 0.001, 0.012);
+  }
+  function buildCollapseDossier() {
+    var p = state.player;
+    p.collapseCooldownTurn = state.turn + COLLAPSE_COOLDOWN_TURNS;
+    var flavor = COLLAPSE_FLAVORS[Math.floor(Math.random() * COLLAPSE_FLAVORS.length)];
+    return {
+      id: "collapse_moment", kind: "notizia", cat: "Cronaca",
+      eyebrow: "Un colpo di scena negativo", title: flavor.title,
+      brief: flavor.brief + " Il partito deve reagire in fretta: come intende gestire la crisi?",
+      choices: [
+        { label: "Fai un passo indietro pubblico e chiedi scusa", hint: "Limita il danno nel tempo, ma costa in immagine subito", collapseStrategy: "scuse", effects: {}, result: "" },
+        { label: "Nega tutto e vai avanti senza fermarti", hint: "Nessun costo immediato, rischio reale che la vicenda si ingigantisca", collapseStrategy: "nega", effects: {}, result: "" },
+        { label: "Minimizza e lascia correre", hint: "Una via di mezzo tra le due strade", collapseStrategy: "minimizza", effects: {}, result: "" }
+      ]
+    };
+  }
   // ---------- Weekly recomputation: polling, drift, decay, upkeep ----------
   function recomputePeriodic() {
     var p = state.player;
@@ -9262,6 +9337,17 @@
     var isGovernoNow = p.parliamentRole === "governo";
     var countrySondaggiEffect = clamp(countryTrendDelta * 0.6 * (isGovernoNow ? 1 : -0.4), -2.6, 2.6);
     target = clamp(target + countrySondaggiEffect, 0, 40);
+    // Un vero soffitto strutturale per i primi tempi di un partito fondato da zero (nessun sondaggio
+    // reale ereditato, vedi baselineSondaggi): nella realtà, sfondare il 3% in una sola legislatura senza
+    // un vero momento di rottura (vedi checkBreakthroughTrigger sopra) è raro fuori da condizioni
+    // eccezionali. Il tetto si applica SOLO ai partiti fondati da zero (chi prende in mano un partito
+    // esistente eredita già una base reale, non ha bisogno di questo freno) e SOLO finché non è ancora
+    // arrivato un vero colpo di scena mediatico o non sono passate abbastanza settimane — una volta
+    // sfondato, non torna mai più indietro.
+    if ((p.baselineSondaggi === null || p.baselineSondaggi === undefined) && !p.breakthroughFired &&
+        (state.turn - (p.foundedTurn || 0)) < EARLY_GROWTH_CEILING_TURNS) {
+      target = Math.min(target, EARLY_GROWTH_CEILING_VALUE);
+    }
     // Salvato solo per mostrarlo in UI (vedi renderPollGrid): prima il giocatore vedeva salire o scendere
     // i sondaggi settimana dopo settimana senza alcuna indicazione del PERCHÉ — nessun modo di capire se
     // stesse convergendo verso un equilibrio più alto o più basso finché non ci arrivava. Non altera in
@@ -9289,6 +9375,17 @@
       momentumTerm = clamp(momentumAvgDelta * 0.2, -0.3, 0.3);
     }
     p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3, 0, 40);
+    // Il tetto sul BERSAGLIO qui sopra (vedi EARLY_GROWTH_CEILING_VALUE) da solo non basta: diversi eventi
+    // di partito e situazioni applicano un bonus DIRETTO ai sondaggi (eff.sondaggi in applyChoice, o gli
+    // eventi di rivalità/regionali sotto), che bypassa del tutto la convergenza lenta verso il bersaglio e
+    // può sfondare il tetto in un colpo solo. Un ultimo blocco qui, eseguito ogni settimana prima di
+    // mostrare il numero al giocatore, chiude anche questa scappatoia: se il tetto è ancora attivo (nessun
+    // vero breakthrough), un eventuale sforamento di questa settimana viene riportato giù. Non tocca mai
+    // un calo (min, non clamp): un crollo resta un crollo, il tetto blocca solo la salita.
+    if ((p.baselineSondaggi === null || p.baselineSondaggi === undefined) && !p.breakthroughFired &&
+        (state.turn - (p.foundedTurn || 0)) < EARLY_GROWTH_CEILING_TURNS) {
+      p.sondaggi = Math.min(p.sondaggi, EARLY_GROWTH_CEILING_VALUE);
+    }
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
 
@@ -10860,6 +10957,7 @@
       state.player.leaderTraits = d.leaderTraits.slice();
       state.player.logoDataUrl = d.logoDataUrl || null;
       state.player.short = (d.short || "").trim() || null;
+      state.player.foundedTurn = state.turn;
       addDiaryEntry(isTakeover ? "Prendo il comando" : "Il primo giorno",
         isTakeover
           ? "Da oggi " + state.player.name + " è nelle mie mani. Eredito una storia che non ho scritto io, ma da qui in avanti la direzione la do io."
@@ -13582,6 +13680,41 @@
       } else if (dossier.id === "eu_group_choice") {
         state.player.euGroup = choice.groupId;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "breakthrough_moment") {
+        var pbr = state.player;
+        var stratBr = choice.breakthroughStrategy;
+        pbr.breakthroughFired = true;
+        var sondaggiBoost = stratBr === "aggressiva" ? rand(5, 11) : rand(3, 6);
+        pbr.sondaggi = clamp(pbr.sondaggi + sondaggiBoost, 0, 40);
+        pbr.visibilita = clamp(pbr.visibilita + (stratBr === "aggressiva" ? rand(18, 32) : rand(10, 18)), 0, 100);
+        pbr.iscritti = pbr.iscritti + (stratBr === "aggressiva" ? rand(100, 220) : rand(60, 120));
+        var esitoBr;
+        if (stratBr === "aggressiva" && Math.random() < 0.3) {
+          pbr.reputazione = clamp(pbr.reputazione - rand(2, 6), 0, 100);
+          esitoBr = "Il partito cavalca il momento con decisione, ma l'eccesso di esposizione genera anche qualche malumore su una linea percepita come troppo opportunistica.";
+        } else {
+          pbr.reputazione = clamp(pbr.reputazione + rand(1, 3), 0, 100);
+          esitoBr = "Il partito coglie l'occasione al volo: mai come in questi giorni tanti italiani hanno sentito parlare di " + pbr.name + ".";
+        }
+        choice.result = esitoBr;
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "collapse_moment") {
+        var pco = state.player;
+        var stratCo = choice.collapseStrategy;
+        var baseDrop = rand(3, 8);
+        var negaBad = stratCo === "nega" && Math.random() < 0.5;
+        var mult = stratCo === "scuse" ? 0.6 : stratCo === "nega" ? (negaBad ? 1.6 : 0.7) : 1;
+        var sondaggiDrop = clamp(baseDrop * mult, 1, 14);
+        pco.sondaggi = clamp(pco.sondaggi - sondaggiDrop, 0, 40);
+        pco.visibilita = clamp(pco.visibilita + rand(5, 12), 0, 100);
+        pco.reputazione = clamp(pco.reputazione - (stratCo === "scuse" ? rand(1, 3) : rand(3, 7)), 0, 100);
+        var esitoCo = stratCo === "scuse"
+          ? "Le scuse pubbliche contengono il danno, anche se costano in immagine nell'immediato."
+          : stratCo === "nega"
+            ? (negaBad ? "Negare tutto si rivela un errore: la vicenda si ingigantisce, rimbalzando sui media per giorni." : "Negare tutto funziona, almeno per ora: la vicenda perde slancio più in fretta del previsto.")
+            : "Minimizzare attenua parzialmente il colpo, senza però spegnere del tutto la vicenda.";
+        choice.result = esitoCo;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "whistleblower_leak") {
         var pw = state.player;
         var cpw = state.countryProfile;
@@ -15083,6 +15216,20 @@
 
     if (checkWhistleblowerTrigger()) {
       state.aiDynamicDossier = buildWhistleblowerDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkBreakthroughTrigger()) {
+      state.aiDynamicDossier = buildBreakthroughDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkCollapseTrigger()) {
+      state.aiDynamicDossier = buildCollapseDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
