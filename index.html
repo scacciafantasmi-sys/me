@@ -952,9 +952,229 @@
     var econSignal = (state.countryProfile.economia + state.countryProfile.pil) / 2 - 5;
     b.entrate = Math.max(400, b.entrate + econSignal * 0.6 + (Math.random() - 0.5) * 1.5);
     b.uscite = Math.max(400, b.uscite - econSignal * 0.4 + (Math.random() - 0.5) * 1.5);
+    if (!state.currencyAbolished) {
+      var fpIdx = fiscalPressureIndex();
+      if (fpIdx) {
+        b.entrate += fpIdx * 3;
+        state.countryProfile.aziende = clamp(state.countryProfile.aziende - fpIdx * 0.01, 1, 10);
+      }
+    }
     var saldo = b.entrate - b.uscite;
     state.deficitPil = clamp(-saldo / 2100 * 100, -1, 12);
     state.debitoPil = clamp(state.debitoPil + (saldo < 0 ? 0.04 : -0.03), 80, 220);
+  }
+  // ---------- Politica Fiscale: aliquote reali italiane, modulabili da chi governa ----------
+  // Parte dai valori veri (IRPEF a scaglioni, IVA, IRES) e ogni intervento ha due effetti distinti: uno
+  // immediato e piccolo su reputazione/consenso (alzare le tasse scontenta un po' di più che accontenti
+  // ad abbassarle, coerente con la percezione reale), e uno strutturale e continuo sul gettito dello
+  // Stato e sulla salute delle imprese private, calcolato ogni settimana in driftBilancioStato() sopra
+  // tramite fiscalPressureIndex(): più le aliquote si discostano (in alto) dai valori reali di partenza,
+  // più gettito arriva ma più le imprese ne risentono nel tempo, e viceversa se si abbassano.
+  function fiscalPressureIndex() {
+    if (state.currencyAbolished) return 0;
+    var base = freshFiscalPolicy();
+    var fp = state.fiscalPolicy;
+    var irpefAvg = fp.irpef.reduce(function (s, br) { return s + br.aliquota; }, 0) / fp.irpef.length;
+    var irpefBaseAvg = base.irpef.reduce(function (s, br) { return s + br.aliquota; }, 0) / base.irpef.length;
+    return (irpefAvg - irpefBaseAvg) * 0.4 + (fp.ires - base.ires) * 0.3 + (fp.ivaOrdinaria - base.ivaOrdinaria) * 0.2 + (fp.patrimoniale - base.patrimoniale) * 0.1;
+  }
+  var FISCAL_STEP = { irpef: 1, iva: 1, ires: 1, patrimoniale: 0.5 };
+  var FISCAL_BOUNDS = { irpef: [0, 70], iva: [0, 27], ires: [0, 50], patrimoniale: [0, 5] };
+  var FISCAL_COOLDOWN_TURNS = 8;
+  function adjustFiscalRate(target, direction) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || state.currencyAbolished) return null;
+    if (state.turn < (state.fiscalCooldownTurn || 0)) return null;
+    var fp = state.fiscalPolicy;
+    var label, delta;
+    if (target.indexOf("irpef_") === 0) {
+      var idx = parseInt(target.split("_")[1], 10);
+      var bracket = fp.irpef[idx];
+      if (!bracket) return null;
+      delta = FISCAL_STEP.irpef * direction;
+      bracket.aliquota = clamp(bracket.aliquota + delta, FISCAL_BOUNDS.irpef[0], FISCAL_BOUNDS.irpef[1]);
+      label = idx === fp.irpef.length - 1 ? ("IRPEF oltre " + fmtEuro(fp.irpef[idx - 1].soglia)) : ("IRPEF fino a " + fmtEuro(bracket.soglia));
+    } else if (target === "iva") {
+      delta = FISCAL_STEP.iva * direction;
+      fp.ivaOrdinaria = clamp(fp.ivaOrdinaria + delta, FISCAL_BOUNDS.iva[0], FISCAL_BOUNDS.iva[1]);
+      label = "IVA ordinaria";
+    } else if (target === "ires") {
+      delta = FISCAL_STEP.ires * direction;
+      fp.ires = clamp(fp.ires + delta, FISCAL_BOUNDS.ires[0], FISCAL_BOUNDS.ires[1]);
+      label = "IRES sulle imprese";
+    } else if (target === "patrimoniale") {
+      delta = FISCAL_STEP.patrimoniale * direction;
+      fp.patrimoniale = clamp(fp.patrimoniale + delta, FISCAL_BOUNDS.patrimoniale[0], FISCAL_BOUNDS.patrimoniale[1]);
+      label = "imposta patrimoniale";
+    } else return null;
+    if (!delta) return null;
+    state.fiscalCooldownTurn = state.turn + FISCAL_COOLDOWN_TURNS;
+    var raising = delta > 0;
+    var repDelta = raising ? -rand(0.3, 1) : rand(0.2, 0.7);
+    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    if (state.consensoGoverno !== undefined) state.consensoGoverno = clamp(state.consensoGoverno + (raising ? -rand(0.3, 1) : rand(0.3, 1)), 0, 100);
+    var resultText = (raising ? "Il governo alza l'" : "Il governo abbassa l'") + label + (raising ? ", per aumentare il gettito dello Stato." : ", per alleggerire il carico su cittadini e imprese.");
+    state.log.unshift({ week: state.turn, title: "Manovra fiscale: " + label, choiceLabel: raising ? "Alza" : "Abbassa", result: resultText, headlines: [], type: "dossier", cat: "Fisco" });
+    return { resultText: resultText, headlines: [] };
+  }
+  function renderFiscalPolicyPanel() {
+    var p = state.player;
+    if (!p) return "";
+    if (state.currencyAbolished) {
+      return '<section aria-label="Politica Fiscale"><details class="log"><summary>Politica Fiscale<span>▾</span></summary>' +
+        '<p class="ci-hint">Con l\'abolizione della moneta, aliquote fiscali e gettito non hanno più alcun significato: l\'economia del paese è ormai interamente pianificata e redistribuita, senza scambio monetario.</p></details></section>';
+    }
+    if (p.parliamentRole !== "governo") return "";
+    var fp = state.fiscalPolicy;
+    var cd = (state.fiscalCooldownTurn || 0) - state.turn;
+    var onCooldown = cd > 0;
+    var html = '<section aria-label="Politica Fiscale"><details class="log"><summary>Politica Fiscale<span>▾</span></summary>' +
+      '<p class="ci-hint">Puoi modulare le aliquote fiscali reali del paese: ogni intervento ha un piccolo effetto immediato su reputazione e consenso, più uno strutturale e continuo sul gettito dello Stato e sulla salute delle imprese private.' +
+      (onCooldown ? " Prossimo intervento possibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + '</p><div class="stat-grid">';
+    function tile(label, val, key) {
+      return '<div class="stat-tile"><div class="label">' + label + '</div><div class="row"><span class="value">' + fmt1(val) + '%</span>' +
+        '<button type="button" class="staff-btn" data-fiscal-adjust="' + key + ':1"' + (onCooldown ? " disabled" : "") + '>+</button>' +
+        '<button type="button" class="staff-btn" data-fiscal-adjust="' + key + ':-1"' + (onCooldown ? " disabled" : "") + '>-</button></div></div>';
+    }
+    fp.irpef.forEach(function (br, i) {
+      var label = i === fp.irpef.length - 1 ? "IRPEF oltre " + fmtEuro(fp.irpef[i - 1].soglia) : "IRPEF fino a " + fmtEuro(br.soglia);
+      html += tile(label, br.aliquota, "irpef_" + i);
+    });
+    html += tile("IVA ordinaria", fp.ivaOrdinaria, "iva");
+    html += tile("IRES sulle imprese", fp.ires, "ires");
+    html += tile("Imposta patrimoniale", fp.patrimoniale, "patrimoniale");
+    html += '</div></details></section>';
+    return html;
+  }
+  // ---------- Programma Spaziale Nazionale ----------
+  // Otto tappe, sempre nello stesso ordine storico reale (dal primo satellite alla missione umana su
+  // Marte): un investimento enorme e a lungo termine, riservato a chi governa, finanziato in deficit (il
+  // costo alza subito il debito/PIL, coerente con come i grandi programmi spaziali reali sono sempre
+  // stati finanziati). Una volta avviata, ogni tappa richiede settimane vere di sviluppo — non è mai un
+  // click a risultato immediato — e l'esito (successo o battuta d'arresto) dipende dalla ricerca e
+  // sviluppo e dalla salute economica del paese: un paese debole nella ricerca rischia il fallimento
+  // anche pagando, uno forte ha più chance di riuscire. Il successo fa avanzare stabilmente alla tappa
+  // successiva ed entra nella Scheda Paese come un vero traguardo storico; il fallimento non fa
+  // arretrare la tappa raggiunta, ma i soldi investiti restano spesi.
+  var SPACE_PROGRAM_STAGES = [
+    { id: "satellite", label: "Primo Satellite Nazionale in Orbita", cost: 8, duration: 15,
+      desc: "Mettere in orbita il primo satellite interamente progettato e costruito in Italia, per telecomunicazioni e osservazione della Terra.",
+      rsBoost: 0.4, relDiplBoost: 0.2, felicitaBoost: 0.2 },
+    { id: "agenzia", label: "Agenzia Spaziale Nazionale e Lanciatore Proprio", cost: 22, duration: 25,
+      desc: "Costruire un'agenzia spaziale nazionale a pieno titolo, con un proprio vettore di lancio: non dipendere più da lanciatori altrui per accedere allo spazio.",
+      rsBoost: 0.6, relDiplBoost: 0.3, aziendeBoost: 0.3 },
+    { id: "astronauta", label: "Primo Astronauta Nazionale nello Spazio", cost: 35, duration: 30,
+      desc: "Addestrare e lanciare in orbita il primo astronauta del paese: il salto dalla tecnologia al volo umano.",
+      rsBoost: 0.5, felicitaBoost: 0.6, relDiplBoost: 0.4 },
+    { id: "stazione", label: "Partecipazione a una Stazione Spaziale Orbitale", cost: 50, duration: 35,
+      desc: "Costruire e mantenere moduli abitativi e di ricerca in orbita bassa, da soli o in cooperazione internazionale: un laboratorio permanente fuori dall'atmosfera.",
+      rsBoost: 0.8, relDiplBoost: 0.6, felicitaBoost: 0.3 },
+    { id: "sonda_lunare", label: "Sonda Robotica sulla Luna", cost: 30, duration: 25,
+      desc: "Una sonda automatica per un allunaggio morbido, a studiare suolo e risorse lunari prima di rischiare vite umane.",
+      rsBoost: 0.5, relDiplBoost: 0.3 },
+    { id: "luna_equipaggio", label: "Missione Lunare con Equipaggio", cost: 130, duration: 60,
+      desc: "Il traguardo che per decenni solo due potenze al mondo hanno raggiunto: portare esseri umani sulla Luna e riportarli sani e salvi sulla Terra.",
+      rsBoost: 1.0, felicitaBoost: 1.2, relDiplBoost: 1.0 },
+    { id: "base_lunare", label: "Base Lunare Permanente", cost: 220, duration: 90,
+      desc: "Una base abitata in modo continuativo sulla superficie lunare: il primo avamposto umano permanente fuori dalla Terra.",
+      rsBoost: 1.2, relDiplBoost: 1.0, aziendeBoost: 0.5 },
+    { id: "marte", label: "Missione con Equipaggio su Marte", cost: 450, duration: 180,
+      desc: "Il traguardo finale: portare esseri umani su un altro pianeta. Non solo per l'Italia — per l'intera umanità.",
+      rsBoost: 1.8, felicitaBoost: 2, relDiplBoost: 1.8 }
+  ];
+  var SPACE_RIVAL_NATIONS = ["Stati Uniti", "Cina", "Russia", "l'Unione Europea nel suo insieme", "India", "Giappone"];
+  function spaceStageAffordable(stage) {
+    return stage.cost <= budgetPoolTotal() * 2.5;
+  }
+  function spaceMissionSuccessProbability(stage) {
+    var cp = state.countryProfile;
+    return clamp(0.5 + (cp.ricercaSviluppo - 5) * 0.05 + (cp.economia - 5) * 0.02, 0.25, 0.92);
+  }
+  function launchSpaceStage() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || state.currencyAbolished) return null;
+    var sp = state.spaceProgram;
+    if (sp.activeMission) return null;
+    var stage = SPACE_PROGRAM_STAGES[sp.stageIndex];
+    if (!stage || !spaceStageAffordable(stage)) return null;
+    sp.activeMission = { stageIndex: sp.stageIndex, startTurn: state.turn, resolveTurn: state.turn + stage.duration };
+    sp.investedTotal += stage.cost;
+    state.debitoPil = clamp(state.debitoPil + stage.cost / 500, 80, 220);
+    var resultText = "Il governo avvia ufficialmente \"" + stage.label + "\": " + stage.desc + " Ci vorranno circa " + stage.duration + " settimane prima di sapere come è andata.";
+    state.log.unshift({ week: state.turn, title: "Programma Spaziale: " + stage.label, choiceLabel: "Avvia il programma", result: resultText, headlines: [], type: "dossier", cat: "Spazio" });
+    return { resultText: resultText, headlines: [] };
+  }
+  function resolveSpaceMissionIfDue() {
+    var sp = state.spaceProgram;
+    if (!sp.activeMission) return null;
+    if (state.turn < sp.activeMission.resolveTurn) return null;
+    var stage = SPACE_PROGRAM_STAGES[sp.activeMission.stageIndex];
+    sp.activeMission = null;
+    if (!stage) return null;
+    var success = Math.random() < spaceMissionSuccessProbability(stage);
+    var cp = state.countryProfile;
+    var esito;
+    if (success) {
+      cp.ricercaSviluppo = clamp(cp.ricercaSviluppo + (stage.rsBoost || 0), 1, 10);
+      if (stage.felicitaBoost) cp.felicita = clamp(cp.felicita + stage.felicitaBoost, 1, 10);
+      if (stage.relDiplBoost) cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + stage.relDiplBoost, 1, 10);
+      if (stage.aziendeBoost) cp.aziende = clamp(cp.aziende + stage.aziendeBoost, 1, 10);
+      sp.stageIndex = Math.min(SPACE_PROGRAM_STAGES.length, sp.stageIndex + 1);
+      sp.history.push({ week: state.turn, stageId: stage.id, label: stage.label, outcome: "successo" });
+      recordEnactedPolicy(stage.label, "Traguardo spaziale raggiunto: " + stage.desc);
+      esito = "\"" + stage.label + "\" è un successo pieno: " + stage.desc + " Il paese festeggia un traguardo che resterà nei libri di storia.";
+      if (stage.id === "marte") {
+        addDiaryEntry("Un piccolo passo, ancora una volta", "Oggi esseri umani hanno messo piede su Marte, e l'Italia ha fatto la sua parte per portarceli. Qualunque cosa succeda da qui in avanti, questo giorno non me lo toglie nessuno.");
+      } else {
+        addDiaryEntry("Un altro passo nello spazio", "\"" + stage.label + "\" è andata: " + stage.desc);
+      }
+    } else {
+      cp.economia = clamp(cp.economia - 0.2, 1, 10);
+      sp.history.push({ week: state.turn, stageId: stage.id, label: stage.label, outcome: "fallimento" });
+      esito = "\"" + stage.label + "\" si conclude con una battuta d'arresto: un problema tecnico compromette la missione. Gli ingegneri promettono di aver imparato dall'errore, ma i fondi investiti sono andati persi, e la tappa resta da riconquistare.";
+    }
+    var rival = SPACE_RIVAL_NATIONS[Math.floor(Math.random() * SPACE_RIVAL_NATIONS.length)];
+    var brief = esito + " Nel frattempo anche " + rival + " avanza nella propria corsa allo spazio: la competizione internazionale resta serrata." +
+      (success ? " Come reagisce il paese a questo traguardo?" : " Come reagisce il paese a questa battuta d'arresto?");
+    var rivalPool = activeParties();
+    var rivalParty = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var choices = buildSituationChoices({ noun: "il Programma Spaziale Nazionale", city: city, rivalName: rivalParty.name, rivalId: rivalParty.id, coherent: true, nationalMetric: "ricercaSviluppo", themeId: METRIC_TO_THEME_ID.ricercaSviluppo, inParliament: !!state.player.inParliament }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: success ? "Successo per il Programma Spaziale Nazionale" : "Battuta d'arresto per il Programma Spaziale Nazionale",
+      cat: "Programma Spaziale", title: stage.label, brief: brief, choices: choices
+    };
+  }
+  function renderSpaceProgramPanel() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return "";
+    var sp = state.spaceProgram;
+    var html = '<section aria-label="Programma Spaziale Nazionale"><details class="log"><summary>Programma Spaziale Nazionale<span>▾</span></summary>';
+    if (state.currencyAbolished) {
+      html += '<p class="ci-hint">Con l\'abolizione della moneta, i costi in miliardi di euro non hanno più senso: il programma spaziale, se vuoi proseguirlo, andrebbe ormai finanziato per intero con risorse pianificate.</p></details></section>';
+      return html;
+    }
+    if (sp.history.length) {
+      html += '<p class="ci-hint">Tappe raggiunte finora: ' + sp.history.filter(function (h) { return h.outcome === "successo"; }).length + " su " + SPACE_PROGRAM_STAGES.length +
+        ". Investimento totale: " + fmtEuroMld(sp.investedTotal) + '.</p>';
+    }
+    if (sp.activeMission) {
+      var stage = SPACE_PROGRAM_STAGES[sp.activeMission.stageIndex];
+      var weeksLeft = sp.activeMission.resolveTurn - state.turn;
+      html += '<p class="ci-hint">In corso: <strong>' + stage.label + '</strong>. Risultato atteso tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + '.</p>';
+    } else if (sp.stageIndex >= SPACE_PROGRAM_STAGES.length) {
+      html += '<p class="ci-hint">Il Programma Spaziale Nazionale ha raggiunto tutti i traguardi previsti, fino alla missione umana su Marte: un capitolo di storia, scritto fino in fondo.</p>';
+    } else {
+      var next = SPACE_PROGRAM_STAGES[sp.stageIndex];
+      var affordable = spaceStageAffordable(next);
+      html += '<p class="ci-hint">Prossima tappa disponibile: <strong>' + next.label + '</strong>. ' + next.desc + '</p><div class="option-grid">' +
+        '<button type="button" class="option-card" data-space-launch="1"' + (affordable ? "" : " disabled") + '>' +
+        '<span class="olabel">Avvia il programma</span><span class="odesc">Costo: ' + fmtEuroMld(next.cost) + ", durata stimata " + next.duration + " settimane." +
+        (affordable ? "" : " Serve un tesoretto annuale più ampio per permetterselo.") + '</span></button></div>';
+    }
+    html += "</details></section>";
+    return html;
   }
   // Il consenso di governo si muove solo per eventi discreti (mozioni, referendum, iniziative
   // parlamentari): senza una deriva propria, un'opposizione attiva per decine di settimane di fila lo
@@ -4945,6 +5165,34 @@
       ]
     };
   }
+  // Il traguardo finale di un regime comunista maturo: l'abolizione della moneta. Non basta essere al
+  // potere né aver instaurato il regime da poco — serve che il settore privato sia stato quasi del tutto
+  // assorbito (aziende <= 2, coerente con il decadimento strutturale già in atto sotto un governo
+  // comunista/comunismo di lusso, vedi applyCollectivistPrivateSectorDecay), che il welfare collettivo sia
+  // ormai quasi totale (welfare >= 9) e che siano passati almeno 100 settimane dall'instaurazione del
+  // regime: un traguardo storico raggiunto per davvero, non un click a caso. Da quel momento in poi la
+  // Politica Fiscale (aliquote, gettito) smette semplicemente di avere senso: l'economia è pianificata e
+  // redistribuita senza scambio monetario.
+  var CURRENCY_ABOLITION_MIN_TURNS = 100;
+  function currencyAbolitionEligible() {
+    var p = state.player;
+    if (!p || state.currencyAbolished || !state.regime || state.regime.type !== "comunista") return false;
+    return state.countryProfile.aziende <= 2 && state.countryProfile.welfare >= 9 && (state.turn - state.regime.since) >= CURRENCY_ABOLITION_MIN_TURNS;
+  }
+  function generateAbolishCurrencyDossier() {
+    if (!currencyAbolitionEligible()) return null;
+    return {
+      id: "gov_abolisci_moneta", kind: "notizia", cat: "Governo",
+      title: "Abolisci la Moneta",
+      brief: "Il settore privato è ormai quasi del tutto assorbito dallo Stato e il welfare collettivo copre praticamente ogni bisogno: il tuo governo potrebbe compiere il passo finale del comunismo, abolendo la moneta e passando a una distribuzione interamente pianificata dei beni. È un punto di non ritorno epocale.",
+      choices: [
+        { label: "Abolisci la moneta", hint: "Il comunismo è pienamente realizzato: fine dello scambio monetario", abolisciMoneta: true, effects: { reputazione: 3, national: { felicita: 0.8, corruzione: 0.5 } },
+          result: "La moneta viene abolita: beni e servizi vengono distribuiti secondo il bisogno, non più comprati e venduti. Il comunismo, nella sua forma più piena, è realtà." },
+        { label: "Non ancora, resta prudente", hint: "La possibilità resta aperta per più avanti nella partita", effects: {},
+          result: "Il partito sceglie la prudenza, per ora: il passo finale resta sul tavolo, si potrà tornare a valutarlo più avanti." }
+      ]
+    };
+  }
   // Uscita dalla NATO e dall'Unione Europea (più, per un governo europeista, la federazione europea) e
   // le grandi scelte istituzionali sul regime: le decisioni più pesanti che un governo possa prendere.
   // Prima quelle su NATO/UE erano raggiungibili solo per sorteggio, in mezzo a decine di altri dossier
@@ -4972,6 +5220,9 @@
     }
     if (!state.regime && REGIME_FAMILIES[p.family]) {
       items.push({ id: "gov_instaura_regime", label: "Instaura " + REGIME_LABELS[REGIME_FAMILIES[p.family]].name, desc: "Apri il dibattito sulla svolta di regime", disabled: false });
+    }
+    if (currencyAbolitionEligible()) {
+      items.push({ id: "gov_abolisci_moneta", label: "Abolisci la Moneta", desc: "Il passo finale del comunismo: apri il dibattito sulla fine dello scambio monetario", disabled: false });
     }
     if (state.regime) {
       items.push({ id: "gov_ripristina_democrazia", label: "Ripristina la Democrazia", desc: "Apri il dibattito per smantellare " + REGIME_LABELS[state.regime.type].name, disabled: false });
@@ -8097,6 +8348,22 @@
       sicurezza: 5, giustizia: 4, casa: 4, immigrazione: 5, disoccupazione: 5, energia: 4
     };
   }
+  // Aliquote fiscali reali italiane a inizio partita (scaglioni IRPEF 2024 post-riforma, IVA ordinaria e
+  // ridotte, IRES sulle imprese): il giocatore parte dai valori veri, non da numeri inventati, e da lì
+  // può alzarle o abbassarle. La patrimoniale ordinaria in Italia non esiste (a parte imposte minori su
+  // specifici beni): parte da 0%, un'eventuale introduzione è quindi una scelta politica vera e propria.
+  function freshFiscalPolicy() {
+    return {
+      irpef: [{ soglia: 28000, aliquota: 23 }, { soglia: 50000, aliquota: 35 }, { soglia: Infinity, aliquota: 43 }],
+      ivaOrdinaria: 22, ivaRidotta: 10, ires: 24, patrimoniale: 0
+    };
+  }
+  // Il Programma Spaziale Nazionale: una progressione di tappe reali (dal primo satellite alla missione
+  // umana su Marte), sempre nello stesso ordine storico che ogni vero programma spaziale ha seguito.
+  // Ogni tappa, una volta avviata, richiede settimane reali di sviluppo prima di sapere se è riuscita.
+  function freshSpaceProgram() {
+    return { stageIndex: 0, investedTotal: 0, activeMission: null, history: [] };
+  }
   var STATE_FIELD_DEFAULTS = {
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
@@ -8115,7 +8382,9 @@
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
     cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, cpuQuestionTimeCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
     electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null,
-    countryEpochs: [], currentEpoch: null
+    countryEpochs: [], currentEpoch: null,
+    fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
+    spaceProgram: freshSpaceProgram()
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -8136,7 +8405,8 @@
     institutionalRelations: { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 },
     judicialRisk: 8, institutionalActionCooldowns: {}, talkShowCooldownTurn: 0, intervistaCooldownTurn: 0,
     lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
-    leaderTraits: [], privateLifeCooldownTurn: 0, diaryEntries: []
+    leaderTraits: [], privateLifeCooldownTurn: 0, diaryEntries: [],
+    candidateList: null, allyListChoicesCache: null
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -10013,7 +10283,19 @@
     spot_elettorale: { label: "Spot elettorale in TV", cost: 1800, cooldown: 3,
       desc: "Uno spot elettorale nella fascia di massimo ascolto, nei giorni caldi della campagna." },
     dibattito_tv: { label: "Dibattito televisivo con gli avversari", cost: 0, cooldown: 4,
-      desc: "Un confronto diretto in TV con i leader degli altri partiti: alto rischio, alta visibilità." }
+      desc: "Un confronto diretto in TV con i leader degli altri partiti: alto rischio, alta visibilità." },
+    campagna_social: { label: "Campagna mirata sui social media", cost: 900, cooldown: 2,
+      desc: "Contenuti e sponsorizzazioni mirate su Instagram, TikTok e X per intercettare l'elettorato più giovane." },
+    volantinaggio: { label: "Volantinaggio in stazioni e mercati", cost: 150, cooldown: 2,
+      desc: "Militanti con volantini nei luoghi di passaggio quotidiano: economico, capillare, poco spettacolare." },
+    endorsement_vip: { label: "Endorsement di un volto noto", cost: 2500, cooldown: 6,
+      desc: "Un personaggio pubblico si espone pubblicamente per il partito, nel bene e nel male." },
+    tour_regionale: { label: "Tour elettorale nelle regioni chiave", cost: 1400, cooldown: 4,
+      desc: "Un giro di tappe nelle regioni dove il voto è più in bilico, con comizi locali ogni giorno." },
+    intervista_podcast: { label: "Intervista in un podcast politico", cost: 250, cooldown: 2,
+      desc: "Un formato più lungo e disteso dei talk show tradizionali, apprezzato dal pubblico più giovane." },
+    attacco_avversario: { label: "Attacco mirato a un avversario", cost: 0, cooldown: 5,
+      desc: "Una campagna di comunicazione aggressiva contro il principale avversario politico: puoi guadagnarci o farti male da solo." }
   };
   function campaignActivityEffects(id) {
     if (id === "comizio_chiusura") return { iscritti: rand(25, 55), visibilita: rand(4, 8), reputazione: rand(0.5, 2) };
@@ -10023,14 +10305,34 @@
       var win = Math.random() < 0.55;
       return win ? { visibilita: rand(6, 12), reputazione: rand(1.5, 4) } : { visibilita: rand(3, 8), reputazione: -rand(1, 3) };
     }
+    if (id === "campagna_social") return { visibilita: rand(7, 14), iscritti: rand(18, 38) };
+    if (id === "volantinaggio") return { iscritti: rand(8, 18), reputazione: rand(0.2, 0.6) };
+    if (id === "endorsement_vip") {
+      var backfire = Math.random() < 0.3;
+      return backfire ? { visibilita: rand(5, 10), reputazione: -rand(2, 5) } : { visibilita: rand(10, 20), iscritti: rand(20, 40), reputazione: rand(1, 3) };
+    }
+    if (id === "tour_regionale") return { sondaggi: rand(0.1, 0.25), reputazione: rand(0.5, 1.5), visibilita: rand(3, 7) };
+    if (id === "intervista_podcast") return { visibilita: rand(3, 7), reputazione: rand(0.5, 1.5), iscritti: rand(10, 20) };
+    if (id === "attacco_avversario") {
+      var lands = Math.random() < 0.5;
+      return lands ? { visibilita: rand(4, 9), sondaggi: rand(0.08, 0.18) } : { reputazione: -rand(1.5, 4), visibilita: rand(2, 5) };
+    }
     return {};
   }
   function campaignActivityFlavor(id) {
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
     if (id === "comizio_chiusura") return "Il comizio di chiusura a " + city + " scalda la base militante nel rush finale della campagna.";
     if (id === "porta_a_porta") return "Il porta a porta a " + city + " e in altre città intercetta gli indecisi con un contatto diretto.";
     if (id === "spot_elettorale") return "Lo spot elettorale in TV porta il simbolo del partito in milioni di case italiane.";
     if (id === "dibattito_tv") return "Il dibattito televisivo con gli altri leader tiene incollati gli elettori nella settimana decisiva.";
+    if (id === "campagna_social") return "La campagna sui social genera migliaia di condivisioni e commenti, tra entusiasmo e polemiche.";
+    if (id === "volantinaggio") return "Il volantinaggio a " + city + " e in altre città raggiunge chi i media tradizionali non intercettano più.";
+    if (id === "endorsement_vip") return "Un volto noto si schiera pubblicamente per il partito: la notizia rimbalza su tutti i media.";
+    if (id === "tour_regionale") return "Il tour elettorale tocca " + city + " e altre città chiave, con comizi quotidiani nelle regioni in bilico.";
+    if (id === "intervista_podcast") return "L'intervista in podcast, più lunga e distesa di un talk show, raccoglie ascolti sorprendenti tra il pubblico più giovane.";
+    if (id === "attacco_avversario") return "La campagna di attacco contro " + rival.name + " domina il dibattito politico della settimana.";
     return CAMPAIGN_ACTIVITIES[id].label + " si svolge senza intoppi.";
   }
   function resolveCampaignActivity(id) {
@@ -10095,6 +10397,157 @@
     html += '<button type="button" class="option-card" data-campaign-pledge="1"' + (pledgeDisabled ? " disabled" : "") + '>' +
       '<span class="olabel">Promessa elettorale sul tuo tema</span><span class="odesc">Una promessa specifica, coerente con la linea del partito. ' + pledgeStatus + '</span></button>';
     html += "</div></details></section>";
+    return html;
+  }
+
+  // ---------- Liste Elettorali: candidati a Camera e Senato ----------
+  // Depositare la lista è un atto vero, non solo cosmetico: 25 settimane prima del voto politico, il
+  // partito sceglie CON QUALE CRITERIO comporre la propria squadra di candidati — non i quasi 600 nomi
+  // reali di deputati e senatori (irrealistico da gestire in un gioco testuale), ma i suoi capilista di
+  // punta, ciascuno con un nome, un passato e un tratto proprio, generati secondo il criterio scelto. Se
+  // il partito è in coalizione, gli alleati hanno già fatto la propria scelta prima di te (generata una
+  // sola volta per elezione, cache in p.allyListChoicesCache): scegliere lo stesso criterio della
+  // maggioranza degli alleati rafforza la coesione della coalizione, divergere la mette a rischio.
+  var CANDIDATE_LIST_WINDOW_WEEKS = 25;
+  var CANDIDATE_LIST_COST = 700;
+  var CANDIDATE_LIST_STRATEGIES = {
+    rinnovamento: { label: "Lista di Rinnovamento", desc: "Volti nuovi dalla società civile, pochi politici di lunga carriera.",
+      effects: { reputazione: 3, iscritti: 15, national: { corruzione: 0.3 } },
+      backgrounds: ["ex dirigente di una ONG ambientalista", "imprenditrice under 35 di una startup", "ex sindacalista di base", "docente universitaria alla prima esperienza politica", "attivista storica per i diritti civili", "medico di base in un piccolo comune", "ex giornalista d'inchiesta"],
+      traits: ["mai stato in un partito prima d'ora", "molto seguito sui social tra i giovani", "conosciuto per una battaglia civica locale", "senza alcun precedente politico", "arrivato dalla società civile organizzata"] },
+    esperienza: { label: "Lista dell'Esperienza", desc: "Parlamentari uscenti e amministratori navigati, per governare da subito senza inciampi.",
+      effects: { reputazione: 1, iscritti: 8, national: { corruzione: -0.2 } },
+      backgrounds: ["parlamentare uscente alla quarta legislatura", "ex assessore regionale con vent'anni di esperienza", "ex sindaco di un capoluogo di provincia", "dirigente ministeriale in pensione", "ex sottosegretario in due governi diversi", "consigliere regionale storico del partito", "avvocato amministrativista con incarichi pubblici pregressi"],
+      traits: ["conosce bene i meccanismi di Palazzo", "ha già ricoperto un incarico di governo", "molto stimato dagli apparati ma poco dai social", "porta in dote una rete di relazioni istituzionali", "reduce da un'inchiesta archiviata, mai condannato"] },
+    tecnica: { label: "Lista Tecnica", desc: "Professionisti ed esperti di settore per ogni materia chiave: competenza prima della tessera di partito.",
+      effects: { reputazione: 2, iscritti: 5, national: { ricercaSviluppo: 0.3 } },
+      backgrounds: ["ingegnere energetico con esperienza internazionale", "economista che ha lavorato per un'istituzione europea", "primario ospedaliero in aspettativa", "ex dirigente di un'agenzia pubblica", "ricercatrice universitaria in intelligenza artificiale", "esperto di diritto del lavoro", "climatologa con pubblicazioni internazionali"],
+      traits: ["mai stato iscritto a un partito prima", "molto rispettato nel proprio settore", "poco avvezzo alla comunicazione politica", "porta competenze tecniche rare in Parlamento"] },
+    militante: { label: "Lista Militante", desc: "Attivisti e quadri di partito che hanno fatto la gavetta sul territorio, tessera dopo tessera.",
+      effects: { iscritti: 30, visibilita: 5, reputazione: -1 },
+      backgrounds: ["segretario di sezione da oltre dieci anni", "organizzatore storico delle manifestazioni del partito", "responsabile del tesseramento regionale", "portavoce del sindacato di categoria vicino al partito", "coordinatore giovanile passato ai ranghi adulti", "storico militante di base della prima ora", "responsabile della comunicazione territoriale"],
+      traits: ["conosciuto e amato dalla base militante", "cresciuto interamente dentro il partito", "instancabile organizzatore territoriale", "meno noto al grande pubblico ma solidissimo sul territorio"] }
+  };
+  var STRATEGY_FAMILY_BIAS = {
+    sinistra: "militante", comunista: "militante", comunismolusso: "militante", movimentista: "rinnovamento",
+    liberale: "tecnica", tecnoprogressista: "tecnica", europeista: "tecnica", libertario: "tecnica",
+    progressista: "rinnovamento", gratuitista: "rinnovamento",
+    sovranista: "esperienza", cattolico: "esperienza", nazionalpopolare: "esperienza", regionalista: "esperienza",
+    meridionalista: "esperienza", monarchico: "esperienza", fascista: "esperienza"
+  };
+  function pickStrategyForFamily(familyId) {
+    var preferred = STRATEGY_FAMILY_BIAS[familyId];
+    var ids = Object.keys(CANDIDATE_LIST_STRATEGIES);
+    return pickWeighted(ids.map(function (id) { return { id: id }; }), function (e) { return e.id === preferred ? 3 : 1; }).id;
+  }
+  function generateCandidateSlate(strategyId, count) {
+    var strat = CANDIDATE_LIST_STRATEGIES[strategyId];
+    var list = [];
+    for (var i = 0; i < count; i++) {
+      list.push({
+        name: generateStaffName(),
+        background: strat.backgrounds[Math.floor(Math.random() * strat.backgrounds.length)],
+        trait: strat.traits[Math.floor(Math.random() * strat.traits.length)]
+      });
+    }
+    return list;
+  }
+  function nationalListWindow() {
+    var w = weeksToNationalElection();
+    return w > 0 && w <= CANDIDATE_LIST_WINDOW_WEEKS;
+  }
+  function candidateListDepositedForCurrentElection() {
+    var p = state.player;
+    return !!(p.candidateList && p.candidateList.forElectionTurn === state.nextElectionTurn);
+  }
+  function getAllyListChoices() {
+    var p = state.player;
+    if (!p.allianceId) return null;
+    if (p.allyListChoicesCache && p.allyListChoicesCache.forElectionTurn === state.nextElectionTurn) return p.allyListChoicesCache.choices;
+    var coal = coalitionById(p.allianceId);
+    var choices = {};
+    if (coal) {
+      coal.members.filter(function (id) { return id !== "player"; }).forEach(function (id) {
+        var party = partyById(id);
+        choices[id] = pickStrategyForFamily(party && party.familyId);
+      });
+    }
+    p.allyListChoicesCache = { forElectionTurn: state.nextElectionTurn, choices: choices };
+    return choices;
+  }
+  function dominantAllyStrategy(choices) {
+    var counts = {}, best = null, bestCount = -1;
+    Object.keys(choices || {}).forEach(function (id) {
+      var s = choices[id];
+      counts[s] = (counts[s] || 0) + 1;
+      if (counts[s] > bestCount) { bestCount = counts[s]; best = s; }
+    });
+    return best;
+  }
+  function depositCandidateList(strategyId) {
+    var p = state.player;
+    var strat = CANDIDATE_LIST_STRATEGIES[strategyId];
+    if (!strat || !nationalListWindow() || candidateListDepositedForCurrentElection()) return null;
+    if (p.fondi < CANDIDATE_LIST_COST) return null;
+    p.fondi -= CANDIDATE_LIST_COST;
+    var deputati = generateCandidateSlate(strategyId, 6);
+    var senatori = generateCandidateSlate(strategyId, 4);
+    var coordinated = null, allyNote = "";
+    if (p.allianceId) {
+      var allyChoices = getAllyListChoices();
+      var dominant = dominantAllyStrategy(allyChoices);
+      if (dominant) {
+        coordinated = dominant === strategyId;
+        if (state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined) {
+          state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] + (coordinated ? rand(2, 5) : -rand(1, 3)), 0, 100);
+        }
+        allyNote = coordinated
+          ? " La scelta è coerente con quella già fatta dalla maggioranza degli alleati di coalizione, che rafforza la coesione della lista comune."
+          : " La scelta diverge da quella fatta dalla maggioranza degli alleati di coalizione, che notano la differenza di impostazione.";
+      }
+    }
+    p.candidateList = { forElectionTurn: state.nextElectionTurn, strategyId: strategyId, coordinated: coordinated, deputati: deputati, senatori: senatori, depositedTurn: state.turn };
+    var dossier = { title: "Lista Elettorale: " + strat.label, cat: "Organizzazione" };
+    var choice = { label: strat.label, effects: strat.effects, result: "Il partito deposita la propria lista elettorale per Camera e Senato con il criterio \"" + strat.label + "\": " + strat.desc + allyNote };
+    var res = applyChoice(dossier, choice);
+    addDiaryEntry("La lista è depositata", "Abbiamo scelto: " + strat.label.toLowerCase() + ". " + strat.desc);
+    return res;
+  }
+  function renderCandidateListPanel() {
+    var p = state.player;
+    if (!p) return "";
+    if (!nationalListWindow() && !candidateListDepositedForCurrentElection()) return "";
+    var html = '<section aria-label="Liste Elettorali"><details class="log" open><summary>Liste Elettorali — Camera e Senato<span>▾</span></summary>';
+    if (candidateListDepositedForCurrentElection()) {
+      var cl = p.candidateList;
+      var strat = CANDIDATE_LIST_STRATEGIES[cl.strategyId];
+      html += '<p class="ci-hint">Lista depositata con il criterio <strong>' + strat.label + '</strong>: ' + strat.desc +
+        (cl.coordinated === true ? " Coerente con la maggioranza degli alleati di coalizione." : cl.coordinated === false ? " Scelta diversa da quella della maggioranza degli alleati di coalizione." : "") + '</p>';
+      html += '<p class="eyebrow" style="margin-top:.6rem">Capilista alla Camera</p><ul class="enacted-policy-list">' +
+        cl.deputati.map(function (c) { return "<li><strong>" + c.name + "</strong> — " + c.background + '. <span class="ci-hint">' + c.trait + ".</span></li>"; }).join("") + "</ul>";
+      html += '<p class="eyebrow" style="margin-top:.6rem">Capilista al Senato</p><ul class="enacted-policy-list">' +
+        cl.senatori.map(function (c) { return "<li><strong>" + c.name + "</strong> — " + c.background + '. <span class="ci-hint">' + c.trait + ".</span></li>"; }).join("") + "</ul>";
+    } else {
+      var w = weeksToNationalElection();
+      html += '<p class="ci-hint">Mancano ' + w + " settiman" + (w === 1 ? "a" : "e") + " alle elezioni politiche: scegli il criterio con cui comporre la tua lista di candidati per Camera e Senato. Costo: " + fmtEuro(CANDIDATE_LIST_COST) + '.</p>';
+      if (p.allianceId) {
+        var allyChoices = getAllyListChoices();
+        var names = Object.keys(allyChoices || {}).map(function (id) {
+          var party = partyById(id);
+          return (party ? party.name : id) + ": " + CANDIDATE_LIST_STRATEGIES[allyChoices[id]].label;
+        });
+        if (names.length) html += '<p class="ci-hint">I tuoi alleati di coalizione hanno già fatto la propria scelta: ' + names.join("; ") + '.</p>';
+      }
+      var disabled = p.fondi < CANDIDATE_LIST_COST;
+      html += '<div class="option-grid">';
+      Object.keys(CANDIDATE_LIST_STRATEGIES).forEach(function (id) {
+        var s = CANDIDATE_LIST_STRATEGIES[id];
+        html += '<button type="button" class="option-card" data-deposit-list="' + id + '"' + (disabled ? " disabled" : "") + '>' +
+          '<span class="olabel">' + s.label + '</span><span class="odesc">' + s.desc + (disabled ? " Fondi insufficienti (" + fmtEuro(CANDIDATE_LIST_COST) + ")." : "") + '</span></button>';
+      });
+      html += "</div>";
+    }
+    html += "</details></section>";
     return html;
   }
 
@@ -11946,13 +12399,13 @@
   // pagina lunghissima.
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
-        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderLeaderDiary() + renderIdeologyProfile();
+        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
         return renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
@@ -11961,7 +12414,7 @@
         return renderReunificationPanel() + renderCoalitionPanel();
       } },
     { id: "paese", label: "Scheda Paese e Bilancio dello Stato", render: function () {
-        return renderNationalStrip() + renderCountryProfile() + renderCountryHistory() + renderBilancioStato() + renderBudgetAllocation();
+        return renderNationalStrip() + renderCountryProfile() + renderCountryHistory() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -12359,6 +12812,13 @@
           state.nextElectionTurn = state.turn + 52;
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_abolisci_moneta") {
+        if (choice.abolisciMoneta) {
+          state.currencyAbolished = true;
+          state.currencyAbolishedTurn = state.turn;
+          addDiaryEntry("La moneta non esiste più", "Oggi abbiamo compiuto il passo che pochi, nella storia, hanno anche solo tentato: abolire la moneta. Da oggi si produce e si distribuisce secondo il bisogno, non secondo il prezzo. Il tempo dirà se avevamo ragione.");
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
         state.natoDecided = true;
         if (choice.exitNato) state.leftNato = true;
@@ -12517,6 +12977,35 @@
         var id = btn.getAttribute("data-fundraising");
         var res = resolveFundraisingAction(id);
         if (!res) { showSaveStatus("Non puoi ancora usare questa fonte di finanziamento (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-deposit-list]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-deposit-list");
+        var res = depositCandidateList(id);
+        if (!res) { showSaveStatus("Non puoi ancora depositare la lista (fuori dalla finestra elettorale, già depositata, o fondi insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-space-launch]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var res = launchSpaceStage();
+        if (!res) { showSaveStatus("Non puoi ancora avviare questa tappa del programma spaziale (tesoretto insufficiente o missione già in corso).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-fiscal-adjust]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var raw = btn.getAttribute("data-fiscal-adjust").split(":");
+        var res = adjustFiscalRate(raw[0], parseInt(raw[1], 10));
+        if (!res) { showSaveStatus("Non puoi ancora intervenire sulle aliquote (tempo di recupero).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
@@ -12861,6 +13350,7 @@
         var dossier = GOVERNO_DOSSIERS.filter(function (d) { return d.id === id; })[0];
         if (!dossier && id === "gov_instaura_regime") dossier = generateRegimeEstablishDossier();
         if (!dossier && id === "gov_ripristina_democrazia") dossier = generateRegimeRestoreDossier();
+        if (!dossier && id === "gov_abolisci_moneta") dossier = generateAbolishCurrencyDossier();
         if (!dossier) return;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
@@ -13417,6 +13907,14 @@
     var amendmentDossier = resolveAmendmentIfDue();
     if (amendmentDossier) {
       state.aiDynamicDossier = amendmentDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var spaceMissionDossier = resolveSpaceMissionIfDue();
+    if (spaceMissionDossier) {
+      state.aiDynamicDossier = spaceMissionDossier;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
