@@ -5294,7 +5294,8 @@
       '<div class="correnti-row">' + Object.keys(labels).map(function (k) {
         return "<span>" + labels[k] + " " + Math.round(p.institutionalRelations[k]) + "% (" + institutionalRelationLabel(p.institutionalRelations[k]) + ")</span>";
       }).join("") + '</div>' +
-      '<p class="ci-hint">Rischio giudiziario: <strong>' + Math.round(p.judicialRisk) + "% (" + judicialRiskLabel(p.judicialRisk) + ")</strong> — cresce con scelte spregiudicate o azioni scoperte di una loggia, si riduce con una linea istituzionale trasparente.</p>" +
+      '<p class="ci-hint">Rischio giudiziario: <strong>' + Math.round(p.judicialRisk) + "% (" + judicialRiskLabel(p.judicialRisk) + ")</strong> — cresce con scelte spregiudicate o azioni scoperte di una loggia, si riduce con una linea istituzionale trasparente." +
+      (p.pendingTrial ? " Un'inchiesta giudiziaria è aperta dalla settimana " + p.pendingTrial.openedTurn + ": l'esito arriverà alla settimana " + p.pendingTrial.resolveTurn + "." : "") + "</p>" +
       '<div class="option-grid">';
     ISTITUZIONALI_DOMAINS.forEach(function (d) {
       var weeksLeft = (p.institutionalActionCooldowns[d.id] || 0) - state.turn;
@@ -8623,6 +8624,7 @@
     amendmentCooldownTurn: 0, pendingAmendment: null, amendmentCandidates: null, acceptedAmendments: [],
     institutionalRelations: { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 },
     judicialRisk: 8, institutionalActionCooldowns: {}, talkShowCooldownTurn: 0, intervistaCooldownTurn: 0,
+    pendingTrial: null, trialCooldownTurn: 0,
     lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
     leaderTraits: [], privateLifeCooldownTurn: 0, diaryEntries: [],
     candidateList: null, allyListChoicesCache: null,
@@ -9842,6 +9844,101 @@
     html += "</div></details></section>";
     return html;
   }
+
+  // ---------- Processo e Inchiesta Giudiziaria ----------
+  // Il "redde rationem" del rischio giudiziario: la Loggia Riservata, la criminalità organizzata, la
+  // vita privata e le operazioni coperte fanno tutte salire p.judicialRisk nel tempo, ma finora quel
+  // numero non aveva mai un vero costo diretto — restava un indicatore che influenzava altre
+  // probabilità, mai un evento in sé. Da qui in poi, superata una soglia, il rischio può concretizzarsi
+  // in un'inchiesta giudiziaria formale: non un esito istantaneo, ma un vero processo che si apre con
+  // una scelta di strategia difensiva e si risolve solo dopo mesi, con un esito reale — assoluzione,
+  // condanna lieve, o nei casi più gravi condanna pesante con dimissioni forzate dalla guida del
+  // partito (mai lo scioglimento del partito stesso: resta un colpo durissimo, non la fine della
+  // partita).
+  var TRIAL_OPEN_THRESHOLD = 65;
+  function checkTrialTrigger() {
+    var p = state.player;
+    if (!p || p.pendingTrial || p.judicialRisk === undefined) return false;
+    if (state.turn < (p.trialCooldownTurn || 0)) return false;
+    if (p.judicialRisk < TRIAL_OPEN_THRESHOLD) return false;
+    var prob = clamp((p.judicialRisk - TRIAL_OPEN_THRESHOLD) / 220, 0.015, 0.1);
+    return Math.random() < prob;
+  }
+  function buildTrialOpenDossier() {
+    var duration = 20 + Math.floor(Math.random() * 16);
+    var hasStaffToSacrifice = state.player.staff && state.player.staff.length > 0;
+    var choices = [
+      { label: "Collabora pienamente con gli inquirenti", hint: "Costa in immagine subito, riduce il rischio nel tempo", trialStrategy: "collabora", trialDuration: duration,
+        effects: { reputazione: -3 }, result: "Il partito sceglie la linea della piena collaborazione con la magistratura: costa un colpo d'immagine immediato, ma è la strada più solida per uscirne bene." },
+      { label: "Nega tutto e prepara una difesa aggressiva", hint: "Nessun costo immediato, esito più incerto", trialStrategy: "nega", trialDuration: duration,
+        effects: {}, result: "Il partito nega ogni addebito e monta una difesa aggressiva: nessun costo immediato, ma l'esito resta molto più incerto." }
+    ];
+    if (hasStaffToSacrifice) {
+      choices.push({ label: "Fai un passo indietro di un dirigente come capro espiatorio", hint: "Un membro dello staff lascia l'incarico", trialStrategy: "capro_espiatorio", trialDuration: duration,
+        sacrificeStaff: true, effects: { iscritti: -10 }, result: "Un dirigente di primo piano lascia volontariamente l'incarico, assumendosi pubblicamente la responsabilità: un sacrificio che allevia la posizione del partito." });
+    }
+    return {
+      id: "trial_open", kind: "notizia", cat: "Giustizia",
+      title: "Si apre un'inchiesta giudiziaria", eyebrow: "La Procura apre un fascicolo",
+      brief: "Dopo mesi in cui le voci si accumulavano, la Procura apre un'inchiesta giudiziaria formale sul partito. Non si saprà l'esito per parecchio tempo: come intende muoversi la difesa nel frattempo?",
+      choices: choices
+    };
+  }
+  function resolveTrialIfDue() {
+    var p = state.player;
+    var t = p.pendingTrial;
+    if (!t) return null;
+    if (state.turn < t.resolveTurn) return null;
+    p.pendingTrial = null;
+    p.trialCooldownTurn = state.turn + 25;
+    var magistratura = (p.institutionalRelations && p.institutionalRelations.magistratura !== undefined) ? p.institutionalRelations.magistratura : 50;
+    var strategyMod = t.strategy === "collabora" ? -15 : t.strategy === "capro_espiatorio" ? -10 : 5;
+    var convictionProb = clamp((t.riskAtOpening - 30) / 100 + strategyMod / 100 + (50 - magistratura) / 300, 0.08, 0.85);
+    var convicted = Math.random() < convictionProb;
+    var esito, diaryTitle, diaryText;
+    if (!convicted) {
+      p.reputazione = clamp(p.reputazione + rand(3, 8), 0, 100);
+      p.judicialRisk = clamp(p.judicialRisk * 0.4, 1, 95);
+      esito = "L'inchiesta si conclude con una piena assoluzione: nessun reato, nessuna responsabilità. Il partito esce dalla vicenda con la reputazione, nel complesso, intatta.";
+      diaryTitle = "Assolti"; diaryText = "Il processo è finito: assoluzione piena. Mesi di attesa e di sospetti, ma alla fine la verità ha retto.";
+    } else {
+      var severe = t.riskAtOpening >= 85 && Math.random() < 0.5;
+      if (severe) {
+        p.reputazione = clamp(p.reputazione - rand(20, 35), 0, 100);
+        p.iscritti = Math.max(0, Math.round(p.iscritti * (1 - rand(0.2, 0.35))));
+        p.fondi = Math.max(0, p.fondi - rand(5000, 15000));
+        p.judicialRisk = clamp(p.judicialRisk * 0.3, 1, 95);
+        esito = "L'inchiesta si conclude con una condanna pesante: il partito ne esce segnato in profondità, tra dimissioni e un crollo di credibilità difficile da recuperare in fretta.";
+        diaryTitle = "Condannati"; diaryText = "La condanna è arrivata, ed è pesante. Qualunque cosa succeda da qui in avanti, questo processo resterà una macchia sulla storia del partito.";
+        if (p.playerIsLeader) {
+          var successor = primariesChallengerName(p);
+          p.playerIsLeader = false;
+          p.interimLeaderName = successor;
+          p.leaderTrust = clamp(25 + Math.random() * 15, 0, 100);
+          p.primariesCooldownTurn = state.turn + PRIMARIES_RETRY_COOLDOWN_TURNS;
+          esito += " Sotto la pressione della condanna, la guida del partito passa a " + successor + ": potrai provare a riconquistarla alla prossima primaria.";
+        }
+      } else {
+        p.reputazione = clamp(p.reputazione - rand(8, 15), 0, 100);
+        p.fondi = Math.max(0, p.fondi - rand(2000, 6000));
+        p.judicialRisk = clamp(p.judicialRisk * 0.55, 1, 95);
+        esito = "L'inchiesta si conclude con una condanna lieve, principalmente pecuniaria: un colpo all'immagine e alle casse del partito, ma non un terremoto.";
+        diaryTitle = "Condanna lieve"; diaryText = "Condanna lieve, soprattutto una multa. Poteva andare peggio, ma il segno resta.";
+      }
+    }
+    addDiaryEntry(diaryTitle, diaryText);
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var choices = buildSituationChoices({ noun: "l'esito del processo", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "corruzione", themeId: METRIC_TO_THEME_ID.corruzione, inParliament: !!p.inParliament }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: convicted ? "Si chiude il processo: condanna" : "Si chiude il processo: assoluzione",
+      cat: "Giustizia", title: "L'esito del processo", brief: esito + " Come reagisce il partito?",
+      choices: choices
+    };
+  }
+
   // Situazioni dedicate alla vita sotto il nuovo regime: 3 per tipo, pescate occasionalmente al posto
   // del normale generatore di situazioni una volta che state.regime è impostato (vedi advanceTurnLogic).
   var REGIME_SITUATIONS = {
@@ -13294,6 +13391,18 @@
           addDiaryEntry("Il mondo è in guerra", "Oggi il governo ha scelto la collocazione dell'Italia nella guerra mondiale: " + choice.label.toLowerCase() + ". Qualunque cosa succeda da qui in avanti, questa scelta segnerà il paese per una generazione.");
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "trial_open") {
+        var p = state.player;
+        if (choice.trialStrategy) {
+          p.pendingTrial = { openedTurn: state.turn, resolveTurn: state.turn + choice.trialDuration, strategy: choice.trialStrategy, riskAtOpening: p.judicialRisk };
+          if (choice.trialStrategy === "collabora") p.judicialRisk = clamp(p.judicialRisk * 0.85, 1, 95);
+          if (choice.sacrificeStaff && p.staff && p.staff.length) {
+            var sacrificed = p.staff[Math.floor(Math.random() * p.staff.length)];
+            p.staff = p.staff.filter(function (s) { return s !== sacrificed; });
+            p.judicialRisk = clamp(p.judicialRisk * 0.75, 1, 95);
+          }
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
         state.natoDecided = true;
         if (choice.exitNato) state.leftNato = true;
@@ -14437,6 +14546,21 @@
         state.phase = "building";
         return;
       }
+    }
+
+    var trialResolveDossier = resolveTrialIfDue();
+    if (trialResolveDossier) {
+      state.aiDynamicDossier = trialResolveDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkTrialTrigger()) {
+      state.aiDynamicDossier = buildTrialOpenDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
     }
 
     var questionTimeDue = resolveQuestionTimeIfDue();
