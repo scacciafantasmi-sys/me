@@ -6829,19 +6829,34 @@
     for (var i = 1; i < weights.length; i++) { if (weights[i] > weights[maxIdx]) maxIdx = i; }
     return weights.map(function (w, i) { return i === maxIdx ? w * bonus : w; });
   }
+  // Un referendum già PASSATO non deve mai più tornare alle urne: passedIds lo esclude sempre, in ogni
+  // ramo qui sotto, senza eccezioni (a differenza del vecchio codice, che in caso di pool esaurito
+  // ripescava dall'intero elenco, PASSATI compresi). Un referendum bocciato, invece, può legittimamente
+  // ripresentarsi più avanti (come nella realtà, un quesito respinto può tornare al voto dopo anni) — ma
+  // per non dare mai l'impressione di un "reset", i temi mai proposti prima vengono sempre preferiti, e
+  // solo quando sono tutti esauriti si ripesca un tema già bocciato, etichettandolo esplicitamente come
+  // un ritorno alle urne, non come una domanda inedita.
   function triggerReferendumIfDue() {
     if (state.turn < state.nextReferendumTurn) return null;
     if (state.pendingNationalReferendum) return null;
     state.nextReferendumTurn = state.turn + 90 + Math.floor(Math.random() * 60);
     var passedIds = state.passedNationalReferendumIds || [];
-    var pool = REFERENDUM_TOPICS.filter(function (t) { return passedIds.indexOf(t.id) === -1; });
+    var history = state.referendumTopicHistory || {};
+    var neverTried = REFERENDUM_TOPICS.filter(function (t) { return history[t.id] === undefined && passedIds.indexOf(t.id) === -1; });
+    var notPassed = REFERENDUM_TOPICS.filter(function (t) { return passedIds.indexOf(t.id) === -1; });
+    var isRevisit = !neverTried.length;
+    var pool = neverTried.length ? neverTried : notPassed;
     if (!pool.length) pool = REFERENDUM_TOPICS;
     var topic = pool[Math.floor(Math.random() * pool.length)];
+    if (!state.referendumTopicHistory) state.referendumTopicHistory = {};
+    state.referendumTopicHistory[topic.id] = state.turn;
     state.pendingNationalReferendum = { topic: topic, stance: undefined, resolveTurn: state.turn + 5 + Math.floor(Math.random() * 5) };
     return {
-      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Referendum nazionale annunciato",
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: isRevisit ? "Un vecchio quesito torna alle urne" : "Referendum nazionale annunciato",
       cat: "Referendum Nazionale", title: topic.title,
-      brief: topic.brief + " Si vota tra qualche settimana: il tuo partito può fare campagna per il SÌ, per il NO, oppure restare neutrale — la tua campagna sposta un po' l'esito, in proporzione al peso reale del partito.",
+      brief: (isRevisit ? "Il paese aveva già votato su questo quesito in passato, senza approvarlo: a distanza di tempo, torna alle urne. " : "") +
+        topic.brief + " Si vota tra qualche settimana: il tuo partito può fare campagna per il SÌ, per il NO, oppure restare neutrale — la tua campagna sposta un po' l'esito, in proporzione al peso reale del partito.",
       choices: [
         { label: "Fai campagna per il SÌ", stance: "si", hint: "Spinge l'esito verso il SÌ, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il SÌ su questo referendum." },
         { label: "Fai campagna per il NO", stance: "no", hint: "Spinge l'esito verso il NO, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il NO su questo referendum." },
@@ -8608,7 +8623,7 @@
     spaceProgram: freshSpaceProgram(),
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
-    coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0
+    coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {}
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -8632,7 +8647,7 @@
     lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
     leaderTraits: [], privateLifeCooldownTurn: 0, diaryEntries: [],
     candidateList: null, allyListChoicesCache: null,
-    intelActionCooldowns: {}
+    intelActionCooldowns: {}, intelSituationCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -9077,13 +9092,18 @@
     // in consenso elettorale reale. Sotto reputazione ~15 la crescita crolla quasi a zero; sopra ~60 non
     // c'è più penalità.
     var repCeiling = clamp((p.reputazione - 15) / 45, 0.03, 1);
-    // Le ideologie di nicchia (fascismo, monarchia, comunismo, gratuitismo) partono già da sondaggi
-    // molto bassi (vedi state.parties in freshState), ma senza un freno aggiuntivo crescerebbero con
-    // la STESSA facilità di un partito mainstream una volta accumulati iscritti/sezioni/reputazione — non
-    // realistico per basi elettorali strutturalmente di nicchia. Il moltiplicatore resta basso finché la
-    // reputazione è bassa/media, ma sale verso 1 (nessuna penalità) quando il giocatore costruisce davvero
-    // credibilità: difficile, non impossibile, esattamente come richiesto.
-    var nicheMult = NICHE_FAMILIES[p.family] ? clamp(0.32 + p.reputazione / 130, 0.32, 1) : 1;
+    // Le ideologie di nicchia (fascismo, monarchia, comunismo, gratuitismo, comunismo di lusso) partono già
+    // da sondaggi molto bassi (vedi state.parties in freshState), ma senza un freno aggiuntivo
+    // crescerebbero con la STESSA facilità di un partito mainstream una volta accumulati iscritti/sezioni/
+    // reputazione — non realistico per basi elettorali strutturalmente di nicchia. La prima versione di
+    // questo freno (0.32 -> 1, saturato già a reputazione ~88) si è rivelata troppo debole nella pratica:
+    // con scelte fatte a caso (nessuna strategia), un partito come Potere al Popolo (famiglia comunista)
+    // superava il 2% di sondaggi in meno di 20 settimane, perché la reputazione sale in fretta anche senza
+    // sforzo deliberato e il moltiplicatore saturava quasi subito verso "nessuna penalità". Il freno ora
+    // resta permanentemente più basso (0.22 -> 0.72, mai saturato del tutto nemmeno a reputazione massima):
+    // resta comunque possibile crescere costruendo credibilità, ma un'ideologia di nicchia deve restare
+    // strutturalmente più lenta di una mainstream per l'intera partita, non solo nelle prime settimane.
+    var nicheMult = NICHE_FAMILIES[p.family] ? clamp(0.22 + p.reputazione / 200, 0.22, 0.72) : 1;
     // Le sezioni locali (vedi openLocalSection) contano soprattutto sul TERRITORIO (elezioni
     // comunali/provinciali/regionali, vedi triggerLocalElectionCycle), ma un radicamento reale deve
     // ancora contribuire, in modo contenuto, anche alla crescita organica nazionale — toglierlo del
@@ -9747,106 +9767,71 @@
   }
 
   // ---------- Servizi di Intelligence ----------
-  // A differenza della Loggia Riservata (illegale, nascosta, scoperta = scandalo enorme), questa è
-  // l'azione ISTITUZIONALE e legittima dei servizi segreti dello Stato sotto la direzione del governo in
-  // carica: sempre disponibile a chi governa, senza soglie di sblocco nascoste. Resta comunque un'azione
-  // rischiosa — un'operazione può fallire, e un'operazione coperta all'estero scoperta è un incidente
-  // diplomatico vero, non solo un brutto titolo di giornale.
+  // Prima versione: un menu permanente sempre disponibile a chi governa, cliccabile in ogni momento
+  // senza che ci fosse una vera minaccia da fronteggiare — un "non ha senso metterli così a cazzo",
+  // per citare la richiesta esplicita che ha portato a questa riscrittura. Ora è un sistema REATTIVO:
+  // di tanto in tanto, mentre si governa, emerge una situazione reale e concreta (una cellula
+  // individuata, un tentativo di spionaggio in corso, un'ingerenza elettorale rilevata, un'occasione
+  // per un'operazione riservata all'estero) sotto forma di dossier, esattamente come mafia/golpe/
+  // processo/ingerenza. Il giocatore autorizza l'operazione dei servizi (rischio reale di fallimento)
+  // oppure non interviene (per una minaccia reale, l'esito negativo è garantito; per un'occasione,
+  // semplicemente sfuma senza conseguenze).
   var INTELLIGENCE_ACTIONS = {
-    antiterrorismo: { label: "Sventa una Minaccia Terroristica", cost: 1200, cooldown: 10,
-      desc: "I servizi seguono una cellula sospettata di preparare un attentato sul suolo nazionale." },
-    controspionaggio: { label: "Contrasta lo Spionaggio Industriale", cost: 1000, cooldown: 10,
-      desc: "Un'indagine di controspionaggio su tentativi di furto di segreti industriali da aziende strategiche italiane." },
-    interferenze_elettorali: { label: "Contrasta Interferenze Elettorali Straniere", cost: 900, cooldown: 12,
-      desc: "I servizi monitorano e contrastano tentativi di ingerenza straniera nel processo elettorale italiano." },
-    operazione_coperta: { label: "Conduci un'Operazione Coperta all'Estero", cost: 2500, cooldown: 16,
-      desc: "Un'operazione riservata condotta all'estero per un obiettivo strategico del governo: il rischio più alto di tutti." }
+    antiterrorismo: { label: "Sventa una Minaccia Terroristica", cost: 1200, cooldown: 10 },
+    controspionaggio: { label: "Contrasta lo Spionaggio Industriale", cost: 1000, cooldown: 10 },
+    interferenze_elettorali: { label: "Contrasta Interferenze Elettorali Straniere", cost: 900, cooldown: 12 },
+    operazione_coperta: { label: "Conduci un'Operazione Coperta all'Estero", cost: 2500, cooldown: 16 }
   };
+  var INTEL_SITUATION_COOLDOWN_TURNS = 8;
   function intelligenceActionSuccessProb(id) {
     var base = { antiterrorismo: 0.72, controspionaggio: 0.68, interferenze_elettorali: 0.7, operazione_coperta: 0.55 }[id] || 0.65;
     var cp = state.countryProfile;
     return clamp(base + (cp.ricercaSviluppo - 5) * 0.02, 0.25, 0.92);
   }
-  function resolveIntelligenceAction(id) {
+  function checkIntelSituationTrigger() {
     var p = state.player;
-    var a = INTELLIGENCE_ACTIONS[id];
-    if (!a || !p || p.parliamentRole !== "governo") return null;
+    if (!p || p.parliamentRole !== "governo") return null;
+    if (state.turn < (p.intelSituationCooldownTurn || 0)) return null;
     if (!p.intelActionCooldowns) p.intelActionCooldowns = {};
-    if (state.turn < (p.intelActionCooldowns[id] || 0)) return null;
-    if (p.fondi < a.cost) return null;
-    p.fondi -= a.cost;
-    p.intelActionCooldowns[id] = state.turn + a.cooldown;
-    var success = Math.random() < intelligenceActionSuccessProb(id);
-    var cp = state.countryProfile;
-    var resultText;
-    if (id === "antiterrorismo") {
-      if (success) {
-        cp.sicurezza = clamp(cp.sicurezza + 0.6, 1, 10);
-        p.reputazione = clamp(p.reputazione + 2, 0, 100);
-        resultText = "I servizi sventano l'attentato prima che possa essere messo in atto: un'operazione silenziosa, ma efficace, che rafforza la sicurezza del paese.";
-      } else {
-        cp.sicurezza = clamp(cp.sicurezza - 1, 1, 10);
-        cp.felicita = clamp(cp.felicita - 0.8, 1, 10);
-        resultText = "L'operazione antiterrorismo arriva tardi: un incidente si verifica comunque, seppure contenuto grazie all'allerta già scattata. Il paese resta scosso.";
-      }
-    } else if (id === "controspionaggio") {
-      if (success) {
-        cp.ricercaSviluppo = clamp(cp.ricercaSviluppo + 0.5, 1, 10);
-        cp.aziende = clamp(cp.aziende + 0.3, 1, 10);
-        resultText = "Il tentativo di spionaggio industriale viene individuato e neutralizzato: i segreti delle imprese strategiche italiane restano al sicuro.";
-      } else {
-        cp.ricercaSviluppo = clamp(cp.ricercaSviluppo - 0.6, 1, 10);
-        cp.aziende = clamp(cp.aziende - 0.4, 1, 10);
-        resultText = "L'operazione di controspionaggio fallisce: informazioni industriali sensibili finiscono comunque nelle mani sbagliate.";
-      }
-    } else if (id === "interferenze_elettorali") {
-      if (success) {
-        cp.corruzione = clamp(cp.corruzione + 0.4, 1, 10);
-        p.reputazione = clamp(p.reputazione + 1.5, 0, 100);
-        resultText = "Un tentativo di interferenza elettorale straniera viene individuato e neutralizzato prima di poter incidere sul dibattito pubblico.";
-      } else {
-        cp.corruzione = clamp(cp.corruzione - 0.6, 1, 10);
-        resultText = "L'interferenza elettorale straniera passa inosservata: solo mesi dopo emergeranno i primi indizi di una campagna di disinformazione mirata.";
-      }
-    } else if (id === "operazione_coperta") {
-      var targetNation = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
-      if (success) {
-        state.foreignRelations = state.foreignRelations || {};
-        if (state.foreignRelations[targetNation.id] === undefined) state.foreignRelations[targetNation.id] = 50;
-        cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 0.4, 1, 10);
-        p.reputazione = clamp(p.reputazione + 1, 0, 100);
-        resultText = "L'operazione coperta condotta in territorio straniero raggiunge il proprio obiettivo strategico senza lasciare tracce: nessuno, fuori da una ristrettissima cerchia, saprà mai che è avvenuta.";
-      } else {
-        state.foreignRelations = state.foreignRelations || {};
-        if (state.foreignRelations[targetNation.id] === undefined) state.foreignRelations[targetNation.id] = 50;
-        state.foreignRelations[targetNation.id] = clamp(state.foreignRelations[targetNation.id] - rand(15, 30), 0, 100);
-        cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche - 0.8, 1, 10);
-        p.reputazione = clamp(p.reputazione - rand(4, 9), 0, 100);
-        p.judicialRisk = clamp((p.judicialRisk || 8) + 10, 1, 95);
-        resultText = "L'operazione coperta viene scoperta: un incidente diplomatico serio con " + targetNation.name + ", che protesta ufficialmente. Il governo nega tutto, ma il danno è fatto.";
-      }
-    }
-    state.log.unshift({ week: state.turn, title: a.label, choiceLabel: success ? "Operazione riuscita" : "Operazione fallita", result: resultText, headlines: [], type: "dossier", cat: "Servizi di Intelligence" });
-    return { resultText: resultText, headlines: [] };
+    var available = Object.keys(INTELLIGENCE_ACTIONS).filter(function (id) { return state.turn >= (p.intelActionCooldowns[id] || 0); });
+    if (!available.length) return null;
+    if (Math.random() > 0.09) return null;
+    return available[Math.floor(Math.random() * available.length)];
   }
-  function renderIntelligencePanel() {
+  function buildIntelSituationDossier(id) {
+    var a = INTELLIGENCE_ACTIONS[id];
     var p = state.player;
-    if (!p || p.parliamentRole !== "governo") return "";
-    if (!p.intelActionCooldowns) p.intelActionCooldowns = {};
-    var html = '<section aria-label="Servizi di Intelligence"><details class="log"><summary>Servizi di Intelligence<span>▾</span></summary>' +
-      '<p class="ci-hint">Come governo, dirigi le agenzie di sicurezza dello Stato: minacce terroristiche, spionaggio industriale, interferenze elettorali straniere, o operazioni coperte all\'estero. Ogni operazione può riuscire o fallire, e un fallimento ha un costo reale.</p><div class="option-grid">';
-    Object.keys(INTELLIGENCE_ACTIONS).forEach(function (id) {
-      var a = INTELLIGENCE_ACTIONS[id];
-      var cd = p.intelActionCooldowns[id] || 0;
-      var weeksLeft = cd - state.turn;
-      var disabled = weeksLeft > 0 || p.fondi < a.cost;
-      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
-        : p.fondi < a.cost ? "Fondi insufficienti (" + fmtEuro(a.cost) + ")" : "Costo: " + fmtEuro(a.cost);
-      html += '<button type="button" class="option-card" data-intel-action="' + id + '"' + (disabled ? " disabled" : "") + '>' +
-        '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
-    });
-    html += "</div></details></section>";
-    return html;
+    var isOpportunity = id === "operazione_coperta";
+    var title, eyebrow, brief;
+    if (id === "antiterrorismo") {
+      var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+      eyebrow = "Allerta dei servizi segreti"; title = "Cellula sospetta individuata a " + city;
+      brief = "I servizi segreti hanno intercettato comunicazioni che indicano una cellula pronta a colpire a " + city + ". Il tempo per agire è poco.";
+    } else if (id === "controspionaggio") {
+      eyebrow = "Allerta controspionaggio"; title = "Tentativo di spionaggio industriale rilevato";
+      brief = "Un'unità di controspionaggio ha rilevato un tentativo, riconducibile a un attore straniero, di sottrarre segreti industriali a un'azienda strategica italiana.";
+    } else if (id === "interferenze_elettorali") {
+      var nation = pickHostileForeignNation();
+      eyebrow = "Allerta interferenza elettorale"; title = "Ingerenza elettorale straniera in corso";
+      brief = "I servizi rilevano un'operazione di ingerenza in corso nel processo elettorale italiano, con indizi che portano a " + nation.name + ".";
+    } else {
+      var nation2 = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
+      eyebrow = "Finestra operativa dei servizi"; title = "Opportunità per un'operazione riservata all'estero";
+      brief = "Si apre una finestra imprevista per un'operazione riservata su un obiettivo strategico in " + nation2.name + ". Non durerà a lungo.";
+    }
+    var choices = [];
+    if (p.fondi >= a.cost) {
+      choices.push({ label: "Autorizza l'operazione (" + fmtEuro(a.cost) + ")", intelAction: "agisci", intelType: id,
+        hint: "Rischio reale di fallimento, ma è l'unico modo per intervenire davvero", effects: {}, result: "" });
+    }
+    choices.push({ label: isOpportunity ? "Lascia perdere l'occasione" : "Non intervenire", intelAction: "ignora", intelType: id,
+      hint: isOpportunity ? "Nessun rischio, ma l'occasione sfuma" : "Nessun costo immediato, ma la minaccia resta senza risposta",
+      effects: {}, result: "" });
+    return {
+      id: "intel_situation", kind: "notizia", cat: "Servizi di Intelligence", intelType: id,
+      eyebrow: eyebrow, title: title, brief: brief + " Come intende muoversi il governo?",
+      choices: choices
+    };
   }
 
   // ---------- Processo e Inchiesta Giudiziaria ----------
@@ -13053,7 +13038,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderIntelligencePanel() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", render: function () {
         return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
@@ -13586,6 +13571,77 @@
         }
         choice.result = interfEsito;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "intel_situation") {
+        var pi = state.player;
+        var cpi = state.countryProfile;
+        var idi = dossier.intelType;
+        var ai = INTELLIGENCE_ACTIONS[idi];
+        var acted = choice.intelAction === "agisci";
+        var successI = acted && Math.random() < intelligenceActionSuccessProb(idi);
+        if (acted) {
+          pi.fondi = Math.max(0, pi.fondi - ai.cost);
+          pi.intelActionCooldowns = pi.intelActionCooldowns || {};
+          pi.intelActionCooldowns[idi] = state.turn + ai.cooldown;
+        }
+        pi.intelSituationCooldownTurn = state.turn + INTEL_SITUATION_COOLDOWN_TURNS;
+        var esitoI;
+        if (idi === "antiterrorismo") {
+          if (successI) {
+            cpi.sicurezza = clamp(cpi.sicurezza + 0.6, 1, 10);
+            pi.reputazione = clamp(pi.reputazione + 2, 0, 100);
+            esitoI = "I servizi sventano l'attentato prima che possa essere messo in atto: un'operazione silenziosa, ma efficace, che rafforza la sicurezza del paese.";
+          } else {
+            cpi.sicurezza = clamp(cpi.sicurezza - 1, 1, 10);
+            cpi.felicita = clamp(cpi.felicita - 0.8, 1, 10);
+            esitoI = acted
+              ? "L'operazione antiterrorismo arriva tardi: un incidente si verifica comunque, seppure contenuto grazie all'allerta già scattata. Il paese resta scosso."
+              : "Senza un intervento, la cellula riesce a colpire: un attentato che si sarebbe potuto prevenire scuote il paese.";
+          }
+        } else if (idi === "controspionaggio") {
+          if (successI) {
+            cpi.ricercaSviluppo = clamp(cpi.ricercaSviluppo + 0.5, 1, 10);
+            cpi.aziende = clamp(cpi.aziende + 0.3, 1, 10);
+            esitoI = "Il tentativo di spionaggio industriale viene individuato e neutralizzato: i segreti delle imprese strategiche italiane restano al sicuro.";
+          } else {
+            cpi.ricercaSviluppo = clamp(cpi.ricercaSviluppo - 0.6, 1, 10);
+            cpi.aziende = clamp(cpi.aziende - 0.4, 1, 10);
+            esitoI = acted
+              ? "L'operazione di controspionaggio fallisce: informazioni industriali sensibili finiscono comunque nelle mani sbagliate."
+              : "Senza contromisure, il tentativo di spionaggio va a segno: informazioni industriali sensibili finiscono nelle mani sbagliate.";
+          }
+        } else if (idi === "interferenze_elettorali") {
+          if (successI) {
+            cpi.corruzione = clamp(cpi.corruzione + 0.4, 1, 10);
+            pi.reputazione = clamp(pi.reputazione + 1.5, 0, 100);
+            esitoI = "Un tentativo di interferenza elettorale straniera viene individuato e neutralizzato prima di poter incidere sul dibattito pubblico.";
+          } else {
+            cpi.corruzione = clamp(cpi.corruzione - 0.6, 1, 10);
+            esitoI = acted
+              ? "L'operazione fallisce: l'interferenza elettorale straniera passa comunque inosservata, e solo mesi dopo emergeranno i primi indizi di una campagna di disinformazione mirata."
+              : "Senza un contrasto attivo, l'ingerenza elettorale straniera prosegue indisturbata: solo mesi dopo emergeranno i primi indizi di una campagna di disinformazione mirata.";
+          }
+        } else {
+          var targetNation = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
+          if (!acted) {
+            esitoI = "Il governo lascia cadere l'occasione: la finestra operativa si chiude senza conseguenze, ma anche senza risultati.";
+          } else if (successI) {
+            state.foreignRelations = state.foreignRelations || {};
+            if (state.foreignRelations[targetNation.id] === undefined) state.foreignRelations[targetNation.id] = 50;
+            cpi.relazioniDiplomatiche = clamp(cpi.relazioniDiplomatiche + 0.4, 1, 10);
+            pi.reputazione = clamp(pi.reputazione + 1, 0, 100);
+            esitoI = "L'operazione coperta condotta in territorio straniero raggiunge il proprio obiettivo strategico senza lasciare tracce: nessuno, fuori da una ristrettissima cerchia, saprà mai che è avvenuta.";
+          } else {
+            state.foreignRelations = state.foreignRelations || {};
+            if (state.foreignRelations[targetNation.id] === undefined) state.foreignRelations[targetNation.id] = 50;
+            state.foreignRelations[targetNation.id] = clamp(state.foreignRelations[targetNation.id] - rand(15, 30), 0, 100);
+            cpi.relazioniDiplomatiche = clamp(cpi.relazioniDiplomatiche - 0.8, 1, 10);
+            pi.reputazione = clamp(pi.reputazione - rand(4, 9), 0, 100);
+            pi.judicialRisk = clamp((pi.judicialRisk || 8) + 10, 1, 95);
+            esitoI = "L'operazione coperta viene scoperta: un incidente diplomatico serio con " + targetNation.name + ", che protesta ufficialmente. Il governo nega tutto, ma il danno è fatto.";
+          }
+        }
+        choice.result = esitoI;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
         state.natoDecided = true;
         if (choice.exitNato) state.leftNato = true;
@@ -13760,16 +13816,6 @@
       btn.addEventListener("click", function () {
         var res = launchSpaceStage();
         if (!res) { showSaveStatus("Non puoi ancora avviare questa tappa del programma spaziale (tesoretto insufficiente o missione già in corso).", true); return; }
-        showSaveStatus(res.resultText, false);
-        save();
-        render();
-      });
-    });
-    app.querySelectorAll("[data-intel-action]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-intel-action");
-        var res = resolveIntelligenceAction(id);
-        if (!res) { showSaveStatus("Non puoi ancora avviare questa operazione (fondi o tempo di recupero insufficienti).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
@@ -14755,6 +14801,14 @@
 
     if (checkForeignInterferenceTrigger()) {
       state.aiDynamicDossier = buildForeignInterferenceDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var intelSituationId = checkIntelSituationTrigger();
+    if (intelSituationId) {
+      state.aiDynamicDossier = buildIntelSituationDossier(intelSituationId);
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
