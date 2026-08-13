@@ -5170,24 +5170,47 @@
   // assorbito (aziende <= 2, coerente con il decadimento strutturale già in atto sotto un governo
   // comunista/comunismo di lusso, vedi applyCollectivistPrivateSectorDecay), che il welfare collettivo sia
   // ormai quasi totale (welfare >= 9) e che siano passati almeno 100 settimane dall'instaurazione del
-  // regime: un traguardo storico raggiunto per davvero, non un click a caso. Da quel momento in poi la
-  // Politica Fiscale (aliquote, gettito) smette semplicemente di avere senso: l'economia è pianificata e
-  // redistribuita senza scambio monetario.
+  // regime: un traguardo storico raggiunto per davvero, non un click a caso. Ma soddisfare queste soglie
+  // minime non basta a garantire che vada bene: communistReadiness() misura QUANTO in profondità il paese
+  // è stato preparato (non solo se ha appena toccato le soglie), incrociando lo stato del welfare/settore
+  // privato con quante riforme di governo il partito ha davvero completato nel tempo — un paese preparato
+  // a fondo regge il passaggio, uno che lo tenta appena raggiunte le soglie minime rischia il collasso
+  // economico invece dell'abbondanza promessa. In più, indipendentemente dall'esito interno, se il paese fa
+  // ancora parte dell'Unione Europea la reazione di Bruxelles è automatica e durissima: applyEuExitConsequences()
+  // (la stessa usata per un'uscita dall'UE vera e propria) scatta comunque, perché l'UE non può restare a
+  // guardare l'abolizione della moneta in uno stato membro. Da quel momento in poi la Politica Fiscale
+  // (aliquote, gettito) smette semplicemente di avere senso: l'economia è pianificata e redistribuita senza
+  // scambio monetario.
   var CURRENCY_ABOLITION_MIN_TURNS = 100;
   function currencyAbolitionEligible() {
     var p = state.player;
     if (!p || state.currencyAbolished || !state.regime || state.regime.type !== "comunista") return false;
     return state.countryProfile.aziende <= 2 && state.countryProfile.welfare >= 9 && (state.turn - state.regime.since) >= CURRENCY_ABOLITION_MIN_TURNS;
   }
+  function communistReadiness() {
+    var p = state.player;
+    var cp = state.countryProfile;
+    var welfareScore = clamp((cp.welfare - 5) / 5, 0, 1);
+    var aziendeScore = clamp((5 - cp.aziende) / 5, 0, 1);
+    var timeScore = state.regime ? clamp((state.turn - state.regime.since) / 300, 0, 1) : 0;
+    var reformScore = clamp((p.completedReformDomains || []).length / 10, 0, 1);
+    return clamp(welfareScore * 0.3 + aziendeScore * 0.3 + timeScore * 0.2 + reformScore * 0.2, 0, 1);
+  }
   function generateAbolishCurrencyDossier() {
     if (!currencyAbolitionEligible()) return null;
+    var readiness = communistReadiness();
+    var readinessNote = readiness >= 0.7 ? "Il terreno preparato in questi anni sembra solido."
+      : readiness >= 0.4 ? "Il terreno preparato è incerto: il risultato non è affatto scontato."
+      : "Il terreno preparato è ancora fragile: è un azzardo, non un traguardo maturo.";
     return {
       id: "gov_abolisci_moneta", kind: "notizia", cat: "Governo",
       title: "Abolisci la Moneta",
-      brief: "Il settore privato è ormai quasi del tutto assorbito dallo Stato e il welfare collettivo copre praticamente ogni bisogno: il tuo governo potrebbe compiere il passo finale del comunismo, abolendo la moneta e passando a una distribuzione interamente pianificata dei beni. È un punto di non ritorno epocale.",
+      brief: "Il settore privato è ormai quasi del tutto assorbito dallo Stato e il welfare collettivo copre praticamente ogni bisogno: il tuo governo potrebbe compiere il passo finale del comunismo, abolendo la moneta e passando a una distribuzione interamente pianificata dei beni. Non è un passo senza rischi: se non c'è dietro abbastanza collettivizzazione reale, non solo propaganda, l'abolizione può degenerare nel caos economico invece che nell'abbondanza promessa. " + readinessNote +
+        (!state.leftEu ? " E se il paese fa ancora parte dell'Unione Europea, Bruxelles reagirà con durezza, tagliando i ponti nel modo più netto possibile, indipendentemente da come andrà internamente." : "") +
+        " È comunque un punto di non ritorno epocale.",
       choices: [
-        { label: "Abolisci la moneta", hint: "Il comunismo è pienamente realizzato: fine dello scambio monetario", abolisciMoneta: true, effects: { reputazione: 3, national: { felicita: 0.8, corruzione: 0.5 } },
-          result: "La moneta viene abolita: beni e servizi vengono distribuiti secondo il bisogno, non più comprati e venduti. Il comunismo, nella sua forma più piena, è realtà." },
+        { label: "Abolisci la moneta", hint: "Il passo finale, con tutti i rischi che comporta", abolisciMoneta: true, effects: {},
+          result: "" },
         { label: "Non ancora, resta prudente", hint: "La possibilità resta aperta per più avanti nella partita", effects: {},
           result: "Il partito sceglie la prudenza, per ora: il passo finale resta sul tavolo, si potrà tornare a valutarlo più avanti." }
       ]
@@ -12814,9 +12837,31 @@
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_abolisci_moneta") {
         if (choice.abolisciMoneta) {
+          var readiness = communistReadiness();
+          var abolitionSuccess = Math.random() < (0.25 + readiness * 0.65);
+          var cpAb = state.countryProfile;
           state.currencyAbolished = true;
           state.currencyAbolishedTurn = state.turn;
-          addDiaryEntry("La moneta non esiste più", "Oggi abbiamo compiuto il passo che pochi, nella storia, hanno anche solo tentato: abolire la moneta. Da oggi si produce e si distribuisce secondo il bisogno, non secondo il prezzo. Il tempo dirà se avevamo ragione.");
+          var euNote = "";
+          if (!state.leftEu) {
+            applyEuExitConsequences();
+            euNote = " L'Unione Europea reagisce con durezza: il paese viene di fatto espulso, con effetti immediati su economia, commercio e relazioni diplomatiche.";
+          }
+          if (abolitionSuccess) {
+            cpAb.felicita = clamp(cpAb.felicita + 1.2, 1, 10);
+            cpAb.corruzione = clamp(cpAb.corruzione + 0.6, 1, 10);
+            state.player.reputazione = clamp(state.player.reputazione + 5, 0, 100);
+            choice.result = "La moneta viene abolita: beni e servizi vengono distribuiti secondo il bisogno, non più comprati e venduti. Il terreno preparato in questi anni regge il passaggio: il comunismo, nella sua forma più piena, è realtà, senza il collasso che molti temevano." + euNote;
+            addDiaryEntry("La moneta non esiste più", "Oggi abbiamo compiuto il passo che pochi, nella storia, hanno anche solo tentato: abolire la moneta. Il terreno che avevamo preparato ha retto: il paese non è crollato. Il tempo dirà se avevamo ragione fino in fondo.");
+          } else {
+            cpAb.felicita = clamp(cpAb.felicita - 2, 1, 10);
+            cpAb.sicurezza = clamp(cpAb.sicurezza - 1.5, 1, 10);
+            cpAb.corruzione = clamp(cpAb.corruzione - 2, 1, 10);
+            cpAb.economia = clamp(cpAb.economia - 1.5, 1, 10);
+            state.player.reputazione = clamp(state.player.reputazione - 8, 0, 100);
+            choice.result = "La moneta viene abolita, ma il terreno non era davvero pronto: file ai magazzini statali, razionamento improvvisato, un mercato nero che nasce nel giro di poche settimane. Il paese paga caro un passo compiuto troppo presto." + euNote;
+            addDiaryEntry("Non eravamo pronti", "Abbiamo abolito la moneta prima che il terreno fosse davvero pronto. Il paese non era preparato per questo passo, e lo stiamo pagando caro: razionamento, mercato nero, scontento diffuso. Forse dovevamo aspettare ancora.");
+          }
         }
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
