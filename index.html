@@ -5436,8 +5436,11 @@
       items.push({ id: "gov_ripristina_democrazia", label: "Ripristina la Democrazia", desc: "Apri il dibattito per smantellare " + REGIME_LABELS[state.regime.type].name, disabled: false });
     }
     if (!items.length) return "";
+    var coupRisk = isExtremistFamily(p.family) && state.consensoGoverno !== undefined && state.consensoGoverno < COUP_TRUST_THRESHOLD;
     var html = '<section aria-label="Grandi Scelte di Governo"><details class="log"><summary>Grandi Scelte di Governo<span>▾</span></summary>' +
-      '<p class="ci-hint">Da governo puoi aprire tu stesso, quando vuoi, il dibattito sulle decisioni più pesanti: non serve aspettare che capitino per caso. A differenza delle altre sezioni, le opzioni non compaiono qui sotto ma sostituiscono il dossier della settimana in cima alla pagina: dopo aver cliccato, torna su.</p><div class="option-grid">';
+      '<p class="ci-hint">Da governo puoi aprire tu stesso, quando vuoi, il dibattito sulle decisioni più pesanti: non serve aspettare che capitino per caso. A differenza delle altre sezioni, le opzioni non compaiono qui sotto ma sostituiscono il dossier della settimana in cima alla pagina: dopo aver cliccato, torna su.' +
+      (coupRisk ? " <strong>Attenzione:</strong> con un governo di linea estremista e una fiducia sotto il " + COUP_TRUST_THRESHOLD + "%, un tentativo di golpe è un rischio concreto." : "") +
+      '</p><div class="option-grid">';
     items.forEach(function (it) {
       html += '<button type="button" class="option-card" data-big-foreign-choice="' + it.id + '"' + (it.disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + it.label + '</span><span class="odesc">' + it.desc + '</span></button>';
@@ -8604,7 +8607,8 @@
     fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
     spaceProgram: freshSpaceProgram(),
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
-    worldWarActive: false, worldWar: null, italyMilitaryStance: "nato"
+    worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
+    coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -9936,6 +9940,108 @@
       eyebrow: convicted ? "Si chiude il processo: condanna" : "Si chiude il processo: assoluzione",
       cat: "Giustizia", title: "L'esito del processo", brief: esito + " Come reagisce il partito?",
       choices: choices
+    };
+  }
+
+  // ---------- Estremismo: soglia condivisa da Colpo di Stato e Ingerenza Straniera ----------
+  // Non una lista di famiglie scritta a mano, ma una soglia sulla stessa scala sinistra-destra già usata
+  // per compatibilità di coalizione: fascista, comunista, comunismolusso e nazionalpopolare superano la
+  // soglia; sinistra e monarchico, pur marcati, restano sotto (socialismo moderato e tradizionalismo
+  // istituzionale non sono "estremismo" nel senso qui inteso).
+  var EXTREMIST_POSITION_THRESHOLD = 2.4;
+  function isExtremistFamily(familyId) {
+    var pos = LEFT_RIGHT_POSITION[familyId];
+    return pos !== undefined && Math.abs(pos) >= EXTREMIST_POSITION_THRESHOLD;
+  }
+
+  // ---------- Tentativo di Golpe ----------
+  // Un rischio automatico, non scelto dal giocatore: se il TUO governo è di un'ideologia estremista E la
+  // fiducia di governo crolla sotto il 30%, un gruppo di apparati dello Stato può tentare di rovesciarlo
+  // con la forza — indipendentemente dal fatto che tu abbia già instaurato formalmente un regime o stia
+  // ancora governando (male) dentro le forme democratiche. Complementa "Opposizione al Regime" (dove sei
+  // TU all'opposizione a tentare di rovesciare un regime altrui): qui il pericolo arriva addosso al TUO
+  // governo. Risoluzione immediata (non richiede settimane di attesa: un golpe si gioca in poche ore),
+  // con tre strategie reali: resistere con la forza, trattare una transizione pilotata, o affidarsi al
+  // sostegno popolare con un discorso alla nazione.
+  var COUP_TRUST_THRESHOLD = 30;
+  var COUP_COOLDOWN_TURNS = 40;
+  function checkCoupTrigger() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return false;
+    if (!isExtremistFamily(p.family)) return false;
+    if (state.consensoGoverno === undefined || state.consensoGoverno >= COUP_TRUST_THRESHOLD) return false;
+    if (state.turn < (state.coupCooldownTurn || 0)) return false;
+    var deficit = (COUP_TRUST_THRESHOLD - state.consensoGoverno) / COUP_TRUST_THRESHOLD;
+    return Math.random() < clamp(0.025 + deficit * 0.1, 0.025, 0.12);
+  }
+  function buildCoupDossier() {
+    state.coupCooldownTurn = state.turn + COUP_COOLDOWN_TURNS;
+    return {
+      id: "coup_attempt", kind: "notizia", cat: "Sicurezza Nazionale",
+      eyebrow: "Tentativo di golpe", title: "Un gruppo di golpisti tenta di rovesciare il governo",
+      brief: "Con la fiducia popolare crollata sotto il " + COUP_TRUST_THRESHOLD + "%, un gruppo di ufficiali e apparati dello Stato tenta un colpo di mano per rovesciare il governo. Le prossime ore sono decisive: come reagisce l'esecutivo?",
+      choices: [
+        { label: "Mobilita le forze fedeli per resistere", hint: "Alto rischio: se regge, il governo esce rafforzato; se cede, la caduta è durissima", coupStrategy: "resisti", effects: {}, result: "" },
+        { label: "Tratta con i golpisti per una transizione pilotata", hint: "Il potere si perde comunque, ma senza spargimento di sangue", coupStrategy: "tratta", effects: {}, result: "" },
+        { label: "Fai un discorso alla nazione per chiedere sostegno popolare", hint: "Ti affidi alla piazza e alla tua credibilità, non alle armi", coupStrategy: "discorso", effects: {}, result: "" }
+      ]
+    };
+  }
+
+  // ---------- Ingerenza Straniera ----------
+  // Il rovescio delle Operazioni Coperte dei Servizi di Intelligence: lì sei TU a colpire un altro paese
+  // nell'ombra, qui è un paese straniero a colpire TE, se sei abbastanza forte (al governo, o
+  // all'opposizione ma sopra il 28% nei sondaggi) e abbastanza scomodo (ideologia estremista, oppure già
+  // fuori da NATO/UE, oppure sotto un regime) da valere la pena destabilizzare. La nazione ostile è
+  // pescata con più probabilità tra quelle con cui i rapporti sono già peggiori (vedi state.foreignRelations).
+  var FOREIGN_INTERFERENCE_COOLDOWN_TURNS = 30;
+  function checkForeignInterferenceTrigger() {
+    var p = state.player;
+    if (!p) return false;
+    if (state.turn < (state.foreignInterferenceCooldownTurn || 0)) return false;
+    var strong = p.parliamentRole === "governo" || p.sondaggi >= 28;
+    if (!strong) return false;
+    var extremist = isExtremistFamily(p.family);
+    var provocative = state.leftNato || state.leftEu || !!state.regime;
+    if (!extremist && !provocative) return false;
+    var prob = 0.02 + (extremist ? 0.02 : 0) + (provocative ? 0.02 : 0);
+    return Math.random() < clamp(prob, 0.02, 0.07);
+  }
+  function pickHostileForeignNation() {
+    var entries = WORLD_NATIONS.map(function (n) {
+      var rel = (state.foreignRelations && state.foreignRelations[n.id] !== undefined) ? state.foreignRelations[n.id] : 50;
+      return { n: n, rel: rel };
+    });
+    return pickWeighted(entries, function (e) { return clamp(100 - e.rel, 5, 100); }).n;
+  }
+  var FOREIGN_INTERFERENCE_TYPES = ["sanzioni", "sostegno_rivale", "disinformazione"];
+  function buildForeignInterferenceDossier() {
+    state.foreignInterferenceCooldownTurn = state.turn + FOREIGN_INTERFERENCE_COOLDOWN_TURNS;
+    var nation = pickHostileForeignNation();
+    var actionType = FOREIGN_INTERFERENCE_TYPES[Math.floor(Math.random() * FOREIGN_INTERFERENCE_TYPES.length)];
+    var fam = familyById(state.player.family);
+    var rivalParty = fam && fam.rival ? partyById(fam.rival) : null;
+    var title, brief;
+    if (actionType === "sanzioni") {
+      title = nation.name + " impone sanzioni mirate";
+      brief = nation.name + ", preoccupata dalla linea del tuo partito, annuncia sanzioni economiche mirate contro settori vicini al tuo governo.";
+    } else if (actionType === "sostegno_rivale") {
+      title = nation.name + " sostiene occultamente un rivale";
+      brief = "I servizi di intelligence rivelano che " + nation.name + " starebbe fornendo sostegno occulto a " + (rivalParty ? rivalParty.name : "un partito rivale") + ", nel tentativo di indebolire il tuo partito.";
+    } else {
+      title = "Campagna di disinformazione da " + nation.name;
+      brief = "Una campagna coordinata di disinformazione, con tracce che portano a " + nation.name + ", prende di mira il tuo partito sui social e sui media internazionali.";
+    }
+    return {
+      id: "foreign_interference", kind: "notizia", cat: "Politica Estera",
+      eyebrow: "Ingerenza straniera", title: title, brief: brief + " Come reagisce il partito?",
+      interferenceNationId: nation.id, interferenceType: actionType,
+      choices: [
+        { label: "Denuncia pubblicamente l'ingerenza", hint: "Visibilità alta, ma il rapporto con quel paese peggiora ulteriormente", interfDenounce: true,
+          effects: { visibilita: rand(4, 8), reputazione: rand(1, 3) }, result: "" },
+        { label: "Ignora e vai avanti", hint: "Nessun rischio aggiuntivo, ma nessun beneficio", effects: {}, result: "" },
+        { label: "Chiedi supporto ai tuoi alleati storici", hint: "Costa un po' di capitale politico, attutisce il colpo", interfSeekAllySupport: true, effects: { fondi: -800 }, result: "" }
+      ]
     };
   }
 
@@ -13403,6 +13509,83 @@
           }
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "coup_attempt") {
+        var pc = state.player;
+        var cpc = state.countryProfile;
+        var strategy = choice.coupStrategy;
+        var survived;
+        if (strategy === "tratta") {
+          survived = false;
+        } else {
+          var base = strategy === "resisti" ? (cpc.difesa + cpc.sicurezza) / 2 : (cpc.felicita + pc.reputazione / 10) / 2;
+          survived = Math.random() < clamp((base - 5) / 8 + 0.35, 0.15, 0.75);
+        }
+        var coupEsito, coupDiaryTitle, coupDiaryText;
+        if (survived) {
+          cpc.sicurezza = clamp(cpc.sicurezza - rand(0.5, 1.5), 1, 10);
+          state.consensoGoverno = clamp(state.consensoGoverno + rand(8, 18), 0, 100);
+          pc.reputazione = clamp(pc.reputazione + rand(3, 8), 0, 100);
+          coupEsito = strategy === "resisti"
+            ? "Le forze fedeli al governo resistono e il golpe viene sventato: una notte di tensione altissima, ma il governo tiene."
+            : "Il discorso alla nazione mobilita un'ondata di sostegno popolare che disinnesca il golpe: la piazza, stavolta, ha salvato il governo.";
+          coupDiaryTitle = "Il golpe è stato sventato";
+          coupDiaryText = "Ce l'abbiamo fatta: il tentativo di rovesciarci è fallito. Non dimenticherò facilmente questa notte.";
+        } else {
+          pc.reputazione = clamp(pc.reputazione - rand(12, 25), 0, 100);
+          cpc.sicurezza = clamp(cpc.sicurezza - rand(1, 3), 1, 10);
+          state.spreadBps = clamp(state.spreadBps + Math.round(rand(120, 220)), 40, 400);
+          var wasRegime = !!state.regime;
+          if (wasRegime) state.regime = null;
+          applyGovernmentCollapseLeadershipShock();
+          state.govEntity = null;
+          state.snapElectionPending = true;
+          state.nextElectionTurn = state.turn + 8;
+          coupEsito = (strategy === "tratta"
+            ? "La trattativa porta a una transizione pilotata: il governo cede il potere senza spargimento di sangue, ma la sconfitta politica è netta."
+            : strategy === "resisti"
+              ? "Nonostante la resistenza, il golpe ha successo: il governo cade, in modo caotico e violento."
+              : "Il discorso alla nazione non basta a fermare i golpisti: il governo cade.")
+            + (wasRegime ? " Il regime viene spazzato via insieme al governo." : "");
+          coupDiaryTitle = "Il governo è caduto";
+          coupDiaryText = "È finita, almeno per ora. " + coupEsito;
+        }
+        addDiaryEntry(coupDiaryTitle, coupDiaryText);
+        choice.result = coupEsito;
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "foreign_interference") {
+        var pf = state.player;
+        var cpf = state.countryProfile;
+        var interfMitigant = 1;
+        if (choice.interfSeekAllySupport) {
+          var avgAllyRel = 0, allyCount = 0;
+          Object.keys(state.foreignRelations || {}).forEach(function (id) {
+            if (id !== dossier.interferenceNationId) { avgAllyRel += state.foreignRelations[id]; allyCount++; }
+          });
+          var avgAlly = allyCount ? avgAllyRel / allyCount : 50;
+          interfMitigant = clamp(1 - (avgAlly - 30) / 140, 0.4, 1);
+        }
+        var interfEsito;
+        if (dossier.interferenceType === "sanzioni") {
+          cpf.economia = clamp(cpf.economia - 0.5 * interfMitigant, 1, 10);
+          pf.fondi = Math.max(0, pf.fondi - Math.round(rand(1500, 4000) * interfMitigant));
+          interfEsito = "Le sanzioni mirate colpiscono l'economia e le casse del partito" + (interfMitigant < 1 ? ", anche se il sostegno degli alleati ne attutisce parte del colpo." : ".");
+        } else if (dossier.interferenceType === "sostegno_rivale") {
+          var famRival = familyById(pf.family) ? familyById(pf.family).rival : null;
+          if (famRival && state.parties[famRival] !== undefined) {
+            state.parties[famRival] = Math.max(0.3, state.parties[famRival] + rand(1.5, 4) * interfMitigant);
+          }
+          interfEsito = "Il sostegno occulto rafforza il tuo principale avversario politico" + (interfMitigant < 1 ? ", anche se meno di quanto sarebbe potuto accadere." : ".");
+        } else {
+          pf.reputazione = clamp(pf.reputazione - rand(3, 8) * interfMitigant, 0, 100);
+          pf.visibilita = clamp((pf.visibilita || 0) - rand(2, 5) * interfMitigant, 0, 100);
+          interfEsito = "La campagna di disinformazione lascia un segno sulla reputazione del partito" + (interfMitigant < 1 ? ", contenuto dal sostegno dei tuoi alleati internazionali." : ".");
+        }
+        if (choice.interfDenounce && state.foreignRelations && state.foreignRelations[dossier.interferenceNationId] !== undefined) {
+          state.foreignRelations[dossier.interferenceNationId] = clamp(state.foreignRelations[dossier.interferenceNationId] - rand(10, 20), 0, 100);
+          interfEsito += " La denuncia pubblica, però, raffredda ulteriormente i rapporti con quel paese.";
+        }
+        choice.result = interfEsito;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_uscita_nato") {
         state.natoDecided = true;
         if (choice.exitNato) state.leftNato = true;
@@ -14558,6 +14741,20 @@
 
     if (checkTrialTrigger()) {
       state.aiDynamicDossier = buildTrialOpenDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkCoupTrigger()) {
+      state.aiDynamicDossier = buildCoupDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkForeignInterferenceTrigger()) {
+      state.aiDynamicDossier = buildForeignInterferenceDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
