@@ -4447,6 +4447,28 @@
       var fragment = PROGRAM_GENERIC_PROPOSALS[key] || ("intervenire su " + (PROGRAM_THEME_LABELS[key] || key).toLowerCase());
       fields.push({ key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: "member", proposerName: proposer, proposalFragment: fragment, decided: null, chosenText: null });
     });
+    // Se il partito è in coalizione, il programma non è più soltanto suo: fino a 2 alleati (scelti a
+    // caso tra i membri della coalizione) mettono sul tavolo un proprio punto, pescato dai LORO temi
+    // identitari (mai uno già coperto sopra) — il giocatore decide se accettarlo, mediarlo o respingerlo.
+    if (p.allianceId) {
+      var coal = coalitionById(p.allianceId);
+      var partnerParties = coal ? activeParties().filter(function (ap) { return coal.members.indexOf(ap.id) !== -1; }) : [];
+      var usedKeys = fields.map(function (f) { return f.key; });
+      shuffleN(partnerParties, Math.min(2, partnerParties.length)).forEach(function (partner) {
+        var partnerThemes = (FAMILY_SIGNATURE_THEMES[partner.familyId] || []).filter(function (k) { return usedKeys.indexOf(k) === -1; });
+        if (!partnerThemes.length) return;
+        var key = partnerThemes[Math.floor(Math.random() * partnerThemes.length)];
+        usedKeys.push(key);
+        var angleNouns = (FAMILY_ANGLE_NOUNS[partner.familyId] && FAMILY_ANGLE_NOUNS[partner.familyId][key]) || [];
+        var noun = angleNouns.length ? angleNouns[Math.floor(Math.random() * angleNouns.length)]
+          : (PROGRAM_GENERIC_PROPOSALS[key] || ("intervenire su " + (PROGRAM_THEME_LABELS[key] || key).toLowerCase()));
+        fields.push({
+          key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: "coalition",
+          partnerName: partner.name, partnerColor: partner.color, proposalNoun: noun,
+          decided: null, chosenText: null
+        });
+      });
+    }
     return fields;
   }
   function buildProgramMeetingScene() {
@@ -12227,7 +12249,7 @@
     var html = '<section aria-label="Programma Elettorale"><details class="log"><summary>Programma Elettorale<span>▾</span></summary>' +
       '<p class="ci-hint">Scritto in assemblea alla settimana ' + prog.draftedAtTurn + ' (' + weekLabel(prog.draftedAtTurn) + '), ' + prog.chapters.length + ' capitoli.</p>' +
       '<ul class="enacted-policy-list">' + prog.chapters.map(function (c) {
-        return '<li><strong>' + c.label + '</strong> <span class="ci-hint">(' + (c.source === "leader" ? "punto del leader" : "proposta dei tesserati") + ')</span><br>' + c.text + '</li>';
+        return '<li><strong>' + c.label + '</strong> <span class="ci-hint">(' + (c.source === "leader" ? "punto del leader" : c.source === "coalizione" ? "proposta della coalizione" : "proposta dei tesserati") + ')</span><br>' + c.text + '</li>';
       }).join("") + '</ul>';
     if (prog.notes) {
       html += '<p class="ci-hint"><strong>Note del leader:</strong> ' + prog.notes.replace(/</g, "&lt;") + '</p>';
@@ -13902,24 +13924,29 @@
     }).join("") + "</div></div></div>";
     return html;
   }
-  // Scena della riunione di programma: intro (passo 0), poi un passo per ciascuno dei 7 capitoli
-  // (indice = passo - 1: i primi 5 sono del giocatore, gli ultimi 2 sono proposte dei tesserati messe ai
-  // voti), poi le note libere (passo 8) e infine il riepilogo del programma completo (passo 9).
+  // Scena della riunione di programma: intro (passo 0), poi un passo per ciascun capitolo (indice =
+  // passo - 1: prima i 5 del giocatore, poi i 2 dei tesserati messi ai voti, poi — se il partito è in
+  // coalizione — fino a 2 proposte degli alleati da accettare/mediare/respingere), poi le note libere e
+  // infine il riepilogo. Il numero di capitoli è variabile (7 o 9), quindi i passi "notes"/"riepilogo"
+  // sono calcolati da pm.fields.length invece di essere indici fissi.
   function renderProgramMeetingScene() {
     var pm = state.programMeeting;
     var p = state.player;
+    var notesStep = pm.fields.length + 1;
     var html = '<div class="qt-scene"><p class="qt-eyebrow">Riunione di Programma — ' + p.name + '</p>' +
       "<h2>Si scrive il programma elettorale</h2>";
     if (pm.step === 0) {
       var staffCount = (p.staff && p.staff.length) || 0;
       var deputyPhrase = p.inParliament ? "i tuoi gruppi parlamentari, " : "";
+      var coal = p.allianceId ? coalitionById(p.allianceId) : null;
+      var coalPhrase = coal ? "una delegazione degli alleati di " + coal.label + ", " : "";
       html += '<p class="ci-hint">Mancano circa ' + PROGRAM_MEETING_WINDOW_WEEKS + ' settimane alle elezioni politiche: è il momento di mettere nero su bianco il programma elettorale. ' +
-        "Attorno al tavolo ci sono " + (staffCount ? "il tuo nucleo (" + staffCount + " persone), " : "") + deputyPhrase +
+        "Attorno al tavolo ci sono " + (staffCount ? "il tuo nucleo (" + staffCount + " persone), " : "") + deputyPhrase + coalPhrase +
         "e una rappresentanza dei " + Math.round(p.iscritti || 0) + " tesserati del partito. Scriverai tu la maggior parte dei punti; alcuni li proporranno loro, e si voterà a maggioranza.</p>";
       html += '<div class="qt-continue-row"><button type="button" class="advance-btn" id="program-scene-continue-btn">Apri la riunione</button></div></div>';
       return html;
     }
-    if (pm.step >= 1 && pm.step <= 7) {
+    if (pm.step >= 1 && pm.step <= pm.fields.length) {
       pm.fields.forEach(function (f, idx) {
         if (idx > pm.step - 1) return;
         html += '<div class="qt-exchange">';
@@ -13931,6 +13958,21 @@
             html += '<div class="choices">' + f.choices.map(function (c, i) {
               return '<button type="button" class="choice-btn" data-program-field-choice="' + idx + ":" + i + '"><span class="clabel">' + c.label + '</span></button>';
             }).join("") + "</div>";
+          }
+        } else if (f.mode === "coalition") {
+          html += '<div class="qt-speaker">' + personBadgeHtml(f.partnerName, null, 26, f.partnerColor) +
+            '<span><span class="qt-speaker-name">' + f.partnerName + '</span> <span class="qt-speaker-party">— partner di coalizione</span></span></div>' +
+            '<p class="qt-question">Per il programma comune, propone di puntare ' + suLabel(f.proposalNoun) + ' (capitolo <strong>' + f.label + "</strong>).</p>";
+          if (f.decided) {
+            html += '<p class="qt-answer">' + (f.decided === "accepted" ? "Accettato nel programma comune: " + f.chosenText
+              : f.decided === "mediated" ? "Mediato e ammorbidito, poi inserito: " + f.chosenText
+              : "Respinto: il punto non entra nel programma comune, gli alleati ne prendono atto.") + "</p>";
+          } else {
+            html += '<div class="choices">' +
+              '<button type="button" class="choice-btn" data-program-coalition-vote="' + idx + ':accept"><span class="clabel">Accetta la proposta</span></button>' +
+              '<button type="button" class="choice-btn" data-program-coalition-vote="' + idx + ':mediate"><span class="clabel">Media una versione più moderata</span></button>' +
+              '<button type="button" class="choice-btn" data-program-coalition-vote="' + idx + ':reject"><span class="clabel">Rifiuta, non è la nostra linea</span></button>' +
+              "</div>";
           }
         } else {
           html += '<div class="qt-speaker">' + personBadgeHtml(f.proposerName, null, 26) +
@@ -13952,17 +13994,24 @@
       html += "</div>";
       return html;
     }
-    if (pm.step === 8) {
+    if (pm.step === notesStep) {
       html += '<p class="ci-hint">Il grosso del programma è scritto. Vuoi aggiungere qualcosa di tuo pugno, che i tesserati non hanno toccato?</p>' +
         '<textarea id="program-notes-textarea" rows="4" style="width:100%;max-width:62ch;" placeholder="Note libere del leader (facoltative)…">' + (pm.notes || "") + "</textarea>" +
         '<div class="qt-continue-row"><button type="button" class="advance-btn" id="program-notes-submit-btn">Concludi la riunione</button></div></div>';
       return html;
     }
-    // Passo 9: riepilogo finale.
+    // Passo finale: riepilogo.
     html += '<p class="ci-hint">Il programma elettorale è pronto.</p>';
     pm.fields.filter(function (f) { return f.chosenText; }).forEach(function (f) {
       html += '<div class="qt-exchange"><p class="qt-question"><strong>' + f.label + "</strong></p><p class=\"qt-answer\">" + f.chosenText + "</p></div>";
     });
+    var acceptedCoalitionFields = pm.fields.filter(function (f) { return f.mode === "coalition" && f.chosenText; });
+    if (acceptedCoalitionFields.length) {
+      html += '<div class="qt-exchange"><p class="qt-question"><strong>Comunicazione della coalizione</strong></p>' +
+        acceptedCoalitionFields.map(function (f) {
+          return '<p class="qt-answer">' + f.partnerName + " comunica il proprio contributo al programma comune sul capitolo " + f.label.toLowerCase() + ".</p>";
+        }).join("") + "</div>";
+    }
     if (pm.notes) {
       html += '<div class="qt-exchange"><p class="qt-question"><strong>Note del leader</strong></p><p class="qt-answer">' + pm.notes.replace(/</g, "&lt;") + "</p></div>";
     }
@@ -14375,12 +14424,44 @@
           render();
         });
       });
+      // Voto su una proposta di un partner di coalizione: a differenza del voto sui tesserati (solo
+      // approva/respingi), qui c'è anche la mediazione — e la decisione sposta subito la fiducia della
+      // coalizione (state.coalitionTrust), non solo alla chiusura della riunione.
+      app.querySelectorAll("[data-program-coalition-vote]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var parts = btn.getAttribute("data-program-coalition-vote").split(":");
+          var fieldIdx = parseInt(parts[0], 10), verdict = parts[1];
+          var pm = state.programMeeting;
+          var f = pm.fields[fieldIdx];
+          var p = state.player;
+          var capitalizedNoun = f.proposalNoun.charAt(0).toUpperCase() + f.proposalNoun.slice(1);
+          if (p.allianceId && state.coalitionTrust[p.allianceId] === undefined) {
+            state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId);
+          }
+          if (verdict === "accept") {
+            f.decided = "accepted";
+            f.chosenText = "Punto proposto da " + f.partnerName + " e accolto nel programma comune: " + capitalizedNoun + ".";
+            if (p.allianceId) state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] + rand(2, 5), 0, 100);
+          } else if (verdict === "mediate") {
+            f.decided = "mediated";
+            f.chosenText = "Punto mediato con " + f.partnerName + ": il programma comune recepisce una versione più equilibrata " + suLabel(f.proposalNoun) + ".";
+            if (p.allianceId) state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] + rand(0, 2), 0, 100);
+          } else {
+            f.decided = "rejected";
+            if (p.allianceId) state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] - rand(2, 5), 0, 100);
+          }
+          pm.step++;
+          save();
+          render();
+        });
+      });
       var pmNotesBtn = document.getElementById("program-notes-submit-btn");
       if (pmNotesBtn) {
         pmNotesBtn.addEventListener("click", function () {
+          var pm = state.programMeeting;
           var ta = document.getElementById("program-notes-textarea");
-          state.programMeeting.notes = ta ? ta.value.trim() : "";
-          state.programMeeting.step = 9;
+          pm.notes = ta ? ta.value.trim() : "";
+          pm.step = pm.fields.length + 2;
           save();
           render();
         });
@@ -14391,7 +14472,8 @@
           var pm = state.programMeeting;
           var p = state.player;
           var chapters = pm.fields.filter(function (f) { return f.chosenText; }).map(function (f) {
-            return { key: f.key, label: f.label, text: f.chosenText, source: f.mode === "player" ? "leader" : "tesserati" };
+            var source = f.mode === "player" ? "leader" : f.mode === "coalition" ? "coalizione" : "tesserati";
+            return { key: f.key, label: f.label, text: f.chosenText, source: source };
           });
           p.electoralProgram = { draftedAtTurn: state.turn, chapters: chapters, notes: pm.notes || "" };
           p.electoralProgramOffered = true;
