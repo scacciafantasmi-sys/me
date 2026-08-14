@@ -4273,18 +4273,20 @@
       : INTERVIEW_SETTINGS.extraparlamentare;
     return pool[Math.floor(Math.random() * pool.length)];
   }
-  function buildInterviewChoices(topicLabel, isGoverno) {
+  function buildInterviewChoices(topicLabel, isGoverno, fromContextPhrase, subjectPronoun) {
     var pol = isGoverno ? "il Governo" : "il tuo partito";
+    var fromCtx = fromContextPhrase || "dall'intervista";
+    var subj = subjectPronoun || "il giornalista";
     return [
       { label: "Rispondi con toni pacati e istituzionali", hint: "Meno scintille, più credibilità",
         effects: { reputazione: rand(1, 3), visibilita: rand(1, 2) },
-        result: "Rispondi con toni misurati su " + topicLabel + ": " + pol + " esce dall'intervista con un'immagine solida, anche se poco memorabile." },
+        result: "Rispondi con toni misurati su " + topicLabel + ": " + pol + " esce " + fromCtx + " con un'immagine solida, anche se poco memorabile." },
       { label: "Rispondi con toni combattivi, all'attacco", hint: "Più visibilità, rischio di polarizzare",
         effects: { visibilita: rand(4, 8), reputazione: -rand(0, 2), iscritti: rand(5, 15) },
         result: "Rispondi con un affondo deciso su " + topicLabel + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
       { label: "Glissa, sposta il discorso altrove", hint: "Nessun rischio immediato, ma sembra evasivo",
         effects: { reputazione: -rand(0, 2) },
-        result: "Eviti di entrare nel merito su " + topicLabel + ": il giornalista insiste, ma l'intervista prosegue su altri temi." }
+        result: "Eviti di entrare nel merito su " + topicLabel + ": " + subj + " insiste, ma il confronto prosegue su altri temi." }
     ];
   }
   function buildLeaderInterviewScene() {
@@ -8892,7 +8894,7 @@
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
-    qtScene: null, leaderInterview: null
+    qtScene: null, leaderInterview: null, partyEventScene: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -11247,6 +11249,10 @@
       label: "Congresso nazionale", cost: 15000, cooldown: 10,
       desc: "Un congresso nazionale per rilanciare la linea del partito: il più caro, ma anche il più efficace."
     },
+    cena_partito: {
+      label: "Cena organizzata dal partito", cost: 3000, cooldown: 8,
+      desc: "Una cena a porte quasi chiuse con iscritti e simpatizzanti più stretti: meno pubblico, più confidenza."
+    },
     tour_territoriale: {
       label: "Tour nei territori", cost: 5000, cooldown: 5,
       desc: "Un giro di tappe in diverse città, per radicare il partito lontano dai grandi centri."
@@ -11275,6 +11281,7 @@
     if (eventId === "comizio") return { sondaggi: rand(0.08, 0.12) };
     if (eventId === "manifestazione") return { sondaggi: rand(0.08, 0.12), reputazione: rand(1, 2.5), visibilita: rand(3, 6) };
     if (eventId === "congresso") return { sondaggi: rand(0.16, 0.24) };
+    if (eventId === "cena_partito") return { reputazione: rand(1, 3), iscritti: rand(8, 18) };
     if (eventId === "tour_territoriale") return { sondaggi: rand(0.08, 0.12), reputazione: rand(3, 6) };
     if (eventId === "missione_diplomatica") return { sondaggi: rand(0.08, 0.12), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
     if (eventId === "campagna_mediatica_nazionale") return { sondaggi: rand(0.08, 0.12) };
@@ -11287,6 +11294,7 @@
     if (eventId === "comizio") return "Il comizio a " + city + " mobilita simpatizzanti e curiosi, con buona partecipazione.";
     if (eventId === "manifestazione") return "La manifestazione di piazza a " + city + " porta il tema del partito al centro dell'attenzione mediatica.";
     if (eventId === "congresso") return "Il congresso nazionale rilancia la linea del partito davanti a delegati arrivati da tutta Italia.";
+    if (eventId === "cena_partito") return "La cena di partito a " + city + " rafforza i legami con iscritti e simpatizzanti più stretti, in un clima più confidenziale.";
     if (eventId === "tour_territoriale") return "Il tour tocca " + city + " e altre realtà locali, rafforzando il radicamento del partito lontano dai grandi centri.";
     if (eventId === "missione_diplomatica") {
       var partner = DIPLOMATIC_PARTNERS[Math.floor(Math.random() * DIPLOMATIC_PARTNERS.length)];
@@ -11312,6 +11320,64 @@
     var dossier = { title: ev.label, cat: "Organizzazione" };
     var choice = { label: ev.label, effects: partyEventEffects(eventId), result: partyEventFlavor(eventId) };
     return applyChoice(dossier, choice);
+  }
+
+  // ---------- Congresso, manifestazione, cena di partito: non più un clic e via, ma una scena vera ----------
+  // Gli altri eventi di partito (comizio, tour, missione diplomatica, campagna mediatica) restano
+  // un'azione istantanea — hanno senso così, sono attività organizzative più che momenti pubblici in cui
+  // il leader parla di persona. Ma un congresso, una manifestazione o una cena di partito sono per
+  // natura il momento in cui il leader SALE SUL PALCO e si confronta con chi ha davanti: il giocatore
+  // sceglie prima il taglio del proprio discorso (coerente con l'ideologia del partito, non un tema a
+  // caso — riusa lo stesso motore combinatorio delle situazioni parlamentari), poi affronta una domanda
+  // vera dal pubblico su un fronte caldo del paese. Stessa logica di scena della Question Time e
+  // dell'intervista al leader: fase dedicata, un passo alla volta, nessun'altra azione nel frattempo.
+  var PARTY_EVENT_SCENE_TYPES = { congresso: true, manifestazione: true, cena_partito: true };
+  var PARTY_EVENT_SCENE_LABELS = { congresso: "il Congresso Nazionale", manifestazione: "la manifestazione di piazza", cena_partito: "la cena di partito" };
+  function buildSpeechChoices(noun) {
+    return [
+      { label: "Un discorso istituzionale e programmatico su " + noun, hint: "Meno scintille, più credibilità",
+        effects: { reputazione: rand(2, 4), iscritti: rand(10, 20) },
+        result: "Il discorso misurato su " + noun + " convince la platea più moderata, senza infiammare la sala." },
+      { label: "Un discorso appassionato e identitario su " + noun, hint: "Più entusiasmo, un po' più divisivo",
+        effects: { visibilita: rand(4, 8), iscritti: rand(20, 40), reputazione: -rand(0, 1) },
+        result: "Il discorso appassionato su " + noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
+      { label: "Un discorso unificante, aperto anche a chi non la pensa come te", hint: "Consenso trasversale, meno mobilitazione della base",
+        effects: { reputazione: rand(3, 5), sondaggi: rand(0.05, 0.1) },
+        result: "Il discorso unificante su " + noun + " apre al di fuori della base tradizionale, con qualche mugugno interno." }
+    ];
+  }
+  function buildAudienceQuestion(noun) {
+    var p = state.player;
+    var askerName = generateStaffName();
+    var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5; });
+    var metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
+    var topicLabel = metric ? METRIC_LABELS[metric] : noun;
+    return {
+      askerName: askerName,
+      text: askerName + " alza la mano dal pubblico: “E su " + topicLabel + ", cosa pensa di fare concretamente il partito?”",
+      choices: buildInterviewChoices(topicLabel, p.parliamentRole === "governo", "dal confronto con il pubblico", "il pubblico")
+    };
+  }
+  function launchPartyEventScene(eventId) {
+    var ev = PARTY_EVENTS[eventId];
+    var p = state.player;
+    if (!p.eventCooldowns) p.eventCooldowns = {};
+    if (state.turn < (p.eventCooldowns[eventId] || 0)) return false;
+    if (state.turn - (p.lastPartyEventTurn || -Infinity) < PARTY_EVENTS_SHARED_COOLDOWN) return false;
+    if (p.fondi < ev.cost) return false;
+    p.fondi -= ev.cost;
+    p.eventCooldowns[eventId] = state.turn + ev.cooldown;
+    p.lastPartyEventTurn = state.turn;
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var topic = pickParliamentaryTopic(p, true);
+    var question = buildAudienceQuestion(topic.noun);
+    state.partyEventScene = {
+      eventId: eventId, step: 0, city: city, noun: topic.noun,
+      speechChoices: buildSpeechChoices(topic.noun), speechAnswered: null, speechResult: null,
+      question: question, questionAnswered: null, questionResult: null
+    };
+    state.phase = "party_event_scene";
+    return true;
   }
 
   // ---------- Campagna Elettorale: attività disponibili solo nelle ultime settimane prima del voto
@@ -13621,6 +13687,38 @@
     html += "</div>";
     return html;
   }
+  // Scena del congresso/manifestazione/cena di partito: due passi, come l'intervista — prima il taglio
+  // del proprio discorso (una scelta vera, non un tema a caso), poi una domanda vera dal pubblico.
+  function renderPartyEventScene() {
+    var pe = state.partyEventScene;
+    var p = state.player;
+    var label = PARTY_EVENT_SCENE_LABELS[pe.eventId];
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">' + label.charAt(0).toUpperCase() + label.slice(1) + " — " + pe.city + '</p>' +
+      "<h2>" + p.name + " sale sul palco</h2>" +
+      '<p class="ci-hint">Il tema di oggi: ' + pe.noun + ".</p>";
+    html += '<div class="qt-exchange"><p class="qt-question">Come imposti il discorso su ' + pe.noun + "?</p>";
+    if (pe.speechAnswered) {
+      html += '<p class="qt-answer"><strong>' + pe.speechAnswered + "</strong> — " + pe.speechResult + "</p></div>";
+    } else {
+      html += '<div class="choices">' + pe.speechChoices.map(function (c, i) {
+        return '<button type="button" class="choice-btn" data-speech-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
+      }).join("") + "</div></div>";
+      html += "</div>";
+      return html;
+    }
+    html += '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(pe.question.askerName, null, 26) +
+      '<span><span class="qt-speaker-name">' + pe.question.askerName + "</span> <span class=\"qt-speaker-party\">— dal pubblico</span></span></div>" +
+      '<p class="qt-question">' + pe.question.text + "</p>";
+    if (pe.questionAnswered) {
+      html += '<p class="qt-answer"><strong>' + pe.questionAnswered + "</strong> — " + pe.questionResult + "</p></div>";
+    } else {
+      html += '<div class="choices">' + pe.question.choices.map(function (c, i) {
+        return '<button type="button" class="choice-btn" data-audience-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
+      }).join("") + "</div></div>";
+    }
+    html += "</div>";
+    return html;
+  }
   // Quando è il partito DEL GIOCATORE a vincere con un margine da regime, la svolta non scatta più in
   // automatico (a differenza di una vittoria CPU, dove non c'è nessuno "al tavolo" a decidere): è lui a
   // scegliere se instaurarlo davvero o restare nella cornice democratica nonostante la maggioranza
@@ -13925,6 +14023,42 @@
             save();
             render();
           }
+        });
+      });
+      return;
+    }
+
+    // Congresso/manifestazione/cena di partito: scena in due passi, avviata dal giocatore stesso (non un
+    // trigger periodico), vedi launchPartyEventScene richiamata dal pannello Eventi di Partito più sotto.
+    if (state.phase === "party_event_scene") {
+      app.innerHTML = renderPartyEventScene();
+      app.querySelectorAll("[data-speech-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = parseInt(btn.getAttribute("data-speech-choice"), 10);
+          var pe = state.partyEventScene;
+          var choice = pe.speechChoices[idx];
+          var dossier = { title: PARTY_EVENT_SCENE_LABELS[pe.eventId], cat: "Organizzazione" };
+          applyChoice(dossier, choice);
+          pe.speechAnswered = choice.label;
+          pe.speechResult = choice.result;
+          save();
+          render();
+        });
+      });
+      app.querySelectorAll("[data-audience-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = parseInt(btn.getAttribute("data-audience-choice"), 10);
+          var pe = state.partyEventScene;
+          var choice = pe.question.choices[idx];
+          var dossier = { title: PARTY_EVENT_SCENE_LABELS[pe.eventId], cat: "Organizzazione" };
+          var res = applyChoice(dossier, choice);
+          pe.questionAnswered = choice.label;
+          pe.questionResult = choice.result;
+          state.resultData = res;
+          state.partyEventScene = null;
+          state.phase = "result";
+          save();
+          render();
         });
       });
       return;
@@ -14666,6 +14800,13 @@
     app.querySelectorAll("[data-party-event]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-party-event");
+        if (PARTY_EVENT_SCENE_TYPES[id]) {
+          var launched = launchPartyEventScene(id);
+          if (!launched) { showSaveStatus("Non puoi ancora organizzare questo evento (fondi o tempo di recupero insufficienti).", true); return; }
+          save();
+          render();
+          return;
+        }
         var res = resolvePartyEvent(id);
         if (!res) { showSaveStatus("Non puoi ancora organizzare questo evento (fondi o tempo di recupero insufficienti).", true); return; }
         showSaveStatus(res.resultText, false);
