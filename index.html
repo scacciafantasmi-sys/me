@@ -2973,6 +2973,40 @@
       ambiente: ["la decarbonizzazione totale guidata dalla tecnologia pubblica", "il riciclo automatizzato su scala industriale", "l'agricoltura verticale automatizzata nelle città", "il monitoraggio ambientale con sensori pubblici diffusi", "la geoingegneria pubblica come risposta collettiva alla crisi climatica", "la bonifica automatizzata dei siti industriali dismessi", "la produzione di cibo sintetico a impatto ambientale zero"]
     }
   };
+  // Etichette dei capitoli del Programma Elettorale: coprono l'unione di tutti i temi identitari usati
+  // sopra in FAMILY_SIGNATURE_THEMES/FAMILY_ANGLE_NOUNS (19 in tutto, tra tutte le famiglie), più quelli
+  // "universali" pescati per i punti proposti dai tesserati (vedi buildProgramMeetingFields più sotto).
+  var PROGRAM_THEME_LABELS = {
+    sicurezza: "Sicurezza", immigrazione: "Immigrazione", famiglia: "Famiglia e natalità", giustizia: "Giustizia",
+    economia: "Economia", lavoro: "Lavoro", digitale: "Digitale e innovazione", infrastrutture: "Infrastrutture",
+    ambiente: "Ambiente", giovani: "Giovani", cultura: "Cultura", sanita: "Sanità", trasporti: "Trasporti",
+    pensioni: "Pensioni", casa: "Casa", scuola: "Scuola", agricoltura: "Agricoltura", energia: "Energia", europa: "Europa"
+  };
+  // Proposte "generiche" (non legate all'ideologia del partito) usate quando un tesserato storico
+  // propone un punto su un capitolo che NON fa parte dei 5 temi identitari della famiglia del giocatore
+  // (vedi FAMILY_ANGLE_NOUNS, che copre solo quei 5 per famiglia): il giocatore resta comunque libero di
+  // approvarle o respingerle a maggioranza in buildProgramMeetingFields/renderProgramMeetingScene.
+  var PROGRAM_GENERIC_PROPOSALS = {
+    sicurezza: "assumere altri agenti di polizia locale e potenziare l'illuminazione pubblica nei quartieri periferici",
+    immigrazione: "attivare corsi di lingua italiana obbligatori collegati ai permessi di soggiorno",
+    famiglia: "istituire un bonus straordinario alla nascita per le famiglie a basso reddito",
+    giustizia: "assumere nuovo personale amministrativo nei tribunali per accorciare i tempi dei processi",
+    economia: "creare un fondo di garanzia regionale per le piccole imprese in difficoltà",
+    lavoro: "istituire uno sportello gratuito di orientamento al lavoro nelle sezioni di partito",
+    digitale: "aprire un percorso gratuito di alfabetizzazione digitale per gli iscritti più anziani",
+    infrastrutture: "chiedere la messa in sicurezza delle strade provinciali più dissestate",
+    ambiente: "avviare una campagna di piantumazione urbana nei comuni dove il partito è presente",
+    giovani: "istituire una carta giovani per l'accesso scontato a cultura e trasporti",
+    cultura: "sostenere le biblioteche di quartiere con un piccolo fondo dedicato",
+    sanita: "aprire ambulatori di prossimità nei comuni più isolati",
+    trasporti: "chiedere il potenziamento delle corse ferroviarie nelle tratte pendolari",
+    pensioni: "istituire uno sportello gratuito di assistenza previdenziale per gli iscritti",
+    casa: "creare un fondo di solidarietà per gli sfratti incolpevoli",
+    scuola: "finanziare il tempo pieno nelle scuole primarie delle periferie",
+    agricoltura: "sostenere le filiere corte con un marchio di qualità territoriale",
+    energia: "promuovere comunità energetiche rinnovabili nei comuni amministrati dal partito",
+    europa: "aprire un ufficio di collegamento con il gruppo di riferimento al Parlamento Europeo"
+  };
   var LEADERSHIP_FRAMING_HINTS = {
     carismatico: "Tutti si aspettano da te una dichiarazione forte, come sempre.",
     tecnocratico: "I media si chiedono se risponderai con dati concreti o con un semplice proclama.",
@@ -4376,6 +4410,49 @@
       choices: buildInterviewChoices(topicLabel, false, "dalla seduta del Consiglio Comunale", askerName)
     };
     state.phase = "consiglio_comunale_scene";
+  }
+  // ---------- Programma Elettorale: una riunione, una volta sola, ~120 settimane prima delle politiche ----------
+  // I 5 temi identitari della famiglia del giocatore (FAMILY_SIGNATURE_THEMES) diventano i capitoli che
+  // scrive lui in prima persona (buildInterviewChoices non c'entra qui: non sono risposte a una domanda,
+  // sono proposte scelte tra 3 alternative pescate da FAMILY_ANGLE_NOUNS, coerenti con l'ideologia). A
+  // questi si aggiungono 2 capitoli "universali" fuori dai 5 temi identitari, proposti da un tesserato
+  // storico (un membro dello staff, se il giocatore ne ha assunti, altrimenti un nome generato) e messi
+  // ai voti dall'assemblea — il giocatore decide se passano a maggioranza o vengono respinti.
+  var PROGRAM_MEETING_WINDOW_WEEKS = 120;
+  function checkProgramMeetingTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader || p.electoralProgramOffered) return false;
+    var weeksToElection = state.nextElectionTurn - state.turn;
+    return weeksToElection > 0 && weeksToElection <= PROGRAM_MEETING_WINDOW_WEEKS;
+  }
+  function buildProgramMeetingFields(p) {
+    var family = p.family;
+    var playerKeys = (FAMILY_SIGNATURE_THEMES[family] || []).slice();
+    var universalPool = Object.keys(PROGRAM_THEME_LABELS).filter(function (k) { return playerKeys.indexOf(k) === -1; });
+    var memberKeys = shuffleN(universalPool, Math.min(2, universalPool.length));
+    var fields = playerKeys.map(function (key) {
+      var angleNouns = (FAMILY_ANGLE_NOUNS[family] && FAMILY_ANGLE_NOUNS[family][key]) || [];
+      var picks = shuffleN(angleNouns, Math.min(3, angleNouns.length));
+      var choices = picks.map(function (noun) {
+        return {
+          label: noun.charAt(0).toUpperCase() + noun.slice(1),
+          text: "Il partito si impegna concretamente " + suLabel(noun) + ": punto qualificante del capitolo " + PROGRAM_THEME_LABELS[key] + " del programma elettorale."
+        };
+      });
+      return { key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: "player", choices: choices, chosenLabel: null, chosenText: null };
+    });
+    var staffPool = (p.staff && p.staff.length) ? p.staff.map(function (s) { return s.name; }) : [];
+    memberKeys.forEach(function (key) {
+      var proposer = staffPool.length ? staffPool[Math.floor(Math.random() * staffPool.length)] : generateStaffName();
+      var fragment = PROGRAM_GENERIC_PROPOSALS[key] || ("intervenire su " + (PROGRAM_THEME_LABELS[key] || key).toLowerCase());
+      fields.push({ key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: "member", proposerName: proposer, proposalFragment: fragment, decided: null, chosenText: null });
+    });
+    return fields;
+  }
+  function buildProgramMeetingScene() {
+    var p = state.player;
+    state.programMeeting = { step: 0, fields: buildProgramMeetingFields(p), notes: "" };
+    state.phase = "program_meeting_scene";
   }
   // Emendamento a un decreto: riservato a chi è al governo (giocatore compreso), generato sull'indicatore
   // della Scheda Paese scelto pescando con più probabilità tra i più deboli — un decreto nasce di solito
@@ -8961,7 +9038,7 @@
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
-    qtScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null
+    qtScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -8990,7 +9067,8 @@
     whistleblowerCooldownTurn: 0,
     foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0,
     leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
-    leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0
+    leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
+    electoralProgram: null, electoralProgramOffered: false
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -12135,6 +12213,29 @@
     return html;
   }
 
+  // Il programma elettorale vero e proprio, scritto una volta sola nella riunione di programma (vedi
+  // buildProgramMeetingScene) e poi consultabile qui per il resto della partita.
+  function renderElectoralProgramPanel() {
+    var p = state.player;
+    if (!p) return "";
+    var prog = p.electoralProgram;
+    if (!prog) {
+      return '<section aria-label="Programma Elettorale"><details class="log"><summary>Programma Elettorale<span>▾</span></summary>' +
+        '<p class="ci-hint">Il programma elettorale verrà scritto insieme al nucleo, ai deputati e ai tesserati del partito circa ' +
+        PROGRAM_MEETING_WINDOW_WEEKS + ' settimane prima delle prossime elezioni politiche.</p></details></section>';
+    }
+    var html = '<section aria-label="Programma Elettorale"><details class="log"><summary>Programma Elettorale<span>▾</span></summary>' +
+      '<p class="ci-hint">Scritto in assemblea alla settimana ' + prog.draftedAtTurn + ' (' + weekLabel(prog.draftedAtTurn) + '), ' + prog.chapters.length + ' capitoli.</p>' +
+      '<ul class="enacted-policy-list">' + prog.chapters.map(function (c) {
+        return '<li><strong>' + c.label + '</strong> <span class="ci-hint">(' + (c.source === "leader" ? "punto del leader" : "proposta dei tesserati") + ')</span><br>' + c.text + '</li>';
+      }).join("") + '</ul>';
+    if (prog.notes) {
+      html += '<p class="ci-hint"><strong>Note del leader:</strong> ' + prog.notes.replace(/</g, "&lt;") + '</p>';
+    }
+    html += '</details></section>';
+    return html;
+  }
+
   function renderPollGrid(prevSnapshot) {
     var p = state.player;
     var html = '<section aria-label="Sondaggi nazionali"><p class="eyebrow">Sondaggi nazionali</p><div class="poll-grid">';
@@ -13801,6 +13902,73 @@
     }).join("") + "</div></div></div>";
     return html;
   }
+  // Scena della riunione di programma: intro (passo 0), poi un passo per ciascuno dei 7 capitoli
+  // (indice = passo - 1: i primi 5 sono del giocatore, gli ultimi 2 sono proposte dei tesserati messe ai
+  // voti), poi le note libere (passo 8) e infine il riepilogo del programma completo (passo 9).
+  function renderProgramMeetingScene() {
+    var pm = state.programMeeting;
+    var p = state.player;
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">Riunione di Programma — ' + p.name + '</p>' +
+      "<h2>Si scrive il programma elettorale</h2>";
+    if (pm.step === 0) {
+      var staffCount = (p.staff && p.staff.length) || 0;
+      var deputyPhrase = p.inParliament ? "i tuoi gruppi parlamentari, " : "";
+      html += '<p class="ci-hint">Mancano circa ' + PROGRAM_MEETING_WINDOW_WEEKS + ' settimane alle elezioni politiche: è il momento di mettere nero su bianco il programma elettorale. ' +
+        "Attorno al tavolo ci sono " + (staffCount ? "il tuo nucleo (" + staffCount + " persone), " : "") + deputyPhrase +
+        "e una rappresentanza dei " + Math.round(p.iscritti || 0) + " tesserati del partito. Scriverai tu la maggior parte dei punti; alcuni li proporranno loro, e si voterà a maggioranza.</p>";
+      html += '<div class="qt-continue-row"><button type="button" class="advance-btn" id="program-scene-continue-btn">Apri la riunione</button></div></div>';
+      return html;
+    }
+    if (pm.step >= 1 && pm.step <= 7) {
+      pm.fields.forEach(function (f, idx) {
+        if (idx > pm.step - 1) return;
+        html += '<div class="qt-exchange">';
+        if (f.mode === "player") {
+          html += '<p class="qt-question"><strong>Capitolo: ' + f.label + '</strong> — qual è il punto qualificante del programma su questo fronte?</p>';
+          if (f.chosenText) {
+            html += '<p class="qt-answer"><strong>' + f.chosenLabel + "</strong> — " + f.chosenText + "</p>";
+          } else {
+            html += '<div class="choices">' + f.choices.map(function (c, i) {
+              return '<button type="button" class="choice-btn" data-program-field-choice="' + idx + ":" + i + '"><span class="clabel">' + c.label + '</span></button>';
+            }).join("") + "</div>";
+          }
+        } else {
+          html += '<div class="qt-speaker">' + personBadgeHtml(f.proposerName, null, 26) +
+            '<span><span class="qt-speaker-name">' + f.proposerName + '</span> <span class="qt-speaker-party">— tesserato storico</span></span></div>' +
+            '<p class="qt-question">Per il capitolo <strong>' + f.label + '</strong> propone di ' + f.proposalFragment + ".</p>";
+          if (f.decided) {
+            html += '<p class="qt-answer">' + (f.decided === "approved"
+              ? "Approvato a maggioranza: " + f.chosenText
+              : "Respinto dall'assemblea: il punto non entra nel programma.") + "</p>";
+          } else {
+            html += '<div class="choices">' +
+              '<button type="button" class="choice-btn" data-program-vote="' + idx + ':approve"><span class="clabel">Approva a maggioranza</span></button>' +
+              '<button type="button" class="choice-btn" data-program-vote="' + idx + ':reject"><span class="clabel">Respingi</span></button>' +
+              "</div>";
+          }
+        }
+        html += "</div>";
+      });
+      html += "</div>";
+      return html;
+    }
+    if (pm.step === 8) {
+      html += '<p class="ci-hint">Il grosso del programma è scritto. Vuoi aggiungere qualcosa di tuo pugno, che i tesserati non hanno toccato?</p>' +
+        '<textarea id="program-notes-textarea" rows="4" style="width:100%;max-width:62ch;" placeholder="Note libere del leader (facoltative)…">' + (pm.notes || "") + "</textarea>" +
+        '<div class="qt-continue-row"><button type="button" class="advance-btn" id="program-notes-submit-btn">Concludi la riunione</button></div></div>';
+      return html;
+    }
+    // Passo 9: riepilogo finale.
+    html += '<p class="ci-hint">Il programma elettorale è pronto.</p>';
+    pm.fields.filter(function (f) { return f.chosenText; }).forEach(function (f) {
+      html += '<div class="qt-exchange"><p class="qt-question"><strong>' + f.label + "</strong></p><p class=\"qt-answer\">" + f.chosenText + "</p></div>";
+    });
+    if (pm.notes) {
+      html += '<div class="qt-exchange"><p class="qt-question"><strong>Note del leader</strong></p><p class="qt-answer">' + pm.notes.replace(/</g, "&lt;") + "</p></div>";
+    }
+    html += '<div class="qt-continue-row"><button type="button" class="advance-btn" id="program-scene-close-btn">Chiudi la riunione</button></div></div>';
+    return html;
+  }
   // Quando è il partito DEL GIOCATORE a vincere con un margine da regime, la svolta non scatta più in
   // automatico (a differenza di una vittoria CPU, dove non c'è nessuno "al tavolo" a decidere): è lui a
   // scegliere se instaurarlo davvero o restare nella cornice democratica nonostante la maggioranza
@@ -13857,7 +14025,7 @@
   // pagina lunghissima.
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
-        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderLeaderDiary() + renderIdeologyProfile();
+        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
@@ -14162,6 +14330,85 @@
           render();
         });
       });
+      return;
+    }
+
+    // Riunione di programma: checkProgramMeetingTrigger già richiede p.playerIsLeader per scattare, come
+    // l'intervista al leader — nessun ramo di auto-play necessario per lo sfiduciato.
+    if (state.phase === "program_meeting_scene") {
+      app.innerHTML = renderProgramMeetingScene();
+      var pmContinueBtn = document.getElementById("program-scene-continue-btn");
+      if (pmContinueBtn) {
+        pmContinueBtn.addEventListener("click", function () {
+          state.programMeeting.step++;
+          save();
+          render();
+        });
+      }
+      app.querySelectorAll("[data-program-field-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var parts = btn.getAttribute("data-program-field-choice").split(":");
+          var fieldIdx = parseInt(parts[0], 10), choiceIdx = parseInt(parts[1], 10);
+          var pm = state.programMeeting;
+          var f = pm.fields[fieldIdx];
+          var chosen = f.choices[choiceIdx];
+          f.chosenLabel = chosen.label;
+          f.chosenText = chosen.text;
+          pm.step++;
+          save();
+          render();
+        });
+      });
+      app.querySelectorAll("[data-program-vote]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var parts = btn.getAttribute("data-program-vote").split(":");
+          var fieldIdx = parseInt(parts[0], 10), verdict = parts[1];
+          var pm = state.programMeeting;
+          var f = pm.fields[fieldIdx];
+          f.decided = verdict === "approve" ? "approved" : "rejected";
+          if (f.decided === "approved") {
+            f.chosenText = "Punto proposto da " + f.proposerName + " e approvato a maggioranza dall'assemblea: " +
+              f.proposalFragment.charAt(0).toUpperCase() + f.proposalFragment.slice(1) + ".";
+          }
+          pm.step++;
+          save();
+          render();
+        });
+      });
+      var pmNotesBtn = document.getElementById("program-notes-submit-btn");
+      if (pmNotesBtn) {
+        pmNotesBtn.addEventListener("click", function () {
+          var ta = document.getElementById("program-notes-textarea");
+          state.programMeeting.notes = ta ? ta.value.trim() : "";
+          state.programMeeting.step = 9;
+          save();
+          render();
+        });
+      }
+      var pmCloseBtn = document.getElementById("program-scene-close-btn");
+      if (pmCloseBtn) {
+        pmCloseBtn.addEventListener("click", function () {
+          var pm = state.programMeeting;
+          var p = state.player;
+          var chapters = pm.fields.filter(function (f) { return f.chosenText; }).map(function (f) {
+            return { key: f.key, label: f.label, text: f.chosenText, source: f.mode === "player" ? "leader" : "tesserati" };
+          });
+          p.electoralProgram = { draftedAtTurn: state.turn, chapters: chapters, notes: pm.notes || "" };
+          p.electoralProgramOffered = true;
+          var dossier = { title: "Programma Elettorale", cat: "Organizzazione" };
+          var choice = {
+            label: "Programma approvato dall'assemblea",
+            effects: { reputazione: rand(2, 5), iscritti: rand(10, 30) },
+            result: "Il programma elettorale è pronto: " + chapters.length + " capitoli, discussi e votati insieme al nucleo, ai deputati e ai tesserati del partito."
+          };
+          var res = applyChoice(dossier, choice);
+          state.resultData = res;
+          state.programMeeting = null;
+          state.phase = "result";
+          save();
+          render();
+        });
+      }
       return;
     }
 
@@ -15864,6 +16111,11 @@
 
     if (checkConsiglioComunaleTrigger()) {
       buildConsiglioComunaleScene();
+      return;
+    }
+
+    if (checkProgramMeetingTrigger()) {
+      buildProgramMeetingScene();
       return;
     }
 
