@@ -4234,6 +4234,84 @@
     state.qtScene = { step: 0, exchanges: exchanges, playerTurn: playerTurn, isPlayerGov: isPlayerGov, govLabel: govLabel };
     state.phase = "question_time_scene";
   }
+  // ---------- Intervista al leader: una scena periodica, contestuale alla posizione reale del giocatore ----------
+  // Ogni tanto (circa ogni 12 settimane, un evento speciale, non settimanale come il question time) un
+  // giornalista ferma il leader — SOLO se il giocatore è davvero ancora lui il leader, altrimenti non ha
+  // senso: chi altro dovrebbe rispondere per lui? Il "dove" e il "perché proprio ora" dipendono dalla sua
+  // posizione reale (fuori dal Parlamento, in Parlamento all'opposizione, o al Governo — ognuna con le
+  // proprie ambientazioni tipiche), e le domande pescano da cose VERE appena successe (l'ultima voce del
+  // diario di partito, l'andamento dei sondaggi) invece che da un canovaccio anonimo. A differenza del
+  // question time (dove il giocatore ascolta e poi interviene UNA volta sola), qui è LUI l'intervistato:
+  // ogni domanda è una scelta vera con conseguenze reali, una alla volta.
+  var LEADER_INTERVIEW_COOLDOWN_TURNS = 12;
+  function checkLeaderInterviewTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader) return false;
+    return state.turn >= (p.leaderInterviewCooldownTurn || 0);
+  }
+  var INTERVIEW_SETTINGS = {
+    governo: [
+      "Fuori da Palazzo Chigi, subito dopo il Consiglio dei Ministri",
+      "A margine di una conferenza stampa istituzionale",
+      "Durante una pausa di un vertice internazionale"
+    ],
+    parlamento: [
+      "Fuori da Montecitorio, dopo una seduta d'Aula",
+      "A margine dei lavori parlamentari, nel Transatlantico",
+      "In un corridoio del Senato, tra un voto e l'altro"
+    ],
+    extraparlamentare: [
+      "Davanti alla sede del partito",
+      "A margine di un comizio in piazza",
+      "Un giornalista ti ferma per un caffè al bar, quasi per caso",
+      "Fuori da un congresso di partito"
+    ]
+  };
+  function pickInterviewSetting(p) {
+    var pool = p.parliamentRole === "governo" ? INTERVIEW_SETTINGS.governo
+      : p.inParliament ? INTERVIEW_SETTINGS.parlamento
+      : INTERVIEW_SETTINGS.extraparlamentare;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  function buildInterviewChoices(topicLabel, isGoverno) {
+    var pol = isGoverno ? "il Governo" : "il tuo partito";
+    return [
+      { label: "Rispondi con toni pacati e istituzionali", hint: "Meno scintille, più credibilità",
+        effects: { reputazione: rand(1, 3), visibilita: rand(1, 2) },
+        result: "Rispondi con toni misurati su " + topicLabel + ": " + pol + " esce dall'intervista con un'immagine solida, anche se poco memorabile." },
+      { label: "Rispondi con toni combattivi, all'attacco", hint: "Più visibilità, rischio di polarizzare",
+        effects: { visibilita: rand(4, 8), reputazione: -rand(0, 2), iscritti: rand(5, 15) },
+        result: "Rispondi con un affondo deciso su " + topicLabel + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
+      { label: "Glissa, sposta il discorso altrove", hint: "Nessun rischio immediato, ma sembra evasivo",
+        effects: { reputazione: -rand(0, 2) },
+        result: "Eviti di entrare nel merito su " + topicLabel + ": il giornalista insiste, ma l'intervista prosegue su altri temi." }
+    ];
+  }
+  function buildLeaderInterviewScene() {
+    var p = state.player;
+    p.leaderInterviewCooldownTurn = state.turn + LEADER_INTERVIEW_COOLDOWN_TURNS;
+    var isGoverno = p.parliamentRole === "governo";
+    var setting = pickInterviewSetting(p);
+    var recentDiary = p.diaryEntries && p.diaryEntries[0];
+    var q1Text = recentDiary
+      ? "Il giornalista apre subito sul tema del momento: “" + recentDiary.title + "”. Come commenta " + p.name + "?"
+      : "Il giornalista chiede conto della linea del partito in questa fase, con " + p.name + " a " + fmt1(p.sondaggi) + "% nei sondaggi.";
+    var q1Topic = recentDiary ? recentDiary.title.toLowerCase() : "la linea del partito";
+    var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5; });
+    var q2Metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
+    var q2Text = q2Metric
+      ? "Passa poi a un fronte caldo: " + METRIC_LABELS[q2Metric] + ", fermo a " + fmt1(state.countryProfile[q2Metric]) + "/10. Qual è la proposta del partito?"
+      : "Passa poi a chiedere quale sarà la prossima mossa politica del partito nelle prossime settimane.";
+    var q2Topic = q2Metric ? METRIC_LABELS[q2Metric] : "le prossime mosse del partito";
+    state.leaderInterview = {
+      step: 0, setting: setting, isGoverno: isGoverno,
+      questions: [
+        { text: q1Text, choices: buildInterviewChoices(q1Topic, isGoverno), answeredLabel: null, resultText: null },
+        { text: q2Text, choices: buildInterviewChoices(q2Topic, isGoverno), answeredLabel: null, resultText: null }
+      ]
+    };
+    state.phase = "leader_interview_scene";
+  }
   // Emendamento a un decreto: riservato a chi è al governo (giocatore compreso), generato sull'indicatore
   // della Scheda Paese scelto pescando con più probabilità tra i più deboli — un decreto nasce di solito
   // per rimediare a un problema reale, non a caso tra indicatori già a posto.
@@ -8814,7 +8892,7 @@
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
-    qtScene: null
+    qtScene: null, leaderInterview: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -8842,7 +8920,8 @@
     memoryCallbackCooldownTurn: 0, memoryCallbackUsedTitles: [],
     whistleblowerCooldownTurn: 0,
     foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0,
-    leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0
+    leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
+    leaderInterviewCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -13519,6 +13598,29 @@
     html += "</div>";
     return html;
   }
+  // Scena dell'intervista al leader: a differenza del question time (il giocatore ascolta e interviene
+  // una volta sola), qui OGNI domanda è rivolta direttamente a lui — le domande già risposte restano
+  // visibili con la scelta fatta e il suo esito, la domanda corrente mostra le scelte vere.
+  function renderLeaderInterviewScene() {
+    var iv = state.leaderInterview;
+    var p = state.player;
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">Intervista — ' + iv.setting + '</p>' +
+      "<h2>Un giornalista ferma " + p.name + "</h2>" +
+      '<p class="ci-hint">' + iv.setting + ": un cronista coglie l'occasione per qualche domanda a bruciapelo.</p>";
+    iv.questions.forEach(function (q, idx) {
+      if (idx > iv.step) return;
+      html += '<div class="qt-exchange"><p class="qt-question">' + q.text + "</p>";
+      if (q.answeredLabel) {
+        html += '<p class="qt-answer"><strong>' + q.answeredLabel + "</strong> — " + q.resultText + "</p></div>";
+      } else {
+        html += '<div class="choices">' + q.choices.map(function (c, i) {
+          return '<button type="button" class="choice-btn" data-interview-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
+        }).join("") + "</div></div>";
+      }
+    });
+    html += "</div>";
+    return html;
+  }
   // Quando è il partito DEL GIOCATORE a vincere con un margine da regime, la svolta non scatta più in
   // automatico (a differenza di una vittoria CPU, dove non c'è nessuno "al tavolo" a decidere): è lui a
   // scegliere se instaurarlo davvero o restare nella cornice democratica nonostante la maggioranza
@@ -13795,6 +13897,37 @@
         });
         return;
       }
+    }
+
+    // Intervista al leader: gating diverso dal question time (checkLeaderInterviewTrigger già richiede
+    // p.playerIsLeader per scattare, quindi qui non serve un ramo di auto-play per lo sfiduciato — se il
+    // giocatore non è più leader, questa scena non si genera affatto).
+    if (state.phase === "leader_interview_scene") {
+      app.innerHTML = renderLeaderInterviewScene();
+      app.querySelectorAll("[data-interview-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = parseInt(btn.getAttribute("data-interview-choice"), 10);
+          var iv = state.leaderInterview;
+          var q = iv.questions[iv.step];
+          var choice = q.choices[idx];
+          var dossier = { title: "Intervista al leader", cat: "Comunicazione" };
+          var res = applyChoice(dossier, choice);
+          q.answeredLabel = choice.label;
+          q.resultText = choice.result;
+          if (iv.step < iv.questions.length - 1) {
+            iv.step++;
+            save();
+            render();
+          } else {
+            state.resultData = res;
+            state.leaderInterview = null;
+            state.phase = "result";
+            save();
+            render();
+          }
+        });
+      });
+      return;
     }
 
     // Il dossier/risultato va SEMPRE per primo, subito dopo la testata: è l'unica cosa che richiede
@@ -15479,6 +15612,11 @@
 
     if (checkParliamentQtSceneTrigger()) {
       buildParliamentQtScene();
+      return;
+    }
+
+    if (checkLeaderInterviewTrigger()) {
+      buildLeaderInterviewScene();
       return;
     }
 
