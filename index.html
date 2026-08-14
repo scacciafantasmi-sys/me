@@ -496,6 +496,24 @@
   .advance-btn:hover, .primary-btn:hover { filter: brightness(1.08); }
   .advance-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+  /* ---------- Question Time in Aula: scena sequenziale, non un dossier come gli altri ---------- */
+  @keyframes qtFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .qt-scene {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px;
+    padding: 1.1rem 1rem; box-shadow: var(--shadow);
+  }
+  .qt-scene .qt-eyebrow { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-dim); letter-spacing: 0.03em; text-transform: uppercase; }
+  .qt-scene h2 { font-family: var(--font-display); font-size: 1.2rem; margin: 0.3rem 0 0.8rem; }
+  .qt-exchange { animation: qtFadeIn 0.35s ease; margin-bottom: 0.9rem; padding-bottom: 0.9rem; border-bottom: 1px dashed var(--border); }
+  .qt-exchange:last-child { border-bottom: none; }
+  .qt-speaker { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; }
+  .qt-speaker-name { font-weight: 600; font-size: 0.88rem; }
+  .qt-speaker-party { font-size: 0.72rem; color: var(--text-dim); }
+  .qt-question { font-size: 0.88rem; line-height: 1.5; margin: 0 0 0.5rem; max-width: 62ch; }
+  .qt-answer { font-size: 0.85rem; line-height: 1.5; color: var(--text-dim); margin: 0; padding-left: 0.7rem; border-left: 2px solid var(--accent-soft); max-width: 62ch; }
+  .qt-continue-row { margin-top: 0.9rem; }
+
   /* ---------- Election result ---------- */
   .election-card {
     background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
@@ -4146,6 +4164,75 @@
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Question Time — pesa di più perché sei in Parlamento",
       cat: "Opposizione", title: title, brief: brief, choices: choices
     };
+  }
+  // ---------- Question Time in Aula: scena periodica, non un dossier come un altro ----------
+  // Prima il question time era interamente su iniziativa del giocatore (un pulsante, disponibile solo
+  // all'opposizione): comodo ma passivo, un semplice dossier tra i tanti. Qui diventa un vero rito
+  // parlamentare che scandisce il tempo — ogni due settimane, se si è in Parlamento, si "entra in Aula":
+  // due o tre parlamentari di opposizione (generati al momento) incalzano il Governo su fronti reali
+  // della Scheda Paese, con risposte del Governo costruite sui dati veri del momento (in miglioramento o
+  // no rispetto alla settimana prima) e, quando esiste, su un provvedimento davvero varato di recente
+  // (state.enactedPolicies) — non un canovaccio fisso. Si avanza un botta e risposta alla volta (nessun'
+  // altra azione possibile nel frattempo, esattamente come chiesto), fino al proprio turno: chi è
+  // all'opposizione sceglie su quale fronte incalzare e poi come farlo; chi è al governo deve invece
+  // rispondere in prima persona a una delle domande sollevate.
+  var PARLIAMENT_QT_SCENE_COOLDOWN_TURNS = 2;
+  function checkParliamentQtSceneTrigger() {
+    var p = state.player;
+    if (!p || !p.inParliament) return false;
+    return state.turn >= (p.qtSceneCooldownTurn || 0);
+  }
+  function buildGovernmentAnswerText(metric, value) {
+    var prev = state.countryProfilePrev ? state.countryProfilePrev[metric] : value;
+    var improving = value > prev + 0.02;
+    var worsening = value < prev - 0.02;
+    var base = improving
+      ? "Il Governo replica che i dati delle ultime settimane mostrano un miglioramento su questo fronte, per quanto ancora insufficiente."
+      : worsening
+        ? "Il Governo ammette che la situazione si è aggravata nelle ultime settimane, ma rivendica l'impegno messo in campo."
+        : "Il Governo riconosce che la situazione resta sostanzialmente stabile, ma sostiene che le misure adottate inizieranno presto a dare frutti.";
+    var recentPolicy = state.enactedPolicies && state.enactedPolicies[0];
+    var policyNote = recentPolicy ? (" Cita come esempio concreto il provvedimento “" + recentPolicy.title + "”, varato di recente.") : "";
+    return base + policyNote;
+  }
+  function buildParliamentQtScene() {
+    var p = state.player;
+    p.qtSceneCooldownTurn = state.turn + PARLIAMENT_QT_SCENE_COOLDOWN_TURNS;
+    var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var isPlayerGov = p.parliamentRole === "governo";
+    var oppParties = activeParties().filter(function (pt) { return govMemberIds.indexOf(pt.id) === -1; });
+    var metricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 7.5; });
+    if (metricKeys.length < 3) metricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k]; });
+    metricKeys = shuffleN(metricKeys, Math.min(3, metricKeys.length));
+    var govLabel = govEntityLabel();
+    var exchanges = metricKeys.map(function (metric) {
+      var asker = oppParties.length ? oppParties[Math.floor(Math.random() * oppParties.length)] : null;
+      var askerName = generateStaffName();
+      var noun = METRIC_LABELS[metric];
+      var value = state.countryProfile[metric];
+      return {
+        askerName: askerName, askerParty: asker ? { name: asker.name, color: asker.color } : { name: "Gruppo Misto", color: "#888888" },
+        metric: metric, noun: noun, value: value,
+        questionText: askerName + " (" + (asker ? asker.name : "Gruppo Misto") + ") chiede conto al Governo " + govLabel + " sul fronte " + noun + ", fermo a " + fmt1(value) + "/10.",
+        answerText: buildGovernmentAnswerText(metric, value)
+      };
+    });
+    var playerTurn = null;
+    if (isPlayerGov) {
+      var pick = exchanges[exchanges.length - 1] || { metric: metricKeys[0], noun: METRIC_LABELS[metricKeys[0]], value: state.countryProfile[metricKeys[0]] };
+      playerTurn = {
+        mode: "answer", metric: pick.metric, noun: pick.noun, value: pick.value,
+        choices: buildParliamentChoices({ noun: pick.noun, nationalMetric: pick.metric, isGoverno: true, rivalId: null, themeId: METRIC_TO_THEME_ID[pick.metric] }, 4)
+      };
+    } else {
+      playerTurn = {
+        mode: "choose_topic",
+        topicOptions: metricKeys.map(function (m) { return { metric: m, noun: METRIC_LABELS[m], value: state.countryProfile[m] }; }),
+        chosenMetric: null, choices: null
+      };
+    }
+    state.qtScene = { step: 0, exchanges: exchanges, playerTurn: playerTurn, isPlayerGov: isPlayerGov, govLabel: govLabel };
+    state.phase = "question_time_scene";
   }
   // Emendamento a un decreto: riservato a chi è al governo (giocatore compreso), generato sull'indicatore
   // della Scheda Paese scelto pescando con più probabilità tra i più deboli — un decreto nasce di solito
@@ -8726,7 +8813,8 @@
     spaceProgram: freshSpaceProgram(),
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
-    coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {}
+    coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
+    qtScene: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -8754,7 +8842,7 @@
     memoryCallbackCooldownTurn: 0, memoryCallbackUsedTitles: [],
     whistleblowerCooldownTurn: 0,
     foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0,
-    leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0
+    leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -13389,6 +13477,48 @@
     return html;
   }
 
+  // Scena del Question Time: a differenza di un dossier normale, si rivela un botta e risposta alla
+  // volta (state.qtScene.step) — ogni clic su "Continua" avanza di un solo scambio, mai tutti insieme,
+  // per dare il senso di essere davvero seduti in Aula ad ascoltare, non di leggere un elenco. Solo
+  // all'ultimo passo compaiono scelte vere: il proprio turno, come opposizione (prima il tema, poi il
+  // taglio) o come governo (si risponde direttamente a una delle domande già poste).
+  function renderQuestionTimeScene() {
+    var qt = state.qtScene;
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">Question Time — Aula della Camera</p>' +
+      "<h2>Il Governo " + qt.govLabel + " risponde alle interrogazioni</h2>" +
+      '<p class="ci-hint">Ogni due settimane l\'Aula si ferma per il question time: si prende posto, e le domande scorrono una alla volta.</p>';
+    var visibleExchanges = qt.exchanges.slice(0, Math.min(qt.step + 1, qt.exchanges.length));
+    visibleExchanges.forEach(function (ex) {
+      html += '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(ex.askerName, null, 26, ex.askerParty.color) +
+        '<span><span class="qt-speaker-name">' + ex.askerName + '</span> <span class="qt-speaker-party">— ' + ex.askerParty.name + '</span></span></div>' +
+        '<p class="qt-question">' + ex.questionText + '</p>' +
+        '<p class="qt-answer">' + ex.answerText + '</p></div>';
+    });
+    var allExchangesShown = qt.step >= qt.exchanges.length - 1;
+    if (!allExchangesShown) {
+      html += '<div class="qt-continue-row"><button type="button" class="advance-btn" id="qt-scene-continue-btn">Continua ad ascoltare</button></div></div>';
+      return html;
+    }
+    // Ultimo passo: il turno del giocatore.
+    if (qt.playerTurn.mode === "answer") {
+      html += '<div class="qt-exchange"><p class="qt-question"><strong>Tocca a te</strong>: come premier/esponente di governo, rispondi personalmente su ' + qt.playerTurn.noun + " (" + fmt1(qt.playerTurn.value) + "/10).</p></div>";
+      html += '<div class="choices">' + qt.playerTurn.choices.map(function (c, i) {
+        return '<button type="button" class="choice-btn" data-qt-answer-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
+      }).join("") + "</div></div>";
+    } else if (qt.playerTurn.chosenMetric === null) {
+      html += '<div class="qt-exchange"><p class="qt-question"><strong>Tocca a te</strong>: su quale fronte vuoi incalzare il Governo?</p></div>';
+      html += '<div class="choices">' + qt.playerTurn.topicOptions.map(function (t, i) {
+        return '<button type="button" class="choice-btn" data-qt-topic-choice="' + i + '"><span class="clabel">' + t.noun.charAt(0).toUpperCase() + t.noun.slice(1) + '</span><span class="chint">Fermo a ' + fmt1(t.value) + "/10</span></button>";
+      }).join("") + "</div></div>";
+    } else {
+      html += '<div class="qt-exchange"><p class="qt-question"><strong>Il tuo intervento su ' + qt.playerTurn.noun + '</strong>: un question time più approfondito, che pesa anche sull\'operato recente del Governo.</p></div>';
+      html += '<div class="choices">' + qt.playerTurn.choices.map(function (c, i) {
+        return '<button type="button" class="choice-btn" data-qt-answer-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
+      }).join("") + "</div></div>";
+    }
+    html += "</div>";
+    return html;
+  }
   // Quando è il partito DEL GIOCATORE a vincere con un margine da regime, la svolta non scatta più in
   // automatico (a differenza di una vittoria CPU, dove non c'è nessuno "al tavolo" a decidere): è lui a
   // scegliere se instaurarlo davvero o restare nella cornice democratica nonostante la maggioranza
@@ -13605,6 +13735,66 @@
         render();
       });
       return;
+    }
+
+    // Question Time: se il giocatore ha perso le ultime primarie (non è più lui il leader), la scena
+    // interattiva si auto-risolve subito con una scelta a caso, esattamente come ogni altro dossier in
+    // quella condizione (vedi più sotto) — non ha senso restare in attesa di un clic che non arriverà.
+    // In caso contrario, "question_time_scene" prende il controllo TOTALE dello schermo (niente pannelli
+    // sotto, niente altre azioni possibili) fino a quando lo scambio non è concluso.
+    if (state.phase === "question_time_scene") {
+      var qtP = state.player;
+      if (qtP && !qtP.playerIsLeader) {
+        var qtAuto = state.qtScene;
+        var autoChoiceList = qtAuto.playerTurn.mode === "answer" ? qtAuto.playerTurn.choices : null;
+        if (!autoChoiceList) {
+          var autoTopic = qtAuto.playerTurn.topicOptions[Math.floor(Math.random() * qtAuto.playerTurn.topicOptions.length)];
+          autoChoiceList = buildParliamentChoices({ noun: autoTopic.noun, nationalMetric: autoTopic.metric, isGoverno: false, rivalId: leadingGovPartyId(), themeId: METRIC_TO_THEME_ID[autoTopic.metric] }, 4);
+          qtAuto.playerTurn.noun = autoTopic.noun;
+        }
+        var autoChoice = autoChoiceList[Math.floor(Math.random() * autoChoiceList.length)];
+        var autoDossier = { title: "Question Time — " + qtAuto.playerTurn.noun, cat: qtAuto.isPlayerGov ? "Governo" : "Opposizione" };
+        state.resultData = applyChoice(autoDossier, autoChoice);
+        state.resultData.autoPlayed = true;
+        state.qtScene = null;
+        state.phase = "result";
+        save();
+      } else {
+        app.innerHTML = renderQuestionTimeScene();
+        var qtContinueBtn = document.getElementById("qt-scene-continue-btn");
+        if (qtContinueBtn) {
+          qtContinueBtn.addEventListener("click", function () {
+            state.qtScene.step++;
+            save();
+            render();
+          });
+        }
+        app.querySelectorAll("[data-qt-topic-choice]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var idx = parseInt(btn.getAttribute("data-qt-topic-choice"), 10);
+            var topic = state.qtScene.playerTurn.topicOptions[idx];
+            state.qtScene.playerTurn.chosenMetric = topic.metric;
+            state.qtScene.playerTurn.noun = topic.noun;
+            state.qtScene.playerTurn.choices = buildParliamentChoices({ noun: topic.noun, nationalMetric: topic.metric, isGoverno: false, rivalId: leadingGovPartyId(), themeId: METRIC_TO_THEME_ID[topic.metric] }, 4);
+            save();
+            render();
+          });
+        });
+        app.querySelectorAll("[data-qt-answer-choice]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            var idx = parseInt(btn.getAttribute("data-qt-answer-choice"), 10);
+            var qt = state.qtScene;
+            var choice = qt.playerTurn.choices[idx];
+            var dossier = { title: "Question Time — " + qt.playerTurn.noun, cat: qt.isPlayerGov ? "Governo" : "Opposizione" };
+            state.resultData = applyChoice(dossier, choice);
+            state.qtScene = null;
+            state.phase = "result";
+            save();
+            render();
+          });
+        });
+        return;
+      }
     }
 
     // Il dossier/risultato va SEMPRE per primo, subito dopo la testata: è l'unica cosa che richiede
@@ -15284,6 +15474,11 @@
     if (state.pendingGovernmentOath) {
       state.currentDossierId = "government_oath";
       state.phase = "building";
+      return;
+    }
+
+    if (checkParliamentQtSceneTrigger()) {
+      buildParliamentQtScene();
       return;
     }
 
