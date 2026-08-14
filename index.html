@@ -4320,6 +4320,18 @@
     if (label.indexOf("i ") === 0) return "sui " + label.slice(2);
     return "su " + label;
   }
+  // Come suLabel/diLabel ma per "a": usata dal pannello Opinione pubblica per soggetti come "il Governo"
+  // ("guarda al Governo", non "guarda a il Governo").
+  function aLabel(label) {
+    if (label.indexOf("l'") === 0) return "all'" + label.slice(2);
+    if (label.indexOf("lo ") === 0) return "allo " + label.slice(3);
+    if (label.indexOf("la ") === 0) return "alla " + label.slice(3);
+    if (label.indexOf("il ") === 0) return "al " + label.slice(3);
+    if (label.indexOf("gli ") === 0) return "agli " + label.slice(4);
+    if (label.indexOf("le ") === 0) return "alle " + label.slice(3);
+    if (label.indexOf("i ") === 0) return "ai " + label.slice(2);
+    return "a " + label;
+  }
   function buildInterviewChoices(topicLabel, isGoverno, fromContextPhrase, subjectPronoun) {
     var pol = isGoverno ? "il Governo" : "il tuo partito";
     var fromCtx = fromContextPhrase || "dall'intervista";
@@ -11433,6 +11445,83 @@
     return "neutral";
   }
 
+  // ---------- Opinione pubblica ----------
+  // Il "consenso di governo" (state.consensoGoverno) e la "reputazione" del partito (p.reputazione)
+  // esistevano già come numeri, ma erano solo una cifra buttata in mezzo ad altre statistiche — mai una
+  // vera lettura di COSA pensa il paese. Questo pannello dà loro un giudizio qualitativo (5 fasce) e una
+  // frase di commento che ruota nel tempo (pescata deterministicamente da turno+soggetto, non a caso ad
+  // ogni render, così non "sfarfalla" da un click all'altro nella stessa settimana), per tre soggetti
+  // distinti: il Governo, il partito in generale, e — quando in Parlamento — la sua attività lì, con
+  // dettagli concreti (leggi/mozioni approvate) invece di ripetere lo stesso giudizio generico.
+  function opinionTier(value) {
+    if (value < 20) return { label: "Ostilità diffusa", tone: "critical" };
+    if (value < 40) return { label: "Sfiducia diffusa", tone: "warning" };
+    if (value < 60) return { label: "Percezione incerta", tone: "neutral" };
+    if (value < 80) return { label: "Consenso solido", tone: "good" };
+    return { label: "Ampio consenso", tone: "good" };
+  }
+  var OPINION_FLAVORS = {
+    critical: [
+      function (s) { return "L'opinione pubblica guarda " + aLabel(s) + " con aperta ostilità."; },
+      function (s) { return "Il malcontento verso " + s + " è ormai diffuso e difficile da ignorare."; },
+      function (s) { return s.charAt(0).toUpperCase() + s.slice(1) + " sta perdendo credibilità agli occhi dell'opinione pubblica."; },
+      function (s) { return "I sondaggi d'opinione registrano una sfiducia quasi generalizzata verso " + s + "."; }
+    ],
+    warning: [
+      function (s) { return "Cresce lo scetticismo verso " + s + ", anche se non manca chi lo difende."; },
+      function (s) { return s.charAt(0).toUpperCase() + s.slice(1) + " fatica a convincere una parte crescente dell'opinione pubblica."; },
+      function (s) { return "Le critiche verso " + s + " si moltiplicano nel dibattito pubblico."; },
+      function (s) { return "L'umore verso " + s + " resta negativo, senza ancora sfociare in vera ostilità."; }
+    ],
+    neutral: [
+      function (s) { return "L'opinione pubblica resta divisa " + suLabel(s) + ", tra chi apprezza e chi resta scettico."; },
+      function (s) { return "Il giudizio " + suLabel(s) + " è ancora incerto, senza una vera tendenza prevalente."; },
+      function (s) { return s.charAt(0).toUpperCase() + s.slice(1) + " non convince del tutto, ma non scontenta nemmeno apertamente."; },
+      function (s) { return "Le opinioni " + suLabel(s) + " restano frammentate, senza un chiaro consenso o dissenso."; }
+    ],
+    good: [
+      function (s) { return "L'opinione pubblica guarda con favore " + aLabel(s) + "."; },
+      function (s) { return s.charAt(0).toUpperCase() + s.slice(1) + " gode di un consenso solido nel paese."; },
+      function (s) { return "Il giudizio prevalente " + suLabel(s) + " resta positivo."; },
+      function (s) { return "Cresce la fiducia nei confronti " + diLabel(s) + "."; }
+    ]
+  };
+  function opinionFlavorText(subjectPhrase, value, seed) {
+    var tier = opinionTier(value);
+    var pool = OPINION_FLAVORS[tier.tone];
+    var idx = (state.turn + seed) % pool.length;
+    return { tier: tier, text: pool[idx](subjectPhrase) };
+  }
+  function renderOpinionCard(label, subjectPhrase, value, seed, detailHtml) {
+    var of = opinionFlavorText(subjectPhrase, value, seed);
+    var color = of.tier.tone === "critical" ? "var(--critical)" : of.tier.tone === "warning" ? "var(--warning)" : of.tier.tone === "good" ? "var(--good)" : "var(--text-dim)";
+    return '<div class="stat-tile" style="grid-column:1/-1"><div class="label">' + label + '</div><div class="row"><span class="value">' + Math.round(value) + '%</span><span class="chip ' + of.tier.tone + '">' + of.tier.label + "</span></div>" +
+      '<div class="gauge"><span style="width:' + Math.max(0, Math.min(100, value)) + "%;background:" + color + '"></span></div>' +
+      '<p class="ci-hint" style="margin:0.4rem 0 0">' + of.text + (detailHtml || "") + "</p></div>";
+  }
+  function renderPublicOpinionPanel() {
+    var p = state.player;
+    if (!p) return "";
+    var html = '<section aria-label="Opinione pubblica"><p class="eyebrow">Opinione pubblica</p><div class="stat-grid">';
+    var govSubject = p.parliamentRole === "governo" ? "il Governo, che il tuo partito sostiene" : "il Governo in carica";
+    html += renderOpinionCard("Il Governo", govSubject, state.consensoGoverno === undefined ? 50 : state.consensoGoverno, 0, "");
+    html += renderOpinionCard("Il tuo partito", p.name, p.reputazione, 7, "");
+    if (p.inParliament) {
+      var leggiN = (p.acceptedLeggi || []).length, mozioniN = (p.acceptedMozioni || []).length, emendN = (p.acceptedAmendments || []).length;
+      var parlDetail = " In questa legislatura ha portato a casa " + leggiN + " legg" + (leggiN === 1 ? "e" : "i") +
+        " e " + mozioniN + " mozion" + (mozioniN === 1 ? "e" : "i") + " approvate" + (emendN ? (", oltre a " + emendN + " emendament" + (emendN === 1 ? "o" : "i") + ".") : ".");
+      html += renderOpinionCard("Il tuo partito in Parlamento", p.name + " in Parlamento", p.reputazione, 13, parlDetail);
+    } else {
+      var amm = p.amministratoriLocali || 0;
+      var exDetail = amm > 0
+        ? " Il radicamento sul territorio conta " + amm + " amministrator" + (amm === 1 ? "e locale" : "i locali") + "."
+        : " Fuori dal Parlamento, il partito è ancora poco conosciuto al grande pubblico.";
+      html += renderOpinionCard("Il tuo partito fuori dal Parlamento", p.name, p.reputazione, 13, exDetail);
+    }
+    html += "</div></section>";
+    return html;
+  }
+
   function renderPlayerStats() {
     var p = state.player;
     var html = '<section aria-label="Il tuo partito"><p class="eyebrow">Il tuo partito</p><div class="stat-grid">';
@@ -14601,6 +14690,7 @@
     // di default (vedi wrapCollapsed).
     body += renderPlayerStats();
     body += renderPollGrid(state.prevSnapshot);
+    body += renderPublicOpinionPanel();
     body += renderPageNav();
     body += activePageDef().render();
     // Ogni render() ricostruisce l'intero DOM da zero (innerHTML), quindi lo stato open/closed di ogni
