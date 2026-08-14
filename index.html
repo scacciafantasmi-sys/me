@@ -4539,6 +4539,54 @@
     };
     state.phase = "salotto_scene";
   }
+  // ---------- Ufficio del Leader: la giovanile o un consigliere portano una richiesta vera ----------
+  // La sezione giovanile aveva già un grado di accordo con la linea del partito (p.giovanile.agreement,
+  // vedi driftYouthWing) che oscillava però SOLO in automatico, senza mai un vero momento in cui il
+  // giocatore potesse influenzarlo con una scelta. Qui il/la segretario/a della giovanile (o, in
+  // alternativa, un membro dello staff nei panni di un consigliere) entra fisicamente nell'ufficio del
+  // leader con una richiesta concreta — pescata dagli stessi temi identitari del partito (coerente con
+  // buildProgramMeetingFields) — e il giocatore decide se accontentarla, mediare o respingerla.
+  var UFFICIO_COOLDOWN_TURNS = 14;
+  function checkUfficioTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader) return false;
+    if (!p.giovanile && !(p.staff && p.staff.length)) return false;
+    return state.turn >= (p.ufficioCooldownTurn || 0);
+  }
+  function buildUfficioScene() {
+    var p = state.player;
+    p.ufficioCooldownTurn = state.turn + UFFICIO_COOLDOWN_TURNS;
+    var useGiovanile = p.giovanile && (!(p.staff && p.staff.length) || Math.random() < 0.5);
+    var visitorName = useGiovanile ? generateStaffName() : p.staff[Math.floor(Math.random() * p.staff.length)].name;
+    var visitorRole = useGiovanile ? ("segretario/a di \"" + p.giovanile.name + "\"") : "consigliere del leader";
+    var themeKeys = FAMILY_SIGNATURE_THEMES[p.family] || [];
+    var themeKey = themeKeys.length ? themeKeys[Math.floor(Math.random() * themeKeys.length)] : null;
+    var angleNouns = themeKey && FAMILY_ANGLE_NOUNS[p.family] ? FAMILY_ANGLE_NOUNS[p.family][themeKey] : null;
+    var noun = angleNouns && angleNouns.length ? angleNouns[Math.floor(Math.random() * angleNouns.length)] : "la linea del partito su alcuni temi chiave";
+    var requestText = visitorName + " (" + visitorRole + ") chiede un incontro riservato nel tuo ufficio: vuole che il partito si impegni davvero " + suLabel(noun) + ".";
+    var choices = [
+      {
+        label: "Accetta pienamente la richiesta", hint: "Costa risorse, ma la conquista del tutto",
+        effects: { fondi: -rand(80, 180), reputazione: rand(1, 3), iscritti: rand(5, 15) },
+        result: "Accetti in pieno la richiesta: " + visitorName + " esce soddisfatto/a dall'ufficio, e la voce si sparge in fretta tra la base.",
+        agreementDelta: rand(8, 15)
+      },
+      {
+        label: "Media una via di mezzo", hint: "Meno costoso, ma non la accontenta del tutto",
+        effects: { reputazione: rand(0, 2) },
+        result: "Trovi un compromesso: non è quello che " + visitorName + " sperava, ma basta a evitare uno strappo.",
+        agreementDelta: rand(2, 6)
+      },
+      {
+        label: "Rifiuta, non è il momento", hint: "Nessun costo immediato, ma il malumore resta",
+        effects: { reputazione: -rand(0, 2) },
+        result: visitorName + " esce dall'ufficio visibilmente contrariato/a: il malumore resterà, e potrebbe riproporsi.",
+        agreementDelta: -rand(6, 14)
+      }
+    ];
+    state.ufficioScene = { source: useGiovanile ? "giovanile" : "staff", visitorName: visitorName, visitorRole: visitorRole, requestText: requestText, choices: choices };
+    state.phase = "ufficio_scene";
+  }
   // Emendamento a un decreto: riservato a chi è al governo (giocatore compreso), generato sull'indicatore
   // della Scheda Paese scelto pescando con più probabilità tra i più deboli — un decreto nasce di solito
   // per rimediare a un problema reale, non a caso tra indicatori già a posto.
@@ -9197,7 +9245,7 @@
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
     qtScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
-    salottoScene: null
+    salottoScene: null, ufficioScene: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -9227,7 +9275,7 @@
     foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0,
     leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
-    electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0
+    electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -14259,6 +14307,21 @@
     html += "</div>";
     return html;
   }
+  // Scena dell'ufficio del leader: un solo scambio, come il Consiglio Comunale — non serve più di un
+  // passo per una richiesta a tu per tu.
+  function renderUfficioScene() {
+    var uf = state.ufficioScene;
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">Ufficio del Leader</p>' +
+      "<h2>" + uf.visitorName + " chiede un incontro</h2>" +
+      '<p class="ci-hint">Una richiesta arriva direttamente nel tuo ufficio, fuori dalle riunioni ufficiali.</p>';
+    html += '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(uf.visitorName, null, 26) +
+      '<span><span class="qt-speaker-name">' + uf.visitorName + '</span> <span class="qt-speaker-party">— ' + uf.visitorRole + '</span></span></div>' +
+      '<p class="qt-question">' + uf.requestText + '</p>';
+    html += '<div class="choices">' + uf.choices.map(function (c, i) {
+      return '<button type="button" class="choice-btn" data-ufficio-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
+    }).join("") + "</div></div></div>";
+    return html;
+  }
   // Quando è il partito DEL GIOCATORE a vincere con un margine da regime, la svolta non scatta più in
   // automatico (a differenza di una vittoria CPU, dove non c'è nessuno "al tavolo" a decidere): è lui a
   // scegliere se instaurarlo davvero o restare nella cornice democratica nonostante la maggioranza
@@ -14760,6 +14823,29 @@
             save();
             render();
           }
+        });
+      });
+      return;
+    }
+
+    if (state.phase === "ufficio_scene") {
+      app.innerHTML = renderUfficioScene();
+      app.querySelectorAll("[data-ufficio-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = parseInt(btn.getAttribute("data-ufficio-choice"), 10);
+          var uf = state.ufficioScene;
+          var p = state.player;
+          var choice = uf.choices[idx];
+          var dossier = { title: "Incontro in ufficio con " + uf.visitorName, cat: "Organizzazione" };
+          var res = applyChoice(dossier, choice);
+          if (uf.source === "giovanile" && p.giovanile) {
+            p.giovanile.agreement = clamp(p.giovanile.agreement + choice.agreementDelta, 0, 100);
+          }
+          state.resultData = res;
+          state.ufficioScene = null;
+          state.phase = "result";
+          save();
+          render();
         });
       });
       return;
@@ -16465,6 +16551,11 @@
 
     if (checkSalottoTrigger()) {
       buildSalottoScene();
+      return;
+    }
+
+    if (checkUfficioTrigger()) {
+      buildUfficioScene();
       return;
     }
 
