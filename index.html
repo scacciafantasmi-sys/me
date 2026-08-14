@@ -6054,7 +6054,47 @@
     ]
   };
 
-  var OUTLETS = ["Il Domani d'Italia", "La Voce Libera", "Cronaca Aperta", "Il Dossier"];
+  // Testate reali della stampa italiana, ciascuna con un orientamento (lean) MAI mostrato esplicitamente
+  // al giocatore: lo si intuisce solo leggendo settimana dopo settimana come ciascuna copre le stesse
+  // notizie (vedi outletRelationToPlayer/HEADLINE_TEMPLATES più sotto) — esattamente come nella realtà.
+  var OUTLETS = [
+    { name: "Corriere della Sera", lean: "centro" },
+    { name: "la Repubblica", lean: "centrosinistra" },
+    { name: "La Stampa", lean: "centrosinistra" },
+    { name: "Il Sole 24 Ore", lean: "liberale" },
+    { name: "il Fatto Quotidiano", lean: "movimentista" },
+    { name: "il Manifesto", lean: "sinistra" },
+    { name: "il Giornale", lean: "destra" },
+    { name: "Libero", lean: "destra" },
+    { name: "La Verità", lean: "destra" },
+    { name: "Avvenire", lean: "cattolico" },
+    { name: "Il Foglio", lean: "liberale" },
+    { name: "Il Messaggero", lean: "centro" }
+  ];
+  // Posizione sull'asse sinistra-destra (da -2 a +2) di ogni "lean" di testata e di ogni famiglia
+  // ideologica di partito: la distanza tra le due determina se una testata copre il partito da amica,
+  // da avversaria o con un tono più neutro (vedi outletRelationToPlayer).
+  var AXIS_SCORE = {
+    sinistra: -2, movimentista: -0.4, centrosinistra: -1, cattolico: 0, centro: 0, europeista: 0,
+    liberale: 0.6, centrodestra: 1, destra: 2
+  };
+  var FAMILY_CAMP = {
+    sovranista: "destra", nazionalpopolare: "destra", fascista: "destra", monarchico: "destra",
+    regionalista: "centrodestra", liberale: "centrodestra", libertario: "destra",
+    cattolico: "centro", europeista: "centro",
+    tecnoprogressista: "centrosinistra", progressista: "centrosinistra", meridionalista: "centrosinistra",
+    sinistra: "sinistra", comunista: "sinistra", comunismolusso: "sinistra", gratuitista: "sinistra",
+    movimentista: "movimentista"
+  };
+  function outletRelationToPlayer(outletLean, playerFamily) {
+    var campScore = AXIS_SCORE[FAMILY_CAMP[playerFamily]];
+    var outletScore = AXIS_SCORE[outletLean];
+    if (campScore === undefined || outletScore === undefined) return "neutro";
+    var d = Math.abs(campScore - outletScore);
+    if (d <= 0.6) return "amico";
+    if (d <= 1.6) return "neutro";
+    return "avversario";
+  }
 
   // ---------- Vita autonoma dei partiti rivali ----------
   // Ogni settimana, indipendentemente da quello che fa il giocatore, c'è una probabilità che uno degli
@@ -8985,26 +9025,59 @@
     return html;
   }
 
-  var HEADLINE_BANK = {
-    "La Voce Libera": function (ev, ch) {
-      return ch.effects.reputazione && ch.effects.reputazione < 0
-        ? "Il nuovo soggetto politico tiene la barra dritta su " + ev.title.toLowerCase()
-        : ch.label + ": la mossa del nuovo partito premia il progetto";
+  // Se una testata copre lo stesso identico avvenimento da amica o da avversaria del partito (vedi
+  // outletRelationToPlayer), il titolo cambia — e cambia ancora in base al tono della scelta fatta
+  // (moderata/istituzionale o combattiva/polarizzante): la stessa notizia letta su testate diverse non
+  // dice mai la stessa cosa, così come nella realtà.
+  function choiceIsCombative(choice) {
+    var eff = choice.effects || {};
+    return (eff.visibilita > 3 || eff.iscritti > 10) && (eff.reputazione || 0) <= 0;
+  }
+  var HEADLINE_TEMPLATES = {
+    amico: {
+      moderato: [
+        function (title, name) { return name + " tiene la barra dritta su " + title.toLowerCase() + ": una linea che convince"; },
+        function (title, name) { return "Il pragmatismo paga: " + name + " gestisce con equilibrio il dossier " + title.toLowerCase(); },
+        function (title, name, motto) { return motto ? '"' + motto + '": ' + name + " resta coerente anche su " + title.toLowerCase() : name + " conferma la propria linea su " + title.toLowerCase(); }
+      ],
+      combattivo: [
+        function (title, name) { return name + " non arretra su " + title.toLowerCase() + ": la base esulta"; },
+        function (title, name) { return "Voce forte e chiara: " + name + " prende posizione netta su " + title.toLowerCase(); },
+        function (title, name) { return name + ", la mossa su " + title.toLowerCase() + " premia il progetto"; }
+      ]
     },
-    "Cronaca Aperta": function (ev, ch) {
-      return (ch.effects.reputazione && ch.effects.reputazione > 0)
-        ? "Ombre su " + ev.title.toLowerCase() + ": il nuovo partito rassicura, ma i dubbi restano"
-        : ev.title + ", il nuovo soggetto politico incassa un altro scivolone";
+    neutro: {
+      moderato: [
+        function (title, name) { return title + ": la scelta di " + name + " divide gli osservatori"; },
+        function (title, name) { return name + " sceglie la linea prudente su " + title.toLowerCase() + ", tra consensi e perplessità"; },
+        function (title) { return "Cosa c'è davvero dietro la scelta su " + title.toLowerCase() + "?"; }
+      ],
+      combattivo: [
+        function (title, name) { return name + " alza i toni su " + title.toLowerCase() + ": reazioni contrastanti"; },
+        function (title, name) { return "Fronte caldo: la mossa di " + name + " su " + title.toLowerCase() + " non lascia indifferenti"; },
+        function (title, name) { return title + ", " + name + " incassa un altro scossone mediatico"; }
+      ]
     },
-    "Il Dossier": function (ev, ch) {
-      return "Cosa c'è davvero dietro la scelta del nuovo partito su " + ev.title.toLowerCase() + "?";
-    },
-    "Il Domani d'Italia": function (ev, ch, motto) {
-      return motto
-        ? '"' + motto + '": ' + ev.title.toLowerCase() + ", il partito prova a restare coerente con la propria linea"
-        : ev.title + ": osservatori e analisti valutano l'impatto della scelta";
+    avversario: {
+      moderato: [
+        function (title, name) { return name + " prova a smarcarsi su " + title.toLowerCase() + ", ma i nodi restano"; },
+        function (title, name) { return "Ancora ombre sulla linea di " + name + " riguardo a " + title.toLowerCase(); },
+        function (title, name) { return name + " prova a rassicurare, ma i dubbi restano su " + title.toLowerCase(); }
+      ],
+      combattivo: [
+        function (title, name) { return name + " alza i toni su " + title.toLowerCase() + ": la solita retorica, secondo i critici"; },
+        function (title, name) { return "Sotto accusa la mossa di " + name + " su " + title.toLowerCase(); },
+        function (title, name) { return title + ", " + name + " incassa un altro scivolone"; }
+      ]
     }
   };
+  function generateHeadlineText(outlet, dossier, choice, p) {
+    var relation = outletRelationToPlayer(outlet.lean, p.family);
+    var tone = choiceIsCombative(choice) ? "combattivo" : "moderato";
+    var pool = HEADLINE_TEMPLATES[relation][tone];
+    var tpl = pool[Math.floor(Math.random() * pool.length)];
+    return tpl(dossier.title, p.name, p.motto);
+  }
 
   // ---------- State ----------
   // Fonte unica di verità per i campi "strutturali" opzionali dello stato e del giocatore: usata sia per
@@ -9447,7 +9520,7 @@
     }
 
     var outlets = pickN(OUTLETS, 3);
-    var headlines = outlets.map(function (o) { return { outlet: o, text: HEADLINE_BANK[o](dossier, choice, p.motto) }; });
+    var headlines = outlets.map(function (o) { return { outlet: o.name, text: generateHeadlineText(o, dossier, choice, p) }; });
 
     // Impatto numerico reale della scelta (dopo tutti i moltiplicatori di stile/staff sopra), catturato
     // per dare un riscontro visivo immediato e per restare visibile nel registro nel tempo — vedi
