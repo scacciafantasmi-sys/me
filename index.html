@@ -8753,7 +8753,8 @@
     intelActionCooldowns: {}, intelSituationCooldownTurn: 0,
     memoryCallbackCooldownTurn: 0, memoryCallbackUsedTitles: [],
     whistleblowerCooldownTurn: 0,
-    foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0
+    foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0,
+    leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -11329,9 +11330,11 @@
     var list = [];
     for (var i = 0; i < count; i++) {
       list.push({
+        id: "mp_" + state.turn + "_" + i + "_" + Math.floor(Math.random() * 100000),
         name: generateStaffName(),
         background: strat.backgrounds[Math.floor(Math.random() * strat.backgrounds.length)],
-        trait: strat.traits[Math.floor(Math.random() * strat.traits.length)]
+        trait: strat.traits[Math.floor(Math.random() * strat.traits.length)],
+        loyalty: rand(45, 80), photoDataUrl: null
       });
     }
     return list;
@@ -11407,10 +11410,16 @@
       var strat = CANDIDATE_LIST_STRATEGIES[cl.strategyId];
       html += '<p class="ci-hint">Lista depositata con il criterio <strong>' + strat.label + '</strong>: ' + strat.desc +
         (cl.coordinated === true ? " Coerente con la maggioranza degli alleati di coalizione." : cl.coordinated === false ? " Scelta diversa da quella della maggioranza degli alleati di coalizione." : "") + '</p>';
+      var mpLine = function (c) {
+        var loyaltyNote = p.inParliament ? ' <span class="ci-hint">Lealtà al partito: ' + Math.round(c.loyalty) + '/100.</span>' : "";
+        return '<li style="display:flex;align-items:center;gap:.5rem">' + personBadgeHtml(c.name, c.photoDataUrl, 28) +
+          '<span><strong>' + c.name + "</strong> — " + c.background + '. <span class="ci-hint">' + c.trait + ".</span>" + loyaltyNote + "</span></li>";
+      };
       html += '<p class="eyebrow" style="margin-top:.6rem">Capilista alla Camera</p><ul class="enacted-policy-list">' +
-        cl.deputati.map(function (c) { return "<li><strong>" + c.name + "</strong> — " + c.background + '. <span class="ci-hint">' + c.trait + ".</span></li>"; }).join("") + "</ul>";
+        cl.deputati.map(mpLine).join("") + "</ul>";
       html += '<p class="eyebrow" style="margin-top:.6rem">Capilista al Senato</p><ul class="enacted-policy-list">' +
-        cl.senatori.map(function (c) { return "<li><strong>" + c.name + "</strong> — " + c.background + '. <span class="ci-hint">' + c.trait + ".</span></li>"; }).join("") + "</ul>";
+        cl.senatori.map(mpLine).join("") + "</ul>";
+      if (p.inParliament) html += '<p class="ci-hint">Ogni tanto uno di loro finisce al centro dell\'attenzione: una dichiarazione, una richiesta, un\'intervista che fa discutere — vedi il dossier della settimana quando succede.</p>';
     } else {
       var w = weeksToNationalElection();
       html += '<p class="ci-hint">Mancano ' + w + " settiman" + (w === 1 ? "a" : "e") + " alle elezioni politiche: scegli il criterio con cui comporre la tua lista di candidati per Camera e Senato. Costo: " + fmtEuro(CANDIDATE_LIST_COST) + '.</p>';
@@ -11433,6 +11442,92 @@
     }
     html += "</details></section>";
     return html;
+  }
+
+  // ---------- Vita parlamentare individuale: i capilista non sono solo nomi in un elenco ----------
+  // Prima i deputati/senatori generati per la lista elettorale (vedi generateCandidateSlate) restavano
+  // pura decorazione: un nome, un passato, un tratto, mai più menzionati dopo il deposito della lista.
+  // Ora, una volta eletti, di tanto in tanto uno di loro fa notizia per conto proprio — un dissenso
+  // pubblico dalla linea del partito, una richiesta di un ruolo/commissione, un'intervista che fa
+  // discutere, una voce di cambio di gruppo — e il giocatore deve reagire, con conseguenze reali sulla
+  // lealtà di quel singolo parlamentare (persistita su di lui, non un numero astratto di partito) e
+  // sull'immagine complessiva. Attivo solo se una lista è stata davvero depositata: nessuna invenzione di
+  // deputati fantasma per chi non l'ha mai fatto.
+  var MP_EVENT_COOLDOWN_TURNS = 20;
+  var MP_EVENT_TYPES = [
+    { id: "dissenso", eyebrow: "Dissenso pubblico in Parlamento",
+      buildTitle: function (mp) { return mp.name + " si smarca dalla linea del partito"; },
+      buildBrief: function (mp) { return mp.name + " (" + mp.background + ") rilascia dichiarazioni pubbliche in aperto contrasto con la linea ufficiale del partito su un tema caldo del momento. La stampa ci fa un titolo." + " " + mp.trait.charAt(0).toUpperCase() + mp.trait.slice(1) + ": non è la prima volta che si fa notare." + " Come reagisce la segreteria?"; } },
+    { id: "richiesta", eyebrow: "Una richiesta interna",
+      buildTitle: function (mp) { return mp.name + " chiede un ruolo di maggior peso"; },
+      buildBrief: function (mp) { return mp.name + " (" + mp.background + ") chiede alla segreteria un ruolo di maggior peso — la presidenza di una commissione, un incarico più visibile — sostenendo di meritarlo per il lavoro svolto finora. Come rispondi?"; } },
+    { id: "intervista", eyebrow: "Un'intervista che fa discutere",
+      buildTitle: function (mp) { return "Un'intervista di " + mp.name + " fa il giro dei media"; },
+      buildBrief: function (mp) { return mp.name + " (" + mp.background + ") rilascia un'intervista molto commentata, in cui parla anche a titolo personale su temi delicati per il partito. Il tono generale è positivo, ma qualche passaggio è scivoloso. Come gestisci la ricaduta?"; } },
+    { id: "gruppo", eyebrow: "Voci di cambio di gruppo",
+      buildTitle: function (mp) { return "Voci insistenti su un possibile addio di " + mp.name; },
+      buildBrief: function (mp) { return "Circolano voci insistenti secondo cui " + mp.name + " (" + mp.background + ") starebbe valutando di lasciare il gruppo parlamentare del partito, forse per passare al gruppo Misto o altrove. La stampa parlamentare ne parla apertamente. Come intervieni?"; } }
+  ];
+  function allMpEntries() {
+    var p = state.player;
+    if (!p || !p.candidateList) return [];
+    return (p.candidateList.deputati || []).concat(p.candidateList.senatori || []);
+  }
+  function checkMpEventTrigger() {
+    var p = state.player;
+    if (!p || !p.inParliament) return false;
+    if (!allMpEntries().length) return false;
+    if (state.turn < (p.mpEventCooldownTurn || 0)) return false;
+    return Math.random() < 0.05;
+  }
+  function buildMpEventDossier() {
+    var p = state.player;
+    p.mpEventCooldownTurn = state.turn + MP_EVENT_COOLDOWN_TURNS;
+    var pool = allMpEntries();
+    var mp = pool[Math.floor(Math.random() * pool.length)];
+    var evType = MP_EVENT_TYPES[Math.floor(Math.random() * MP_EVENT_TYPES.length)];
+    return {
+      id: "mp_event", kind: "notizia", cat: "Vita Parlamentare", mpId: mp.id, mpEventType: evType.id,
+      eyebrow: evType.eyebrow, title: evType.buildTitle(mp), brief: evType.buildBrief(mp),
+      choices: [
+        { label: "Sostienilo pubblicamente", hint: "La lealtà verso di lui sale, ma la disciplina interna un po' meno", mpResponse: "sostieni", effects: {}, result: "" },
+        { label: "Richiamalo/a all'ordine con fermezza", hint: "La disciplina di partito si rafforza, ma la sua lealtà personale ne risente", mpResponse: "richiama", effects: {}, result: "" },
+        { label: "Lascia correre, senza prendere posizione", hint: "Nessun effetto immediato, la situazione resta irrisolta", mpResponse: "ignora", effects: {}, result: "" }
+      ]
+    };
+  }
+  // Corrispettivo per i parlamentari delle FORZE AVVERSARIE (CPU): non persistenti (il gioco non tiene
+  // un intero parlamento nominale per ogni partito, sarebbe ingestibile), ma comunque un volto e un nome
+  // generati al momento per dare vita politica anche a chi sta dall'altra parte dell'Aula — esattamente
+  // come chiesto: l'interattività non deve valere solo per i propri.
+  var RIVAL_MP_NEWS_COOLDOWN_TURNS = 14;
+  var RIVAL_MP_NEWS_TEMPLATES = [
+    function (name, party) { return { title: name + " (" + party.name + ") apre un caso in Aula", brief: "Un deputato di " + party.name + ", " + name + ", solleva un caso che mette in imbarazzo la maggioranza durante il question time, guadagnandosi le prime pagine del giorno dopo." }; },
+    function (name, party) { return { title: name + " lascia " + party.name + " per il gruppo Misto", brief: name + ", finora tra le fila di " + party.name + ", annuncia il passaggio al gruppo Misto per «divergenze sulla linea politica», l'ennesimo movimento nei gruppi parlamentari di questa legislatura." }; },
+    function (name, party) { return { title: name + " (" + party.name + ") sotto i riflettori per un'intervista", brief: "Un'intervista di " + name + ", esponente di " + party.name + ", scatena un piccolo caso mediatico per alcune dichiarazioni fuori dalle righe." }; }
+  ];
+  function checkRivalMpNewsTrigger() {
+    var p = state.player;
+    if (!p || !p.inParliament) return false;
+    if (state.turn < (p.rivalMpNewsCooldownTurn || 0)) return false;
+    return Math.random() < 0.045;
+  }
+  function buildRivalMpNewsDossier() {
+    var p = state.player;
+    p.rivalMpNewsCooldownTurn = state.turn + RIVAL_MP_NEWS_COOLDOWN_TURNS;
+    var others = activeParties();
+    var party = others[Math.floor(Math.random() * others.length)];
+    var name = generateStaffName();
+    var tpl = RIVAL_MP_NEWS_TEMPLATES[Math.floor(Math.random() * RIVAL_MP_NEWS_TEMPLATES.length)](name, party);
+    return {
+      id: "rival_mp_news", kind: "notizia", cat: "Vita Parlamentare", rivalMpPartyId: party.id,
+      eyebrow: "Dall'altra parte dell'Aula", title: tpl.title, brief: tpl.brief + " Come commenta il tuo partito la vicenda?",
+      choices: [
+        { label: "Commenta duramente, cavalcando la polemica", hint: "Un po' di visibilità, un po' di logoramento verso quel partito", rivalMpTone: "duro", effects: { visibilita: rand(1, 3) }, result: "" },
+        { label: "Commenta con toni misurati", hint: "Nessun rischio, nessun guadagno", rivalMpTone: "misurato", effects: {}, result: "" },
+        { label: "Non commentare la vicenda", hint: "Non è un affare tuo", rivalMpTone: "silenzio", effects: {}, result: "" }
+      ]
+    };
   }
 
   // ---------- Sezione Giovanile ----------
@@ -11596,7 +11691,7 @@
       var member = hired ? staffMember(r.id) : null;
       html += '<div class="staff-card' + (hired ? " hired" : "") + '">' +
         '<div class="staff-label">' + r.label + (hired ? ' <span class="chip good">In carica</span>' : "") + "</div>" +
-        (member ? '<div class="staff-name">' + member.name + (member.skillMult !== undefined ? " · competenza " + Math.round(member.skillMult * 100) + "%" : "") + "</div>" : "") +
+        (member ? '<div class="staff-name" style="display:flex;align-items:center;gap:.4rem">' + personBadgeHtml(member.name, null, 24) + '<span>' + member.name + (member.skillMult !== undefined ? " · competenza " + Math.round(member.skillMult * 100) + "%" : "") + "</span></div>" : "") +
         '<div class="staff-desc">' + r.desc + "</div>";
       if (hired) {
         html += '<div class="staff-cost">Stipendio: ' + fmtEuro(member.salary !== undefined ? member.salary : r.salary) + "/sett.</div>" +
@@ -11689,6 +11784,14 @@
       '<summary>Ideologia e leader<span>▾</span></summary>' +
       '<div class="staff-grid" style="grid-template-columns:1fr">' +
       renderLogoUploadField(p.logoDataUrl, p.color, p.name, "logo-upload-input", "logo-remove-btn") +
+      '<div class="field"><label class="field-label">Foto del leader (facoltativa)</label>' +
+      '<div class="logo-upload-row">' + personBadgeHtml(p.name, p.leaderPhotoDataUrl, 56) +
+      '<div class="logo-upload-actions">' +
+      '<button type="button" class="save-bar-btn" data-trigger-file-input="leader-photo-upload-input">Carica una foto</button>' +
+      '<input type="file" id="leader-photo-upload-input" accept="image/*" style="display:none">' +
+      (p.leaderPhotoDataUrl ? '<button type="button" class="save-bar-btn" id="leader-photo-remove-btn">Rimuovi</button>' : "") +
+      "</div></div>" +
+      '<p class="field-hint">Se non carichi nulla, viene usata un\'icona generica con le iniziali del leader — come per deputati, senatori e membri dello staff, generati automaticamente dal gioco.</p></div>' +
       traitsHtml +
       '<div class="field"><label class="field-label" for="party-name-edit-input">Nome del partito</label>' +
       '<input type="text" id="party-name-edit-input" maxlength="40" placeholder="Es. Alleanza Civica Italiana" value="' + (p.name || "").replace(/"/g, "&quot;") + '">' +
@@ -12533,6 +12636,22 @@
   // Legge il file scelto, lo ridimensiona/centra su un quadrato fisso (128x128) via canvas e restituisce
   // un data-URL PNG: tiene il salvataggio leggero anche caricando foto ad alta risoluzione, e mantiene
   // l'eventuale trasparenza del logo originale (a differenza di un JPEG).
+  // ---------- Avatar delle persone: leader, deputati/senatori, membri dello staff ----------
+  // Riusa esattamente lo stesso meccanismo dei loghi di partito (partyBadgeHtml sopra: foto caricata se
+  // c'è, altrimenti un cerchio colorato con le iniziali) ma applicato alle SINGOLE PERSONE, non ai
+  // partiti. Un colore deterministico calcolato dal nome (hash semplice -> tonalità HSL) fa sì che la
+  // stessa persona abbia sempre lo stesso "colore di sfondo" in ogni punto in cui compare, senza dover
+  // generare o salvare nulla — un'icona indicativa vera e propria, coerente nel tempo, senza bisogno di
+  // immagini reali che il gioco non può generare da solo.
+  function personSeedColor(name) {
+    var s = name || "?";
+    var hash = 0;
+    for (var i = 0; i < s.length; i++) { hash = (hash * 31 + s.charCodeAt(i)) >>> 0; }
+    return "hsl(" + (hash % 360) + ", 52%, 42%)";
+  }
+  function personBadgeHtml(name, photoDataUrl, sizePx, colorOverride) {
+    return partyBadgeHtml(name, colorOverride || personSeedColor(name), photoDataUrl, sizePx);
+  }
   function readAndResizeLogo(file, callback) {
     if (!file) return;
     if (!/^image\//.test(file.type)) { showSaveStatus("Il file scelto non è un'immagine.", true); return; }
@@ -13689,6 +13808,49 @@
       } else if (dossier.id === "eu_group_choice") {
         state.player.euGroup = choice.groupId;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "mp_event") {
+        var pm2 = state.player;
+        var mp2 = allMpEntries().filter(function (c) { return c.id === dossier.mpId; })[0];
+        var esitoMp;
+        if (mp2) {
+          if (choice.mpResponse === "sostieni") {
+            mp2.loyalty = clamp(mp2.loyalty + rand(8, 15), 0, 100);
+            pm2.reputazione = clamp(pm2.reputazione - rand(0, 2), 0, 100);
+            esitoMp = "La segreteria sceglie di sostenerlo pubblicamente: la sua lealtà verso il partito ne esce rafforzata, anche se qualcuno negli ambienti di partito storce il naso per la disciplina interna.";
+          } else if (choice.mpResponse === "richiama") {
+            mp2.loyalty = clamp(mp2.loyalty - rand(10, 20), 0, 100);
+            pm2.reputazione = clamp(pm2.reputazione + rand(0, 2), 0, 100);
+            esitoMp = "La segreteria lo richiama pubblicamente all'ordine: la disciplina di partito ne esce rafforzata, ma il rapporto personale con lui si incrina visibilmente.";
+          } else {
+            esitoMp = "Il partito sceglie di non prendere posizione: la situazione resta irrisolta, per ora.";
+          }
+          if (mp2.loyalty < 20 && Math.random() < 0.35) {
+            var listKey = (pm2.candidateList.deputati || []).indexOf(mp2) !== -1 ? "deputati" : "senatori";
+            pm2.candidateList[listKey] = pm2.candidateList[listKey].filter(function (c) { return c.id !== mp2.id; });
+            pm2.reputazione = clamp(pm2.reputazione - rand(2, 5), 0, 100);
+            esitoMp += " Nelle settimane successive, " + mp2.name + " lascia comunque il gruppo parlamentare del partito: la lealtà ormai ai minimi non si è più ricomposta.";
+          }
+        } else {
+          esitoMp = "";
+        }
+        choice.result = esitoMp;
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "rival_mp_news") {
+        var esitoRv;
+        if (choice.rivalMpTone === "duro") {
+          if (dossier.rivalMpPartyId) {
+            if (!state.partyRelations) state.partyRelations = {};
+            var curRv = state.partyRelations[dossier.rivalMpPartyId];
+            state.partyRelations[dossier.rivalMpPartyId] = clamp((curRv === undefined ? 50 : curRv) - rand(3, 7), 0, 100);
+          }
+          esitoRv = "Il commento duro finisce sui giornali del giorno dopo, guadagnando qualche titolo ma raffreddando ulteriormente i rapporti con quel partito.";
+        } else if (choice.rivalMpTone === "misurato") {
+          esitoRv = "Il commento misurato passa quasi inosservato, senza scosse in nessuna direzione.";
+        } else {
+          esitoRv = "Il partito sceglie di non commentare: la vicenda resta confinata all'altra parte dell'Aula.";
+        }
+        choice.result = esitoRv;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "breakthrough_moment") {
         var pbr = state.player;
         var stratBr = choice.breakthroughStrategy;
@@ -14833,6 +14995,25 @@
         render();
       });
     }
+    var leaderPhotoInput = document.getElementById("leader-photo-upload-input");
+    if (leaderPhotoInput) {
+      leaderPhotoInput.addEventListener("change", function () {
+        var file = leaderPhotoInput.files && leaderPhotoInput.files[0];
+        readAndResizeLogo(file, function (dataUrl) {
+          state.player.leaderPhotoDataUrl = dataUrl;
+          save();
+          render();
+        });
+      });
+    }
+    var leaderPhotoRemoveBtn = document.getElementById("leader-photo-remove-btn");
+    if (leaderPhotoRemoveBtn) {
+      leaderPhotoRemoveBtn.addEventListener("click", function () {
+        state.player.leaderPhotoDataUrl = null;
+        save();
+        render();
+      });
+    }
     app.querySelectorAll("[data-party-logo-input]").forEach(function (input) {
       input.addEventListener("change", function () {
         var partyId = input.getAttribute("data-party-logo-input");
@@ -15239,6 +15420,20 @@
 
     if (checkCollapseTrigger()) {
       state.aiDynamicDossier = buildCollapseDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkMpEventTrigger()) {
+      state.aiDynamicDossier = buildMpEventDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkRivalMpNewsTrigger()) {
+      state.aiDynamicDossier = buildRivalMpNewsDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
