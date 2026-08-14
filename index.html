@@ -4273,20 +4273,34 @@
       : INTERVIEW_SETTINGS.extraparlamentare;
     return pool[Math.floor(Math.random() * pool.length)];
   }
+  // Come diLabel ma per "su": molti topicLabel (quelli tratti da METRIC_LABELS) portano già l'articolo
+  // determinativo, che davanti a "su" va contratto ("sulla sicurezza pubblica", non "su la sicurezza
+  // pubblica"). I topicLabel senza articolo (es. un titolo di diario) restano invariati dietro "su ".
+  function suLabel(label) {
+    if (label.indexOf("l'") === 0) return "sull'" + label.slice(2);
+    if (label.indexOf("lo ") === 0) return "sullo " + label.slice(3);
+    if (label.indexOf("la ") === 0) return "sulla " + label.slice(3);
+    if (label.indexOf("il ") === 0) return "sul " + label.slice(3);
+    if (label.indexOf("gli ") === 0) return "sugli " + label.slice(4);
+    if (label.indexOf("le ") === 0) return "sulle " + label.slice(3);
+    if (label.indexOf("i ") === 0) return "sui " + label.slice(2);
+    return "su " + label;
+  }
   function buildInterviewChoices(topicLabel, isGoverno, fromContextPhrase, subjectPronoun) {
     var pol = isGoverno ? "il Governo" : "il tuo partito";
     var fromCtx = fromContextPhrase || "dall'intervista";
     var subj = subjectPronoun || "il giornalista";
+    var suTopic = suLabel(topicLabel);
     return [
       { label: "Rispondi con toni pacati e istituzionali", hint: "Meno scintille, più credibilità",
         effects: { reputazione: rand(1, 3), visibilita: rand(1, 2) },
-        result: "Rispondi con toni misurati su " + topicLabel + ": " + pol + " esce " + fromCtx + " con un'immagine solida, anche se poco memorabile." },
+        result: "Rispondi con toni misurati " + suTopic + ": " + pol + " esce " + fromCtx + " con un'immagine solida, anche se poco memorabile." },
       { label: "Rispondi con toni combattivi, all'attacco", hint: "Più visibilità, rischio di polarizzare",
         effects: { visibilita: rand(4, 8), reputazione: -rand(0, 2), iscritti: rand(5, 15) },
-        result: "Rispondi con un affondo deciso su " + topicLabel + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
+        result: "Rispondi con un affondo deciso " + suTopic + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
       { label: "Glissa, sposta il discorso altrove", hint: "Nessun rischio immediato, ma sembra evasivo",
         effects: { reputazione: -rand(0, 2) },
-        result: "Eviti di entrare nel merito su " + topicLabel + ": " + subj + " insiste, ma il confronto prosegue su altri temi." }
+        result: "Eviti di entrare nel merito " + suTopic + ": " + subj + " insiste, ma il confronto prosegue su altri temi." }
     ];
   }
   function buildLeaderInterviewScene() {
@@ -4313,6 +4327,55 @@
       ]
     };
     state.phase = "leader_interview_scene";
+  }
+  // ---------- Consiglio Comunale: la politica locale, prima ancora del Parlamento ----------
+  // Il "campo lungo" del gioco (question time, interviste, congressi) presuppone quasi sempre di essere
+  // già in Parlamento. Chi sta ancora costruendo il partito dal basso, con i primi amministratori locali
+  // eletti (vedi triggerLocalElectionCycle) ma nessun seggio nazionale, non aveva NULLA di equivalente:
+  // il percorso locale restava solo un numero (amministratoriLocali) e un tiro di dadi ogni tanto. Ora,
+  // appena il partito elegge il primo amministratore locale, il Consiglio Comunale diventa una vera
+  // scena periodica — un consigliere di un'altra lista solleva un problema del territorio, il partito
+  // deve rispondere: la stessa logica di interazione delle scene nazionali, ma centrata sulla città, non
+  // sul paese, e su effetti local-scale invece che sondaggi nazionali. Resta attivo anche dopo l'ingresso
+  // in Parlamento (il radicamento territoriale non smette di contare), ma è qui, PRIMA di arrivarci, che
+  // dà finalmente al giocatore qualcosa da fare settimana dopo settimana.
+  var CONSIGLIO_COMUNALE_COOLDOWN_TURNS = 10;
+  var LOCAL_COUNCIL_METRICS = ["trasporti", "scuola", "sanita", "casa", "ambientalismo", "sicurezza", "welfare"];
+  // METRIC_LABELS porta già l'articolo determinativo (es. "la sicurezza pubblica", "i trasporti pubblici"):
+  // davanti a "di" va contratto correttamente ("della sicurezza pubblica", non "di la sicurezza pubblica").
+  function diLabel(label) {
+    if (label.indexOf("l'") === 0) return "dell'" + label.slice(2);
+    if (label.indexOf("lo ") === 0) return "dello " + label.slice(3);
+    if (label.indexOf("la ") === 0) return "della " + label.slice(3);
+    if (label.indexOf("il ") === 0) return "del " + label.slice(3);
+    if (label.indexOf("gli ") === 0) return "degli " + label.slice(4);
+    if (label.indexOf("le ") === 0) return "delle " + label.slice(3);
+    if (label.indexOf("i ") === 0) return "dei " + label.slice(2);
+    return "di " + label;
+  }
+  function checkConsiglioComunaleTrigger() {
+    var p = state.player;
+    if (!p || !(p.amministratoriLocali > 0)) return false;
+    return state.turn >= (p.consiglioComunaleCooldownTurn || 0);
+  }
+  function buildConsiglioComunaleScene() {
+    var p = state.player;
+    p.consiglioComunaleCooldownTurn = state.turn + CONSIGLIO_COMUNALE_COOLDOWN_TURNS;
+    var city = (p.sezioniLocations && p.sezioniLocations.length)
+      ? p.sezioniLocations[Math.floor(Math.random() * p.sezioniLocations.length)].name
+      : ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var metric = LOCAL_COUNCIL_METRICS[Math.floor(Math.random() * LOCAL_COUNCIL_METRICS.length)];
+    var topicLabel = METRIC_LABELS[metric] || metric;
+    var askerName = generateStaffName();
+    var otherParties = activeParties();
+    var asker = otherParties.length ? otherParties[Math.floor(Math.random() * otherParties.length)] : null;
+    state.consiglioComunaleScene = {
+      city: city, metric: metric, topicLabel: topicLabel, askerName: askerName,
+      askerParty: asker ? { name: asker.name, color: asker.color } : { name: "Lista civica", color: "#888888" },
+      questionText: askerName + " (" + (asker ? asker.name : "lista civica") + ") solleva in Consiglio Comunale il problema " + diLabel(topicLabel) + " a " + city + ".",
+      choices: buildInterviewChoices(topicLabel, false, "dalla seduta del Consiglio Comunale", askerName)
+    };
+    state.phase = "consiglio_comunale_scene";
   }
   // Emendamento a un decreto: riservato a chi è al governo (giocatore compreso), generato sull'indicatore
   // della Scheda Paese scelto pescando con più probabilità tra i più deboli — un decreto nasce di solito
@@ -6794,9 +6857,13 @@
   // scelta dal peso istituzionale del partito) e scelte reali su come usare politicamente il risultato.
   function triggerLocalElectionCycle() {
     if (state.turn < state.nextLocalElectionTurn) return null;
-    // Cadenza reale: le elezioni comunali, provinciali e regionali tornano circa ogni 3 anni (156
-    // settimane), non ogni pochi mesi.
-    state.nextLocalElectionTurn = state.turn + 150 + Math.floor(Math.random() * 14);
+    // Cadenza rivista: nella realtà comuni, province e regioni diverse votano in momenti diversi (i
+    // mandati sono quinquennali, ma sfalsati sul territorio) — un'unica tornata nazionale ogni 3 anni
+    // (156 settimane) lasciava un giocatore ancora fuori dal Parlamento con poche occasioni reali di
+    // costruirsi un percorso locale prima delle politiche. Accorciata (60-80 settimane): più occasioni
+    // di mettere radici sul territorio, specie nella fase di "inizio carriera" prima di arrivare in
+    // Parlamento, quando le elezioni locali sono spesso l'unica vera partita in corso.
+    state.nextLocalElectionTurn = state.turn + 60 + Math.floor(Math.random() * 20);
     var p = state.player;
     var open = openNuclei();
     if (!p || !open.length) return null; // senza sezioni sul territorio non c'è nulla da votare localmente
@@ -8894,7 +8961,7 @@
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
-    qtScene: null, leaderInterview: null, partyEventScene: null
+    qtScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -8923,7 +8990,7 @@
     whistleblowerCooldownTurn: 0,
     foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0,
     leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
-    leaderInterviewCooldownTurn: 0
+    leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -13719,6 +13786,21 @@
     html += "</div>";
     return html;
   }
+  // Scena del Consiglio Comunale: un solo scambio (più snella delle scene nazionali, coerente con la
+  // scala locale dell'evento), ma con la stessa logica di interazione vera.
+  function renderConsiglioComunaleScene() {
+    var cc = state.consiglioComunaleScene;
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">Consiglio Comunale — ' + cc.city + '</p>' +
+      "<h2>Una seduta del Consiglio Comunale di " + cc.city + "</h2>" +
+      '<p class="ci-hint">I tuoi amministratori locali siedono in Consiglio: un tema del territorio finisce sotto i riflettori.</p>';
+    html += '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(cc.askerName, null, 26, cc.askerParty.color) +
+      '<span><span class="qt-speaker-name">' + cc.askerName + '</span> <span class="qt-speaker-party">— ' + cc.askerParty.name + '</span></span></div>' +
+      '<p class="qt-question">' + cc.questionText + '</p>';
+    html += '<div class="choices">' + cc.choices.map(function (c, i) {
+      return '<button type="button" class="choice-btn" data-council-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
+    }).join("") + "</div></div></div>";
+    return html;
+  }
   // Quando è il partito DEL GIOCATORE a vincere con un margine da regime, la svolta non scatta più in
   // automatico (a differenza di una vittoria CPU, dove non c'è nessuno "al tavolo" a decidere): è lui a
   // scegliere se instaurarlo davvero o restare nella cornice democratica nonostante la maggioranza
@@ -14056,6 +14138,25 @@
           pe.questionResult = choice.result;
           state.resultData = res;
           state.partyEventScene = null;
+          state.phase = "result";
+          save();
+          render();
+        });
+      });
+      return;
+    }
+
+    if (state.phase === "consiglio_comunale_scene") {
+      app.innerHTML = renderConsiglioComunaleScene();
+      app.querySelectorAll("[data-council-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = parseInt(btn.getAttribute("data-council-choice"), 10);
+          var cc = state.consiglioComunaleScene;
+          var choice = cc.choices[idx];
+          var dossier = { title: "Consiglio Comunale di " + cc.city, cat: "Amministrazione Locale" };
+          var res = applyChoice(dossier, choice);
+          state.resultData = res;
+          state.consiglioComunaleScene = null;
           state.phase = "result";
           save();
           render();
@@ -15758,6 +15859,11 @@
 
     if (checkLeaderInterviewTrigger()) {
       buildLeaderInterviewScene();
+      return;
+    }
+
+    if (checkConsiglioComunaleTrigger()) {
+      buildConsiglioComunaleScene();
       return;
     }
 
