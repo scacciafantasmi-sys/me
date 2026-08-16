@@ -5936,26 +5936,92 @@
     return scaleEffects(eff, 0.22);
   }
   // Altri protagonisti della scena pubblica, oltre ai leader di partito (che restano i più frequenti):
-  // figure generiche e volutamente fittizie (mai un vero titolare di carica), per non attribuire mai
-  // dichiarazioni inventate a persone reali.
+  // parlamentari di maggioranza/opposizione (nome generato, ma partito e ruolo reali), il Presidente della
+  // Repubblica realmente in carica in questa partita (state.president, quando eletto — sempre in tono
+  // istituzionale, mai polemico, coerente col ruolo), e figure generiche volutamente fittizie (sindacati,
+  // Confindustria, Quirinale, stampa, magistratura, avvocatura) per non attribuire mai dichiarazioni
+  // inventate a persone realmente esistenti.
   var PUBLIC_FIGURE_ROLES = [
     "Segretario Generale CGIL", "Presidente di Confindustria", "Portavoce del Quirinale",
     "Direttore di un grande quotidiano nazionale", "Presidente ANCI", "Vertice di Banca d'Italia",
     "Segretario di categoria CISL", "Amministratore delegato di una grande azienda", "Portavoce di un comitato studentesco",
-    "Segretario nazionale USB"
+    "Segretario nazionale USB", "Magistrato", "Avvocato costituzionalista", "Alto funzionario dello Stato"
   ];
-  var STATEMENT_OPENERS = [
-    function (name, topic) { return name + " interviene pubblicamente " + suLabel(topic) + "."; },
-    function (name, topic) { return "In un'intervista, " + name + " prende posizione " + suLabel(topic) + "."; },
-    function (name, topic) { return name + " affida a un post sui social un commento tagliente " + suLabel(topic) + "."; },
-    function (name, topic) { return "A margine di un evento pubblico, " + name + " si esprime " + suLabel(topic) + "."; },
-    function (name, topic) { return name + " rilascia una dichiarazione ai cronisti " + suLabel(topic) + "."; }
+  // Frasi tra virgolette davvero diverse in base al tono rilevato/scelto e al tema, non un'unica formula
+  // fissa ripetuta identica ogni volta: danno la sensazione di una dichiarazione vera, sempre diversa dal
+  // contesto, non di un segnaposto. Non è testo generato da un modello linguistico (non c'è una vera IA
+  // nel gioco), ma un banco ampio di frasi scritte a mano, ciascuna parametrizzata sul tema — incrociato
+  // con 21 temi della Scheda Paese più le notizie recenti, il ventaglio di combinazioni resta comunque
+  // ampio, e ogni figura pubblica sceglie il proprio registro in modo indipendente a ogni dichiarazione.
+  var STATEMENT_QUOTES = {
+    aggressivo: [
+      function (suP) { return suP + ", chi governa ha fallito su tutta la linea: non staremo a guardare in silenzio."; },
+      function (suP) { return suP + " basta con gli annunci vuoti: servono fatti veri, subito."; },
+      function (suP) { return suP + " la misura è colma: non arretreremo di un millimetro."; },
+      function (suP) { return suP + " chi ci ha portato fin qui ha perso ogni credibilità: è ora di cambiare rotta."; },
+      function (suP) { return suP + " pretendiamo risposte vere, non promesse."; },
+      function (suP) { return suP + " non è più accettabile far finta di niente."; }
+    ],
+    istituzionale: [
+      function (suP) { return suP + " serve un confronto serio e responsabile, lontano dalle polemiche di piazza."; },
+      function (suP) { return suP + " continueremo a lavorare con equilibrio, nell'interesse generale del paese."; },
+      function (suP) { return suP + " il dialogo tra le parti resta l'unica strada davvero percorribile."; },
+      function (suP) { return suP + " serve gradualità e serietà, non annunci a effetto."; },
+      function (suP) { return suP + " restiamo aperti a un confronto costruttivo con tutte le forze disponibili."; },
+      function (suP) { return suP + " serve unità di intenti, al di là delle appartenenze politiche."; }
+    ],
+    positivo: [
+      function (suP) { return suP + " i risultati raggiunti ci rendono orgogliosi, ed è solo l'inizio."; },
+      function (suP) { return suP + " la direzione è quella giusta: i dati lo confermano, settimana dopo settimana."; },
+      function (suP) { return suP + " siamo soddisfatti dei passi avanti fatti, frutto di un lavoro serio."; },
+      function (suP) { return suP + " un risultato importante, che dimostra che il metodo scelto funziona."; },
+      function (suP) { return suP + " le cose stanno migliorando, e continueremo su questa strada con convinzione."; }
+    ],
+    critico: [
+      function (suP) { return suP + " restiamo perplessi sull'approccio scelto: servirebbe ben altro impegno."; },
+      function (suP) { return suP + " si poteva e si doveva fare di più: continueremo a vigilare."; },
+      function (suP) { return suP + " non convince la linea seguita finora: aspettiamo segnali concreti."; },
+      function (suP) { return suP + " qualche dubbio resta, ma siamo pronti a valutare i prossimi passi."; },
+      function (suP) { return suP + " il giudizio resta sospeso: le buone intenzioni non bastano più."; }
+    ]
+  };
+  var STATEMENT_INTRO_VERBS = [
+    function (name, quote) { return name + " dichiara: «" + quote + "»"; },
+    function (name, quote) { return "In un'intervista, " + name + " afferma: «" + quote + "»"; },
+    function (name, quote) { return name + " scrive sui social: «" + quote + "»"; },
+    function (name, quote) { return "A margine di un evento pubblico, " + name + " dice: «" + quote + "»"; },
+    function (name, quote) { return name + " dichiara ai cronisti: «" + quote + "»"; },
+    function (name, quote) { return "Intervistato in TV, " + name + " commenta: «" + quote + "»"; }
   ];
+  function pickAmbientTone() {
+    var pool = ["aggressivo", "istituzionale", "positivo", "critico"];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  // Costruisce la frase tra virgolette effettivamente pronunciata: parte dal topicLabel (già con
+  // l'articolo giusto, es. "la sanità"), la contrae correttamente dopo "su" con suLabel (già usata altrove
+  // nel gioco per lo stesso scopo) e la mette in maiuscolo a inizio frase.
+  function buildAmbientQuote(topicLabelLower, tone) {
+    var suPhrase = suLabel(topicLabelLower);
+    var capped = suPhrase.charAt(0).toUpperCase() + suPhrase.slice(1);
+    var pool = STATEMENT_QUOTES[tone] || STATEMENT_QUOTES.istituzionale;
+    var tpl = pool[Math.floor(Math.random() * pool.length)];
+    return tpl(capped);
+  }
   function pickAmbientAuthor() {
     var parties = activeParties();
-    if (parties.length && Math.random() < 0.65) {
+    var roll = Math.random();
+    if (state.president && roll < 0.05) {
+      return { name: state.president.name, role: "Presidente della Repubblica", color: "#6b7280", forceTone: "istituzionale" };
+    }
+    if (parties.length && roll < 0.60) {
       var party = parties[Math.floor(Math.random() * parties.length)];
       return { name: party.leader, role: "Leader di " + party.name, color: party.color };
+    }
+    if (parties.length && roll < 0.75) {
+      var mpParty = parties[Math.floor(Math.random() * parties.length)];
+      var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
+      var mpRole = (govMemberIds.indexOf(mpParty.id) !== -1 ? "Parlamentare di maggioranza (" : "Parlamentare di opposizione (") + mpParty.short + ")";
+      return { name: generateStaffName(), role: mpRole, color: mpParty.color };
     }
     var pool = PUBLIC_FIGURE_ROLES.slice();
     if (parties.length) {
@@ -5971,29 +6037,36 @@
     if (!options.length) return;
     var topic = options[Math.floor(Math.random() * options.length)];
     var author = pickAmbientAuthor();
-    var opener = STATEMENT_OPENERS[Math.floor(Math.random() * STATEMENT_OPENERS.length)];
+    var tone = author.forceTone || pickAmbientTone();
+    var topicLabelLower = topic.kind === "paese" ? METRIC_LABELS[topic.metric] : topic.label;
+    var quote = buildAmbientQuote(topicLabelLower, tone);
+    var sentenceTpl = STATEMENT_INTRO_VERBS[Math.floor(Math.random() * STATEMENT_INTRO_VERBS.length)];
     var kws = topic.metric ? STATEMENT_THEME_KEYWORDS[topic.metric] : null;
     var keyword = kws ? kws[Math.floor(Math.random() * kws.length)] : null;
     pushStatement({
       week: state.turn, authorName: author.name, authorRole: author.role, authorColor: author.color, authorPhoto: null,
-      isPlayer: false, topicLabel: topic.label, themeMetric: topic.metric, matchedKeyword: keyword,
-      text: opener(author.name, topic.label)
+      isPlayer: false, topicLabel: topic.label, themeMetric: topic.metric, matchedKeyword: keyword, detectedTone: tone,
+      text: sentenceTpl(author.name, quote)
     });
     // Ogni tanto, qualcuno replica a una dichiarazione già pubblicata (compresa una del giocatore): la
     // stessa dinamica della piazza pubblica reale, dove le prese di posizione si rincorrono a vicenda — e
     // se la dichiarazione bersaglio ha una parola chiave riconosciuta (anche quando è stato il giocatore
-    // stesso a scriverla), la replica la cita davvero, invece di restare sul generico.
+    // stesso a scriverla), la replica la cita davvero, invece di restare sul generico. Anche la replica è
+    // una frase tra virgolette diversa ogni volta, mai un unico canovaccio fisso.
     if (Math.random() < 0.35 && state.statements.length > 1) {
       var pickFrom = Math.min(5, state.statements.length - 1);
       var target = state.statements[1 + Math.floor(Math.random() * pickFrom)];
       var replyAuthor = pickAmbientAuthor();
       if (replyAuthor.name !== target.authorName) {
-        var replyText = target.matchedKeyword
-          ? replyAuthor.name + " replica riprendendo proprio le parole di " + target.authorName + " su “" + target.matchedKeyword + "”: non è così che si affronta il problema."
-          : replyAuthor.name + " replica a " + target.authorName + ": non è così che si affronta il tema di " + target.topicLabel.toLowerCase() + ".";
+        var replyTone = replyAuthor.forceTone || pickAmbientTone();
+        var replyTopicLower = target.topicLabel === "Attualità politica generale" ? "questo tema" : target.topicLabel.toLowerCase();
+        var replyQuote = buildAmbientQuote(replyTopicLower, replyTone);
+        var replyIntro = target.matchedKeyword
+          ? replyAuthor.name + " replica citando le parole di " + target.authorName + " su “" + target.matchedKeyword + "”: «" + replyQuote + "»"
+          : replyAuthor.name + " replica a " + target.authorName + ": «" + replyQuote + "»";
         target.replies.push({
           authorName: replyAuthor.name, authorRole: replyAuthor.role, authorColor: replyAuthor.color, authorPhoto: null,
-          text: replyText, week: state.turn
+          text: replyIntro, week: state.turn
         });
       }
     }
