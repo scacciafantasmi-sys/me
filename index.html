@@ -4192,23 +4192,6 @@
     }
     return (p && p.family) || "sovranista";
   }
-  // Question time: riservato a chi è all'opposizione (giocatore compreso), su un indicatore della Scheda
-  // Paese scelto dal giocatore tra quelli sotto 7/10 — testo e voto generati sul valore reale del momento,
-  // non un canovaccio fisso. Riusa lo stesso motore di scelte (buildParliamentChoices) del resto del
-  // sistema parlamentare, con isGoverno:false: le conseguenze restano coerenti con l'essere all'opposizione.
-  function questionTimeDossier(metric) {
-    var value = state.countryProfile[metric];
-    var noun = METRIC_LABELS[metric] || metric;
-    var govLabel = govEntityLabel();
-    var rivalId = leadingGovPartyId();
-    var title = "Question Time — " + noun.charAt(0).toUpperCase() + noun.slice(1);
-    var brief = "Con " + noun + " fermo a " + fmt1(value) + "/10, presenti un question time in Aula per chiedere conto al Governo guidato da " + govLabel + " di questo ritardo.";
-    var choices = buildParliamentChoices({ noun: noun, nationalMetric: metric, isGoverno: false, rivalId: rivalId, themeId: METRIC_TO_THEME_ID[metric] }, 4);
-    return {
-      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Question Time — pesa di più perché sei in Parlamento",
-      cat: "Opposizione", title: title, brief: brief, choices: choices
-    };
-  }
   // ---------- Question Time in Aula: scena periodica, non un dossier come un altro ----------
   // Prima il question time era interamente su iniziativa del giocatore (un pulsante, disponibile solo
   // all'opposizione): comodo ma passivo, un semplice dossier tra i tanti. Qui diventa un vero rito
@@ -6014,15 +5997,38 @@
   // rilevato nel testo scritto — un testo più lungo e argomentato (60+ caratteri) pesa leggermente di più
   // di una battuta buttata lì. Effetti ridimensionati come le altre azioni ad alta cadenza (scaleEffects):
   // 5 dichiarazioni possibili nella stessa settimana non possono valere quanto un'intera intervista al
-  // leader, disponibile una volta ogni 12 settimane.
-  function buildFreeTextStatementEffects(text, tone) {
+  // leader, disponibile una volta ogni 12 settimane. reachMult (vedi dichiarazioniReachTier) pesa poi
+  // quanto conta DAVVERO chi parla: un attivista fuori dal Parlamento non muove le stesse cifre di chi è
+  // al Governo, a parità di parole.
+  function buildFreeTextStatementEffects(text, tone, reachMult) {
     var boost = (text || "").trim().length >= 60 ? 1.15 : 1;
     var eff;
     if (tone === "aggressivo") eff = { visibilita: rand(4, 8) * boost, reputazione: -rand(0, 2), iscritti: rand(5, 15) * boost };
     else if (tone === "istituzionale") eff = { reputazione: rand(1, 3) * boost, visibilita: rand(1, 2) };
     else if (tone === "positivo") eff = { reputazione: rand(1, 2.5) * boost, visibilita: rand(2, 5) };
     else eff = { reputazione: -rand(0, 2), visibilita: rand(0.5, 1.5) };
-    return scaleEffects(eff, 0.22);
+    return scaleEffects(eff, 0.22 * (reachMult === undefined ? 1 : reachMult));
+  }
+  // ---------- Gittata di una dichiarazione: dipende da dove si è nelle istituzioni ----------
+  // Le stesse parole, dette da un attivista fuori dal Parlamento o dal Presidente del Consiglio, non
+  // arrivano affatto alle stesse persone né pesano allo stesso modo: qui si definiscono 4 livelli
+  // (extraparlamentare, deputato semplice, leader di partito in Parlamento all'opposizione, Governo), ognuno
+  // con un moltiplicatore d'effetto crescente e pesi diversi su CHI, tra le figure pubbliche del gioco,
+  // ha probabilità di accorgersi e rispondere (vedi pickAmbientAuthor più sotto, e l'uso di
+  // presidentW/leaderW/mpW dentro triggerAmbientStatements per le risposte dirette a una dichiarazione del
+  // giocatore). replyChanceMult riduce anche la probabilità stessa che arrivi una risposta, non solo da chi.
+  function dichiarazioniReachTier(p) {
+    if (!p) return { id: "sconosciuto", label: "Il tuo partito", magnitude: 1, replyChanceMult: 1, presidentW: 0.05, leaderW: 0.55, mpW: 0.15 };
+    if (p.parliamentRole === "governo") {
+      return { id: "governo", label: "Il Governo", magnitude: 1.6, replyChanceMult: 1.3, presidentW: 0.15, leaderW: 0.60, mpW: 0.10 };
+    }
+    if (p.inParliament && p.playerIsLeader) {
+      return { id: "opposizione_leader", label: "Opposizione parlamentare", magnitude: 1, replyChanceMult: 1, presidentW: 0.05, leaderW: 0.55, mpW: 0.15 };
+    }
+    if (p.inParliament) {
+      return { id: "deputato", label: "Parlamentare (non leader)", magnitude: 0.7, replyChanceMult: 0.7, presidentW: 0.01, leaderW: 0.25, mpW: 0.20 };
+    }
+    return { id: "extraparlamentare", label: "Il tuo partito", magnitude: 0.45, replyChanceMult: 0.4, presidentW: 0, leaderW: 0.10, mpW: 0.05 };
   }
   // Altri protagonisti della scena pubblica, oltre ai leader di partito (che restano i più frequenti):
   // parlamentari di maggioranza/opposizione (nome generato, ma partito e ruolo reali), il Presidente della
@@ -6212,19 +6218,24 @@
   // condizionato dal governare o dallo stare all'opposizione — non più casuale), il Presidente della
   // Repubblica (sempre istituzionale), e le figure pubbliche generiche sopra (ciascuna col proprio
   // carattere di fondo).
-  function pickAmbientAuthor() {
+  // weights (opzionale) sovrascrive le soglie di default 0.05/0.60/0.75: usato quando si sceglie chi
+  // risponde a una dichiarazione del GIOCATORE, per pesarle secondo dichiarazioniReachTier — un attivista
+  // fuori dal Parlamento difficilmente si becca una replica del Presidente o del leader di un grande
+  // partito, un Presidente del Consiglio sì.
+  function pickAmbientAuthor(weights) {
+    var w = weights || { presidentW: 0.05, leaderW: 0.55, mpW: 0.15 };
     var parties = activeParties();
     var roll = Math.random();
     var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
-    if (state.president && roll < 0.05) {
+    if (state.president && roll < w.presidentW) {
       return { name: state.president.name, role: "Presidente della Repubblica", color: "#6b7280", forceTone: "istituzionale", familyId: null };
     }
-    if (parties.length && roll < 0.60) {
+    if (parties.length && roll < w.presidentW + w.leaderW) {
       var party = parties[Math.floor(Math.random() * parties.length)];
       var isGovParty = govMemberIds.indexOf(party.id) !== -1;
       return { name: party.leader, role: "Leader di " + party.name, color: party.color, familyId: party.familyId, toneWeights: isGovParty ? GOV_TONE_WEIGHTS : OPPOSITION_TONE_WEIGHTS };
     }
-    if (parties.length && roll < 0.75) {
+    if (parties.length && roll < w.presidentW + w.leaderW + w.mpW) {
       var mpParty = parties[Math.floor(Math.random() * parties.length)];
       var mpIsGov = govMemberIds.indexOf(mpParty.id) !== -1;
       var mpRole = (mpIsGov ? "Parlamentare di maggioranza (" : "Parlamentare di opposizione (") + mpParty.short + ")";
@@ -6271,7 +6282,13 @@
     if (Math.random() < 0.35 && state.statements.length > 1) {
       var pickFrom = Math.min(5, state.statements.length - 1);
       var target = state.statements[1 + Math.floor(Math.random() * pickFrom)];
-      var replyAuthor = pickAmbientAuthor();
+      // Una dichiarazione del giocatore non pesca la risposta dal mazzo generico: CHI si accorge di lei
+      // (e SE arriva una risposta) dipende da quanto conta istituzionalmente il giocatore in quel momento
+      // (vedi dichiarazioniReachTier) — un attivista fuori dal Parlamento raramente si becca la replica
+      // di un Presidente della Repubblica o di un grande leader di partito, un Capo del Governo sì.
+      var replyTier = target.isPlayer ? dichiarazioniReachTier(state.player || state.career) : null;
+      if (replyTier && Math.random() >= replyTier.replyChanceMult) return;
+      var replyAuthor = replyTier ? pickAmbientAuthor(replyTier) : pickAmbientAuthor();
       if (replyAuthor.name !== target.authorName) {
         var targetFamilyId = target.isPlayer ? state.player.family : target.authorFamilyId;
         var agree;
@@ -6383,14 +6400,15 @@
           if ((p.dichiarazioniCount || 0) >= DICHIARAZIONI_WEEKLY_CAP) return;
           if (!text) { showSaveStatus("Scrivi qualcosa prima di pubblicare.", true); return; }
           var classification = classifyStatement(text);
-          var eff = buildFreeTextStatementEffects(text, classification.tone);
+          var tier = dichiarazioniReachTier(p);
+          var eff = buildFreeTextStatementEffects(text, classification.tone, tier.magnitude);
           var dossier = { title: "Dichiarazione — " + classification.topicLabel, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
           var choice = { label: "Dichiarazione pubblica", effects: eff, result: text };
           applyChoice(dossier, choice);
           p.dichiarazioniCount = (p.dichiarazioniCount || 0) + 1;
           pushStatement({
             week: state.turn, authorName: p.name,
-            authorRole: p.parliamentRole === "governo" ? "Il Governo" : (p.inParliament ? "Opposizione parlamentare" : "Il tuo partito"),
+            authorRole: tier.label,
             authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, isPlayer: true,
             topicLabel: classification.topicLabel, themeMetric: classification.themeMetric, matchedKeyword: classification.matchedKeyword,
             text: text
@@ -6401,7 +6419,7 @@
           if ((c.dichiarazioniCount || 0) >= DICHIARAZIONI_WEEKLY_CAP) return;
           if (!text) { showSaveStatus("Scrivi qualcosa prima di pubblicare.", true); return; }
           var classificationC = classifyStatement(text);
-          var effC = buildFreeTextStatementEffects(text, classificationC.tone);
+          var effC = buildFreeTextStatementEffects(text, classificationC.tone, dichiarazioniReachTier(c).magnitude);
           applyCareerStatementEffects(effC, c);
           c.dichiarazioniCount = (c.dichiarazioniCount || 0) + 1;
           pushStatement({
@@ -6444,18 +6462,19 @@
         var classification = classifyStatement(text);
         if (state.player) {
           var p2 = state.player;
-          var eff2 = buildFreeTextStatementEffects(text, classification.tone);
+          var tier2 = dichiarazioniReachTier(p2);
+          var eff2 = buildFreeTextStatementEffects(text, classification.tone, tier2.magnitude);
           Object.keys(eff2).forEach(function (k) { if (k !== "national" && k !== "relationDelta") eff2[k] = eff2[k] * 0.6; });
           var dossier2 = { title: "Risposta a " + targetSt.authorName, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
           var choice2 = { label: "Risposta pubblica", effects: eff2, result: text };
           applyChoice(dossier2, choice2);
           targetSt.replies.push({
-            authorName: p2.name, authorRole: p2.parliamentRole === "governo" ? "Il Governo" : "Il tuo partito",
+            authorName: p2.name, authorRole: tier2.label,
             authorColor: p2.color, authorPhoto: p2.leaderPhotoDataUrl, text: text, week: state.turn
           });
         } else if (state.career) {
           var c2 = state.career;
-          var effC2 = buildFreeTextStatementEffects(text, classification.tone);
+          var effC2 = buildFreeTextStatementEffects(text, classification.tone, dichiarazioniReachTier(c2).magnitude);
           Object.keys(effC2).forEach(function (k) { effC2[k] = effC2[k] * 0.6; });
           applyCareerStatementEffects(effC2, c2);
           targetSt.replies.push({
@@ -9273,13 +9292,16 @@
     html += '</div></details></section>';
     return html;
   }
+  // Restituisce solo il metric ormai maturo (o null): CHI apre la scena e COME si scrive la risposta li
+  // decide chi chiama questa funzione (vedi advanceTurnLogic, che apre la scena question_time_manual_scene
+  // — stesso compose libero della scena periodica in Aula, non più un dossier a scelta multipla).
   function resolveQuestionTimeIfDue() {
     var p = state.player;
     if (!p.pendingQuestionTime) return null;
     if (state.turn < p.pendingQuestionTime.resolveTurn) return null;
     var metric = p.pendingQuestionTime.metric;
     p.pendingQuestionTime = null;
-    return questionTimeDossier(metric);
+    return metric;
   }
 
   // ---------- Question Time (governo) ----------
@@ -9929,7 +9951,7 @@
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
-    qtScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
+    qtScene: null, qtManualScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
     salottoScene: null, ufficioScene: null, statements: [],
     mode: "party", career: null
   };
@@ -15035,6 +15057,18 @@
       '<textarea id="qt-answer-input" class="autogrow-textarea" rows="8" placeholder="Scrivi qui, con parole tue, il tuo intervento in Aula…"></textarea></div>' +
       '<div class="choices"><button type="button" class="choice-btn" id="qt-answer-submit-btn"><span class="clabel">Pronuncia il tuo intervento in Aula</span></button></div>';
   }
+  // Question time depositato di propria iniziativa dal giocatore (renderQuestionTimePanel, riservato a chi
+  // è in Parlamento ma non al Governo): a differenza della scena periodica, qui il tema è già stato scelto
+  // in anticipo la settimana prima (state.qtManualScene.metric) — resta solo da scrivere l'intervento,
+  // stesso motore di scrittura libera (buildQuestionTimeFreeTextOutcome) e stessa casella (renderQtAnswerCompose).
+  function renderQtManualScene() {
+    var qt = state.qtManualScene;
+    return '<div class="qt-scene"><p class="qt-eyebrow">Question Time — Aula della Camera</p>' +
+      "<h2>Il tuo question time su " + qt.noun + "</h2>" +
+      '<p class="ci-hint">Il question time che hai depositato la settimana scorsa arriva oggi in Aula: tocca a te esporlo.</p>' +
+      '<div class="qt-exchange"><p class="qt-question"><strong>Tocca a te</strong>: incalza il Governo su ' + qt.noun + " (" + fmt1(qt.value) + "/10).</p></div>" +
+      renderQtAnswerCompose() + "</div>";
+  }
   // Scena del Question Time: a differenza di un dossier normale, si rivela un botta e risposta alla
   // volta (state.qtScene.step) — ogni clic su "Continua" avanza di un solo scambio, mai tutti insieme,
   // per dare il senso di essere davvero seduti in Aula ad ascoltare, non di leggere un elenco. Solo
@@ -15613,6 +15647,44 @@
             var choice = { label: "Il tuo intervento", effects: outcome.effects, result: outcome.result };
             state.resultData = applyChoice(dossier, choice);
             state.qtScene = null;
+            state.phase = "result";
+            save();
+            render();
+          });
+        }
+        return;
+      }
+    }
+
+    // Question time depositato di propria iniziativa dal giocatore (non la scena periodica sopra): stesso
+    // schema di auto-play per lo sfiduciato, stessa casella di scrittura libera per chi è ancora leader.
+    if (state.phase === "question_time_manual_scene") {
+      var qtmP = state.player;
+      var qtm = state.qtManualScene;
+      if (qtmP && !qtmP.playerIsLeader) {
+        var qtmAutoChoices = buildParliamentChoices({ noun: qtm.noun, nationalMetric: qtm.metric, isGoverno: false, rivalId: leadingGovPartyId(), themeId: METRIC_TO_THEME_ID[qtm.metric] }, 4);
+        var qtmAutoChoice = qtmAutoChoices[Math.floor(Math.random() * qtmAutoChoices.length)];
+        var qtmAutoDossier = { title: "Question Time — " + qtm.noun, cat: "Opposizione" };
+        state.resultData = applyChoice(qtmAutoDossier, qtmAutoChoice);
+        state.resultData.autoPlayed = true;
+        state.qtManualScene = null;
+        state.phase = "result";
+        save();
+      } else {
+        app.innerHTML = renderQtManualScene();
+        bindAutoGrowTextarea("qt-answer-input");
+        var qtmSubmitBtn = document.getElementById("qt-answer-submit-btn");
+        if (qtmSubmitBtn) {
+          qtmSubmitBtn.addEventListener("click", function () {
+            var qtmInput = document.getElementById("qt-answer-input");
+            var text = (qtmInput ? qtmInput.value : "").trim();
+            if (!text) { showSaveStatus("Scrivi qualcosa prima di intervenire in Aula.", true); return; }
+            var ctx = { noun: qtm.noun, nationalMetric: qtm.metric, isGoverno: false, rivalId: leadingGovPartyId() };
+            var outcome = buildQuestionTimeFreeTextOutcome(text, ctx);
+            var dossier = { title: "Question Time — " + qtm.noun, cat: "Opposizione" };
+            var choice = { label: "Il tuo intervento", effects: outcome.effects, result: outcome.result };
+            state.resultData = applyChoice(dossier, choice);
+            state.qtManualScene = null;
             state.phase = "result";
             save();
             render();
@@ -17750,11 +17822,10 @@
       return;
     }
 
-    var questionTimeDue = resolveQuestionTimeIfDue();
-    if (questionTimeDue) {
-      state.aiDynamicDossier = questionTimeDue;
-      state.currentDossierId = "ai_dynamic";
-      state.phase = "building";
+    var questionTimeDueMetric = resolveQuestionTimeIfDue();
+    if (questionTimeDueMetric) {
+      state.qtManualScene = { metric: questionTimeDueMetric, noun: METRIC_LABELS[questionTimeDueMetric] || questionTimeDueMetric, value: state.countryProfile[questionTimeDueMetric] };
+      state.phase = "question_time_manual_scene";
       return;
     }
 
