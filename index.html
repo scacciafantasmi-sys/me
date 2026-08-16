@@ -9731,7 +9731,8 @@
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
     qtScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
-    salottoScene: null, ufficioScene: null, statements: []
+    salottoScene: null, ufficioScene: null, statements: [],
+    mode: "party", career: null
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -9815,7 +9816,7 @@
       resultData: null,
       log: [],
       electionResults: [],
-      setupDraft: { name: "", short: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "", mode: "new", takeoverId: null, logoDataUrl: null }
+      setupDraft: { name: "", short: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "", mode: "new", takeoverId: null, logoDataUrl: null, city: null, leaderTraits: [] }
     }, JSON.parse(JSON.stringify(STATE_FIELD_DEFAULTS)), { countryProfile: freshCountryProfile() });
   }
 
@@ -11790,6 +11791,10 @@
       mastheadTitle.textContent = state.player.name;
       mastheadTagline.textContent = familyById(state.player.family).label + " · " + leadershipById(state.player.leadership).label;
       mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
+    } else if (state.career) {
+      mastheadTitle.textContent = state.career.name;
+      mastheadTagline.textContent = "Carriera Politica — " + (familyById(state.career.family) || {}).label;
+      mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
     } else {
       mastheadTitle.textContent = "Politis-IT";
       mastheadTagline.textContent = "Fonda e costruisci il tuo partito, dal primo iscritto alle urne";
@@ -11798,9 +11803,53 @@
   }
 
   // ---------- Setup screen ----------
+  // ---------- Setup: Carriera Politica ----------
+  // Modalità alternativa al fondare/guidare un partito: il giocatore è una singola persona che comincia
+  // a 14 anni come attivista, senza alcun partito proprio — costruisce reputazione e rete di contatti con
+  // azioni di attivismo giovanile disponibili in base alle proprie statistiche accumulate (non una scala
+  // fissa di tappe obbligate: più azioni possono sbloccarsi insieme, in ordine libero), e può tesserarsi a
+  // uno dei partiti reali già esistenti nel gioco. Le tappe successive (consigliere, candidatura,
+  // Parlamento...) sono un'espansione futura, non ancora costruita qui.
+  function renderCareerSetup() {
+    var d = state.setupDraft;
+    var html = '<div class="setup-import-prompt"><p>Hai già una partita salvata?</p>' +
+      '<button type="button" id="setup-import-btn" class="save-bar-btn primary">Importa partita salvata</button></div>' +
+      '<div class="setup-card"><p class="eyebrow">Carriera Politica</p>' +
+      '<h2>Comincia la tua carriera politica</h2>' +
+      '<p class="lead">Hai 14 anni e nessun partito tutto tuo: solo la voglia di farti sentire. Costruisci la tua reputazione e la tua rete di contatti con l\'attivismo, settimana dopo settimana, e prima o poi potrai tesserarti a un partito vero.</p>' +
+      '<div class="field"><label class="field-label">Come vuoi iniziare?</label><div class="option-grid">' +
+      '<button type="button" class="option-card" data-mode="new"><span class="olabel">Fonda un nuovo partito</span><span class="odesc">Parti da zero, con la tua identità</span></button>' +
+      '<button type="button" class="option-card" data-mode="takeover"><span class="olabel">Prendi il comando di un partito esistente</span><span class="odesc">Eredita consensi, radicamento e ideologia di un partito reale</span></button>' +
+      '<button type="button" class="option-card selected" data-mode="career"><span class="olabel">Inizia la tua carriera politica</span><span class="odesc">Parti da attivista a 14 anni, senza un partito tuo</span></button>' +
+      "</div></div>";
+    html += '<div class="field"><label class="field-label" for="career-name-input">Il tuo nome</label>' +
+      '<input type="text" id="career-name-input" maxlength="40" placeholder="Es. Alex Ferrara" value="' + (d.name || "").replace(/"/g, "&quot;") + '"></div>' +
+      '<div class="field"><label class="field-label">La tua città</label><div class="option-grid">' +
+      ITALY_LOCATIONS.map(function (loc) {
+        return '<button type="button" class="option-card' + (d.city === loc.name ? " selected" : "") + '" data-city="' + loc.name + '">' +
+          '<span class="olabel">' + loc.name + '</span><span class="odesc">' + loc.region + '</span></button>';
+      }).join("") + "</div></div>";
+    html += '<div class="field"><label class="field-label">Area politica</label><div class="option-grid">' +
+      FAMILIES.map(function (f) {
+        return '<button type="button" class="option-card' + (d.family === f.id ? " selected" : "") + '" data-family="' + f.id + '">' +
+          '<span class="olabel">' + f.label + '</span><span class="odesc">' + f.desc + '</span></button>';
+      }).join("") + "</div></div>";
+    html += '<div class="field"><label class="field-label">Tratti personali (scegline esattamente 2)</label><div class="option-grid">' +
+      LEADER_TRAITS.map(function (t) {
+        var selected = (d.leaderTraits || []).indexOf(t.id) !== -1;
+        return '<button type="button" class="option-card' + (selected ? " selected" : "") + '" data-trait="' + t.id + '">' +
+          '<span class="olabel">' + t.label + '</span><span class="odesc">' + t.desc + '</span></button>';
+      }).join("") + "</div>" +
+      '<p class="field-hint">Restano fissi per tutta la partita: descrivono la tua persona, non uno stile di partito.</p></div>' +
+      '<button class="primary-btn" id="found-btn" type="button">Inizia la tua carriera</button>' +
+      "</div>";
+    app.innerHTML = html;
+    bindSetupInteractions();
+  }
   function renderSetup() {
     var d = state.setupDraft;
     var mode = d.mode || "new";
+    if (mode === "career") { renderCareerSetup(); return; }
     var takeoverParty = d.takeoverId ? PARTIES.filter(function (pt) { return pt.id === d.takeoverId; })[0] : null;
     var html = '<div class="setup-import-prompt"><p>Hai già una partita salvata?</p>' +
       '<button type="button" id="setup-import-btn" class="save-bar-btn primary">Importa partita salvata</button></div>' +
@@ -11811,6 +11860,7 @@
       '<div class="field"><label class="field-label">Come vuoi iniziare?</label><div class="option-grid">' +
       '<button type="button" class="option-card' + (mode === "new" ? " selected" : "") + '" data-mode="new"><span class="olabel">Fonda un nuovo partito</span><span class="odesc">Parti da zero, con la tua identità</span></button>' +
       '<button type="button" class="option-card' + (mode === "takeover" ? " selected" : "") + '" data-mode="takeover"><span class="olabel">Prendi il comando di un partito esistente</span><span class="odesc">Eredita consensi, radicamento e ideologia di un partito reale</span></button>' +
+      '<button type="button" class="option-card" data-mode="career"><span class="olabel">Inizia la tua carriera politica</span><span class="odesc">Parti da attivista a 14 anni, senza un partito tuo</span></button>' +
       "</div></div>";
     if (mode === "takeover") {
       html += '<div class="field"><label class="field-label">Quale partito?</label><div class="option-grid">' +
@@ -11875,21 +11925,32 @@
         document.getElementById("import-input").click();
       });
     }
-    var nameInput = document.getElementById("party-name-input");
-    nameInput.addEventListener("input", function () { state.setupDraft.name = nameInput.value; });
+    // Il modulo di setup ora ha tre forme diverse (nuovo partito / prendi il comando / carriera politica):
+    // non tutti i campi esistono sempre nel DOM, quindi ogni lookup qui sotto va protetto — un
+    // getElementById(...).addEventListener diretto, senza controllo, andrebbe in errore appena il campo
+    // non è presente per la modalità corrente.
+    var nameInput = document.getElementById("party-name-input") || document.getElementById("career-name-input");
+    if (nameInput) nameInput.addEventListener("input", function () { state.setupDraft.name = nameInput.value; });
     var shortInput = document.getElementById("party-short-input");
-    shortInput.addEventListener("input", function () { state.setupDraft.short = shortInput.value; });
+    if (shortInput) shortInput.addEventListener("input", function () { state.setupDraft.short = shortInput.value; });
     var mottoInput = document.getElementById("party-motto-input");
-    mottoInput.addEventListener("input", function () { state.setupDraft.motto = mottoInput.value; });
+    if (mottoInput) mottoInput.addEventListener("input", function () { state.setupDraft.motto = mottoInput.value; });
     var ideologyTextInput = document.getElementById("ideology-text-input");
-    ideologyTextInput.addEventListener("input", function () { state.setupDraft.ideologyText = ideologyTextInput.value; });
+    if (ideologyTextInput) ideologyTextInput.addEventListener("input", function () { state.setupDraft.ideologyText = ideologyTextInput.value; });
     var leaderCharacterInput = document.getElementById("leader-character-input");
-    leaderCharacterInput.addEventListener("input", function () { state.setupDraft.leaderCharacter = leaderCharacterInput.value; });
+    if (leaderCharacterInput) leaderCharacterInput.addEventListener("input", function () { state.setupDraft.leaderCharacter = leaderCharacterInput.value; });
     app.querySelectorAll(".swatch-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.setupDraft.color = btn.getAttribute("data-color");
         renderSetup();
-        document.getElementById("party-name-input").focus();
+        var focusInput = document.getElementById("party-name-input");
+        if (focusInput) focusInput.focus();
+      });
+    });
+    app.querySelectorAll("[data-city]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.setupDraft.city = btn.getAttribute("data-city");
+        renderSetup();
       });
     });
     app.querySelectorAll("[data-family]").forEach(function (btn) {
@@ -11957,6 +12018,23 @@
     }
     document.getElementById("found-btn").addEventListener("click", function () {
       var d = state.setupDraft;
+      if (d.mode === "career") {
+        if (!d.city) { showSaveStatus("Scegli la tua città.", true); return; }
+        if (!d.family) { showSaveStatus("Scegli un'area politica.", true); return; }
+        if (!d.leaderTraits || d.leaderTraits.length !== 2) { showSaveStatus("Scegli esattamente 2 tratti personali.", true); return; }
+        var careerName = (d.name || "").trim() || "Nuovo Attivista";
+        state.mode = "career";
+        state.career = Object.assign(freshCareer(), {
+          name: careerName, city: d.city, family: d.family, leaderTraits: d.leaderTraits.slice()
+        });
+        state.career.foundedTurn = 1;
+        state.turn = 1;
+        state.career.diario.unshift({ week: 1, title: "Il primo passo", result: careerName + " comincia oggi la propria attività politica a " + d.city + ", a 14 anni: nessun partito alle spalle, solo la voglia di farsi sentire." });
+        state.phase = "career";
+        save();
+        render();
+        return;
+      }
       var isTakeover = d.mode === "takeover";
       var takeoverParty = isTakeover ? PARTIES.filter(function (p) { return p.id === d.takeoverId; })[0] : null;
       if (isTakeover && !takeoverParty) { showSaveStatus("Scegli quale partito vuoi guidare.", true); return; }
@@ -12024,6 +12102,181 @@
       save();
       render();
     });
+  }
+
+  // ---------- Carriera Politica ----------
+  // Modalità di gioco alternativa al fondare/guidare un partito (state.mode === "career"): il giocatore è
+  // una singola persona, non un'organizzazione. Nessuna scala di tappe fissa e obbligata — le azioni di
+  // attivismo disponibili si sbloccano in base alle statistiche accumulate (reputazione, rete di
+  // contatti), non in un ordine imposto, così più strade possono aprirsi insieme. Questa prima versione
+  // copre solo l'attivismo giovanile e il tesseramento a un partito esistente: le tappe successive
+  // (consigliere locale, candidatura, Parlamento...) sono un'espansione futura.
+  function freshCareer() {
+    return {
+      name: "", city: null, family: null, leaderTraits: [],
+      reputazione: 5, rete: 5, foundedTurn: 1,
+      partyId: null, partyName: null, partyColor: null, partyJoinedTurn: null,
+      actionCooldowns: {}, diario: []
+    };
+  }
+  function careerAge(c) {
+    return 14 + Math.floor((state.turn - c.foundedTurn) / 52);
+  }
+  function addCareerDiaryEntry(title, result) {
+    var c = state.career;
+    c.diario.unshift({ week: state.turn, title: title, result: result });
+    if (c.diario.length > 40) c.diario.length = 40;
+  }
+  // Azioni di attivismo: ciascuna con un proprio raffreddamento indipendente e una condizione di sblocco
+  // basata sulle statistiche accumulate (mai su un turno minimo o una tappa precedente completata) — più
+  // azioni possono essere disponibili insieme, ed è il giocatore a scegliere in che ordine affrontarle.
+  var CAREER_ACTIONS = [
+    { id: "volantinaggio", label: "Distribuisci volantini in piazza", desc: "Il modo più semplice per iniziare a farti notare.",
+      cooldown: 1, unlock: function () { return true; },
+      effects: function () { return { reputazione: rand(0.5, 1.5), rete: rand(1, 3) }; },
+      results: [
+        "Passi il pomeriggio a distribuire volantini davanti alla stazione: qualcuno si ferma a parlare, la maggior parte tira dritto.",
+        "Il volantinaggio non cambia il mondo, ma qualche sguardo di interesse in più lo raccogli.",
+        "Fa freddo e pochi si fermano, ma un paio di persone si segnano il tuo nome."
+      ] },
+    { id: "social", label: "Apri un profilo social da attivista", desc: "Costruisci una piccola community online attorno alle tue idee.",
+      cooldown: 2, unlock: function () { return true; },
+      effects: function () { return { reputazione: rand(0.3, 1), rete: rand(2, 5) }; },
+      results: [
+        "Il tuo primo post viene condiviso da qualche coetaneo: numeri piccoli, ma è un inizio.",
+        "Rispondi ai commenti uno per uno: lento, ma la tua rete di contatti cresce davvero.",
+        "Un video improvvisato raccoglie più visualizzazioni del previsto."
+      ] },
+    { id: "corteo", label: "Partecipa a un corteo o una manifestazione", desc: "Ti fai vedere, in mezzo agli altri.",
+      cooldown: 2, unlock: function () { return true; },
+      effects: function () { return { reputazione: rand(1, 2), rete: rand(2, 4) }; },
+      results: [
+        "Il corteo attraversa il centro: cori, striscioni, e la sensazione di far parte di qualcosa di più grande.",
+        "Ti ritrovi in prima fila quasi per caso: qualcuno ti fotografa, e la foto gira un po'.",
+        "La manifestazione si scioglie senza incidenti: giornata tranquilla, ma utile."
+      ] },
+    { id: "banchetto", label: "Banchetto informativo in piazza", desc: "Un tavolino, dei materiali, e tante chiacchiere.",
+      cooldown: 1, unlock: function () { return true; },
+      effects: function () { return { reputazione: rand(0.5, 1.5), rete: rand(1.5, 3) }; },
+      results: [
+        "Passano ore a spiegare le stesse cose, ma qualcuno torna a fare domande più approfondite.",
+        "Una persona anziana si ferma a lungo a raccontarti la sua storia: la ascolti con pazienza.",
+        "Il banchetto attira più curiosi del solito: buona giornata."
+      ] },
+    { id: "dibattito_scuola", label: "Organizza un dibattito nella tua scuola", desc: "Il primo vero palco, anche se piccolo. Si sblocca con un po' di reputazione.",
+      cooldown: 6, unlock: function (c) { return c.reputazione >= 10; },
+      effects: function () { return { reputazione: rand(2, 4), rete: rand(2, 3) }; },
+      results: [
+        "Il dibattito in aula magna va meglio del previsto: qualche insegnante si complimenta con te.",
+        "Ti tremano un po' le mani all'inizio, ma prendi il ritmo e finisci con applausi convinti.",
+        "Non tutti erano d'accordo con te, ma il confronto è stato vero, non di facciata."
+      ] },
+    { id: "assemblea", label: "Parla a un'assemblea studentesca", desc: "Un pubblico più ampio, e più esigente. Serve reputazione e una rete già solida.",
+      cooldown: 8, unlock: function (c) { return c.reputazione >= 20 && c.rete >= 15; },
+      effects: function () { return { reputazione: rand(3, 5), rete: rand(3, 5) }; },
+      results: [
+        "Prendi la parola davanti a centinaia di studenti: il tuo intervento viene ripreso da qualcuno col telefono.",
+        "L'assemblea è agitata, ma riesci a farti ascoltare fino alla fine.",
+        "Qualcuno ti si avvicina dopo per chiederti di più: è la prima volta che succede."
+      ] },
+    { id: "articolo_virale", label: "Scrivi un intervento che prova a farsi notare", desc: "Un tentativo più rischioso: può andare molto bene o passare inosservato. Serve una rete già ampia.",
+      cooldown: 10, unlock: function (c) { return c.rete >= 25; },
+      effects: function () { return Math.random() < 0.4 ? { reputazione: rand(5, 9), rete: rand(5, 10) } : { reputazione: rand(0, 1), rete: rand(0, 2) }; },
+      results: [
+        "Il tuo intervento circola più del previsto: per qualche giorno ne parlano anche fuori dalla tua cerchia.",
+        "Scrivi con cura, ma il pezzo passa quasi inosservato: succede, non tutto può funzionare.",
+        "Un piccolo giornale locale riprende una tua frase: non è molto, ma è un inizio vero."
+      ] }
+  ];
+  function renderCareerDashboard() {
+    var c = state.career;
+    var age = careerAge(c);
+    var fam = familyById(c.family);
+    var html = '<div class="setup-card"><p class="eyebrow">Carriera Politica</p>' +
+      "<h2>" + c.name + "</h2>" +
+      '<p class="lead">' + age + " anni · " + c.city + " · " + (fam ? fam.label : c.family) + "</p></div>";
+    html += '<div class="stat-grid">' +
+      '<div class="stat-tile"><div class="label">Reputazione</div><div class="row"><span class="value">' + Math.round(c.reputazione) + '%</span></div>' +
+      '<div class="gauge"><span style="width:' + c.reputazione + '%;background:' + (c.reputazione < 20 ? "var(--warning)" : "var(--good)") + '"></span></div></div>' +
+      '<div class="stat-tile"><div class="label">Rete di contatti</div><div class="row"><span class="value">' + Math.round(c.rete) + '%</span></div>' +
+      '<div class="gauge"><span style="width:' + c.rete + '%;background:' + (c.rete < 20 ? "var(--warning)" : "var(--good)") + '"></span></div></div>' +
+      "</div>";
+    if (c.partyId) {
+      var party = activeParties().filter(function (p) { return p.id === c.partyId; })[0];
+      html += '<section aria-label="Tesseramento"><p class="ci-hint">Sei tesserato/a a <strong>' + (party ? party.name : c.partyName) + '</strong> dalla settimana ' + c.partyJoinedTurn + ".</p></section>";
+    } else {
+      html += '<section aria-label="Tesseramento"><h3>Tesseramento a un partito</h3>' +
+        '<p class="ci-hint">Non sei ancora tesserato/a a nessun partito: puoi farlo quando vuoi, scegliendo tra quelli reali della scena politica di oggi.</p>' +
+        '<div class="option-grid">' +
+        activeParties().map(function (pt) {
+          return '<button type="button" class="option-card" data-career-join="' + pt.id + '"><span class="olabel">' + pt.name + '</span><span class="odesc">' + pt.famiglia + " — " + fmt1(state.parties[pt.id] || 0) + "% nei sondaggi</span></button>";
+        }).join("") + "</div></section>";
+    }
+    html += '<section aria-label="Attivismo"><h3>Attivismo</h3><div class="option-grid">';
+    CAREER_ACTIONS.forEach(function (a) {
+      var unlocked = a.unlock(c);
+      var weeksLeft = (c.actionCooldowns[a.id] || 0) - state.turn;
+      var onCooldown = weeksLeft > 0;
+      var disabled = !unlocked || onCooldown;
+      var status = !unlocked ? "Non ancora disponibile" : (onCooldown ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Fai qualcosa ora");
+      html += '<button type="button" class="option-card" data-career-action="' + a.id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
+    });
+    html += "</div></section>";
+    var diaryItems = c.diario.slice(0, 20).map(function (e) {
+      return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
+    }).join("");
+    html += '<section><details class="log"><summary>Diario dell\'attivista (' + c.diario.length + ")<span>▾</span></summary>" +
+      '<div class="log-entries">' + diaryItems + "</div></details></section>";
+    html += '<div class="choices"><button type="button" class="advance-btn" id="career-advance-btn">Passa alla settimana successiva</button></div>';
+    app.innerHTML = html;
+    bindCareerInteractions();
+  }
+  function bindCareerInteractions() {
+    app.querySelectorAll("[data-career-action]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var id = btn.getAttribute("data-career-action");
+        var action = CAREER_ACTIONS.filter(function (a) { return a.id === id; })[0];
+        if (!action) return;
+        var c = state.career;
+        var eff = action.effects();
+        c.reputazione = clamp(c.reputazione + (eff.reputazione || 0), 0, 100);
+        c.rete = clamp(c.rete + (eff.rete || 0), 0, 100);
+        c.actionCooldowns[id] = state.turn + action.cooldown;
+        var text = action.results[Math.floor(Math.random() * action.results.length)];
+        addCareerDiaryEntry(action.label, text);
+        showSaveStatus(text, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-career-join]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-career-join");
+        var party = activeParties().filter(function (p) { return p.id === id; })[0];
+        if (!party) return;
+        var c = state.career;
+        c.partyId = party.id;
+        c.partyName = party.name;
+        c.partyColor = party.color;
+        c.partyJoinedTurn = state.turn;
+        c.reputazione = clamp(c.reputazione + rand(1, 3), 0, 100);
+        c.rete = clamp(c.rete + rand(3, 6), 0, 100);
+        addCareerDiaryEntry("Tesseramento", "Ti tesseri a " + party.name + ": da oggi non sei più solo/a, hai una casa politica alle spalle.");
+        showSaveStatus("Ti sei tesserato/a a " + party.name + ".", false);
+        save();
+        render();
+      });
+    });
+    var careerAdvanceBtn = document.getElementById("career-advance-btn");
+    if (careerAdvanceBtn) {
+      careerAdvanceBtn.addEventListener("click", function () {
+        state.turn++;
+        save();
+        render();
+      });
+    }
   }
 
   // ---------- Building dashboard ----------
@@ -14923,6 +15176,7 @@
     applyGameTheme();
 
     if (state.phase === "setup") { renderSetup(); return; }
+    if (state.phase === "career") { renderCareerDashboard(); return; }
 
     if (state.phase === "election_result") {
       app.innerHTML = renderElectionResult();
@@ -17495,15 +17749,15 @@
   }
 
   function updateSaveControls() {
-    exportBtn.disabled = !state.player;
+    exportBtn.disabled = !state.player && !state.career;
   }
 
   exportBtn.addEventListener("click", function () {
-    if (!state.player) return;
+    if (!state.player && !state.career) return;
     var data = JSON.stringify(state, null, 2);
     var blob = new Blob([data], { type: "application/json" });
     var url = URL.createObjectURL(blob);
-    var safeName = state.player.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "") || "partito";
+    var safeName = (state.player ? state.player.name : state.career.name).replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "") || (state.player ? "partito" : "carriera");
     var a = document.createElement("a");
     a.href = url;
     a.download = "politis-it-" + safeName + "-settimana" + state.turn + ".json";
@@ -17524,7 +17778,7 @@
     reader.onload = function () {
       try {
         var parsed = JSON.parse(reader.result);
-        if (!parsed || typeof parsed !== "object" || !parsed.player || !parsed.parties || typeof parsed.turn !== "number") {
+        if (!parsed || typeof parsed !== "object" || (!parsed.player && !parsed.career) || !parsed.parties || typeof parsed.turn !== "number") {
           throw new Error("invalid");
         }
         state = normalizeLoadedState(parsed);
