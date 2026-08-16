@@ -5789,22 +5789,27 @@
   }
 
   // ---------- Dichiarazioni pubbliche ----------
-  // Una pagina dedicata dove il leader (fino a 5 volte a settimana) prende posizione pubblica su un tema —
-  // un indicatore critico della Scheda Paese o una notizia uscita di recente — davanti a stampa, TV,
-  // comizi o social: stesso motore di scelte multiple già rodato altrove (buildParliamentChoices per i
-  // temi con un vero themeId, buildInterviewChoices come riserva per le notizie di cronaca), ma con effetti
-  // fortemente ridimensionati (vedi scaleEffects) perché qui la cadenza è molto più alta di un question
-  // time o di un'intervista al leader. La piazza pubblica non è mai silenziosa: anche altri protagonisti
-  // della scena — leader di partito, ma anche sindacalisti, Confindustria, Quirinale, direttori di
-  // giornale, giovanili avversarie — pubblicano dichiarazioni proprie (triggerAmbientStatements, agganciato
-  // al giro settimanale in recomputePeriodic), e chiunque, compreso il giocatore, può rispondere a
-  // qualunque dichiarazione già pubblicata, senza alcun limite settimanale sulle risposte.
+  // Il giocatore scrive DAVVERO il testo della propria dichiarazione, con parole sue (nessuna scelta
+  // preconfezionata): fino a 5 dichiarazioni a settimana, davanti a stampa, TV, comizi o social. Non
+  // essendoci una vera intelligenza artificiale nel gioco, "capire" quel testo qui significa un'analisi
+  // lessicale leggera e del tutto deterministica (vedi classifyStatement/detectStatementTheme/
+  // detectStatementTone poco più sotto): quali parole del testo coincidono con uno dei 21 temi della
+  // Scheda Paese, e se il tono prevalente è aggressivo, istituzionale o positivo. Non è comprensione del
+  // linguaggio naturale, è pattern-matching su un dizionario — ma basta a calibrare l'effetto sulla scelta
+  // del giocatore invece di un canovaccio fisso, e a far sì che chi replica a una dichiarazione citi
+  // davvero la parola chiave trovata in quel testo, dando la sensazione concreta che l'abbia letta. Le
+  // altre figure pubbliche (leader di partito, sindacalisti, Confindustria, Quirinale, direttori di
+  // giornale, giovanili avversarie) pubblicano dichiarazioni proprie ogni settimana
+  // (triggerAmbientStatements, agganciato al giro settimanale in recomputePeriodic), e chiunque, compreso
+  // il giocatore, può rispondere — anche qui scrivendo liberamente — a qualunque dichiarazione già
+  // pubblicata, senza alcun limite settimanale sulle risposte.
   var DICHIARAZIONI_WEEKLY_CAP = 5;
   var DICHIARAZIONI_FEED_CAP = 60;
-  // Riduce proporzionalmente tutte le grandezze numeriche di un blocco effects: buildParliamentChoices e
-  // buildInterviewChoices sono tarati su azioni molto meno frequenti (un question time ogni 2 settimane,
-  // un'intervista ogni 12): applicati qui senza sconto, con 5 dichiarazioni disponibili nella STESSA
-  // settimana, sarebbero uno sbilanciamento evidente.
+  var DICHIARAZIONI_MAX_CHARS = 400;
+  // Riduce proporzionalmente tutte le grandezze numeriche di un blocco effects: le stesse fasce già usate
+  // da buildInterviewChoices sono tarate su azioni molto meno frequenti (un'intervista al leader ogni 12
+  // settimane): applicate qui senza sconto, con 5 dichiarazioni disponibili nella STESSA settimana,
+  // sarebbero uno sbilanciamento evidente.
   function scaleEffects(eff, factor) {
     if (!eff) return {};
     var out = {};
@@ -5830,56 +5835,105 @@
     state.statements.unshift(entry);
     if (state.statements.length > DICHIARAZIONI_FEED_CAP) state.statements.length = DICHIARAZIONI_FEED_CAP;
   }
-  // Fino a 2 temi presi dagli indicatori più deboli della Scheda Paese e fino a 2 dalle notizie più
-  // recenti del registro (che abbiano un titolo vero) — stesso principio già usato per la scena Salotto
-  // TV, ma qui la selezione è deterministica (niente Math.random qui dentro): le opzioni proposte non
-  // "saltano" a ogni singolo render della pagina, solo quando cambia davvero lo stato del paese o il log.
+  // Fino a 3 temi presi dagli indicatori più deboli della Scheda Paese e fino a 2 dalle notizie più
+  // recenti del registro: non più bottoni da cliccare (il giocatore scrive liberamente), solo spunti
+  // suggeriti sopra il modulo di scrittura — e, per le figure CPU, gli argomenti tra cui pescano quando
+  // pubblicano una dichiarazione propria (vedi triggerAmbientStatements).
   function buildDeclarationTopicOptions() {
     var options = [];
     var metricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k]; });
     metricKeys.sort(function (a, b) { return state.countryProfile[a] - state.countryProfile[b]; });
-    metricKeys.slice(0, 2).forEach(function (k) {
+    metricKeys.slice(0, 3).forEach(function (k) {
       var lbl = METRIC_LABELS[k];
-      options.push({ id: "metric_" + k, kind: "paese", metric: k, label: lbl.charAt(0).toUpperCase() + lbl.slice(1), themeId: METRIC_TO_THEME_ID[k] });
+      options.push({ metric: k, kind: "paese", label: lbl.charAt(0).toUpperCase() + lbl.slice(1) });
     });
     var seenTitles = {};
-    var newsEntries = (state.log || []).filter(function (e) { return e.title && !seenTitles[e.title] && (seenTitles[e.title] = true); }).slice(0, 2);
-    newsEntries.forEach(function (e, i) {
-      options.push({ id: "news_" + i, kind: "notizia", label: e.title, themeId: null });
+    // Esclude le voci di registro generate dalle Dichiarazioni stesse (cat "Dichiarazioni"): altrimenti
+    // ogni dichiarazione appena pubblicata finirebbe a ruota nei suoi stessi spunti come se fosse una
+    // notizia vera, un'eco autoreferenziale evidente dopo due o tre dichiarazioni di fila.
+    (state.log || []).filter(function (e) { return e.title && e.cat !== "Dichiarazioni" && !seenTitles[e.title] && (seenTitles[e.title] = true); }).slice(0, 2).forEach(function (e) {
+      options.push({ metric: null, kind: "notizia", label: e.title });
     });
     return options;
   }
-  function generateDeclarationDossier(topicId) {
-    var topic = buildDeclarationTopicOptions().filter(function (o) { return o.id === topicId; })[0];
-    if (!topic) return null;
-    var p = state.player;
-    var isGoverno = p.parliamentRole === "governo";
-    var rawChoices = topic.themeId
-      ? buildParliamentChoices({ noun: topic.label.toLowerCase(), nationalMetric: topic.metric, isGoverno: isGoverno, rivalId: null, themeId: topic.themeId }, 4)
-      : buildInterviewChoices(topic.label, isGoverno, "dalla dichiarazione", "un cronista");
-    var choices = rawChoices.map(function (c) {
-      return { label: c.label, hint: c.hint, effects: scaleEffects(c.effects, 0.22), result: c.result };
-    });
-    return {
-      id: "dichiarazione_" + topicId, kind: "dichiarazione", cat: "Dichiarazioni", title: "Dichiarazione — " + topic.label,
-      brief: "Prendi posizione pubblicamente su “" + topic.label + "”. Le tue parole finiranno dritte nella pagina Dichiarazioni.",
-      topicLabel: topic.label, choices: choices
-    };
+  // ---------- Analisi lessicale del testo scritto dal giocatore ----------
+  // Un dizionario di parole chiave per ciascuno dei 21 temi della Scheda Paese e per tre registri di tono
+  // (aggressivo, istituzionale, positivo): sceglie il tema più citato (a parità, la parola chiave più
+  // specifica/lunga vince su una generica) e il tono prevalente. Testo e dizionario sono confrontati senza
+  // accenti/maiuscole (normalizeStatementText), così "città", "Città" e "citta" contano allo stesso modo.
+  function normalizeStatementText(s) {
+    return (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   }
-  function generateDeclarationReplyDossier(statementId) {
-    var st = (state.statements || []).filter(function (s) { return s.id === statementId; })[0];
-    if (!st) return null;
-    var p = state.player;
-    var isGoverno = p.parliamentRole === "governo";
-    var rawChoices = buildInterviewChoices(st.topicLabel, isGoverno, "dallo scambio con " + st.authorName, st.authorName);
-    var choices = rawChoices.map(function (c) {
-      return { label: c.label, hint: c.hint, effects: scaleEffects(c.effects, 0.12), result: c.result };
+  var STATEMENT_THEME_KEYWORDS = {
+    salari: ["salario", "salari", "stipendio", "stipendi", "busta paga", "reddito", "paga", "salario minimo"],
+    trasporti: ["trasporti", "treno", "treni", "autobus", "pendolari", "trasporto pubblico", "ferrovie", "metro"],
+    welfare: ["welfare", "assistenza", "famiglie", "famiglia", "natalita", "asili", "pensioni", "pensione", "sussidio", "sussidi"],
+    sanita: ["sanita", "ospedale", "ospedali", "medico", "medici", "liste d'attesa", "pronto soccorso", "cure", "malati", "infermieri"],
+    corruzione: ["corruzione", "tangenti", "mazzette", "corrotti", "malaffare", "trasparenza"],
+    aziende: ["imprese", "aziende", "impresa", "azienda", "pmi", "industria", "industrie", "imprenditori"],
+    economia: ["economia", "economico", "mercato", "mercati", "finanza", "conti pubblici"],
+    pil: ["pil", "crescita economica", "prodotto interno lordo"],
+    felicita: ["benessere", "felicita", "qualita della vita"],
+    scuola: ["scuola", "scuole", "istruzione", "studenti", "insegnanti", "professori", "universita", "docenti"],
+    ambientalismo: ["ambiente", "clima", "climatico", "emissioni", "inquinamento", "ecologia", "transizione ecologica"],
+    commercio: ["commercio", "export", "importazioni", "esportazioni", "dazi", "scambi commerciali"],
+    relazioniDiplomatiche: ["diplomazia", "relazioni internazionali", "alleati", "nato", "onu", "unione europea"],
+    ricercaSviluppo: ["ricerca", "innovazione", "tecnologia", "tecnologico", "brevetti", "startup", "digitale"],
+    inflazione: ["inflazione", "prezzi", "carovita", "caro vita", "potere d'acquisto"],
+    difesa: ["difesa", "esercito", "forze armate", "militare", "armi", "spese militari"],
+    sicurezza: ["sicurezza", "criminalita", "polizia", "reati", "furti", "violenza", "ordine pubblico"],
+    giustizia: ["giustizia", "magistrati", "tribunali", "processi", "carceri", "pene", "giudici"],
+    casa: ["casa", "affitti", "affitto", "case popolari", "edilizia", "mutuo", "mutui", "abitare"],
+    immigrazione: ["immigrazione", "migranti", "sbarchi", "stranieri", "accoglienza", "rimpatri", "frontiere"],
+    disoccupazione: ["lavoro", "occupazione", "disoccupazione", "disoccupati", "posti di lavoro", "licenziamenti"],
+    energia: ["energia", "bollette", "gas", "elettricita", "rinnovabili", "nucleare", "petrolio"]
+  };
+  var STATEMENT_TONE_KEYWORDS = {
+    aggressivo: ["basta", "vergogna", "inaccettabile", "scandalo", "scandaloso", "fallimento", "disastro", "indegno", "incapaci", "incompetenti", "combattere", "lottare", "cacciare", "dimettersi", "dimissioni", "vergognoso"],
+    istituzionale: ["dialogo", "insieme", "responsabilita", "responsabile", "equilibrio", "gradualmente", "ascolto", "confronto", "costruttivo", "serieta", "collaborazione", "unita"],
+    positivo: ["orgoglio", "successo", "ottimo", "bene", "migliora", "crescita", "conquista", "fieri", "soddisfatti", "risultato", "orgogliosi"]
+  };
+  function detectStatementTheme(text) {
+    var norm = normalizeStatementText(text);
+    var best = null, bestScore = 0, bestKeyword = null;
+    Object.keys(STATEMENT_THEME_KEYWORDS).forEach(function (metric) {
+      STATEMENT_THEME_KEYWORDS[metric].forEach(function (kw) {
+        if (norm.indexOf(kw) !== -1 && kw.length > bestScore) { bestScore = kw.length; best = metric; bestKeyword = kw; }
+      });
     });
-    return {
-      id: "dichiarazione_reply_" + statementId, kind: "dichiarazione_reply", cat: "Dichiarazioni", title: "Risposta a " + st.authorName,
-      brief: st.authorName + " ha detto: “" + st.text + "”. Come rispondi?",
-      statementId: statementId, choices: choices
-    };
+    return best ? { metric: best, keyword: bestKeyword } : null;
+  }
+  function detectStatementTone(text) {
+    var norm = normalizeStatementText(text);
+    var scores = { aggressivo: 0, istituzionale: 0, positivo: 0 };
+    Object.keys(STATEMENT_TONE_KEYWORDS).forEach(function (tone) {
+      STATEMENT_TONE_KEYWORDS[tone].forEach(function (kw) { if (norm.indexOf(kw) !== -1) scores[tone]++; });
+    });
+    if (/!{2,}/.test(text || "")) scores.aggressivo += 1;
+    var best = "neutro", bestScore = 0;
+    Object.keys(scores).forEach(function (k) { if (scores[k] > bestScore) { best = k; bestScore = scores[k]; } });
+    return best;
+  }
+  function classifyStatement(text) {
+    var themeInfo = detectStatementTheme(text);
+    var tone = detectStatementTone(text);
+    var topicLabel = themeInfo ? (METRIC_LABELS[themeInfo.metric].charAt(0).toUpperCase() + METRIC_LABELS[themeInfo.metric].slice(1)) : "Attualità politica generale";
+    return { themeMetric: themeInfo ? themeInfo.metric : null, matchedKeyword: themeInfo ? themeInfo.keyword : null, tone: tone, topicLabel: topicLabel };
+  }
+  // Stessi tre registri già usati da buildInterviewChoices (pacato/combattivo/glissa) più un quarto,
+  // "positivo": qui non è il giocatore a scegliere lo stile cliccando un bottone, lo determina il tono
+  // rilevato nel testo scritto — un testo più lungo e argomentato (60+ caratteri) pesa leggermente di più
+  // di una battuta buttata lì. Effetti ridimensionati come le altre azioni ad alta cadenza (scaleEffects):
+  // 5 dichiarazioni possibili nella stessa settimana non possono valere quanto un'intera intervista al
+  // leader, disponibile una volta ogni 12 settimane.
+  function buildFreeTextStatementEffects(text, tone) {
+    var boost = (text || "").trim().length >= 60 ? 1.15 : 1;
+    var eff;
+    if (tone === "aggressivo") eff = { visibilita: rand(4, 8) * boost, reputazione: -rand(0, 2), iscritti: rand(5, 15) * boost };
+    else if (tone === "istituzionale") eff = { reputazione: rand(1, 3) * boost, visibilita: rand(1, 2) };
+    else if (tone === "positivo") eff = { reputazione: rand(1, 2.5) * boost, visibilita: rand(2, 5) };
+    else eff = { reputazione: -rand(0, 2), visibilita: rand(0.5, 1.5) };
+    return scaleEffects(eff, 0.22);
   }
   // Altri protagonisti della scena pubblica, oltre ai leader di partito (che restano i più frequenti):
   // figure generiche e volutamente fittizie (mai un vero titolare di carica), per non attribuire mai
@@ -5918,21 +5972,28 @@
     var topic = options[Math.floor(Math.random() * options.length)];
     var author = pickAmbientAuthor();
     var opener = STATEMENT_OPENERS[Math.floor(Math.random() * STATEMENT_OPENERS.length)];
+    var kws = topic.metric ? STATEMENT_THEME_KEYWORDS[topic.metric] : null;
+    var keyword = kws ? kws[Math.floor(Math.random() * kws.length)] : null;
     pushStatement({
       week: state.turn, authorName: author.name, authorRole: author.role, authorColor: author.color, authorPhoto: null,
-      isPlayer: false, topicLabel: topic.label, text: opener(author.name, topic.label)
+      isPlayer: false, topicLabel: topic.label, themeMetric: topic.metric, matchedKeyword: keyword,
+      text: opener(author.name, topic.label)
     });
     // Ogni tanto, qualcuno replica a una dichiarazione già pubblicata (compresa una del giocatore): la
-    // stessa dinamica della piazza pubblica reale, dove le prese di posizione si rincorrono a vicenda.
+    // stessa dinamica della piazza pubblica reale, dove le prese di posizione si rincorrono a vicenda — e
+    // se la dichiarazione bersaglio ha una parola chiave riconosciuta (anche quando è stato il giocatore
+    // stesso a scriverla), la replica la cita davvero, invece di restare sul generico.
     if (Math.random() < 0.35 && state.statements.length > 1) {
       var pickFrom = Math.min(5, state.statements.length - 1);
       var target = state.statements[1 + Math.floor(Math.random() * pickFrom)];
       var replyAuthor = pickAmbientAuthor();
       if (replyAuthor.name !== target.authorName) {
+        var replyText = target.matchedKeyword
+          ? replyAuthor.name + " replica riprendendo proprio le parole di " + target.authorName + " su “" + target.matchedKeyword + "”: non è così che si affronta il problema."
+          : replyAuthor.name + " replica a " + target.authorName + ": non è così che si affronta il tema di " + target.topicLabel.toLowerCase() + ".";
         target.replies.push({
           authorName: replyAuthor.name, authorRole: replyAuthor.role, authorColor: replyAuthor.color, authorPhoto: null,
-          text: replyAuthor.name + " replica a " + target.authorName + ": “non è così che si affronta il tema di " + target.topicLabel.toLowerCase() + "”.",
-          week: state.turn
+          text: replyText, week: state.turn
         });
       }
     }
@@ -5940,30 +6001,24 @@
   function renderDichiarazioniPage() {
     var p = state.player;
     ensurePlayerDichiarazioniWeek(p);
-    var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "dichiarazione" ? state.inlineExpandedTopic : null;
-    var replyExpanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "dichiarazione_reply" ? state.inlineExpandedTopic : null;
     var remaining = Math.max(0, DICHIARAZIONI_WEEKLY_CAP - (p.dichiarazioniCount || 0));
-    var options = buildDeclarationTopicOptions();
+    var hints = buildDeclarationTopicOptions().map(function (t) { return t.kind === "notizia" ? "la notizia “" + t.label + "”" : t.label; });
+    var replyOpenId = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "dichiarazione_reply_box" ? state.inlineExpandedTopic.statementId : null;
+
     var html = '<section aria-label="Dichiarazioni pubbliche"><h3>Dichiarazioni pubbliche</h3>' +
-      '<p class="ci-hint">Prendi posizione davanti a stampa, TV, comizi e social — fino a ' + DICHIARAZIONI_WEEKLY_CAP + ' dichiarazioni a settimana. Ti restano <strong>' + remaining + '</strong> dichiarazion' + (remaining === 1 ? "e" : "i") + ' questa settimana. Ogni altro protagonista della scena pubblica può fare lo stesso qui sotto — e tu puoi rispondere a chiunque, senza limiti.</p>';
-    if (!options.length) {
-      html += '<p class="ci-hint">Nessun argomento disponibile in questo momento: torna più avanti.</p>';
+      '<p class="ci-hint">Scrivi tu, con parole tue, quello che vuoi dichiarare a stampa, TV, comizi o social — fino a ' + DICHIARAZIONI_WEEKLY_CAP + ' dichiarazioni a settimana. Ti restano <strong>' + remaining + '</strong> dichiarazion' + (remaining === 1 ? "e" : "i") + ' questa settimana. Il gioco legge il tema e il tono del tuo testo per calibrare l\'effetto — e le altre figure pubbliche, quando ti rispondono, possono citare davvero le parole che hai usato.</p>';
+    if (hints.length) html += '<p class="ci-hint">Spunti, se ti servono: ' + hints.join(" · ") + '.</p>';
+    if (remaining > 0) {
+      html += '<div class="field"><label class="field-label" for="dichiarazione-compose-input">La tua dichiarazione</label>' +
+        '<textarea id="dichiarazione-compose-input" maxlength="' + DICHIARAZIONI_MAX_CHARS + '" rows="4" placeholder="Scrivi qui, con parole tue, la tua dichiarazione pubblica…"></textarea></div>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="dichiarazione-publish-btn"><span class="clabel">Pubblica dichiarazione</span></button></div>';
     } else {
-      html += '<div class="option-grid">';
-      options.forEach(function (t) {
-        var isOpen = expanded && expanded.domainId === t.id;
-        var disabled = remaining <= 0 && !isOpen;
-        var status = disabled ? "Dichiarazioni esaurite questa settimana" : (isOpen ? "Chiudi" : "Prendi posizione");
-        html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-dichiarazione-topic="' + t.id + '"' + (disabled ? " disabled" : "") + '>' +
-          '<span class="olabel">' + t.label + '</span><span class="odesc">' + (t.kind === "paese" ? "Dalla Scheda Paese — " : "Dalla cronaca recente — ") + status + '</span></button>';
-        if (isOpen) html += renderInlineTopicChoices(expanded);
-      });
-      html += "</div>";
+      html += '<p class="ci-hint"><strong>Dichiarazioni esaurite per questa settimana.</strong> Potrai scriverne altre dalla prossima settimana.</p>';
     }
     html += "</section>";
 
     var feedItems = (state.statements || []).slice(0, 40).map(function (st) {
-      var replyOpen = replyExpanded && replyExpanded.statementId === st.id;
+      var replyOpen = replyOpenId === st.id;
       var repliesHtml = (st.replies || []).map(function (r) {
         return '<div class="qt-exchange" style="margin-left:1.2rem"><div class="qt-speaker">' + personBadgeHtml(r.authorName, r.authorPhoto, 22, r.authorColor) +
           '<span><span class="qt-speaker-name">' + r.authorName + '</span> <span class="qt-speaker-party">— ' + r.authorRole + '</span></span></div>' +
@@ -5974,8 +6029,13 @@
         '<p class="qt-question">' + st.text + '</p>' +
         '<p class="ci-hint" style="margin:.2rem 0 .4rem">Settimana ' + st.week + ' — su: ' + st.topicLabel + '</p>' +
         repliesHtml +
-        '<div class="choices"><button type="button" class="choice-btn" data-dichiarazione-reply="' + st.id + '"><span class="clabel">' + (replyOpen ? "Chiudi" : "Rispondi") + '</span></button></div>';
-      if (replyOpen) card += renderInlineTopicChoices(replyExpanded);
+        '<div class="choices"><button type="button" class="choice-btn" data-dichiarazione-reply-toggle="' + st.id + '"><span class="clabel">' + (replyOpen ? "Chiudi" : "Rispondi") + '</span></button></div>';
+      if (replyOpen) {
+        card += '<div class="inline-topic-expand" style="grid-column:1/-1">' +
+          '<div class="field"><label class="field-label" for="dichiarazione-reply-input">La tua risposta</label>' +
+          '<textarea id="dichiarazione-reply-input" maxlength="' + DICHIARAZIONI_MAX_CHARS + '" rows="3" placeholder="Scrivi qui, con parole tue, la tua risposta…"></textarea></div>' +
+          '<div class="choices"><button type="button" class="choice-btn" data-dichiarazione-reply-publish="' + st.id + '"><span class="clabel">Invia risposta</span></button></div></div>';
+      }
       card += "</div>";
       return card;
     }).join("");
@@ -16266,9 +16326,6 @@
           if (!p.institutionalActionCooldowns) p.institutionalActionCooldowns = {};
           var istDomain = ISTITUZIONALI_DOMAINS.filter(function (d) { return d.id === topic.domainId; })[0];
           p.institutionalActionCooldowns[topic.domainId] = state.turn + (istDomain ? istDomain.cooldown : 10);
-        } else if (topic.kind === "dichiarazione" || topic.kind === "dichiarazione_reply") {
-          // Nessun raffreddamento dedicato qui: il limite settimanale delle dichiarazioni del giocatore
-          // (vedi ensurePlayerDichiarazioniWeek più sotto) e la libertà di risposta illimitata bastano da sole.
         } else {
           p.euInitiativeCooldownTurn = state.turn + 11;
         }
@@ -16319,56 +16376,74 @@
           if (p.completedReformDomains.indexOf(topic.domainId) === -1) p.completedReformDomains.push(topic.domainId);
         }
         var outcome = applyChoice(topic.dossier, choice);
-        if (topic.kind === "dichiarazione") {
-          ensurePlayerDichiarazioniWeek(p);
-          p.dichiarazioniCount = (p.dichiarazioniCount || 0) + 1;
-          pushStatement({
-            week: state.turn, authorName: p.name,
-            authorRole: p.parliamentRole === "governo" ? "Il Governo" : (p.inParliament ? "Opposizione parlamentare" : "Il tuo partito"),
-            authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, isPlayer: true,
-            topicLabel: topic.dossier.topicLabel, text: choice.result
-          });
-        } else if (topic.kind === "dichiarazione_reply") {
-          var targetSt = (state.statements || []).filter(function (s) { return s.id === topic.dossier.statementId; })[0];
-          if (targetSt) {
-            targetSt.replies.push({
-              authorName: p.name, authorRole: p.parliamentRole === "governo" ? "Il Governo" : "Il tuo partito",
-              authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, text: choice.result, week: state.turn
-            });
-          }
-        }
         showSaveStatus(outcome.resultText, false);
         save();
         render();
       });
     });
-    app.querySelectorAll("[data-dichiarazione-topic]").forEach(function (btn) {
+    // Dichiarazioni: il giocatore scrive il testo a mano, non seleziona tra scelte preconfezionate — vedi
+    // classifyStatement/buildFreeTextStatementEffects più sopra per come il gioco "legge" quel testo.
+    var dichiarazionePublishBtn = document.getElementById("dichiarazione-publish-btn");
+    if (dichiarazionePublishBtn) {
+      dichiarazionePublishBtn.addEventListener("click", function () {
+        var p = state.player;
+        ensurePlayerDichiarazioniWeek(p);
+        if ((p.dichiarazioniCount || 0) >= DICHIARAZIONI_WEEKLY_CAP) return;
+        var input = document.getElementById("dichiarazione-compose-input");
+        var text = (input ? input.value : "").trim();
+        if (!text) { showSaveStatus("Scrivi qualcosa prima di pubblicare.", true); return; }
+        var classification = classifyStatement(text);
+        var eff = buildFreeTextStatementEffects(text, classification.tone);
+        var dossier = { title: "Dichiarazione — " + classification.topicLabel, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
+        var choice = { label: "Dichiarazione pubblica", effects: eff, result: text };
+        applyChoice(dossier, choice);
+        p.dichiarazioniCount = (p.dichiarazioniCount || 0) + 1;
+        pushStatement({
+          week: state.turn, authorName: p.name,
+          authorRole: p.parliamentRole === "governo" ? "Il Governo" : (p.inParliament ? "Opposizione parlamentare" : "Il tuo partito"),
+          authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, isPlayer: true,
+          topicLabel: classification.topicLabel, themeMetric: classification.themeMetric, matchedKeyword: classification.matchedKeyword,
+          text: text
+        });
+        showSaveStatus("Dichiarazione pubblicata.", false);
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-dichiarazione-reply-toggle]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        if (btn.disabled) return;
-        var topicId = btn.getAttribute("data-dichiarazione-topic");
+        var statementId = btn.getAttribute("data-dichiarazione-reply-toggle");
         var current = state.inlineExpandedTopic;
-        if (current && current.kind === "dichiarazione" && current.domainId === topicId) {
+        if (current && current.kind === "dichiarazione_reply_box" && current.statementId === statementId) {
           state.inlineExpandedTopic = null;
         } else {
-          var dossier = generateDeclarationDossier(topicId);
-          if (!dossier) return;
-          state.inlineExpandedTopic = { kind: "dichiarazione", domainId: topicId, dossier: dossier };
+          state.inlineExpandedTopic = { kind: "dichiarazione_reply_box", statementId: statementId };
         }
         save();
         render();
       });
     });
-    app.querySelectorAll("[data-dichiarazione-reply]").forEach(function (btn) {
+    app.querySelectorAll("[data-dichiarazione-reply-publish]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var statementId = btn.getAttribute("data-dichiarazione-reply");
-        var current = state.inlineExpandedTopic;
-        if (current && current.kind === "dichiarazione_reply" && current.statementId === statementId) {
-          state.inlineExpandedTopic = null;
-        } else {
-          var dossier = generateDeclarationReplyDossier(statementId);
-          if (!dossier) return;
-          state.inlineExpandedTopic = { kind: "dichiarazione_reply", domainId: "reply_" + statementId, dossier: dossier, statementId: statementId };
-        }
+        var statementId = btn.getAttribute("data-dichiarazione-reply-publish");
+        var targetSt = (state.statements || []).filter(function (s) { return s.id === statementId; })[0];
+        if (!targetSt) return;
+        var input = document.getElementById("dichiarazione-reply-input");
+        var text = (input ? input.value : "").trim();
+        if (!text) { showSaveStatus("Scrivi qualcosa prima di rispondere.", true); return; }
+        var p = state.player;
+        var classification = classifyStatement(text);
+        var eff = buildFreeTextStatementEffects(text, classification.tone);
+        Object.keys(eff).forEach(function (k) { if (k !== "national" && k !== "relationDelta") eff[k] = eff[k] * 0.6; });
+        var dossier = { title: "Risposta a " + targetSt.authorName, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
+        var choice = { label: "Risposta pubblica", effects: eff, result: text };
+        applyChoice(dossier, choice);
+        targetSt.replies.push({
+          authorName: p.name, authorRole: p.parliamentRole === "governo" ? "Il Governo" : "Il tuo partito",
+          authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, text: text, week: state.turn
+        });
+        state.inlineExpandedTopic = null;
+        showSaveStatus("Risposta pubblicata.", false);
         save();
         render();
       });
