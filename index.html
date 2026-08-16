@@ -5788,6 +5788,202 @@
     return html;
   }
 
+  // ---------- Dichiarazioni pubbliche ----------
+  // Una pagina dedicata dove il leader (fino a 5 volte a settimana) prende posizione pubblica su un tema —
+  // un indicatore critico della Scheda Paese o una notizia uscita di recente — davanti a stampa, TV,
+  // comizi o social: stesso motore di scelte multiple già rodato altrove (buildParliamentChoices per i
+  // temi con un vero themeId, buildInterviewChoices come riserva per le notizie di cronaca), ma con effetti
+  // fortemente ridimensionati (vedi scaleEffects) perché qui la cadenza è molto più alta di un question
+  // time o di un'intervista al leader. La piazza pubblica non è mai silenziosa: anche altri protagonisti
+  // della scena — leader di partito, ma anche sindacalisti, Confindustria, Quirinale, direttori di
+  // giornale, giovanili avversarie — pubblicano dichiarazioni proprie (triggerAmbientStatements, agganciato
+  // al giro settimanale in recomputePeriodic), e chiunque, compreso il giocatore, può rispondere a
+  // qualunque dichiarazione già pubblicata, senza alcun limite settimanale sulle risposte.
+  var DICHIARAZIONI_WEEKLY_CAP = 5;
+  var DICHIARAZIONI_FEED_CAP = 60;
+  // Riduce proporzionalmente tutte le grandezze numeriche di un blocco effects: buildParliamentChoices e
+  // buildInterviewChoices sono tarati su azioni molto meno frequenti (un question time ogni 2 settimane,
+  // un'intervista ogni 12): applicati qui senza sconto, con 5 dichiarazioni disponibili nella STESSA
+  // settimana, sarebbero uno sbilanciamento evidente.
+  function scaleEffects(eff, factor) {
+    if (!eff) return {};
+    var out = {};
+    ["fondi", "reputazione", "visibilita", "iscritti", "consensoGoverno", "sondaggi", "spreadDelta", "rivalExtra"].forEach(function (k) {
+      if (eff[k] !== undefined) out[k] = eff[k] * factor;
+    });
+    if (eff.national) {
+      out.national = {};
+      Object.keys(eff.national).forEach(function (k) { out.national[k] = eff.national[k] * factor; });
+    }
+    if (eff.relationDelta && eff.relationDelta.id) {
+      out.relationDelta = { id: eff.relationDelta.id, delta: eff.relationDelta.delta * factor };
+    }
+    return out;
+  }
+  function ensurePlayerDichiarazioniWeek(p) {
+    if (p.dichiarazioniWeek !== state.turn) { p.dichiarazioniWeek = state.turn; p.dichiarazioniCount = 0; }
+  }
+  function pushStatement(entry) {
+    if (!state.statements) state.statements = [];
+    entry.id = "st_" + state.turn + "_" + Math.floor(Math.random() * 1000000);
+    entry.replies = entry.replies || [];
+    state.statements.unshift(entry);
+    if (state.statements.length > DICHIARAZIONI_FEED_CAP) state.statements.length = DICHIARAZIONI_FEED_CAP;
+  }
+  // Fino a 2 temi presi dagli indicatori più deboli della Scheda Paese e fino a 2 dalle notizie più
+  // recenti del registro (che abbiano un titolo vero) — stesso principio già usato per la scena Salotto
+  // TV, ma qui la selezione è deterministica (niente Math.random qui dentro): le opzioni proposte non
+  // "saltano" a ogni singolo render della pagina, solo quando cambia davvero lo stato del paese o il log.
+  function buildDeclarationTopicOptions() {
+    var options = [];
+    var metricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k]; });
+    metricKeys.sort(function (a, b) { return state.countryProfile[a] - state.countryProfile[b]; });
+    metricKeys.slice(0, 2).forEach(function (k) {
+      var lbl = METRIC_LABELS[k];
+      options.push({ id: "metric_" + k, kind: "paese", metric: k, label: lbl.charAt(0).toUpperCase() + lbl.slice(1), themeId: METRIC_TO_THEME_ID[k] });
+    });
+    var seenTitles = {};
+    var newsEntries = (state.log || []).filter(function (e) { return e.title && !seenTitles[e.title] && (seenTitles[e.title] = true); }).slice(0, 2);
+    newsEntries.forEach(function (e, i) {
+      options.push({ id: "news_" + i, kind: "notizia", label: e.title, themeId: null });
+    });
+    return options;
+  }
+  function generateDeclarationDossier(topicId) {
+    var topic = buildDeclarationTopicOptions().filter(function (o) { return o.id === topicId; })[0];
+    if (!topic) return null;
+    var p = state.player;
+    var isGoverno = p.parliamentRole === "governo";
+    var rawChoices = topic.themeId
+      ? buildParliamentChoices({ noun: topic.label.toLowerCase(), nationalMetric: topic.metric, isGoverno: isGoverno, rivalId: null, themeId: topic.themeId }, 4)
+      : buildInterviewChoices(topic.label, isGoverno, "dalla dichiarazione", "un cronista");
+    var choices = rawChoices.map(function (c) {
+      return { label: c.label, hint: c.hint, effects: scaleEffects(c.effects, 0.22), result: c.result };
+    });
+    return {
+      id: "dichiarazione_" + topicId, kind: "dichiarazione", cat: "Dichiarazioni", title: "Dichiarazione — " + topic.label,
+      brief: "Prendi posizione pubblicamente su “" + topic.label + "”. Le tue parole finiranno dritte nella pagina Dichiarazioni.",
+      topicLabel: topic.label, choices: choices
+    };
+  }
+  function generateDeclarationReplyDossier(statementId) {
+    var st = (state.statements || []).filter(function (s) { return s.id === statementId; })[0];
+    if (!st) return null;
+    var p = state.player;
+    var isGoverno = p.parliamentRole === "governo";
+    var rawChoices = buildInterviewChoices(st.topicLabel, isGoverno, "dallo scambio con " + st.authorName, st.authorName);
+    var choices = rawChoices.map(function (c) {
+      return { label: c.label, hint: c.hint, effects: scaleEffects(c.effects, 0.12), result: c.result };
+    });
+    return {
+      id: "dichiarazione_reply_" + statementId, kind: "dichiarazione_reply", cat: "Dichiarazioni", title: "Risposta a " + st.authorName,
+      brief: st.authorName + " ha detto: “" + st.text + "”. Come rispondi?",
+      statementId: statementId, choices: choices
+    };
+  }
+  // Altri protagonisti della scena pubblica, oltre ai leader di partito (che restano i più frequenti):
+  // figure generiche e volutamente fittizie (mai un vero titolare di carica), per non attribuire mai
+  // dichiarazioni inventate a persone reali.
+  var PUBLIC_FIGURE_ROLES = [
+    "Segretario Generale CGIL", "Presidente di Confindustria", "Portavoce del Quirinale",
+    "Direttore di un grande quotidiano nazionale", "Presidente ANCI", "Vertice di Banca d'Italia",
+    "Segretario di categoria CISL", "Amministratore delegato di una grande azienda", "Portavoce di un comitato studentesco",
+    "Segretario nazionale USB"
+  ];
+  var STATEMENT_OPENERS = [
+    function (name, topic) { return name + " interviene pubblicamente " + suLabel(topic) + "."; },
+    function (name, topic) { return "In un'intervista, " + name + " prende posizione " + suLabel(topic) + "."; },
+    function (name, topic) { return name + " affida a un post sui social un commento tagliente " + suLabel(topic) + "."; },
+    function (name, topic) { return "A margine di un evento pubblico, " + name + " si esprime " + suLabel(topic) + "."; },
+    function (name, topic) { return name + " rilascia una dichiarazione ai cronisti " + suLabel(topic) + "."; }
+  ];
+  function pickAmbientAuthor() {
+    var parties = activeParties();
+    if (parties.length && Math.random() < 0.65) {
+      var party = parties[Math.floor(Math.random() * parties.length)];
+      return { name: party.leader, role: "Leader di " + party.name, color: party.color };
+    }
+    var pool = PUBLIC_FIGURE_ROLES.slice();
+    if (parties.length) {
+      var rivalParty = parties[Math.floor(Math.random() * parties.length)];
+      pool = pool.concat(["Segretario Giovanile di " + rivalParty.name]);
+    }
+    var role = pool[Math.floor(Math.random() * pool.length)];
+    return { name: generateStaffName(), role: role, color: null };
+  }
+  function triggerAmbientStatements() {
+    if (Math.random() > 0.5) return;
+    var options = buildDeclarationTopicOptions();
+    if (!options.length) return;
+    var topic = options[Math.floor(Math.random() * options.length)];
+    var author = pickAmbientAuthor();
+    var opener = STATEMENT_OPENERS[Math.floor(Math.random() * STATEMENT_OPENERS.length)];
+    pushStatement({
+      week: state.turn, authorName: author.name, authorRole: author.role, authorColor: author.color, authorPhoto: null,
+      isPlayer: false, topicLabel: topic.label, text: opener(author.name, topic.label)
+    });
+    // Ogni tanto, qualcuno replica a una dichiarazione già pubblicata (compresa una del giocatore): la
+    // stessa dinamica della piazza pubblica reale, dove le prese di posizione si rincorrono a vicenda.
+    if (Math.random() < 0.35 && state.statements.length > 1) {
+      var pickFrom = Math.min(5, state.statements.length - 1);
+      var target = state.statements[1 + Math.floor(Math.random() * pickFrom)];
+      var replyAuthor = pickAmbientAuthor();
+      if (replyAuthor.name !== target.authorName) {
+        target.replies.push({
+          authorName: replyAuthor.name, authorRole: replyAuthor.role, authorColor: replyAuthor.color, authorPhoto: null,
+          text: replyAuthor.name + " replica a " + target.authorName + ": “non è così che si affronta il tema di " + target.topicLabel.toLowerCase() + "”.",
+          week: state.turn
+        });
+      }
+    }
+  }
+  function renderDichiarazioniPage() {
+    var p = state.player;
+    ensurePlayerDichiarazioniWeek(p);
+    var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "dichiarazione" ? state.inlineExpandedTopic : null;
+    var replyExpanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "dichiarazione_reply" ? state.inlineExpandedTopic : null;
+    var remaining = Math.max(0, DICHIARAZIONI_WEEKLY_CAP - (p.dichiarazioniCount || 0));
+    var options = buildDeclarationTopicOptions();
+    var html = '<section aria-label="Dichiarazioni pubbliche"><h3>Dichiarazioni pubbliche</h3>' +
+      '<p class="ci-hint">Prendi posizione davanti a stampa, TV, comizi e social — fino a ' + DICHIARAZIONI_WEEKLY_CAP + ' dichiarazioni a settimana. Ti restano <strong>' + remaining + '</strong> dichiarazion' + (remaining === 1 ? "e" : "i") + ' questa settimana. Ogni altro protagonista della scena pubblica può fare lo stesso qui sotto — e tu puoi rispondere a chiunque, senza limiti.</p>';
+    if (!options.length) {
+      html += '<p class="ci-hint">Nessun argomento disponibile in questo momento: torna più avanti.</p>';
+    } else {
+      html += '<div class="option-grid">';
+      options.forEach(function (t) {
+        var isOpen = expanded && expanded.domainId === t.id;
+        var disabled = remaining <= 0 && !isOpen;
+        var status = disabled ? "Dichiarazioni esaurite questa settimana" : (isOpen ? "Chiudi" : "Prendi posizione");
+        html += '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-dichiarazione-topic="' + t.id + '"' + (disabled ? " disabled" : "") + '>' +
+          '<span class="olabel">' + t.label + '</span><span class="odesc">' + (t.kind === "paese" ? "Dalla Scheda Paese — " : "Dalla cronaca recente — ") + status + '</span></button>';
+        if (isOpen) html += renderInlineTopicChoices(expanded);
+      });
+      html += "</div>";
+    }
+    html += "</section>";
+
+    var feedItems = (state.statements || []).slice(0, 40).map(function (st) {
+      var replyOpen = replyExpanded && replyExpanded.statementId === st.id;
+      var repliesHtml = (st.replies || []).map(function (r) {
+        return '<div class="qt-exchange" style="margin-left:1.2rem"><div class="qt-speaker">' + personBadgeHtml(r.authorName, r.authorPhoto, 22, r.authorColor) +
+          '<span><span class="qt-speaker-name">' + r.authorName + '</span> <span class="qt-speaker-party">— ' + r.authorRole + '</span></span></div>' +
+          '<p class="qt-answer">' + r.text + '</p></div>';
+      }).join("");
+      var card = '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(st.authorName, st.authorPhoto, 26, st.authorColor) +
+        '<span><span class="qt-speaker-name">' + st.authorName + (st.isPlayer ? " (tu)" : "") + '</span> <span class="qt-speaker-party">— ' + st.authorRole + '</span></span></div>' +
+        '<p class="qt-question">' + st.text + '</p>' +
+        '<p class="ci-hint" style="margin:.2rem 0 .4rem">Settimana ' + st.week + ' — su: ' + st.topicLabel + '</p>' +
+        repliesHtml +
+        '<div class="choices"><button type="button" class="choice-btn" data-dichiarazione-reply="' + st.id + '"><span class="clabel">' + (replyOpen ? "Chiudi" : "Rispondi") + '</span></button></div>';
+      if (replyOpen) card += renderInlineTopicChoices(replyExpanded);
+      card += "</div>";
+      return card;
+    }).join("");
+    html += '<section aria-label="Feed dichiarazioni"><h3>Ultime dichiarazioni</h3>' +
+      (feedItems || '<p class="ci-hint">Nessuna dichiarazione pubblicata ancora: sii il primo a prendere posizione.</p>') + "</section>";
+    return html;
+  }
+
   // Il dossier per instaurare un regime: dinamico perché il tipo dipende dalla famiglia ideologica del
   // giocatore (fascista, comunista/comunismolusso, monarchico) — non c'è un unico testo statico come per
   // NATO/UE. Include ora anche il Comunismo di Lusso: non fa più scattare nulla in automatico dopo
@@ -9245,7 +9441,7 @@
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
     qtScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
-    salottoScene: null, ufficioScene: null
+    salottoScene: null, ufficioScene: null, statements: []
   };
   var PLAYER_FIELD_DEFAULTS = {
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
@@ -9275,7 +9471,8 @@
     foundedTurn: 0, breakthroughFired: false, breakthroughCooldownTurn: 0, collapseCooldownTurn: 0,
     leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
-    electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0
+    electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0,
+    dichiarazioniWeek: 0, dichiarazioniCount: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -9765,6 +9962,7 @@
     driftGeopoliticalTension();
     driftConsensoGoverno();
     driftYouthWing(p);
+    triggerAmbientStatements();
 
     var commDigMember = staffMember("comunicazione_digitale");
     var commDigSkill = commDigMember ? (commDigMember.skillMult !== undefined ? commDigMember.skillMult : 1) : 0;
@@ -14398,6 +14596,9 @@
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
       } },
+    { id: "dichiarazioni", label: "Dichiarazioni — stampa, TV e social", render: function () {
+        return renderDichiarazioniPage();
+      } },
     { id: "diario", label: "Diario di Partito — registro completo", render: function () {
         return renderLog();
       } }
@@ -16065,6 +16266,9 @@
           if (!p.institutionalActionCooldowns) p.institutionalActionCooldowns = {};
           var istDomain = ISTITUZIONALI_DOMAINS.filter(function (d) { return d.id === topic.domainId; })[0];
           p.institutionalActionCooldowns[topic.domainId] = state.turn + (istDomain ? istDomain.cooldown : 10);
+        } else if (topic.kind === "dichiarazione" || topic.kind === "dichiarazione_reply") {
+          // Nessun raffreddamento dedicato qui: il limite settimanale delle dichiarazioni del giocatore
+          // (vedi ensurePlayerDichiarazioniWeek più sotto) e la libertà di risposta illimitata bastano da sole.
         } else {
           p.euInitiativeCooldownTurn = state.turn + 11;
         }
@@ -16115,7 +16319,56 @@
           if (p.completedReformDomains.indexOf(topic.domainId) === -1) p.completedReformDomains.push(topic.domainId);
         }
         var outcome = applyChoice(topic.dossier, choice);
+        if (topic.kind === "dichiarazione") {
+          ensurePlayerDichiarazioniWeek(p);
+          p.dichiarazioniCount = (p.dichiarazioniCount || 0) + 1;
+          pushStatement({
+            week: state.turn, authorName: p.name,
+            authorRole: p.parliamentRole === "governo" ? "Il Governo" : (p.inParliament ? "Opposizione parlamentare" : "Il tuo partito"),
+            authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, isPlayer: true,
+            topicLabel: topic.dossier.topicLabel, text: choice.result
+          });
+        } else if (topic.kind === "dichiarazione_reply") {
+          var targetSt = (state.statements || []).filter(function (s) { return s.id === topic.dossier.statementId; })[0];
+          if (targetSt) {
+            targetSt.replies.push({
+              authorName: p.name, authorRole: p.parliamentRole === "governo" ? "Il Governo" : "Il tuo partito",
+              authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, text: choice.result, week: state.turn
+            });
+          }
+        }
         showSaveStatus(outcome.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-dichiarazione-topic]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var topicId = btn.getAttribute("data-dichiarazione-topic");
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "dichiarazione" && current.domainId === topicId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          var dossier = generateDeclarationDossier(topicId);
+          if (!dossier) return;
+          state.inlineExpandedTopic = { kind: "dichiarazione", domainId: topicId, dossier: dossier };
+        }
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-dichiarazione-reply]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var statementId = btn.getAttribute("data-dichiarazione-reply");
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "dichiarazione_reply" && current.statementId === statementId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          var dossier = generateDeclarationReplyDossier(statementId);
+          if (!dossier) return;
+          state.inlineExpandedTopic = { kind: "dichiarazione_reply", domainId: "reply_" + statementId, dossier: dossier, statementId: statementId };
+        }
         save();
         render();
       });
