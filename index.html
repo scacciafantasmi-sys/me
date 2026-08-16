@@ -6229,7 +6229,10 @@
     }
   }
   function renderDichiarazioniPage() {
-    var p = state.player;
+    // Disponibile sia in modalità partito (state.player) sia in Carriera Politica (state.career): in
+    // entrambe l'unico campo che serve qui è il tetto/contatore settimanale delle dichiarazioni, presente
+    // su entrambi gli oggetti — il resto della funzione non fa altre assunzioni su chi sia "p".
+    var p = state.player || state.career;
     ensurePlayerDichiarazioniWeek(p);
     var remaining = Math.max(0, DICHIARAZIONI_WEEKLY_CAP - (p.dichiarazioniCount || 0));
     var hints = buildDeclarationTopicOptions().map(function (t) { return t.kind === "notizia" ? "la notizia “" + t.label + "”" : t.label; });
@@ -6272,6 +6275,120 @@
     html += '<section aria-label="Feed dichiarazioni"><h3>Ultime dichiarazioni</h3>' +
       (feedItems || '<p class="ci-hint">Nessuna dichiarazione pubblicata ancora: sii il primo a prendere posizione.</p>') + "</section>";
     return html;
+  }
+  // In Carriera Politica non esistono fondi/iscritti/consenso di partito: un tuo intervento pubblico
+  // aggiunto (o toglie) solo reputazione personale e rete di contatti, gli unici due numeri che la
+  // modalità carriera traccia — a differenza della modalità partito, che invece passa dagli stessi
+  // moltiplicatori di stile di leadership/staff di applyChoice.
+  function applyCareerStatementEffects(eff, c) {
+    if (eff.reputazione) c.reputazione = clamp(c.reputazione + eff.reputazione, 0, 100);
+    if (eff.visibilita) c.rete = clamp(c.rete + eff.visibilita, 0, 100);
+  }
+  // Comune alle due modalità (state.player in modalità partito, state.career in Carriera Politica):
+  // pubblicare una dichiarazione o rispondere a una già pubblicata funziona allo stesso modo in entrambe,
+  // ma l'applicazione degli effetti numerici e l'etichetta dell'autore restano specifiche di ciascuna,
+  // perché le due modalità tracciano statistiche del tutto diverse (fondi/iscritti/reputazione di partito
+  // contro la sola reputazione/rete personale di un singolo attivista).
+  function bindDichiarazioniInteractions() {
+    var dichiarazionePublishBtn = document.getElementById("dichiarazione-publish-btn");
+    if (dichiarazionePublishBtn) {
+      dichiarazionePublishBtn.addEventListener("click", function () {
+        var input = document.getElementById("dichiarazione-compose-input");
+        var text = (input ? input.value : "").trim();
+        if (state.player) {
+          var p = state.player;
+          ensurePlayerDichiarazioniWeek(p);
+          if ((p.dichiarazioniCount || 0) >= DICHIARAZIONI_WEEKLY_CAP) return;
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di pubblicare.", true); return; }
+          var classification = classifyStatement(text);
+          var eff = buildFreeTextStatementEffects(text, classification.tone);
+          var dossier = { title: "Dichiarazione — " + classification.topicLabel, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
+          var choice = { label: "Dichiarazione pubblica", effects: eff, result: text };
+          applyChoice(dossier, choice);
+          p.dichiarazioniCount = (p.dichiarazioniCount || 0) + 1;
+          pushStatement({
+            week: state.turn, authorName: p.name,
+            authorRole: p.parliamentRole === "governo" ? "Il Governo" : (p.inParliament ? "Opposizione parlamentare" : "Il tuo partito"),
+            authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, isPlayer: true,
+            topicLabel: classification.topicLabel, themeMetric: classification.themeMetric, matchedKeyword: classification.matchedKeyword,
+            text: text
+          });
+        } else if (state.career) {
+          var c = state.career;
+          ensurePlayerDichiarazioniWeek(c);
+          if ((c.dichiarazioniCount || 0) >= DICHIARAZIONI_WEEKLY_CAP) return;
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di pubblicare.", true); return; }
+          var classificationC = classifyStatement(text);
+          var effC = buildFreeTextStatementEffects(text, classificationC.tone);
+          applyCareerStatementEffects(effC, c);
+          c.dichiarazioniCount = (c.dichiarazioniCount || 0) + 1;
+          pushStatement({
+            week: state.turn, authorName: c.name,
+            authorRole: c.partyId ? ("Tesserato/a di " + c.partyName) : "Attivista indipendente",
+            authorColor: c.partyColor || null, authorPhoto: null, isPlayer: true,
+            topicLabel: classificationC.topicLabel, themeMetric: classificationC.themeMetric, matchedKeyword: classificationC.matchedKeyword,
+            text: text
+          });
+          addCareerDiaryEntry("Dichiarazione pubblica", "Pubblichi una dichiarazione su " + classificationC.topicLabel.toLowerCase() + ".");
+        } else {
+          return;
+        }
+        showSaveStatus("Dichiarazione pubblicata.", false);
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-dichiarazione-reply-toggle]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var statementId = btn.getAttribute("data-dichiarazione-reply-toggle");
+        var current = state.inlineExpandedTopic;
+        if (current && current.kind === "dichiarazione_reply_box" && current.statementId === statementId) {
+          state.inlineExpandedTopic = null;
+        } else {
+          state.inlineExpandedTopic = { kind: "dichiarazione_reply_box", statementId: statementId };
+        }
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-dichiarazione-reply-publish]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var statementId = btn.getAttribute("data-dichiarazione-reply-publish");
+        var targetSt = (state.statements || []).filter(function (s) { return s.id === statementId; })[0];
+        if (!targetSt) return;
+        var input = document.getElementById("dichiarazione-reply-input");
+        var text = (input ? input.value : "").trim();
+        if (!text) { showSaveStatus("Scrivi qualcosa prima di rispondere.", true); return; }
+        var classification = classifyStatement(text);
+        if (state.player) {
+          var p2 = state.player;
+          var eff2 = buildFreeTextStatementEffects(text, classification.tone);
+          Object.keys(eff2).forEach(function (k) { if (k !== "national" && k !== "relationDelta") eff2[k] = eff2[k] * 0.6; });
+          var dossier2 = { title: "Risposta a " + targetSt.authorName, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
+          var choice2 = { label: "Risposta pubblica", effects: eff2, result: text };
+          applyChoice(dossier2, choice2);
+          targetSt.replies.push({
+            authorName: p2.name, authorRole: p2.parliamentRole === "governo" ? "Il Governo" : "Il tuo partito",
+            authorColor: p2.color, authorPhoto: p2.leaderPhotoDataUrl, text: text, week: state.turn
+          });
+        } else if (state.career) {
+          var c2 = state.career;
+          var effC2 = buildFreeTextStatementEffects(text, classification.tone);
+          Object.keys(effC2).forEach(function (k) { effC2[k] = effC2[k] * 0.6; });
+          applyCareerStatementEffects(effC2, c2);
+          targetSt.replies.push({
+            authorName: c2.name, authorRole: c2.partyId ? ("Tesserato/a di " + c2.partyName) : "Attivista indipendente",
+            authorColor: c2.partyColor || null, authorPhoto: null, text: text, week: state.turn
+          });
+        } else {
+          return;
+        }
+        state.inlineExpandedTopic = null;
+        showSaveStatus("Risposta pubblicata.", false);
+        save();
+        render();
+      });
+    });
   }
 
   // Il dossier per instaurare un regime: dinamico perché il tipo dipende dalla famiglia ideologica del
@@ -12116,7 +12233,8 @@
       name: "", city: null, family: null, leaderTraits: [],
       reputazione: 5, rete: 5, foundedTurn: 1,
       partyId: null, partyName: null, partyColor: null, partyJoinedTurn: null,
-      actionCooldowns: {}, diario: []
+      actionCooldowns: {}, diario: [],
+      dichiarazioniWeek: 0, dichiarazioniCount: 0
     };
   }
   function careerAge(c) {
@@ -12223,6 +12341,7 @@
         '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
     });
     html += "</div></section>";
+    html += renderDichiarazioniPage();
     var diaryItems = c.diario.slice(0, 20).map(function (e) {
       return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
     }).join("");
@@ -12233,6 +12352,7 @@
     bindCareerInteractions();
   }
   function bindCareerInteractions() {
+    bindDichiarazioniInteractions();
     app.querySelectorAll("[data-career-action]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
@@ -16865,73 +16985,7 @@
         render();
       });
     });
-    // Dichiarazioni: il giocatore scrive il testo a mano, non seleziona tra scelte preconfezionate — vedi
-    // classifyStatement/buildFreeTextStatementEffects più sopra per come il gioco "legge" quel testo.
-    var dichiarazionePublishBtn = document.getElementById("dichiarazione-publish-btn");
-    if (dichiarazionePublishBtn) {
-      dichiarazionePublishBtn.addEventListener("click", function () {
-        var p = state.player;
-        ensurePlayerDichiarazioniWeek(p);
-        if ((p.dichiarazioniCount || 0) >= DICHIARAZIONI_WEEKLY_CAP) return;
-        var input = document.getElementById("dichiarazione-compose-input");
-        var text = (input ? input.value : "").trim();
-        if (!text) { showSaveStatus("Scrivi qualcosa prima di pubblicare.", true); return; }
-        var classification = classifyStatement(text);
-        var eff = buildFreeTextStatementEffects(text, classification.tone);
-        var dossier = { title: "Dichiarazione — " + classification.topicLabel, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
-        var choice = { label: "Dichiarazione pubblica", effects: eff, result: text };
-        applyChoice(dossier, choice);
-        p.dichiarazioniCount = (p.dichiarazioniCount || 0) + 1;
-        pushStatement({
-          week: state.turn, authorName: p.name,
-          authorRole: p.parliamentRole === "governo" ? "Il Governo" : (p.inParliament ? "Opposizione parlamentare" : "Il tuo partito"),
-          authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, isPlayer: true,
-          topicLabel: classification.topicLabel, themeMetric: classification.themeMetric, matchedKeyword: classification.matchedKeyword,
-          text: text
-        });
-        showSaveStatus("Dichiarazione pubblicata.", false);
-        save();
-        render();
-      });
-    }
-    app.querySelectorAll("[data-dichiarazione-reply-toggle]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var statementId = btn.getAttribute("data-dichiarazione-reply-toggle");
-        var current = state.inlineExpandedTopic;
-        if (current && current.kind === "dichiarazione_reply_box" && current.statementId === statementId) {
-          state.inlineExpandedTopic = null;
-        } else {
-          state.inlineExpandedTopic = { kind: "dichiarazione_reply_box", statementId: statementId };
-        }
-        save();
-        render();
-      });
-    });
-    app.querySelectorAll("[data-dichiarazione-reply-publish]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var statementId = btn.getAttribute("data-dichiarazione-reply-publish");
-        var targetSt = (state.statements || []).filter(function (s) { return s.id === statementId; })[0];
-        if (!targetSt) return;
-        var input = document.getElementById("dichiarazione-reply-input");
-        var text = (input ? input.value : "").trim();
-        if (!text) { showSaveStatus("Scrivi qualcosa prima di rispondere.", true); return; }
-        var p = state.player;
-        var classification = classifyStatement(text);
-        var eff = buildFreeTextStatementEffects(text, classification.tone);
-        Object.keys(eff).forEach(function (k) { if (k !== "national" && k !== "relationDelta") eff[k] = eff[k] * 0.6; });
-        var dossier = { title: "Risposta a " + targetSt.authorName, cat: "Dichiarazioni", topicLabel: classification.topicLabel };
-        var choice = { label: "Risposta pubblica", effects: eff, result: text };
-        applyChoice(dossier, choice);
-        targetSt.replies.push({
-          authorName: p.name, authorRole: p.parliamentRole === "governo" ? "Il Governo" : "Il tuo partito",
-          authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, text: text, week: state.turn
-        });
-        state.inlineExpandedTopic = null;
-        showSaveStatus("Risposta pubblicata.", false);
-        save();
-        render();
-      });
-    });
+    bindDichiarazioniInteractions();
     app.querySelectorAll("[data-vita-pubblica]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
