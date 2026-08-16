@@ -15290,7 +15290,63 @@
       items + "</aside></nav>";
   }
 
+  // Rete di sicurezza: se QUALUNQUE cosa dentro renderCore() lancia un'eccezione non gestita (un bug in
+  // una singola schermata, un salvataggio con una combinazione di dati mai vista prima...), prima questo
+  // lasciava la pagina bloccata sul DOM residuo dell'ultimo render riuscito — bottoni presenti ma senza
+  // alcun gestore di click appena aggiornato, quindi del tutto morti, senza alcun messaggio d'errore
+  // visibile: sembrava che il gioco si fosse "impallato", con lo stato comunque già caricato e salvato in
+  // localStorage (save() viene chiamato PRIMA di render() ovunque nel codice) ma invisibile e inutilizzabile.
+  // Ora un errore qui dentro produce sempre una schermata di recupero vera, con il messaggio tecnico a
+  // vista (copiabile per una segnalazione) e un modo per esportare comunque il salvataggio intatto.
   function render() {
+    try {
+      renderCore();
+    } catch (err) {
+      if (window.console && console.error) console.error("Errore durante il render():", err);
+      renderCrashRecovery(err);
+    }
+  }
+  function renderCrashRecovery(err) {
+    var detail = ((err && err.message) || String(err)) + "\n" + ((err && err.stack) || "");
+    app.innerHTML = '<div class="setup-card"><p class="eyebrow">Errore imprevisto</p>' +
+      '<h2>Qualcosa è andato storto nel mostrare la partita</h2>' +
+      '<p class="lead">La partita è comunque caricata in memoria e salvata nel browser: non è andata persa. Ma il gioco non riesce a disegnare questa schermata. Esporta il salvataggio qui sotto e mandalo per farlo controllare, oppure ricarica la pagina per riprovare.</p>' +
+      '<div class="field"><label class="field-label">Dettaglio tecnico (utile per la segnalazione)</label>' +
+      '<textarea readonly rows="8" style="width:100%;font-family:monospace;font-size:.75rem">' + detail.replace(/</g, "&lt;") + '</textarea></div>' +
+      '<div class="choices">' +
+      '<button type="button" class="choice-btn" id="crash-export-btn"><span class="clabel">Esporta comunque il salvataggio</span></button>' +
+      '<button type="button" class="choice-btn" id="crash-reload-btn"><span class="clabel">Ricarica la pagina</span></button>' +
+      '<button type="button" class="choice-btn" id="crash-newgame-btn"><span class="clabel">Inizia una nuova partita (il salvataggio attuale va perso)</span></button>' +
+      "</div></div>";
+    var exportBtnCrash = document.getElementById("crash-export-btn");
+    if (exportBtnCrash) {
+      exportBtnCrash.addEventListener("click", function () {
+        try {
+          var data = JSON.stringify(state, null, 2);
+          var blob = new Blob([data], { type: "application/json" });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = "politis-it-salvataggio-di-emergenza.json";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        } catch (exportErr) { /* se anche l'esportazione fallisce, non c'è altro da fare qui */ }
+      });
+    }
+    var reloadBtnCrash = document.getElementById("crash-reload-btn");
+    if (reloadBtnCrash) reloadBtnCrash.addEventListener("click", function () { window.location.reload(); });
+    var newGameBtnCrash = document.getElementById("crash-newgame-btn");
+    if (newGameBtnCrash) {
+      newGameBtnCrash.addEventListener("click", function () {
+        if (!window.confirm("Sei sicuro? Il salvataggio attuale andrà perso definitivamente.")) return;
+        localStorage.removeItem(STORAGE_KEY);
+        window.location.reload();
+      });
+    }
+  }
+  function renderCore() {
     renderMasthead();
     updateSaveControls();
     applyGameTheme();
