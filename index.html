@@ -1370,7 +1370,7 @@
       if (stage.aziendeBoost) cp.aziende = clamp(cp.aziende + stage.aziendeBoost, 1, 10);
       sp.stageIndex = Math.min(SPACE_PROGRAM_STAGES.length, sp.stageIndex + 1);
       sp.history.push({ week: state.turn, stageId: stage.id, label: stage.label, outcome: "successo" });
-      recordEnactedPolicy(stage.label, "Traguardo spaziale raggiunto: " + stage.desc);
+      recordEnactedPolicy(stage.label, "Traguardo spaziale raggiunto: " + stage.desc, "ricercaSviluppo");
       esito = "\"" + stage.label + "\" è un successo pieno: " + stage.desc + " Il paese festeggia un traguardo che resterà nei libri di storia.";
       if (stage.id === "marte") {
         addDiaryEntry("Un piccolo passo, ancora una volta", "Oggi esseri umani hanno messo piede su Marte, e l'Italia ha fatto la sua parte per portarceli. Qualunque cosa succeda da qui in avanti, questo giorno non me lo toglie nessuno.");
@@ -4280,41 +4280,108 @@
     }
     return { effects: eff, result: result };
   }
+  // Non solo un numero della Scheda Paese: l'opposizione può incalzare il Governo anche su un
+  // provvedimento (legge/mozione/riforma/referendum) approvato di recente, o su una notizia/scandalo
+  // uscito nelle ultime settimane — esattamente come capita davvero in Aula. Ogni candidato porta comunque
+  // con sé un metric/noun/value reali (mai null, per non rompere il rendering a valle): per le notizie,
+  // si tenta di riconoscere il tema con lo stesso motore lessicale delle Dichiarazioni; se il testo della
+  // notizia non parla chiaramente di nessun fronte specifico, quella notizia semplicemente non diventa un
+  // candidato (non si inventa un tema a caso).
+  function buildQtTopicCandidates() {
+    var candidates = [];
+    var allMetricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k]; });
+    // Fronti "sindacabili" sui numeri: mai quelli già eccellenti (sotto 7.5/10, la stessa soglia usata
+    // altrove nel gioco per "transizione compiuta"). Se il paese va bene su quasi tutto e i fronti deboli
+    // sono meno di 3, si completa con i fronti meno eccellenti rimasti, non con uno a caso tra tutti.
+    var weakMetrics = allMetricKeys.filter(function (k) { return state.countryProfile[k] < 7.5; });
+    if (weakMetrics.length < 3) {
+      var restRanked = allMetricKeys.filter(function (k) { return weakMetrics.indexOf(k) === -1; })
+        .sort(function (a, b) { return state.countryProfile[a] - state.countryProfile[b]; });
+      weakMetrics = weakMetrics.concat(restRanked.slice(0, 3 - weakMetrics.length));
+    }
+    weakMetrics.forEach(function (metric) {
+      var noun = METRIC_LABELS[metric];
+      var value = state.countryProfile[metric];
+      candidates.push({
+        metric: metric, noun: noun, value: value, source: "metrica",
+        topicPhrase: "sul fronte " + noun + ", fermo a " + fmt1(value) + "/10",
+        answerText: buildGovernmentAnswerText(metric, value)
+      });
+    });
+    // Un provvedimento specifico (legge, mozione, riforma di governo, referendum) approvato nelle ultime
+    // settimane: qui la contestazione è sul provvedimento in sé, non sul numero — resta legittima anche su
+    // un fronte che nel frattempo è già migliorato.
+    var recentPolicies = (state.enactedPolicies || []).filter(function (e) {
+      return e.metric && METRIC_LABELS[e.metric] && (state.turn - e.week) >= 0 && (state.turn - e.week) <= 8;
+    });
+    recentPolicies.slice(0, 4).forEach(function (e) {
+      var noun = METRIC_LABELS[e.metric];
+      var value = state.countryProfile[e.metric];
+      candidates.push({
+        metric: e.metric, noun: noun, value: value, source: "legge",
+        topicPhrase: "del provvedimento “" + e.title + "”, approvato di recente su " + noun,
+        answerText: buildGovernmentAnswerText(e.metric, value)
+      });
+    });
+    // Una notizia o uno scandalo delle ultime settimane, legato al Governo: la contestazione riguarda il
+    // fatto concreto, non un dato numerico — resta legittima anche su un fronte che sulla carta va bene.
+    var recentGovNews = (state.worldNews || []).filter(function (n) {
+      var age = (n.week === undefined || n.week === null) ? 0 : (state.turn - n.week);
+      return age >= 0 && age <= 6 && (n.cat === "Governo" || /scandal/i.test(n.text || ""));
+    });
+    recentGovNews.slice(0, 2).forEach(function (n) {
+      var guessed = detectStatementTheme(n.text || "");
+      if (!guessed || !METRIC_LABELS[guessed.metric]) return;
+      var noun = METRIC_LABELS[guessed.metric];
+      var value = state.countryProfile[guessed.metric];
+      candidates.push({
+        metric: guessed.metric, noun: noun, value: value, source: "notizia",
+        topicPhrase: "di quanto emerso di recente: “" + n.text + "”",
+        answerText: "Il Governo replica che la vicenda è già stata chiarita nelle sedi opportune, e respinge le accuse definendole strumentali."
+      });
+    });
+    return candidates;
+  }
   function buildParliamentQtScene() {
     var p = state.player;
     p.qtSceneCooldownTurn = state.turn + PARLIAMENT_QT_SCENE_COOLDOWN_TURNS;
     var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
     var isPlayerGov = p.parliamentRole === "governo";
     var oppParties = activeParties().filter(function (pt) { return govMemberIds.indexOf(pt.id) === -1; });
-    // L'opposizione contesta solo i fronti che NON sono già eccellenti (sotto 7.5/10, la stessa soglia
-    // usata altrove nel gioco per "transizione compiuta"/eccellenza): non ha senso attaccare il Governo
-    // su un indicatore già ottimo solo perché è stabile. Se il paese va bene su quasi tutto e i fronti
-    // deboli sono meno di 3, si completa con i fronti meno eccellenti rimasti (mai scegliendo a caso tra
-    // TUTTI gli indicatori, altrimenti un 9/10 potrebbe finire comunque nel mirino).
-    var allMetricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k]; });
-    var metricKeys = allMetricKeys.filter(function (k) { return state.countryProfile[k] < 7.5; });
-    if (metricKeys.length < 3) {
-      var restRanked = allMetricKeys.filter(function (k) { return metricKeys.indexOf(k) === -1; })
-        .sort(function (a, b) { return state.countryProfile[a] - state.countryProfile[b]; });
-      metricKeys = metricKeys.concat(restRanked.slice(0, 3 - metricKeys.length));
+    var candidates = buildQtTopicCandidates();
+    // Almeno una domanda resta sempre ancorata a un fronte debole reale della Scheda Paese; le altre due,
+    // quando disponibili, possono arrivare da un provvedimento recente o da una notizia/scandalo — un
+    // question time vero non nasce solo dalla tabella degli indicatori.
+    var metricCandidates = candidates.filter(function (c) { return c.source === "metrica"; });
+    var guaranteed = metricCandidates.length ? metricCandidates[0] : candidates[0];
+    var restPool = shuffleN(candidates.filter(function (c) { return c !== guaranteed; }), candidates.length - 1);
+    var picked = [guaranteed];
+    var usedMetrics = {};
+    if (guaranteed.metric) usedMetrics[guaranteed.metric] = true;
+    for (var ri = 0; ri < restPool.length && picked.length < 3; ri++) {
+      var cand = restPool[ri];
+      if (cand.source === "metrica" && usedMetrics[cand.metric]) continue;
+      picked.push(cand);
+      usedMetrics[cand.metric] = true;
     }
-    metricKeys = shuffleN(metricKeys, Math.min(3, metricKeys.length));
+    for (var mi = 0; mi < metricCandidates.length && picked.length < 3; mi++) {
+      if (picked.indexOf(metricCandidates[mi]) === -1) picked.push(metricCandidates[mi]);
+    }
+    picked = shuffleN(picked, picked.length);
     var govLabel = govEntityLabel();
-    var exchanges = metricKeys.map(function (metric) {
+    var exchanges = picked.map(function (cand) {
       var asker = oppParties.length ? oppParties[Math.floor(Math.random() * oppParties.length)] : null;
       var askerName = generateStaffName();
-      var noun = METRIC_LABELS[metric];
-      var value = state.countryProfile[metric];
       return {
         askerName: askerName, askerParty: asker ? { name: asker.name, color: asker.color } : { name: "Gruppo Misto", color: "#888888" },
-        metric: metric, noun: noun, value: value,
-        questionText: askerName + " (" + (asker ? asker.name : "Gruppo Misto") + ") chiede conto al Governo " + govLabel + " sul fronte " + noun + ", fermo a " + fmt1(value) + "/10.",
-        answerText: buildGovernmentAnswerText(metric, value)
+        metric: cand.metric, noun: cand.noun, value: cand.value,
+        questionText: askerName + " (" + (asker ? asker.name : "Gruppo Misto") + ") chiede conto al Governo " + govLabel + " " + cand.topicPhrase + ".",
+        answerText: cand.answerText
       };
     });
     var playerTurn = null;
     if (isPlayerGov) {
-      var pick = exchanges[exchanges.length - 1] || { metric: metricKeys[0], noun: METRIC_LABELS[metricKeys[0]], value: state.countryProfile[metricKeys[0]] };
+      var pick = exchanges[exchanges.length - 1] || { metric: guaranteed.metric, noun: guaranteed.noun, value: guaranteed.value };
       playerTurn = {
         mode: "answer", metric: pick.metric, noun: pick.noun, value: pick.value,
         choices: buildParliamentChoices({ noun: pick.noun, nationalMetric: pick.metric, isGoverno: true, rivalId: null, themeId: METRIC_TO_THEME_ID[pick.metric] }, 4)
@@ -4322,7 +4389,7 @@
     } else {
       playerTurn = {
         mode: "choose_topic",
-        topicOptions: metricKeys.map(function (m) { return { metric: m, noun: METRIC_LABELS[m], value: state.countryProfile[m] }; }),
+        topicOptions: picked.map(function (cand) { return { metric: cand.metric, noun: cand.noun, value: cand.value }; }),
         chosenMetric: null, choices: null
       };
     }
@@ -5573,7 +5640,8 @@
       title: shape.kind + ": " + domain.label,
       brief: "Da governo hai la possibilità concreta di intervenire su " + noun + "." + ideologyNote + " Come intendi procedere?",
       choices: shape.choices(noun, domain.metric),
-      reformNoun: noun
+      reformNoun: noun,
+      domainMetric: domain.metric
     };
   }
   var REFORM_COOLDOWN_TURNS = 15;
@@ -7885,9 +7953,9 @@
   // leggi in realtà solo scomparse dalla vista. L'elenco resta comunque un array semplice di poche
   // centinaia di oggetti anche in una partita lunghissima: nessun problema di prestazioni a lasciarlo
   // crescere senza limite artificiale.
-  function recordEnactedPolicy(title, note) {
+  function recordEnactedPolicy(title, note, metric) {
     if (!state.enactedPolicies) state.enactedPolicies = [];
-    state.enactedPolicies.unshift({ week: state.turn, title: title, note: note });
+    state.enactedPolicies.unshift({ week: state.turn, title: title, note: note, metric: metric || null });
   }
   // Leggi, mozioni e referendum del giocatore pescano tutti dallo stesso bacino di "nouns" combinatori
   // (vedi FAMILY_ANGLE_NOUNS/SITUATION_THEMES), solo con un involucro diverso ("Proposta di Legge su X",
@@ -8201,7 +8269,7 @@
     if (passed) {
       if (!state.passedNationalReferendumIds) state.passedNationalReferendumIds = [];
       state.passedNationalReferendumIds.push(topic.id);
-      recordEnactedPolicy(topic.title, esito + " Il paese prende atto del cambiamento: questo referendum non verrà riproposto.");
+      recordEnactedPolicy(topic.title, esito + " Il paese prende atto del cambiamento: questo referendum non verrà riproposto.", topic.metric);
       if (topic.electoralSystem) state.electoralSystem = topic.electoralSystem;
     }
     var rivalPool = activeParties();
@@ -8483,7 +8551,7 @@
     if (passed && !isEuExit) {
       if (!p.acceptedReferendum) p.acceptedReferendum = [];
       p.acceptedReferendum.push(topic.title);
-      recordEnactedPolicy(topic.title, "Referendum approvato: " + topic.noun + " cambia nella direzione richiesta. Il paese prende atto del cambiamento: non verrà riproposto.");
+      recordEnactedPolicy(topic.title, "Referendum approvato: " + topic.noun + " cambia nella direzione richiesta. Il paese prende atto del cambiamento: non verrà riproposto.", topic.metric);
       markTopicNounResolved(topic.noun);
     }
     if (governmentCrisisDossier) return governmentCrisisDossier;
@@ -8803,7 +8871,7 @@
     if (passed) {
       if (!p.acceptedMozioni) p.acceptedMozioni = [];
       p.acceptedMozioni.push(topic.title);
-      recordEnactedPolicy(topic.title, "Mozione approvata: " + topic.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta.");
+      recordEnactedPolicy(topic.title, "Mozione approvata: " + topic.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
       markTopicNounResolved(topic.noun);
       if (isFiscalTopic(topic.noun) || isFiscalTopic(topic.title)) applyIndirectFiscalNudge(p.family, 0.6);
     }
@@ -8875,7 +8943,7 @@
     if (passed) {
       if (!p.acceptedLeggi) p.acceptedLeggi = [];
       p.acceptedLeggi.push(topic.title);
-      recordEnactedPolicy(topic.title, "Legge approvata: " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.");
+      recordEnactedPolicy(topic.title, "Legge approvata: " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
       markTopicNounResolved(topic.noun);
       if (isFiscalTopic(topic.noun) || isFiscalTopic(topic.title)) applyIndirectFiscalNudge(p.family, 1);
     }
@@ -8945,7 +9013,7 @@
     if (passed) {
       if (!p.acceptedAmendments) p.acceptedAmendments = [];
       p.acceptedAmendments.push(topic.title);
-      recordEnactedPolicy(topic.title, "Modifica approvata: " + topic.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.");
+      recordEnactedPolicy(topic.title, "Modifica approvata: " + topic.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
     }
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -9028,7 +9096,7 @@
     if (passed) {
       if (!p.acceptedAmendments) p.acceptedAmendments = [];
       p.acceptedAmendments.push(dossier.title.split(" (")[0]);
-      recordEnactedPolicy(dossier.title.split(" (")[0], "Modifica approvata (proposta da " + meta.proposerName + "): " + meta.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.");
+      recordEnactedPolicy(dossier.title.split(" (")[0], "Modifica approvata (proposta da " + meta.proposerName + "): " + meta.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.", meta.metric);
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Modifica di Legge" });
     state.resultData = { resultText: esito, headlines: [] };
@@ -9108,7 +9176,7 @@
       p.acceptedLeggi.push(dossier.title.split(" (")[0]);
       recordEnactedPolicy(dossier.title.split(" (")[0], meta.isRevisit
         ? ("Ulteriore intervento legislativo (proposta da " + meta.proposerName + "): un nuovo intervento normativo si aggiunge a quanto già stabilito su " + meta.noun + ".")
-        : ("Legge approvata (proposta da " + meta.proposerName + "): " + meta.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta."));
+        : ("Legge approvata (proposta da " + meta.proposerName + "): " + meta.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta."), meta.metric);
       markTopicNounResolved(meta.noun);
       if (isFiscalTopic(meta.noun) || isFiscalTopic(dossier.title)) {
         var leggeProposer = partyById(meta.proposerId);
@@ -9196,7 +9264,7 @@
       p.acceptedMozioni.push(dossier.title.split(" (")[0]);
       recordEnactedPolicy(dossier.title.split(" (")[0], meta.isRevisit
         ? ("Ulteriore atto parlamentare (proposta da " + meta.proposerName + "): un nuovo atto di indirizzo si aggiunge a quanto già deciso su " + meta.noun + ".")
-        : ("Mozione approvata (proposta da " + meta.proposerName + "): " + meta.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta."));
+        : ("Mozione approvata (proposta da " + meta.proposerName + "): " + meta.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta."), meta.metric);
       markTopicNounResolved(meta.noun);
       if (isFiscalTopic(meta.noun) || isFiscalTopic(dossier.title)) {
         var mozioneProposer = partyById(meta.proposerId);
@@ -17268,6 +17336,10 @@
           // tutte e tre. Una riforma di governo è un intervento più deciso di una singola legge, quindi pesa
           // un po' di più (1.2 contro l'1 della legge).
           if (isFiscalTopic(topic.dossier.title) || isFiscalTopic(topic.dossier.reformNoun)) applyIndirectFiscalNudge(p.family, 1.2);
+          // Le Riforme di Governo erano anche l'unica delle tre leve a non finire mai nel registro
+          // enactedPolicies: un'azione di governo vera e propria che restava invisibile a tutto ciò che
+          // legge quel registro (Scheda Paese, e ora anche la selezione dei temi del Question Time).
+          recordEnactedPolicy(topic.dossier.title, "Riforma di Governo attuata su " + topic.dossier.reformNoun + ".", topic.dossier.domainMetric);
         }
         var outcome = applyChoice(topic.dossier, choice);
         showSaveStatus(outcome.resultText, false);
