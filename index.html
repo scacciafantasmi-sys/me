@@ -9774,6 +9774,99 @@
     if (state.euMembershipOverrides && state.euMembershipOverrides[nation.id] !== undefined) return state.euMembershipOverrides[nation.id];
     return !!nation.isEU;
   }
+  // ---------- Congressi Internazionali: le "internazionali" di partito ----------
+  // Le famiglie ideologiche reali si organizzano da decenni in federazioni transnazionali (Internazionale
+  // Socialista, Internazionale Liberale, il PPE, il Foro di São Paulo per la sinistra radicale...): qui
+  // ognuna delle 17 famiglie del gioco viene raggruppata in una di queste federazioni, che si riunisce
+  // periodicamente a congresso. Distinto dal Gruppo europarlamentare (euGroup, che richiede seggi europei
+  // e una scelta del giocatore): qui basta essere un partito rilevante in Parlamento, con un leader in
+  // carica, per ricevere l'invito — indipendentemente dagli eurodeputati.
+  var INTERNATIONAL_CONGRESSES = [
+    { id: "internazionale_socialista", label: "Internazionale Socialista e Socialdemocratica", partyNoun: "il Partito Socialista", families: ["sinistra"] },
+    { id: "foro_comunista", label: "Foro dei Partiti Comunisti e Radicali", partyNoun: "il Partito Comunista", families: ["comunista", "gratuitista", "comunismolusso"] },
+    { id: "internazionale_liberale", label: "Internazionale Liberale e Riformista", partyNoun: "il Partito Liberale", families: ["liberale", "libertario", "tecnoprogressista", "europeista"] },
+    { id: "congresso_verde", label: "Congresso Verde Globale", partyNoun: "il Partito Verde", families: ["progressista"] },
+    { id: "unione_popolare_democratica", label: "Unione Popolare Democratica Internazionale", partyNoun: "il Partito Popolare", families: ["cattolico"] },
+    { id: "alleanza_conservatrice", label: "Alleanza dei Conservatori e dei Riformisti", partyNoun: "il Partito Conservatore", families: ["regionalista", "meridionalista", "monarchico"] },
+    { id: "vertice_sovranista", label: "Vertice dei Movimenti Sovranisti e Nazional-Popolari", partyNoun: "il Movimento Sovranista", families: ["sovranista", "nazionalpopolare"] },
+    { id: "raduno_nazionalfascista", label: "Raduno dei Movimenti Nazional-Fascisti Europei", partyNoun: "il Movimento Nazionalfascista", families: ["fascista"] },
+    { id: "rete_movimentista", label: "Rete Internazionale dei Movimenti Anti-Establishment", partyNoun: "il Movimento Anti-Establishment", families: ["movimentista"] }
+  ];
+  var FAMILY_TO_INTERNATIONAL_CONGRESS = {};
+  INTERNATIONAL_CONGRESSES.forEach(function (c) { c.families.forEach(function (f) { FAMILY_TO_INTERNATIONAL_CONGRESS[f] = c; }); });
+  var DEMONYM_BY_NATION_ID = {
+    germania: "tedesco", francia: "francese", spagna: "spagnolo", polonia: "polacco", paesibassi: "olandese",
+    belgio: "belga", svezia: "svedese", austria: "austriaco", irlanda: "irlandese", portogallo: "portoghese",
+    grecia: "greco", romania: "rumeno", ungheria: "ungherese", repubblicaceca: "ceco", danimarca: "danese",
+    finlandia: "finlandese", croazia: "croato", slovacchia: "slovacco", statiuniti: "americano",
+    regnounito: "britannico", russia: "russo", cina: "cinese", india: "indiano", giappone: "giapponese",
+    coreadelsud: "sudcoreano", brasile: "brasiliano", canada: "canadese", australia: "australiano",
+    turchia: "turco", arabiasaudita: "saudita", emiratiarabi: "emiratino", israele: "israeliano",
+    egitto: "egiziano", sudafrica: "sudafricano", nigeria: "nigeriano", indonesia: "indonesiano",
+    messico: "messicano", argentina: "argentino", norvegia: "norvegese", svizzera: "svizzero"
+  };
+  var FOREIGN_DELEGATE_FIRST_NAMES = ["Klaus", "Marie", "Elena", "Piotr", "Sofia", "Anders", "João", "Willem", "Ioanna", "Katarina", "Lars", "Hans", "Camille", "Ingrid", "Milan", "Astrid", "Dimitri", "Freya", "Erik", "Nadia"];
+  var FOREIGN_DELEGATE_SURNAMES = ["Müller", "Dubois", "García", "Kowalski", "Novak", "Andersson", "Silva", "de Jong", "Papadopoulos", "Horvat", "Larsen", "Fischer", "Moreau", "Nilsson", "Kovač", "Berg", "Costa", "Weber", "Lund", "Petrov"];
+  function generateForeignDelegateName() {
+    var fn = FOREIGN_DELEGATE_FIRST_NAMES[Math.floor(Math.random() * FOREIGN_DELEGATE_FIRST_NAMES.length)];
+    var sn = FOREIGN_DELEGATE_SURNAMES[Math.floor(Math.random() * FOREIGN_DELEGATE_SURNAMES.length)];
+    return fn + " " + sn;
+  }
+  var CONGRESS_DELEGATE_LINE_TEMPLATES = [
+    function (name, partyLabel, nationName) { return name + " (" + partyLabel + ") porta il saluto della propria delegazione e ricorda le battaglie comuni degli ultimi anni, chiedendo più coordinamento tra le forze sorelle."; },
+    function (name, partyLabel, nationName) { return name + " (" + partyLabel + ") racconta le difficoltà affrontate in " + nationName + " nell'ultima tornata elettorale, cercando solidarietà dagli altri delegati presenti."; },
+    function (name, partyLabel, nationName) { return name + " (" + partyLabel + ") illustra i risultati ottenuti in " + nationName + ", proponendoli come modello da esportare anche altrove."; },
+    function (name, partyLabel, nationName) { return name + " (" + partyLabel + ") lancia un appello per una linea comune europea sul tema del momento, tra gli applausi della sala."; }
+  ];
+  var INTERNATIONAL_CONGRESS_COOLDOWN_TURNS = 20;
+  function checkInternationalCongressTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader || !p.inParliament || !p.family) return false;
+    if (!FAMILY_TO_INTERNATIONAL_CONGRESS[p.family]) return false;
+    return state.turn >= (p.internationalCongressCooldownTurn || 0);
+  }
+  function buildInternationalCongressScene() {
+    var p = state.player;
+    p.internationalCongressCooldownTurn = state.turn + INTERNATIONAL_CONGRESS_COOLDOWN_TURNS;
+    var congress = FAMILY_TO_INTERNATIONAL_CONGRESS[p.family];
+    var delegateNations = shuffleN(WORLD_NATIONS.slice(), Math.min(2, WORLD_NATIONS.length));
+    var exchanges = delegateNations.map(function (nation) {
+      var demonym = DEMONYM_BY_NATION_ID[nation.id] || nation.name;
+      var partyLabel = congress.partyNoun + " " + demonym.charAt(0).toUpperCase() + demonym.slice(1);
+      var name = generateForeignDelegateName();
+      var template = CONGRESS_DELEGATE_LINE_TEMPLATES[Math.floor(Math.random() * CONGRESS_DELEGATE_LINE_TEMPLATES.length)];
+      return { delegateName: name, partyLabel: partyLabel, nationName: nation.name, line: template(name, partyLabel, nation.name) };
+    });
+    state.internationalCongress = {
+      step: 0, congressId: congress.id, congressLabel: congress.label,
+      exchanges: exchanges, speechAnswered: null, speechResult: null
+    };
+    state.phase = "international_congress_scene";
+  }
+  // Come buildSpeechFreeTextOutcome (discorso di partito), ma su un palco internazionale: effetti un po'
+  // più ampi (è un evento raro, ogni 20 settimane) e con un tocco di relazioniDiplomatiche, coerente col
+  // fatto di parlare davanti a delegazioni straniere e non solo alla propria base.
+  function buildCongressSpeechOutcome(text, congressLabel) {
+    var classification = classifyStatement(text);
+    var tone = classification.tone;
+    var trimmed = (text || "").trim();
+    var boost = trimmed.length >= 80 ? 1.2 : (trimmed.length < 20 ? 0.5 : 1);
+    var eff, result;
+    if (tone === "aggressivo") {
+      eff = { visibilita: rand(8, 16) * boost, iscritti: rand(20, 40) * boost, reputazione: -rand(0, 2), national: { relazioniDiplomatiche: rand(0.05, 0.15) * boost } };
+      result = "Il tuo intervento appassionato al " + congressLabel + " scalda la sala internazionale: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa.";
+    } else if (tone === "istituzionale") {
+      eff = { reputazione: rand(3, 6) * boost, visibilita: rand(3, 6), national: { relazioniDiplomatiche: rand(0.15, 0.3) * boost } };
+      result = "Il tuo intervento misurato e argomentato al " + congressLabel + " rafforza la credibilità internazionale del partito, aprendo la strada a nuovi contatti con le forze sorelle.";
+    } else if (tone === "positivo") {
+      eff = { reputazione: rand(2, 4) * boost, sondaggi: rand(0.05, 0.12) * boost, national: { relazioniDiplomatiche: rand(0.1, 0.25) * boost } };
+      result = "Il tuo intervento propositivo al " + congressLabel + " convince molti dei delegati presenti, e getta le basi per una collaborazione più stretta con le forze sorelle europee.";
+    } else {
+      eff = { reputazione: -rand(0, 2) };
+      result = "Il tuo intervento al " + congressLabel + " resta generico, poco incisivo: i delegati passano rapidamente al punto successivo dell'ordine del giorno.";
+    }
+    return { effects: eff, result: result };
+  }
   // Deriva lentamente (4% del divario a settimana) verso l'affinità ideologica col governo attuale:
   // basta e avanza per rendere i rapporti vivi nel tempo, senza scatti innaturali settimana per settimana.
   // Attiva solo mentre si è al governo: è lì che si "sbloccano" davvero i rapporti con l'estero.
@@ -10041,7 +10134,7 @@
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
     qtScene: null, qtManualScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
-    salottoScene: null, ufficioScene: null, statements: [],
+    salottoScene: null, ufficioScene: null, internationalCongress: null, statements: [],
     mode: "party", career: null
   };
   var PLAYER_FIELD_DEFAULTS = {
@@ -10073,6 +10166,7 @@
     leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
     electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0,
+    internationalCongressCooldownTurn: 0,
     dichiarazioniWeek: 0, dichiarazioniCount: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
@@ -15215,6 +15309,35 @@
     html += "</div>";
     return html;
   }
+  // Scena del Congresso Internazionale: stesso schema "ascolta e poi parla" del Question Time (step +
+  // bottone "Continua ad ascoltare"), ma qui gli interlocutori sono delegati stranieri della stessa area
+  // ideologica, non colleghi di Aula — solo alla fine arriva il turno del giocatore di prendere la parola
+  // davanti alla platea internazionale.
+  function renderInternationalCongressScene() {
+    var ic = state.internationalCongress;
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">' + ic.congressLabel + " — Bruxelles</p>" +
+      "<h2>Il tuo partito è stato invitato</h2>" +
+      '<p class="ci-hint">Delegazioni di partiti della stessa area ideologica, arrivate da tutta Europa, si riuniscono per il congresso periodico. Prendi posto in sala.</p>';
+    var visibleExchanges = ic.exchanges.slice(0, Math.min(ic.step + 1, ic.exchanges.length));
+    visibleExchanges.forEach(function (ex) {
+      html += '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(ex.delegateName, null, 26) +
+        '<span><span class="qt-speaker-name">' + ex.delegateName + '</span> <span class="qt-speaker-party">— ' + ex.partyLabel + '</span></span></div>' +
+        '<p class="qt-question">' + ex.line + '</p></div>';
+    });
+    var allExchangesShown = ic.step >= ic.exchanges.length - 1;
+    if (!allExchangesShown) {
+      html += '<div class="qt-continue-row"><button type="button" class="advance-btn" id="congress-scene-continue-btn">Continua ad ascoltare</button></div></div>';
+      return html;
+    }
+    html += '<div class="qt-exchange"><p class="qt-question"><strong>Tocca a te</strong>: arriva il tuo turno di parlare davanti alla platea internazionale.</p></div>';
+    if (ic.speechAnswered) {
+      html += '<p class="qt-answer">«' + ic.speechAnswered + '»<br><span class="ci-hint">' + ic.speechResult + "</span></p></div>";
+    } else {
+      html += renderFreeTextCompose("congress-speech-input", "congress-speech-submit-btn", "Il tuo intervento", "Scrivi qui, con parole tue, il tuo intervento davanti alla platea internazionale…", "Prendi la parola") + "</div>";
+    }
+    html += "</div>";
+    return html;
+  }
   // Scena dell'intervista al leader: a differenza del question time (il giocatore ascolta e interviene
   // una volta sola), qui OGNI domanda è rivolta direttamente a lui — le domande già risposte restano
   // visibili con la scelta fatta e il suo esito, la domanda corrente mostra le scelte vere.
@@ -15823,6 +15946,53 @@
             save();
             render();
           }
+        });
+      }
+      return;
+    }
+
+    // Congresso Internazionale: stesso gating della intervista al leader (checkInternationalCongressTrigger
+    // richiede già p.playerIsLeader, quindi nessun ramo di auto-play per lo sfiduciato). Il discorso finale
+    // viene anche pubblicato come una vera dichiarazione pubblica (pushStatement), visibile nel registro
+    // Dichiarazioni: parlare a un congresso internazionale resta comunque una presa di posizione pubblica.
+    if (state.phase === "international_congress_scene") {
+      app.innerHTML = renderInternationalCongressScene();
+      bindAutoGrowTextarea("congress-speech-input");
+      var congressContinueBtn = document.getElementById("congress-scene-continue-btn");
+      if (congressContinueBtn) {
+        congressContinueBtn.addEventListener("click", function () {
+          state.internationalCongress.step++;
+          save();
+          render();
+        });
+      }
+      var congressSubmitBtn = document.getElementById("congress-speech-submit-btn");
+      if (congressSubmitBtn) {
+        congressSubmitBtn.addEventListener("click", function () {
+          var congressInput = document.getElementById("congress-speech-input");
+          var text = (congressInput ? congressInput.value : "").trim();
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di prendere la parola.", true); return; }
+          var ic = state.internationalCongress;
+          var p = state.player;
+          var outcome = buildCongressSpeechOutcome(text, ic.congressLabel);
+          var dossier = { title: ic.congressLabel, cat: "Internazionale" };
+          var choice = { label: "Il tuo intervento", effects: outcome.effects, result: outcome.result };
+          var classification = classifyStatement(text);
+          var res = applyChoice(dossier, choice);
+          pushStatement({
+            week: state.turn, authorName: p.name,
+            authorRole: "Delegazione — " + ic.congressLabel,
+            authorColor: p.color, authorPhoto: p.leaderPhotoDataUrl, isPlayer: true,
+            topicLabel: classification.topicLabel, themeMetric: classification.themeMetric, matchedKeyword: classification.matchedKeyword,
+            text: text
+          });
+          ic.speechAnswered = text;
+          ic.speechResult = outcome.result;
+          state.resultData = res;
+          state.internationalCongress = null;
+          state.phase = "result";
+          save();
+          render();
         });
       }
       return;
@@ -17774,6 +17944,11 @@
 
     if (checkLeaderInterviewTrigger()) {
       buildLeaderInterviewScene();
+      return;
+    }
+
+    if (checkInternationalCongressTrigger()) {
+      buildInternationalCongressScene();
       return;
     }
 
