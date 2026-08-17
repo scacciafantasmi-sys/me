@@ -4383,22 +4383,35 @@
     if (label.indexOf("i ") === 0) return "ai " + label.slice(2);
     return "a " + label;
   }
-  function buildInterviewChoices(topicLabel, isGoverno, fromContextPhrase, subjectPronoun) {
-    var pol = isGoverno ? "il Governo" : "il tuo partito";
-    var fromCtx = fromContextPhrase || "dall'intervista";
-    var subj = subjectPronoun || "il giornalista";
-    var suTopic = suLabel(topicLabel);
-    return [
-      { label: "Rispondi con toni pacati e istituzionali", hint: "Meno scintille, più credibilità",
-        effects: { reputazione: rand(1, 3), visibilita: rand(1, 2) },
-        result: "Rispondi con toni misurati " + suTopic + ": " + pol + " esce " + fromCtx + " con un'immagine solida, anche se poco memorabile." },
-      { label: "Rispondi con toni combattivi, all'attacco", hint: "Più visibilità, rischio di polarizzare",
-        effects: { visibilita: rand(4, 8), reputazione: -rand(0, 2), iscritti: rand(5, 15) },
-        result: "Rispondi con un affondo deciso " + suTopic + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
-      { label: "Glissa, sposta il discorso altrove", hint: "Nessun rischio immediato, ma sembra evasivo",
-        effects: { reputazione: -rand(0, 2) },
-        result: "Eviti di entrare nel merito " + suTopic + ": " + subj + " insiste, ma il confronto prosegue su altri temi." }
-    ];
+  // Sostituisce le vecchie tre posture fisse (pacato/combattivo/glissa) con lo stesso motore lessicale
+  // delle Dichiarazioni (classifyStatement/detectStatementTone): usato ovunque il giocatore debba
+  // rispondere a una domanda vera in un momento pubblico (intervista al leader, Consiglio Comunale,
+  // domanda dal pubblico a un comizio/congresso). Il tono "positivo" (assente nelle 3 posture originali)
+  // copre chi risponde rivendicando con ottimismo, non solo difendendosi o attaccando.
+  function buildInterviewFreeTextOutcome(text, ctx) {
+    var classification = classifyStatement(text);
+    var tone = classification.tone;
+    var trimmed = (text || "").trim();
+    var boost = trimmed.length >= 60 ? 1.15 : (trimmed.length < 15 ? 0.6 : 1);
+    var pol = ctx.isGoverno ? "il Governo" : "il tuo partito";
+    var fromCtx = ctx.fromContextPhrase || "dall'intervista";
+    var subj = ctx.subjectPronoun || "il giornalista";
+    var suTopic = suLabel(ctx.topicLabel);
+    var eff, result;
+    if (tone === "aggressivo") {
+      eff = { visibilita: rand(4, 8) * boost, reputazione: -rand(0, 2), iscritti: rand(5, 15) * boost };
+      result = "Rispondi con un affondo deciso " + suTopic + ": la clip fa il giro dei social, scalda la base ma non convince tutti.";
+    } else if (tone === "istituzionale") {
+      eff = { reputazione: rand(1, 3) * boost, visibilita: rand(1, 2) };
+      result = "Rispondi con toni pacati e istituzionali " + suTopic + ": " + pol + " esce " + fromCtx + " con un'immagine solida, anche se poco memorabile.";
+    } else if (tone === "positivo") {
+      eff = { reputazione: rand(1, 2.5) * boost, visibilita: rand(2, 5) };
+      result = "Rispondi con un tono positivo e propositivo " + suTopic + ": l'ottimismo convince una parte del pubblico.";
+    } else {
+      eff = { reputazione: -rand(0, 2) };
+      result = "La tua risposta " + suTopic + " resta vaga, quasi elusiva: " + subj + " insiste, ma il confronto prosegue su altri temi.";
+    }
+    return { effects: eff, result: result };
   }
   function buildLeaderInterviewScene() {
     var p = state.player;
@@ -4419,8 +4432,8 @@
     state.leaderInterview = {
       step: 0, setting: setting, isGoverno: isGoverno,
       questions: [
-        { text: q1Text, choices: buildInterviewChoices(q1Topic, isGoverno), answeredLabel: null, resultText: null },
-        { text: q2Text, choices: buildInterviewChoices(q2Topic, isGoverno), answeredLabel: null, resultText: null }
+        { text: q1Text, topicLabel: q1Topic, answeredText: null, resultText: null },
+        { text: q2Text, topicLabel: q2Topic, answeredText: null, resultText: null }
       ]
     };
     state.phase = "leader_interview_scene";
@@ -4469,8 +4482,7 @@
     state.consiglioComunaleScene = {
       city: city, metric: metric, topicLabel: topicLabel, askerName: askerName,
       askerParty: asker ? { name: asker.name, color: asker.color } : { name: "Lista civica", color: "#888888" },
-      questionText: askerName + " (" + (asker ? asker.name : "lista civica") + ") solleva in Consiglio Comunale il problema " + diLabel(topicLabel) + " a " + city + ".",
-      choices: buildInterviewChoices(topicLabel, false, "dalla seduta del Consiglio Comunale", askerName)
+      questionText: askerName + " (" + (asker ? asker.name : "lista civica") + ") solleva in Consiglio Comunale il problema " + diLabel(topicLabel) + " a " + city + "."
     };
     state.phase = "consiglio_comunale_scene";
   }
@@ -4576,17 +4588,16 @@
     var pickedMetrics = shuffleN(metricKeys, Math.min(2, metricKeys.length));
     var rounds = pickedMetrics.map(function (metric, i) {
       var noun = METRIC_LABELS[metric];
-      var themeId = METRIC_TO_THEME_ID[metric];
       var opener = SALOTTO_OPENERS[(state.turn + i) % SALOTTO_OPENERS.length];
       return {
         metric: metric, noun: noun,
         rivalPositionText: rival ? opener(rival.leader, rival.name, noun) : "Il conduttore introduce il tema " + suLabel(noun) + ".",
-        choices: buildParliamentChoices({ noun: noun, nationalMetric: metric, isGoverno: isPlayerGov, rivalId: rival ? rival.id : null, themeId: themeId }, 4),
-        answeredLabel: null, resultText: null
+        answeredText: null, resultText: null
       };
     });
     state.salottoScene = {
-      step: 0, rival: rival ? { name: rival.leader, partyName: rival.name, color: rival.color } : null, rounds: rounds
+      step: 0, isPlayerGov: isPlayerGov, rivalId: rival ? rival.id : null,
+      rival: rival ? { name: rival.leader, partyName: rival.name, color: rival.color } : null, rounds: rounds
     };
     state.phase = "salotto_scene";
   }
@@ -12737,29 +12748,39 @@
   // dell'intervista al leader: fase dedicata, un passo alla volta, nessun'altra azione nel frattempo.
   var PARTY_EVENT_SCENE_TYPES = { congresso: true, manifestazione: true, cena_partito: true };
   var PARTY_EVENT_SCENE_LABELS = { congresso: "il Congresso Nazionale", manifestazione: "la manifestazione di piazza", cena_partito: "la cena di partito" };
-  function buildSpeechChoices(noun) {
-    return [
-      { label: "Un discorso istituzionale e programmatico su " + noun, hint: "Meno scintille, più credibilità",
-        effects: { reputazione: rand(2, 4), iscritti: rand(10, 20) },
-        result: "Il discorso misurato su " + noun + " convince la platea più moderata, senza infiammare la sala." },
-      { label: "Un discorso appassionato e identitario su " + noun, hint: "Più entusiasmo, un po' più divisivo",
-        effects: { visibilita: rand(4, 8), iscritti: rand(20, 40), reputazione: -rand(0, 1) },
-        result: "Il discorso appassionato su " + noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
-      { label: "Un discorso unificante, aperto anche a chi non la pensa come te", hint: "Consenso trasversale, meno mobilitazione della base",
-        effects: { reputazione: rand(3, 5), sondaggi: rand(0.05, 0.1) },
-        result: "Il discorso unificante su " + noun + " apre al di fuori della base tradizionale, con qualche mugugno interno." }
-    ];
+  // Versione a testo libero delle tre posture fisse di un tempo (istituzionale/appassionato/unificante):
+  // stesso motore lessicale di buildInterviewFreeTextOutcome/buildFreeTextStatementEffects, con effetti e
+  // narrazione tarati sulle stesse tre fasce originali — aggressivo≈appassionato, istituzionale≈misurato,
+  // positivo≈unificante, neutro un discorso che non dice granché.
+  function buildSpeechFreeTextOutcome(text, noun) {
+    var classification = classifyStatement(text);
+    var tone = classification.tone;
+    var trimmed = (text || "").trim();
+    var boost = trimmed.length >= 60 ? 1.15 : (trimmed.length < 15 ? 0.6 : 1);
+    var eff, result;
+    if (tone === "aggressivo") {
+      eff = { visibilita: rand(4, 8) * boost, iscritti: rand(20, 40) * boost, reputazione: -rand(0, 1) };
+      result = "Il tuo discorso appassionato su " + noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo.";
+    } else if (tone === "istituzionale") {
+      eff = { reputazione: rand(2, 4) * boost, iscritti: rand(10, 20) * boost };
+      result = "Il tuo discorso misurato e programmatico su " + noun + " convince la platea più moderata, senza infiammare la sala.";
+    } else if (tone === "positivo") {
+      eff = { reputazione: rand(3, 5) * boost, sondaggi: rand(0.05, 0.1) };
+      result = "Il tuo discorso unificante su " + noun + " apre al di fuori della base tradizionale, con qualche mugugno interno.";
+    } else {
+      eff = { reputazione: -rand(0, 2) };
+      result = "Il tuo discorso su " + noun + " resta generico: la sala applaude per cortesia, ma senza vero entusiasmo.";
+    }
+    return { effects: eff, result: result };
   }
   function buildAudienceQuestion(noun) {
-    var p = state.player;
     var askerName = generateStaffName();
     var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5; });
     var metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
     var topicLabel = metric ? METRIC_LABELS[metric] : noun;
     return {
-      askerName: askerName,
-      text: askerName + " alza la mano dal pubblico: “E su " + topicLabel + ", cosa pensa di fare concretamente il partito?”",
-      choices: buildInterviewChoices(topicLabel, p.parliamentRole === "governo", "dal confronto con il pubblico", "il pubblico")
+      askerName: askerName, topicLabel: topicLabel,
+      text: askerName + " alza la mano dal pubblico: “E su " + topicLabel + ", cosa pensa di fare concretamente il partito?”"
     };
   }
   function launchPartyEventScene(eventId) {
@@ -12776,8 +12797,8 @@
     var topic = pickParliamentaryTopic(p, true);
     var question = buildAudienceQuestion(topic.noun);
     state.partyEventScene = {
-      eventId: eventId, step: 0, city: city, noun: topic.noun,
-      speechChoices: buildSpeechChoices(topic.noun), speechAnswered: null, speechResult: null,
+      eventId: eventId, step: 0, city: city, noun: topic.noun, isGoverno: p.parliamentRole === "governo",
+      speechAnswered: null, speechResult: null,
       question: question, questionAnswered: null, questionResult: null
     };
     state.phase = "party_event_scene";
@@ -15057,6 +15078,15 @@
       '<textarea id="qt-answer-input" class="autogrow-textarea" rows="8" placeholder="Scrivi qui, con parole tue, il tuo intervento in Aula…"></textarea></div>' +
       '<div class="choices"><button type="button" class="choice-btn" id="qt-answer-submit-btn"><span class="clabel">Pronuncia il tuo intervento in Aula</span></button></div>';
   }
+  // Stesso modulo di scrittura libera del question time, generalizzato con id personalizzabili: usato da
+  // ogni altra scena "rispondi tu, di tuo pugno" (intervista al leader, Consiglio Comunale, domanda dal
+  // pubblico a un comizio/congresso, discorso di partito, Salotto TV) — ciascuna con la propria coppia
+  // casella/bottone, per poter avere più caselle attive in pagine diverse senza id duplicati.
+  function renderFreeTextCompose(inputId, submitId, label, placeholder, buttonLabel) {
+    return '<div class="field"><label class="field-label" for="' + inputId + '">' + label + '</label>' +
+      '<textarea id="' + inputId + '" class="autogrow-textarea" rows="8" placeholder="' + placeholder + '"></textarea></div>' +
+      '<div class="choices"><button type="button" class="choice-btn" id="' + submitId + '"><span class="clabel">' + buttonLabel + '</span></button></div>';
+  }
   // Question time depositato di propria iniziativa dal giocatore (renderQuestionTimePanel, riservato a chi
   // è in Parlamento ma non al Governo): a differenza della scena periodica, qui il tema è già stato scelto
   // in anticipo la settimana prima (state.qtManualScene.metric) — resta solo da scrivere l'intervento,
@@ -15119,12 +15149,10 @@
     iv.questions.forEach(function (q, idx) {
       if (idx > iv.step) return;
       html += '<div class="qt-exchange"><p class="qt-question">' + q.text + "</p>";
-      if (q.answeredLabel) {
-        html += '<p class="qt-answer"><strong>' + q.answeredLabel + "</strong> — " + q.resultText + "</p></div>";
+      if (q.answeredText) {
+        html += '<p class="qt-answer">«' + q.answeredText + '»<br><span class="ci-hint">' + q.resultText + "</span></p></div>";
       } else {
-        html += '<div class="choices">' + q.choices.map(function (c, i) {
-          return '<button type="button" class="choice-btn" data-interview-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
-        }).join("") + "</div></div>";
+        html += renderFreeTextCompose("interview-answer-input", "interview-answer-submit-btn", "La tua risposta", "Scrivi qui, con parole tue, la tua risposta…", "Rispondi") + "</div>";
       }
     });
     html += "</div>";
@@ -15141,11 +15169,9 @@
       '<p class="ci-hint">Il tema di oggi: ' + pe.noun + ".</p>";
     html += '<div class="qt-exchange"><p class="qt-question">Come imposti il discorso su ' + pe.noun + "?</p>";
     if (pe.speechAnswered) {
-      html += '<p class="qt-answer"><strong>' + pe.speechAnswered + "</strong> — " + pe.speechResult + "</p></div>";
+      html += '<p class="qt-answer">«' + pe.speechAnswered + '»<br><span class="ci-hint">' + pe.speechResult + "</span></p></div>";
     } else {
-      html += '<div class="choices">' + pe.speechChoices.map(function (c, i) {
-        return '<button type="button" class="choice-btn" data-speech-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
-      }).join("") + "</div></div>";
+      html += renderFreeTextCompose("speech-answer-input", "speech-answer-submit-btn", "Il tuo discorso", "Scrivi qui, con parole tue, il tuo discorso…", "Sali sul palco") + "</div>";
       html += "</div>";
       return html;
     }
@@ -15153,11 +15179,9 @@
       '<span><span class="qt-speaker-name">' + pe.question.askerName + "</span> <span class=\"qt-speaker-party\">— dal pubblico</span></span></div>" +
       '<p class="qt-question">' + pe.question.text + "</p>";
     if (pe.questionAnswered) {
-      html += '<p class="qt-answer"><strong>' + pe.questionAnswered + "</strong> — " + pe.questionResult + "</p></div>";
+      html += '<p class="qt-answer">«' + pe.questionAnswered + '»<br><span class="ci-hint">' + pe.questionResult + "</span></p></div>";
     } else {
-      html += '<div class="choices">' + pe.question.choices.map(function (c, i) {
-        return '<button type="button" class="choice-btn" data-audience-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
-      }).join("") + "</div></div>";
+      html += renderFreeTextCompose("audience-answer-input", "audience-answer-submit-btn", "La tua risposta", "Scrivi qui, con parole tue, la tua risposta…", "Rispondi") + "</div>";
     }
     html += "</div>";
     return html;
@@ -15172,9 +15196,7 @@
     html += '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(cc.askerName, null, 26, cc.askerParty.color) +
       '<span><span class="qt-speaker-name">' + cc.askerName + '</span> <span class="qt-speaker-party">— ' + cc.askerParty.name + '</span></span></div>' +
       '<p class="qt-question">' + cc.questionText + '</p>';
-    html += '<div class="choices">' + cc.choices.map(function (c, i) {
-      return '<button type="button" class="choice-btn" data-council-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
-    }).join("") + "</div></div></div>";
+    html += renderFreeTextCompose("council-answer-input", "council-answer-submit-btn", "La tua risposta", "Scrivi qui, con parole tue, la tua risposta…", "Rispondi") + "</div></div>";
     return html;
   }
   // Scena della riunione di programma: intro (passo 0), poi un passo per ciascun capitolo (indice =
@@ -15287,12 +15309,10 @@
           '<span><span class="qt-speaker-name">' + sc.rival.name + '</span> <span class="qt-speaker-party">— ' + sc.rival.partyName + "</span></span></div>";
       }
       html += '<p class="qt-question">' + r.rivalPositionText + "</p>";
-      if (r.answeredLabel) {
-        html += '<p class="qt-answer"><strong>' + r.answeredLabel + "</strong> — " + r.resultText + "</p></div>";
+      if (r.answeredText) {
+        html += '<p class="qt-answer">«' + r.answeredText + '»<br><span class="ci-hint">' + r.resultText + "</span></p></div>";
       } else {
-        html += '<div class="choices">' + r.choices.map(function (c, i) {
-          return '<button type="button" class="choice-btn" data-salotto-choice="' + i + '"><span class="clabel">' + c.label + '</span>' + (c.hint ? '<span class="chint">' + c.hint + '</span>' : "") + '</button>';
-        }).join("") + "</div></div>";
+        html += renderFreeTextCompose("salotto-answer-input", "salotto-answer-submit-btn", "La tua risposta", "Scrivi qui, con parole tue, la tua replica in diretta…", "Rispondi in diretta") + "</div>";
       }
     });
     html += "</div>";
@@ -15699,16 +15719,21 @@
     // giocatore non è più leader, questa scena non si genera affatto).
     if (state.phase === "leader_interview_scene") {
       app.innerHTML = renderLeaderInterviewScene();
-      app.querySelectorAll("[data-interview-choice]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var idx = parseInt(btn.getAttribute("data-interview-choice"), 10);
+      bindAutoGrowTextarea("interview-answer-input");
+      var ivSubmitBtn = document.getElementById("interview-answer-submit-btn");
+      if (ivSubmitBtn) {
+        ivSubmitBtn.addEventListener("click", function () {
+          var ivInput = document.getElementById("interview-answer-input");
+          var text = (ivInput ? ivInput.value : "").trim();
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di rispondere.", true); return; }
           var iv = state.leaderInterview;
           var q = iv.questions[iv.step];
-          var choice = q.choices[idx];
+          var outcome = buildInterviewFreeTextOutcome(text, { topicLabel: q.topicLabel, isGoverno: iv.isGoverno });
           var dossier = { title: "Intervista al leader", cat: "Comunicazione" };
+          var choice = { label: "La tua risposta", effects: outcome.effects, result: outcome.result };
           var res = applyChoice(dossier, choice);
-          q.answeredLabel = choice.label;
-          q.resultText = choice.result;
+          q.answeredText = text;
+          q.resultText = outcome.result;
           if (iv.step < iv.questions.length - 1) {
             iv.step++;
             save();
@@ -15721,7 +15746,7 @@
             render();
           }
         });
-      });
+      }
       return;
     }
 
@@ -15729,46 +15754,61 @@
     // trigger periodico), vedi launchPartyEventScene richiamata dal pannello Eventi di Partito più sotto.
     if (state.phase === "party_event_scene") {
       app.innerHTML = renderPartyEventScene();
-      app.querySelectorAll("[data-speech-choice]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var idx = parseInt(btn.getAttribute("data-speech-choice"), 10);
+      bindAutoGrowTextarea("speech-answer-input");
+      bindAutoGrowTextarea("audience-answer-input");
+      var speechSubmitBtn = document.getElementById("speech-answer-submit-btn");
+      if (speechSubmitBtn) {
+        speechSubmitBtn.addEventListener("click", function () {
+          var speechInput = document.getElementById("speech-answer-input");
+          var text = (speechInput ? speechInput.value : "").trim();
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di salire sul palco.", true); return; }
           var pe = state.partyEventScene;
-          var choice = pe.speechChoices[idx];
+          var outcome = buildSpeechFreeTextOutcome(text, pe.noun);
           var dossier = { title: PARTY_EVENT_SCENE_LABELS[pe.eventId], cat: "Organizzazione" };
+          var choice = { label: "Il tuo discorso", effects: outcome.effects, result: outcome.result };
           applyChoice(dossier, choice);
-          pe.speechAnswered = choice.label;
-          pe.speechResult = choice.result;
+          pe.speechAnswered = text;
+          pe.speechResult = outcome.result;
           save();
           render();
         });
-      });
-      app.querySelectorAll("[data-audience-choice]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var idx = parseInt(btn.getAttribute("data-audience-choice"), 10);
+      }
+      var audienceSubmitBtn = document.getElementById("audience-answer-submit-btn");
+      if (audienceSubmitBtn) {
+        audienceSubmitBtn.addEventListener("click", function () {
+          var audienceInput = document.getElementById("audience-answer-input");
+          var text = (audienceInput ? audienceInput.value : "").trim();
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di rispondere.", true); return; }
           var pe = state.partyEventScene;
-          var choice = pe.question.choices[idx];
+          var outcome = buildInterviewFreeTextOutcome(text, { topicLabel: pe.question.topicLabel, isGoverno: pe.isGoverno, fromContextPhrase: "dal confronto con il pubblico", subjectPronoun: "il pubblico" });
           var dossier = { title: PARTY_EVENT_SCENE_LABELS[pe.eventId], cat: "Organizzazione" };
+          var choice = { label: "La tua risposta", effects: outcome.effects, result: outcome.result };
           var res = applyChoice(dossier, choice);
-          pe.questionAnswered = choice.label;
-          pe.questionResult = choice.result;
+          pe.questionAnswered = text;
+          pe.questionResult = outcome.result;
           state.resultData = res;
           state.partyEventScene = null;
           state.phase = "result";
           save();
           render();
         });
-      });
+      }
       return;
     }
 
     if (state.phase === "consiglio_comunale_scene") {
       app.innerHTML = renderConsiglioComunaleScene();
-      app.querySelectorAll("[data-council-choice]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var idx = parseInt(btn.getAttribute("data-council-choice"), 10);
+      bindAutoGrowTextarea("council-answer-input");
+      var councilSubmitBtn = document.getElementById("council-answer-submit-btn");
+      if (councilSubmitBtn) {
+        councilSubmitBtn.addEventListener("click", function () {
+          var councilInput = document.getElementById("council-answer-input");
+          var text = (councilInput ? councilInput.value : "").trim();
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di rispondere.", true); return; }
           var cc = state.consiglioComunaleScene;
-          var choice = cc.choices[idx];
+          var outcome = buildInterviewFreeTextOutcome(text, { topicLabel: cc.topicLabel, isGoverno: false, fromContextPhrase: "dalla seduta del Consiglio Comunale", subjectPronoun: cc.askerName });
           var dossier = { title: "Consiglio Comunale di " + cc.city, cat: "Amministrazione Locale" };
+          var choice = { label: "La tua risposta", effects: outcome.effects, result: outcome.result };
           var res = applyChoice(dossier, choice);
           state.resultData = res;
           state.consiglioComunaleScene = null;
@@ -15776,7 +15816,7 @@
           save();
           render();
         });
-      });
+      }
       return;
     }
 
@@ -15896,16 +15936,21 @@
     // leader e riunione di programma — nessun ramo di auto-play necessario per lo sfiduciato.
     if (state.phase === "salotto_scene") {
       app.innerHTML = renderSalottoScene();
-      app.querySelectorAll("[data-salotto-choice]").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var idx = parseInt(btn.getAttribute("data-salotto-choice"), 10);
+      bindAutoGrowTextarea("salotto-answer-input");
+      var salottoSubmitBtn = document.getElementById("salotto-answer-submit-btn");
+      if (salottoSubmitBtn) {
+        salottoSubmitBtn.addEventListener("click", function () {
+          var salottoInput = document.getElementById("salotto-answer-input");
+          var text = (salottoInput ? salottoInput.value : "").trim();
+          if (!text) { showSaveStatus("Scrivi qualcosa prima di rispondere.", true); return; }
           var sc = state.salottoScene;
           var r = sc.rounds[sc.step];
-          var choice = r.choices[idx];
+          var outcome = buildQuestionTimeFreeTextOutcome(text, { noun: r.noun, nationalMetric: r.metric, isGoverno: sc.isPlayerGov, rivalId: sc.rivalId });
           var dossier = { title: "Salotto TV — " + r.noun, cat: "Comunicazione" };
+          var choice = { label: "La tua risposta", effects: outcome.effects, result: outcome.result };
           var res = applyChoice(dossier, choice);
-          r.answeredLabel = choice.label;
-          r.resultText = choice.result;
+          r.answeredText = text;
+          r.resultText = outcome.result;
           if (sc.step < sc.rounds.length - 1) {
             sc.step++;
             save();
@@ -15918,7 +15963,7 @@
             render();
           }
         });
-      });
+      }
       return;
     }
 
