@@ -4322,9 +4322,13 @@
     weakMetrics.forEach(function (metric) {
       var noun = METRIC_LABELS[metric];
       var value = state.countryProfile[metric];
+      // Non solo il numero astratto: un caso concreto e riconoscibile (vedi METRIC_DETAIL_PHRASES), così
+      // il giocatore sa davvero su cosa intervenire quando scrive la sua risposta, invece di dover
+      // rispondere nel vuoto a un indicatore senza contesto.
+      var detailPhrase = pickAmbientDetailPhrase(metric, noun, null);
       candidates.push({
         metric: metric, noun: noun, value: value, source: "metrica",
-        topicPhrase: "sul fronte " + noun + ", fermo a " + fmt1(value) + "/10",
+        topicPhrase: "su " + detailPhrase + ", con " + noun + " fermo a " + fmt1(value) + "/10",
         answerText: buildGovernmentAnswerText(metric, value)
       });
     });
@@ -4522,8 +4526,9 @@
     var q1Topic = recentDiary ? recentDiary.title.toLowerCase() : "la linea del partito";
     var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5 && !isExpectedWeakMetricFor(p.family, k); });
     var q2Metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
+    var q2Detail = q2Metric ? pickAmbientDetailPhrase(q2Metric, METRIC_LABELS[q2Metric], p.family) : null;
     var q2Text = q2Metric
-      ? "Passa poi a un fronte caldo: " + METRIC_LABELS[q2Metric] + ", fermo a " + fmt1(state.countryProfile[q2Metric]) + "/10. Qual è la proposta del partito?"
+      ? "Passa poi a un fronte caldo: " + q2Detail + " (" + METRIC_LABELS[q2Metric] + " fermo a " + fmt1(state.countryProfile[q2Metric]) + "/10). Qual è la proposta del partito?"
       : "Passa poi a chiedere quale sarà la prossima mossa politica del partito nelle prossime settimane.";
     var q2Topic = q2Metric ? METRIC_LABELS[q2Metric] : "le prossime mosse del partito";
     state.leaderInterview = {
@@ -4576,10 +4581,14 @@
     var askerName = generateStaffName();
     var otherParties = activeParties();
     var asker = otherParties.length ? otherParties[Math.floor(Math.random() * otherParties.length)] : null;
+    // Non solo l'etichetta astratta del tema ("la tutela ambientale"): un caso concreto e riconoscibile
+    // (vedi METRIC_DETAIL_PHRASES/pickAmbientDetailPhrase), così il giocatore sa davvero di cosa parlare
+    // invece di dover rispondere nel vuoto a un tema generico.
+    var detailPhrase = pickAmbientDetailPhrase(metric, topicLabel, asker && asker.familyId);
     state.consiglioComunaleScene = {
       city: city, metric: metric, topicLabel: topicLabel, askerName: askerName,
       askerParty: asker ? { name: asker.name, color: asker.color } : { name: "Lista civica", color: "#888888" },
-      questionText: askerName + " (" + (asker ? asker.name : "lista civica") + ") solleva in Consiglio Comunale il problema " + diLabel(topicLabel) + " a " + city + "."
+      questionText: askerName + " (" + (asker ? asker.name : "lista civica") + ") solleva in Consiglio Comunale un caso preciso: " + detailPhrase + ", qui a " + city + "."
     };
     state.phase = "consiglio_comunale_scene";
   }
@@ -4659,10 +4668,10 @@
   // la scena resta riservata a chi è già in Parlamento — come il question time.
   var SALOTTO_COOLDOWN_TURNS = 16;
   var SALOTTO_OPENERS = [
-    function (rivalName, partyName, topic) { return rivalName + " (" + partyName + ") apre il confronto " + suLabel(topic) + " con toni decisi."; },
-    function (rivalName, partyName, topic) { return "Il conduttore lascia subito la parola a " + rivalName + ", che rilancia " + suLabel(topic) + "."; },
-    function (rivalName, partyName, topic) { return rivalName + " non perde tempo e attacca la linea del governo " + suLabel(topic) + "."; },
-    function (rivalName, partyName, topic) { return "Con la consueta sicurezza, " + rivalName + " porta il dibattito " + suLabel(topic) + "."; }
+    function (rivalName, partyName, topic, detail) { return rivalName + " (" + partyName + ") apre il confronto " + suLabel(topic) + " con toni decisi: " + detail + "."; },
+    function (rivalName, partyName, topic, detail) { return "Il conduttore lascia subito la parola a " + rivalName + ", che rilancia " + suLabel(topic) + ", citando " + detail + "."; },
+    function (rivalName, partyName, topic, detail) { return rivalName + " non perde tempo e attacca la linea del governo su " + detail + "."; },
+    function (rivalName, partyName, topic, detail) { return "Con la consueta sicurezza, " + rivalName + " porta il dibattito " + suLabel(topic) + ", puntando il dito su " + detail + "."; }
   ];
   function checkSalottoTrigger() {
     var p = state.player;
@@ -4680,15 +4689,26 @@
     }).sort(function (a, b) { return b.dist - a.dist; });
     var topDistant = scored.slice(0, Math.min(4, scored.length));
     var rival = topDistant.length ? topDistant[Math.floor(Math.random() * topDistant.length)].party : null;
-    var metricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 7.5; });
-    if (metricKeys.length < 2) metricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k]; });
+    // Stessa logica già corretta per il Question Time: mai un fronte già eccellente, e mai uno che è basso
+    // per una scelta ideologica voluta (vedi IDEOLOGY_EXPECTED_WEAK_METRICS); se restano meno di 2 fronti
+    // deboli si completa con i meno eccellenti rimasti, non con uno a caso tra tutti.
+    var allSalottoMetricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && !isExpectedWeakMetricFor(p.family, k); });
+    var metricKeys = allSalottoMetricKeys.filter(function (k) { return state.countryProfile[k] < 7.5; });
+    if (metricKeys.length < 2) {
+      var restRankedSalotto = allSalottoMetricKeys.filter(function (k) { return metricKeys.indexOf(k) === -1; })
+        .sort(function (a, b) { return state.countryProfile[a] - state.countryProfile[b]; });
+      metricKeys = metricKeys.concat(restRankedSalotto.slice(0, 2 - metricKeys.length));
+    }
     var pickedMetrics = shuffleN(metricKeys, Math.min(2, metricKeys.length));
     var rounds = pickedMetrics.map(function (metric, i) {
       var noun = METRIC_LABELS[metric];
       var opener = SALOTTO_OPENERS[(state.turn + i) % SALOTTO_OPENERS.length];
+      // Non solo l'etichetta astratta del tema: un caso concreto e riconoscibile (vedi
+      // METRIC_DETAIL_PHRASES), coerente col rivale che lo pronuncia quando ha un'area politica nota.
+      var detailPhrase = pickAmbientDetailPhrase(metric, noun, rival && rival.familyId);
       return {
         metric: metric, noun: noun,
-        rivalPositionText: rival ? opener(rival.leader, rival.name, noun) : "Il conduttore introduce il tema " + suLabel(noun) + ".",
+        rivalPositionText: rival ? opener(rival.leader, rival.name, noun, detailPhrase) : "Il conduttore introduce il tema " + suLabel(noun) + ": " + detailPhrase + ".",
         answeredText: null, resultText: null
       };
     });
@@ -12971,10 +12991,11 @@
     var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5 && !isExpectedWeakMetricFor(pFamily, k); });
     var metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
     var topicLabel = metric ? METRIC_LABELS[metric] : noun;
-    return {
-      askerName: askerName, topicLabel: topicLabel,
-      text: askerName + " alza la mano dal pubblico: “E su " + topicLabel + ", cosa pensa di fare concretamente il partito?”"
-    };
+    var detailPhrase = metric ? pickAmbientDetailPhrase(metric, topicLabel, pFamily) : null;
+    var text = detailPhrase
+      ? askerName + " alza la mano dal pubblico: “E su " + topicLabel + " — " + detailPhrase + " — cosa pensa di fare concretamente il partito?”"
+      : askerName + " alza la mano dal pubblico: “E su " + topicLabel + ", cosa pensa di fare concretamente il partito?”";
+    return { askerName: askerName, topicLabel: topicLabel, text: text };
   }
   function launchPartyEventScene(eventId) {
     var ev = PARTY_EVENTS[eventId];
