@@ -4727,11 +4727,22 @@
     var weeksToElection = state.nextElectionTurn - state.turn;
     return weeksToElection > 0 && weeksToElection <= PROGRAM_MEETING_WINDOW_WEEKS;
   }
+  // Se il partito è in coalizione ma NON è quello che esprime il Presidente del Consiglio (vedi
+  // state.cabinet.premierId), non è lui a dettare il programma comune: sui propri temi identitari deve
+  // PROPORRE un punto, non semplicemente scriverlo — è il partito guida della coalizione a valutarlo
+  // (accettato/mediato/respinto), esattamente come fanno gli alleati minori con i LORO punti già sotto
+  // "coalition" qui sotto. Fuori da una coalizione, o quando il player la guida davvero, nulla cambia.
+  function isPlayerCoalitionLeader(p) {
+    if (!p.allianceId) return true;
+    if (!state.cabinet) return true;
+    return state.cabinet.premierId === "player";
+  }
   function buildProgramMeetingFields(p) {
     var family = p.family;
     var playerKeys = (FAMILY_SIGNATURE_THEMES[family] || []).slice();
     var universalPool = Object.keys(PROGRAM_THEME_LABELS).filter(function (k) { return playerKeys.indexOf(k) === -1; });
     var memberKeys = shuffleN(universalPool, Math.min(2, universalPool.length));
+    var isLeader = isPlayerCoalitionLeader(p);
     var fields = playerKeys.map(function (key) {
       var angleNouns = (FAMILY_ANGLE_NOUNS[family] && FAMILY_ANGLE_NOUNS[family][key]) || [];
       var picks = shuffleN(angleNouns, Math.min(3, angleNouns.length));
@@ -4741,7 +4752,7 @@
           text: "Il partito si impegna concretamente " + suLabel(noun) + ": punto qualificante del capitolo " + PROGRAM_THEME_LABELS[key] + " del programma elettorale."
         };
       });
-      return { key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: "player", choices: choices, chosenLabel: null, chosenText: null };
+      return { key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: isLeader ? "player" : "proposal", choices: choices, chosenLabel: null, chosenText: null, decided: isLeader ? undefined : null };
     });
     var staffPool = (p.staff && p.staff.length) ? p.staff.map(function (s) { return s.name; }) : [];
     memberKeys.forEach(function (key) {
@@ -4775,7 +4786,8 @@
   }
   function buildProgramMeetingScene() {
     var p = state.player;
-    state.programMeeting = { step: 0, fields: buildProgramMeetingFields(p), notes: "" };
+    var premierParty = (state.cabinet && state.cabinet.premierId !== "player") ? partyById(state.cabinet.premierId) : null;
+    state.programMeeting = { step: 0, fields: buildProgramMeetingFields(p), notes: "", premierPartyName: premierParty ? premierParty.name : "" };
     state.phase = "program_meeting_scene";
   }
   // ---------- Salotto TV: confronto in studio con un leader avversario ----------
@@ -10863,7 +10875,15 @@
     // poco nel bersaglio ma si consuma troppo in fretta. Ammorbidito (-13%/settimana senza staff, -8% con
     // il Comunicazione Digitale al massimo della competenza): resta comunque una risorsa da alimentare,
     // non più un rubinetto che si svuota da solo più veloce di quanto un giocatore attivo possa riempirlo.
-    p.visibilita = p.visibilita * (0.87 + 0.05 * commDigSkill);
+    // Quel -13%/-8% era tarato sulla cadenza ORIGINALE delle scene (question time, interviste, salotto,
+    // consiglio comunale, congresso internazionale) — la principale fonte di rifornimento diretto della
+    // visibilità (vedi buildQuestionTimeFreeTextOutcome e simili). Aver poi allungato i cooldown di quelle
+    // scene di ~50% (per non farle comparire "sempre", su richiesta esplicita) senza toccare qui ha rotto
+    // l'equilibrio: la visibilità continuava a scendere allo stesso ritmo di prima ma veniva rialimentata
+    // molto più di rado, e con essa scendeva anche il bersaglio dei sondaggi settimana dopo settimana,
+    // anche per un partito guidato bene — un vero e proprio calo strutturale "senza motivo apparente".
+    // Ammorbidito di conseguenza (-8.6%/-6.1%), proporzionalmente allo stesso ~50% di cooldown in più.
+    p.visibilita = p.visibilita * (0.914 + 0.032 * commDigSkill);
 
     // quote di tesseramento: entrata settimanale proporzionale agli iscritti
     p.fondi += p.iscritti * 0.55 * staffBonus("tesoriere", 0.1);
@@ -15619,9 +15639,12 @@
       var deputyPhrase = p.inParliament ? "i tuoi gruppi parlamentari, " : "";
       var coal = p.allianceId ? coalitionById(p.allianceId) : null;
       var coalPhrase = coal ? "una delegazione degli alleati di " + coal.label + ", " : "";
+      var writerPhrase = pm.premierPartyName
+        ? "Non sei tu a guidare la coalizione: sui tuoi temi qualificanti proporrai un punto, che " + pm.premierPartyName + " dovrà valutare — accettarlo, ammorbidirlo o respingerlo."
+        : "Scriverai tu la maggior parte dei punti; alcuni li proporranno loro, e si voterà a maggioranza.";
       html += '<p class="ci-hint">Mancano circa ' + PROGRAM_MEETING_WINDOW_WEEKS + ' settimane alle elezioni politiche: è il momento di mettere nero su bianco il programma elettorale. ' +
         "Attorno al tavolo ci sono " + (staffCount ? "il tuo nucleo (" + staffCount + " persone), " : "") + deputyPhrase + coalPhrase +
-        "e una rappresentanza dei " + Math.round(p.iscritti || 0) + " tesserati del partito. Scriverai tu la maggior parte dei punti; alcuni li proporranno loro, e si voterà a maggioranza.</p>";
+        "e una rappresentanza dei " + Math.round(p.iscritti || 0) + " tesserati del partito. " + writerPhrase + "</p>";
       html += '<div class="qt-continue-row"><button type="button" class="advance-btn" id="program-scene-continue-btn">Apri la riunione</button></div></div>';
       return html;
     }
@@ -15633,6 +15656,17 @@
           html += '<p class="qt-question"><strong>Capitolo: ' + f.label + '</strong> — qual è il punto qualificante del programma su questo fronte?</p>';
           if (f.chosenText) {
             html += '<p class="qt-answer"><strong>' + f.chosenLabel + "</strong> — " + f.chosenText + "</p>";
+          } else {
+            html += '<div class="choices">' + f.choices.map(function (c, i) {
+              return '<button type="button" class="choice-btn" data-program-field-choice="' + idx + ":" + i + '"><span class="clabel">' + c.label + '</span></button>';
+            }).join("") + "</div>";
+          }
+        } else if (f.mode === "proposal") {
+          html += '<p class="qt-question"><strong>Capitolo: ' + f.label + "</strong> — su questo fronte non decidi tu da solo: proponi un punto a " + (pm.premierPartyName || "chi guida la coalizione") + ", che dovrà valutarlo.</p>";
+          if (f.decided) {
+            html += '<p class="qt-answer"><strong>' + f.chosenLabel + "</strong> — " + (f.decided === "accepted" ? "Proposta accolta: " + f.chosenText
+              : f.decided === "mediated" ? "Accolta solo in parte, con una versione più sfumata: " + f.chosenText
+              : "Respinta: " + pm.premierPartyName + " non la ritiene in linea, il punto non entra nel programma comune.") + "</p>";
           } else {
             html += '<div class="choices">' + f.choices.map(function (c, i) {
               return '<button type="button" class="choice-btn" data-program-field-choice="' + idx + ":" + i + '"><span class="clabel">' + c.label + '</span></button>';
@@ -15843,6 +15877,29 @@
       '<div class="nav-drawer-head"><strong>Sezioni di gioco</strong><button type="button" class="nav-drawer-close" id="nav-drawer-close" aria-label="Chiudi il menu">✕</button></div>' +
       items + "</aside></nav>";
   }
+  // Lega i comandi del cassetto laterale (icona, chiusura, sfondo, voci di menu) — condiviso sia dal
+  // corpo principale della pagina sia dalle scene a schermo intero (question time, intervista, salotto,
+  // ecc.), che prima non includevano affatto il cassetto: il giocatore restava bloccato in quella scena
+  // senza alcun modo di consultare le altre sezioni finché non la concludeva. onBeforeNavigate (facoltativo)
+  // permette a una scena in corso di congedarsi in modo pulito prima di lasciare spazio alla pagina scelta.
+  function bindPageNavDrawer(onBeforeNavigate) {
+    var navToggle = document.getElementById("nav-drawer-toggle");
+    if (navToggle) navToggle.addEventListener("click", function () { navDrawerOpen = !navDrawerOpen; render(); });
+    var navClose = document.getElementById("nav-drawer-close");
+    if (navClose) navClose.addEventListener("click", function () { navDrawerOpen = false; render(); });
+    var navBackdrop = document.getElementById("nav-drawer-backdrop");
+    if (navBackdrop) navBackdrop.addEventListener("click", function () { navDrawerOpen = false; render(); });
+    app.querySelectorAll("[data-nav-page]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (onBeforeNavigate) onBeforeNavigate();
+        state.uiPage = btn.getAttribute("data-nav-page");
+        navDrawerOpen = false;
+        save();
+        render();
+        window.scrollTo(0, 0);
+      });
+    });
+  }
 
   // Rete di sicurezza: se QUALUNQUE cosa dentro renderCore() lancia un'eccezione non gestita (un bug in
   // una singola schermata, un salvataggio con una combinazione di dati mai vista prima...), prima questo
@@ -16039,7 +16096,22 @@
         state.phase = "result";
         save();
       } else {
-        app.innerHTML = renderQuestionTimeScene();
+        app.innerHTML = renderQuestionTimeScene() + renderPageNav();
+        bindPageNavDrawer(function () {
+          var qtAuto2 = state.qtScene;
+          var autoChoiceList2 = qtAuto2.playerTurn.mode === "answer" ? qtAuto2.playerTurn.choices : null;
+          if (!autoChoiceList2) {
+            var autoTopic2 = qtAuto2.playerTurn.topicOptions[Math.floor(Math.random() * qtAuto2.playerTurn.topicOptions.length)];
+            autoChoiceList2 = buildParliamentChoices({ noun: autoTopic2.noun, nationalMetric: autoTopic2.metric, isGoverno: false, rivalId: leadingGovPartyId(), themeId: METRIC_TO_THEME_ID[autoTopic2.metric] }, 4);
+            qtAuto2.playerTurn.noun = autoTopic2.noun;
+          }
+          var autoChoice2 = autoChoiceList2[Math.floor(Math.random() * autoChoiceList2.length)];
+          var autoDossier2 = { title: "Question Time — " + qtAuto2.playerTurn.noun, cat: qtAuto2.isPlayerGov ? "Governo" : "Opposizione" };
+          state.resultData = applyChoice(autoDossier2, autoChoice2);
+          state.resultData.autoPlayed = true;
+          state.qtScene = null;
+          state.phase = "result";
+        });
         bindAutoGrowTextarea("qt-answer-input");
         var qtContinueBtn = document.getElementById("qt-scene-continue-btn");
         if (qtContinueBtn) {
@@ -16096,7 +16168,16 @@
         state.phase = "result";
         save();
       } else {
-        app.innerHTML = renderQtManualScene();
+        app.innerHTML = renderQtManualScene() + renderPageNav();
+        bindPageNavDrawer(function () {
+          var qtmAutoChoices2 = buildParliamentChoices({ noun: qtm.noun, nationalMetric: qtm.metric, isGoverno: false, rivalId: leadingGovPartyId(), themeId: METRIC_TO_THEME_ID[qtm.metric] }, 4);
+          var qtmAutoChoice2 = qtmAutoChoices2[Math.floor(Math.random() * qtmAutoChoices2.length)];
+          var qtmAutoDossier2 = { title: "Question Time — " + qtm.noun, cat: "Opposizione" };
+          state.resultData = applyChoice(qtmAutoDossier2, qtmAutoChoice2);
+          state.resultData.autoPlayed = true;
+          state.qtManualScene = null;
+          state.phase = "result";
+        });
         bindAutoGrowTextarea("qt-answer-input");
         var qtmSubmitBtn = document.getElementById("qt-answer-submit-btn");
         if (qtmSubmitBtn) {
@@ -16123,7 +16204,11 @@
     // p.playerIsLeader per scattare, quindi qui non serve un ramo di auto-play per lo sfiduciato — se il
     // giocatore non è più leader, questa scena non si genera affatto).
     if (state.phase === "leader_interview_scene") {
-      app.innerHTML = renderLeaderInterviewScene();
+      app.innerHTML = renderLeaderInterviewScene() + renderPageNav();
+      bindPageNavDrawer(function () {
+        state.leaderInterview = null;
+        state.phase = "building";
+      });
       bindAutoGrowTextarea("interview-answer-input");
       var ivSubmitBtn = document.getElementById("interview-answer-submit-btn");
       if (ivSubmitBtn) {
@@ -16160,7 +16245,11 @@
     // viene anche pubblicato come una vera dichiarazione pubblica (pushStatement), visibile nel registro
     // Dichiarazioni: parlare a un congresso internazionale resta comunque una presa di posizione pubblica.
     if (state.phase === "international_congress_scene") {
-      app.innerHTML = renderInternationalCongressScene();
+      app.innerHTML = renderInternationalCongressScene() + renderPageNav();
+      bindPageNavDrawer(function () {
+        state.internationalCongress = null;
+        state.phase = "building";
+      });
       bindAutoGrowTextarea("congress-speech-input");
       var congressContinueBtn = document.getElementById("congress-scene-continue-btn");
       if (congressContinueBtn) {
@@ -16205,7 +16294,11 @@
     // Congresso/manifestazione/cena di partito: scena in due passi, avviata dal giocatore stesso (non un
     // trigger periodico), vedi launchPartyEventScene richiamata dal pannello Eventi di Partito più sotto.
     if (state.phase === "party_event_scene") {
-      app.innerHTML = renderPartyEventScene();
+      app.innerHTML = renderPartyEventScene() + renderPageNav();
+      bindPageNavDrawer(function () {
+        state.partyEventScene = null;
+        state.phase = "building";
+      });
       bindAutoGrowTextarea("speech-answer-input");
       bindAutoGrowTextarea("audience-answer-input");
       var speechSubmitBtn = document.getElementById("speech-answer-submit-btn");
@@ -16249,7 +16342,11 @@
     }
 
     if (state.phase === "consiglio_comunale_scene") {
-      app.innerHTML = renderConsiglioComunaleScene();
+      app.innerHTML = renderConsiglioComunaleScene() + renderPageNav();
+      bindPageNavDrawer(function () {
+        state.consiglioComunaleScene = null;
+        state.phase = "building";
+      });
       bindAutoGrowTextarea("council-answer-input");
       var councilSubmitBtn = document.getElementById("council-answer-submit-btn");
       if (councilSubmitBtn) {
@@ -16275,7 +16372,11 @@
     // Riunione di programma: checkProgramMeetingTrigger già richiede p.playerIsLeader per scattare, come
     // l'intervista al leader — nessun ramo di auto-play necessario per lo sfiduciato.
     if (state.phase === "program_meeting_scene") {
-      app.innerHTML = renderProgramMeetingScene();
+      app.innerHTML = renderProgramMeetingScene() + renderPageNav();
+      bindPageNavDrawer(function () {
+        state.programMeeting = null;
+        state.phase = "building";
+      });
       var pmContinueBtn = document.getElementById("program-scene-continue-btn");
       if (pmContinueBtn) {
         pmContinueBtn.addEventListener("click", function () {
@@ -16292,7 +16393,24 @@
           var f = pm.fields[fieldIdx];
           var chosen = f.choices[choiceIdx];
           f.chosenLabel = chosen.label;
-          f.chosenText = chosen.text;
+          if (f.mode === "proposal") {
+            // Non è tu a guidare la coalizione: la tua proposta passa dallo stesso vaglio di fiducia
+            // usato per le riforme di governo (resolveCoalitionApproval), non è automatica come per chi
+            // scrive il programma in prima persona.
+            var approval = resolveCoalitionApproval();
+            if (approval.approved) {
+              f.decided = "accepted";
+              f.chosenText = chosen.text;
+            } else if (Math.random() < 0.5) {
+              f.decided = "mediated";
+              f.chosenText = "Una versione più sfumata del punto proposto (" + chosen.label + ") entra nel programma comune, dopo una mediazione con " + (pm.premierPartyName || "il partito guida della coalizione") + ".";
+            } else {
+              f.decided = "rejected";
+              f.chosenText = null;
+            }
+          } else {
+            f.chosenText = chosen.text;
+          }
           pm.step++;
           save();
           render();
@@ -16387,7 +16505,11 @@
     // Salotto TV: checkSalottoTrigger già richiede p.playerIsLeader per scattare, come intervista al
     // leader e riunione di programma — nessun ramo di auto-play necessario per lo sfiduciato.
     if (state.phase === "salotto_scene") {
-      app.innerHTML = renderSalottoScene();
+      app.innerHTML = renderSalottoScene() + renderPageNav();
+      bindPageNavDrawer(function () {
+        state.salottoScene = null;
+        state.phase = "building";
+      });
       bindAutoGrowTextarea("salotto-answer-input");
       var salottoSubmitBtn = document.getElementById("salotto-answer-submit-btn");
       if (salottoSubmitBtn) {
@@ -16420,7 +16542,11 @@
     }
 
     if (state.phase === "ufficio_scene") {
-      app.innerHTML = renderUfficioScene();
+      app.innerHTML = renderUfficioScene() + renderPageNav();
+      bindPageNavDrawer(function () {
+        state.ufficioScene = null;
+        state.phase = "building";
+      });
       app.querySelectorAll("[data-ufficio-choice]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var idx = parseInt(btn.getAttribute("data-ufficio-choice"), 10);
@@ -17082,27 +17208,7 @@
   }
 
   function bindInteractions() {
-    var navToggle = document.getElementById("nav-drawer-toggle");
-    if (navToggle) {
-      navToggle.addEventListener("click", function () { navDrawerOpen = !navDrawerOpen; render(); });
-    }
-    var navClose = document.getElementById("nav-drawer-close");
-    if (navClose) {
-      navClose.addEventListener("click", function () { navDrawerOpen = false; render(); });
-    }
-    var navBackdrop = document.getElementById("nav-drawer-backdrop");
-    if (navBackdrop) {
-      navBackdrop.addEventListener("click", function () { navDrawerOpen = false; render(); });
-    }
-    app.querySelectorAll("[data-nav-page]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        state.uiPage = btn.getAttribute("data-nav-page");
-        navDrawerOpen = false;
-        save();
-        render();
-        window.scrollTo(0, 0);
-      });
-    });
+    bindPageNavDrawer(null);
     var localSectionSelect = document.getElementById("local-section-select");
     if (localSectionSelect) {
       localSectionSelect.addEventListener("change", function () {
