@@ -867,10 +867,125 @@
     var powerFactor = clamp((state.consensoGoverno === undefined ? 50 : state.consensoGoverno) / 50, 0.5, 1.7);
     state.countryProfile.aziende = clamp(state.countryProfile.aziende - rate * powerFactor, 0.2, 10);
   }
+  // ---------- Indicatori specifici di ogni linea ideologica ----------
+  // Oltre ai 21 indicatori generali (uguali per tutti), ogni famiglia ideologica ha 2-4 indicatori propri,
+  // il "successo secondo i propri criteri" — cose che un partito di un'altra linea non guarderebbe nemmeno
+  // (il Tempo libero per il Comunismo di Lusso, la Sovranità nazionale percepita per il Sovranista...).
+  // Vivono comunque dentro state.countryProfile (stesso clamp 1-10, stessa deriva settimanale, stesso
+  // meccanismo di salvataggio di tutto il resto), ma NON entrano in METRIC_LABELS: restano quindi invisibili
+  // a Question Time/interviste/eccetera (mai un tema su cui un partito di un'altra linea può essere
+  // incalzato), e compaiono SOLO nella Scheda Paese di chi ha quella linea politica (vedi renderCountryProfile).
+  var IDEOLOGY_EXTRA_METRICS = {
+    sovranista: [
+      { key: "sovranitaNazionale", label: "Sovranità nazionale percepita", proxyMetric: "sicurezza" },
+      { key: "autosufficienzaStrategica", label: "Autosufficienza strategica", proxyMetric: "energia" }
+    ],
+    liberale: [
+      { key: "dinamismoImprenditoriale", label: "Dinamismo imprenditoriale", proxyMetric: "aziende" },
+      { key: "aperturaMercati", label: "Apertura e liberalizzazione dei mercati", proxyMetric: "commercio" }
+    ],
+    progressista: [
+      { key: "transizioneEcologicaAvanzata", label: "Transizione ecologica avanzata", proxyMetric: "ambientalismo" },
+      { key: "estensioneDirittiCivili", label: "Estensione dei diritti civili", proxyMetric: "felicita" }
+    ],
+    movimentista: [
+      { key: "trasparenzaDiretta", label: "Trasparenza e democrazia diretta", proxyMetric: "corruzione" },
+      { key: "indiceAntiCasta", label: "Indice anti-casta", proxyMetric: "giustizia" }
+    ],
+    sinistra: [
+      { key: "forzaSindacale", label: "Forza del movimento sindacale", proxyMetric: "salari" },
+      { key: "redistribuzioneRicchezza", label: "Redistribuzione della ricchezza", proxyMetric: "welfare" }
+    ],
+    cattolico: [
+      { key: "coesioneComunitaria", label: "Coesione comunitaria e valori condivisi", proxyMetric: "felicita" },
+      { key: "sostegnoFamiglia", label: "Sostegno concreto alla famiglia", proxyMetric: "welfare" }
+    ],
+    regionalista: [
+      { key: "autonomiaTerritoriale", label: "Autonomia territoriale reale", proxyMetric: "trasporti" },
+      { key: "vitalitaIdentitaLocale", label: "Vitalità dell'identità locale", proxyMetric: "felicita" }
+    ],
+    comunista: [
+      { key: "coscienzaDiClasse", label: "Coscienza di classe e mobilitazione operaia", proxyMetric: "salari" },
+      { key: "controlloStataleEconomia", label: "Controllo statale dell'economia", invProxyMetric: "aziende", govBonus: 1.2 }
+    ],
+    nazionalpopolare: [
+      { key: "rotturaConEstablishment", label: "Rottura con l'establishment tradizionale", proxyMetric: "corruzione" },
+      { key: "tenutaIdentitaria", label: "Tenuta identitaria intransigente", proxyMetric: "sicurezza" }
+    ],
+    europeista: [
+      { key: "integrazioneEuropea", label: "Grado di integrazione europea", proxyMetric: "relazioniDiplomatiche" },
+      { key: "solidezzaAtlantica", label: "Solidità del legame atlantico", proxyMetric: "difesa" }
+    ],
+    libertario: [
+      { key: "liberteIndividualiReali", label: "Libertà individuali reali", proxyMetric: "giustizia" },
+      { key: "statoMinimo", label: "Riduzione del perimetro dello Stato", invProxyMetric: "welfare" }
+    ],
+    tecnoprogressista: [
+      { key: "innovazionePragmatica", label: "Innovazione pragmatica guidata dai dati", proxyMetric: "ricercaSviluppo" },
+      { key: "efficienzaServiziDigitali", label: "Efficienza dei servizi digitali", proxyMetric: "trasporti" }
+    ],
+    meridionalista: [
+      { key: "infrastruttureSud", label: "Infrastrutture per il Mezzogiorno", proxyMetric: "trasporti" },
+      { key: "coesioneNordSud", label: "Coesione territoriale tra Nord e Sud", proxyMetric: "economia" }
+    ],
+    fascista: [
+      { key: "gerarchiaStatale", label: "Compattezza della gerarchia statale", proxyMetric: "sicurezza" },
+      { key: "nazionalismoIntegrale", label: "Nazionalismo integrale diffuso", proxyMetric: "difesa" }
+    ],
+    monarchico: [
+      { key: "continuitaIstituzionale", label: "Continuità istituzionale percepita", proxyMetric: "giustizia" },
+      { key: "prestigioTradizioni", label: "Prestigio delle tradizioni nazionali", proxyMetric: "relazioniDiplomatiche" }
+    ],
+    gratuitista: [
+      { key: "universalitaServiziGratuiti", label: "Universalità dei servizi gratuiti", proxyMetric: "welfare" },
+      { key: "sostenibilitaFiscaleGenerale", label: "Sostenibilità della fiscalità generale", invProxyMetric: "aziende" }
+    ],
+    comunismolusso: [
+      { key: "tempoLibero", label: "Tempo libero e automazione del lavoro", proxyMetric: "felicita" },
+      { key: "avanzamentoTecnologico", label: "Avanzamento tecnologico verso l'abbondanza", proxyMetric: "ricercaSviluppo" },
+      { key: "indiceSolarpunk", label: "Indice Solar Punk (tecnologia verde diffusa)", proxyMetric: "ambientalismo" },
+      { key: "produzioneNazionalPopolare", label: "Produzione nazionalizzata e popolare", invProxyMetric: "aziende", govBonus: 1.2 }
+    ]
+  };
+  // Un valore iniziale coerente con la partita in corso, non un dato generico: parte per metà dal valore
+  // già raggiunto sull'indicatore generale più correlato (proxyMetric, o il suo opposto per invProxyMetric,
+  // es. "controllo statale dell'economia" è tanto più alto quanto più "aziende" — il settore privato — è
+  // basso), e per il resto da quanto a lungo e con quanto potere reale il partito ha già governato: un
+  // salvataggio caricato dopo centinaia di settimane di governo di quella linea parte già maturo, non da
+  // zero — esattamente l'accusa mossa dall'utente ("non deve ripartire da un dato generico").
+  function seedIdeologyMetricValue(def, countryProfile, playerObj, turn) {
+    var proxyVal = def.proxyMetric ? countryProfile[def.proxyMetric]
+      : def.invProxyMetric ? (11 - countryProfile[def.invProxyMetric])
+      : 5.5;
+    if (proxyVal === undefined || proxyVal === null) proxyVal = 5.5;
+    var weeksActive = Math.max(0, (turn || 0) - ((playerObj && playerObj.foundedTurn) || 0));
+    var maturity = clamp(weeksActive / 200, 0, 1);
+    var sondaggiFactor = clamp(((playerObj && playerObj.sondaggi) || 0) / 25, 0, 1);
+    var govWeight = playerObj && playerObj.parliamentRole === "governo" ? 1 : (playerObj && playerObj.inParliament ? 0.4 : 0.1);
+    var bonus = maturity * sondaggiFactor * govWeight * (def.govBonus || 1) * 3.5;
+    return clamp(proxyVal * 0.55 + 5 * 0.15 + bonus, 1, 10);
+  }
+  // Riempie SOLO le chiavi mancanti (mai sovrascrive un valore già presente): usata sia alla fondazione di
+  // un nuovo partito (turn/playerObj minimi, il seed dipende quasi solo dal proxy) sia in fase di
+  // migrazione di un salvataggio già avanzato (vedi normalizeLoadedState), dove invece pesa parecchio la
+  // maturità reale della partita.
+  function ensureIdeologyExtraMetrics(cp, playerObj, turn) {
+    Object.keys(IDEOLOGY_EXTRA_METRICS).forEach(function (fam) {
+      IDEOLOGY_EXTRA_METRICS[fam].forEach(function (def) {
+        if (cp[def.key] === undefined) cp[def.key] = seedIdeologyMetricValue(def, cp, playerObj, turn);
+      });
+    });
+  }
   function driftCountryProfile() {
     state.countryProfilePrev = Object.assign({}, state.countryProfile);
     COUNTRY_PROFILE_METRICS.forEach(function (m) {
       state.countryProfile[m.key] = clamp(state.countryProfile[m.key] + (Math.random() - 0.5) * 0.12, 1, 10);
+    });
+    Object.keys(IDEOLOGY_EXTRA_METRICS).forEach(function (fam) {
+      IDEOLOGY_EXTRA_METRICS[fam].forEach(function (def) {
+        if (state.countryProfile[def.key] === undefined) return;
+        state.countryProfile[def.key] = clamp(state.countryProfile[def.key] + (Math.random() - 0.5) * 0.12, 1, 10);
+      });
     });
     applyCollectivistPrivateSectorDecay();
   }
@@ -4221,7 +4336,13 @@
   // è al governo deve invece rispondere in prima persona, scrivendo la propria risposta — non più scegliendo
   // tra poche formule fisse (vedi buildQuestionTimeFreeTextOutcome più sotto, stesso motore lessicale delle
   // Dichiarazioni: il gioco legge tema e tono di quello che scrivi davvero).
-  var PARLIAMENT_QT_SCENE_COOLDOWN_TURNS = 4;
+  // Segnalato dall'utente: sommando tutte le scene periodiche a schermo intero (Question Time, intervista
+  // al leader, Consiglio Comunale, Salotto TV, Congresso Internazionale), la frequenza combinata sfiorava
+  // il 55% delle settimane — "sempre" invece di "spesso ma non sempre" come richiesto esplicitamente
+  // (vedi anche LEADER_INTERVIEW_COOLDOWN_TURNS/CONSIGLIO_COMUNALE_COOLDOWN_TURNS/SALOTTO_COOLDOWN_TURNS/
+  // INTERNATIONAL_CONGRESS_COOLDOWN_TURNS, alzati tutti insieme per la stessa ragione): portata qui a circa
+  // il 36% complessivo, un'alternanza reale con le scelte settimanali normali.
+  var PARLIAMENT_QT_SCENE_COOLDOWN_TURNS = 6;
   function checkParliamentQtSceneTrigger() {
     var p = state.player;
     if (!p || !p.inParliament) return false;
@@ -4429,7 +4550,7 @@
   // diario di partito, l'andamento dei sondaggi) invece che da un canovaccio anonimo. A differenza del
   // question time (dove il giocatore ascolta e poi interviene UNA volta sola), qui è LUI l'intervistato:
   // ogni domanda è una scelta vera con conseguenze reali, una alla volta.
-  var LEADER_INTERVIEW_COOLDOWN_TURNS = 12;
+  var LEADER_INTERVIEW_COOLDOWN_TURNS = 18;
   function checkLeaderInterviewTrigger() {
     var p = state.player;
     if (!p || !p.playerIsLeader) return false;
@@ -4551,7 +4672,7 @@
   // sul paese, e su effetti local-scale invece che sondaggi nazionali. Resta attivo anche dopo l'ingresso
   // in Parlamento (il radicamento territoriale non smette di contare), ma è qui, PRIMA di arrivarci, che
   // dà finalmente al giocatore qualcosa da fare settimana dopo settimana.
-  var CONSIGLIO_COMUNALE_COOLDOWN_TURNS = 10;
+  var CONSIGLIO_COMUNALE_COOLDOWN_TURNS = 16;
   var LOCAL_COUNCIL_METRICS = ["trasporti", "scuola", "sanita", "casa", "ambientalismo", "sicurezza", "welfare"];
   // METRIC_LABELS porta già l'articolo determinativo (es. "la sicurezza pubblica", "i trasporti pubblici"):
   // davanti a "di" va contratto correttamente ("della sicurezza pubblica", non "di la sicurezza pubblica").
@@ -4666,7 +4787,7 @@
   // il ventaglio di scelte parla davvero dell'argomento del giorno, non solo del tono. Il testo delle
   // posture generiche presuppone un contesto parlamentare ("il gruppo parlamentare", ecc.), quindi per ora
   // la scena resta riservata a chi è già in Parlamento — come il question time.
-  var SALOTTO_COOLDOWN_TURNS = 16;
+  var SALOTTO_COOLDOWN_TURNS = 24;
   var SALOTTO_OPENERS = [
     function (rivalName, partyName, topic, detail) { return rivalName + " (" + partyName + ") apre il confronto " + suLabel(topic) + " con toni decisi: " + detail + "."; },
     function (rivalName, partyName, topic, detail) { return "Il conduttore lascia subito la parola a " + rivalName + ", che rilancia " + suLabel(topic) + ", citando " + detail + "."; },
@@ -9858,7 +9979,7 @@
     function (name, partyLabel, nationName) { return name + " (" + partyLabel + ") illustra i risultati ottenuti in " + nationName + ", proponendoli come modello da esportare anche altrove."; },
     function (name, partyLabel, nationName) { return name + " (" + partyLabel + ") lancia un appello per una linea comune europea sul tema del momento, tra gli applausi della sala."; }
   ];
-  var INTERNATIONAL_CONGRESS_COOLDOWN_TURNS = 20;
+  var INTERNATIONAL_CONGRESS_COOLDOWN_TURNS = 30;
   function checkInternationalCongressTrigger() {
     var p = state.player;
     if (!p || !p.playerIsLeader || !p.inParliament || !p.family) return false;
@@ -10126,12 +10247,14 @@
   // nuovo basta a renderlo disponibile ovunque, sia in una nuova partita sia in una vecchia importata,
   // senza dover scrivere una riga di migrazione dedicata a mano ogni volta.
   function freshCountryProfile() {
-    return {
+    var cp = {
       salari: 4, trasporti: 5, welfare: 5, sanita: 5, corruzione: 4, aziende: 5, economia: 5,
       pil: 4, felicita: 6, scuola: 5, ambientalismo: 5, commercio: 6, relazioniDiplomatiche: 6,
       ricercaSviluppo: 4, inflazione: 6, difesa: 5,
       sicurezza: 5, giustizia: 4, casa: 4, immigrazione: 5, disoccupazione: 5, energia: 4
     };
+    ensureIdeologyExtraMetrics(cp, null, 0);
+    return cp;
   }
   // Aliquote fiscali reali italiane a inizio partita (scaglioni IRPEF 2024 post-riforma, IVA ordinaria e
   // ridotte, IRES sulle imprese): il giocatore parte dai valori veri, non da numeri inventati, e da lì
@@ -10323,7 +10446,24 @@
     if (parsed.player) normalizeStaff(parsed.player);
     mergeDefaults(parsed, STATE_FIELD_DEFAULTS);
     if (!parsed.countryProfile) parsed.countryProfile = freshCountryProfile();
-    else mergeDefaults(parsed.countryProfile, freshCountryProfile());
+    else {
+      // Gli indicatori specifici di ideologia (IDEOLOGY_EXTRA_METRICS) sono nuovi: un salvataggio
+      // precedente a questa funzionalità non li ha mai avuti. mergeDefaults sotto li riempirebbe con un
+      // seed "a freddo" (turno 0, nessun giocatore) preso da freshCountryProfile — qui invece, per le
+      // chiavi che mancavano DAVVERO, si riseminano subito dopo con un valore coerente con QUESTA
+      // partita (settimane giocate, sondaggi, se è già al governo): esattamente quanto richiesto
+      // dall'utente, "non deve ripartire da un dato generico".
+      var missingIdeologyMetricKeys = [];
+      Object.keys(IDEOLOGY_EXTRA_METRICS).forEach(function (fam) {
+        IDEOLOGY_EXTRA_METRICS[fam].forEach(function (def) {
+          if (parsed.countryProfile[def.key] === undefined) missingIdeologyMetricKeys.push(def);
+        });
+      });
+      mergeDefaults(parsed.countryProfile, freshCountryProfile());
+      missingIdeologyMetricKeys.forEach(function (def) {
+        parsed.countryProfile[def.key] = seedIdeologyMetricValue(def, parsed.countryProfile, parsed.player, parsed.turn);
+      });
+    }
     if (parsed.player) mergeDefaults(parsed.player, PLAYER_FIELD_DEFAULTS);
     // Le seguenti restano migrazioni "vere" (trasformano dati esistenti, non solo completano campi
     // assenti) e vanno mantenute a mano caso per caso.
@@ -13869,7 +14009,10 @@
   function renderProfileMetricTile(m) {
     var prev = state.countryProfilePrev;
     var val = state.countryProfile[m.key];
-    var before = prev ? prev[m.key] : val;
+    // Un indicatore appena aggiunto al gioco (es. i nuovi IDEOLOGY_EXTRA_METRICS su un salvataggio già
+    // avanzato) non esiste ancora nell'istantanea della settimana precedente: senza questo controllo
+    // esplicito su undefined, "prima" restava undefined e la freccia di variazione mostrava "−NaN".
+    var before = (prev && prev[m.key] !== undefined) ? prev[m.key] : val;
     return '<div class="stat-tile"><div class="label">' + m.label + '</div><div class="row"><span class="value">' + fmt1(val) + "/10</span></div>" + deltaLabel(before, val, "") + "</div>";
   }
   function renderCountryProfile() {
@@ -13878,6 +14021,16 @@
     var govFam = currentGoverningFamilyId();
     var privateWarning = COLLECTIVIST_DECAY_RATE[govFam]
       ? '<p class="ci-hint chip negative" style="margin-top:0.4rem">Sotto un governo di linea ' + (familyById(govFam) || {}).label + ', il settore privato subisce una pressione strutturale verso il basso, settimana dopo settimana: più forte con il Comunismo storico, più graduale con il Comunismo di Lusso, e tanto più rapida quanto più il governo è sostenuto.</p>'
+      : "";
+    // Indicatori specifici della linea ideologica del giocatore: solo lui li vede (un partito liberale non
+    // guarderebbe mai il "Tempo libero e automazione del lavoro" del Comunismo di Lusso), e solo se il
+    // partito ha davvero una linea con indicatori propri definiti in IDEOLOGY_EXTRA_METRICS.
+    var p = state.player;
+    var ideologyDefs = p && p.family ? IDEOLOGY_EXTRA_METRICS[p.family] : null;
+    var ideologyHtml = ideologyDefs
+      ? '<p class="eyebrow" style="margin-top:1rem">Indicatori specifici — ' + ((familyById(p.family) || {}).label || "") + '</p>' +
+        '<p class="ci-hint">Il "successo secondo i propri criteri" della tua linea politica: nessun altro partito guarda a questi indicatori.</p>' +
+        '<div class="stat-grid">' + ideologyDefs.map(renderProfileMetricTile).join("") + "</div>"
       : "";
     var enacted = state.enactedPolicies || [];
     var enactedHtml = enacted.length
@@ -13889,6 +14042,7 @@
       '<p class="ci-hint">Indicatori reali del paese, da 1 (pessimo) a 10 (ottimo), divisi tra settore pubblico e settore privato. Cambiano lentamente da soli nel tempo, e vengono spinti dalle tue scelte — poco se il partito è piccolo, molto se è in Parlamento o all\'Europarlamento, moltissimo se è a governo.</p>' +
       '<p class="eyebrow" style="margin-top:0.8rem">Settore pubblico</p><div class="stat-grid">' + pubblico + "</div>" +
       '<p class="eyebrow" style="margin-top:1rem">Settore privato</p><div class="stat-grid">' + privato + "</div>" + privateWarning +
+      ideologyHtml +
       enactedHtml + "</details></section>";
   }
 
