@@ -2732,6 +2732,22 @@
     sicurezza: "la sicurezza pubblica", giustizia: "la giustizia", casa: "la casa e l'abitare",
     immigrazione: "la gestione dell'immigrazione", disoccupazione: "l'occupazione", energia: "l'indipendenza energetica"
   };
+  // Alcuni fronti bassi della Scheda Paese sono l'esito voluto di una scelta ideologica precisa, non un
+  // fallimento di governo da difendere: un partito che nazionalizza tutto (comunista, gratuitista,
+  // comunismo di lusso) avrà per forza "il sostegno alle imprese [private]" strutturalmente basso — non ha
+  // senso che question time, interviste e domande dal pubblico lo trattino come se fosse un fallimento,
+  // esattamente come farebbero con un governo che voleva un settore privato forte e ha fallito. Usata da
+  // buildQtTopicCandidates, buildLeaderInterviewScene e buildAudienceQuestion per escludere questi fronti
+  // dal novero dei "temi da incalzare".
+  var IDEOLOGY_EXPECTED_WEAK_METRICS = {
+    comunista: ["aziende"],
+    comunismolusso: ["aziende"],
+    gratuitista: ["aziende"]
+  };
+  function isExpectedWeakMetricFor(familyId, metric) {
+    var list = IDEOLOGY_EXPECTED_WEAK_METRICS[familyId];
+    return !!(list && list.indexOf(metric) !== -1);
+  }
   var SITUATION_SHAPES = [
     { kind: "Inchiesta", brief: function (noun, ctx) { return "Un'inchiesta giornalistica accende i riflettori su " + noun + " a " + ctx.city + "."; } },
     { kind: "Protesta", brief: function (noun, ctx) { return "Un comitato di cittadini organizza una protesta su " + noun + ", proprio nella tua zona di riferimento."; } },
@@ -4289,10 +4305,14 @@
   // candidato (non si inventa un tema a caso).
   function buildQtTopicCandidates() {
     var candidates = [];
-    var allMetricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k]; });
+    var pFamily = state.player && state.player.family;
     // Fronti "sindacabili" sui numeri: mai quelli già eccellenti (sotto 7.5/10, la stessa soglia usata
-    // altrove nel gioco per "transizione compiuta"). Se il paese va bene su quasi tutto e i fronti deboli
-    // sono meno di 3, si completa con i fronti meno eccellenti rimasti, non con uno a caso tra tutti.
+    // altrove nel gioco per "transizione compiuta"), e mai un fronte che è basso per una scelta ideologica
+    // voluta (es. "il sostegno alle imprese private" per chi ha nazionalizzato tutto) — non ha senso
+    // sindacare come un fallimento qualcosa che il partito ha deciso apertamente. Se il paese va bene su
+    // quasi tutto e i fronti deboli sono meno di 3, si completa con i fronti meno eccellenti rimasti, non
+    // con uno a caso tra tutti.
+    var allMetricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && !isExpectedWeakMetricFor(pFamily, k); });
     var weakMetrics = allMetricKeys.filter(function (k) { return state.countryProfile[k] < 7.5; });
     if (weakMetrics.length < 3) {
       var restRanked = allMetricKeys.filter(function (k) { return weakMetrics.indexOf(k) === -1; })
@@ -4500,7 +4520,7 @@
       ? "Il giornalista apre subito sul tema del momento: “" + recentDiary.title + "”. Come commenta " + p.name + "?"
       : "Il giornalista chiede conto della linea del partito in questa fase, con " + p.name + " a " + fmt1(p.sondaggi) + "% nei sondaggi.";
     var q1Topic = recentDiary ? recentDiary.title.toLowerCase() : "la linea del partito";
-    var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5; });
+    var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5 && !isExpectedWeakMetricFor(p.family, k); });
     var q2Metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
     var q2Text = q2Metric
       ? "Passa poi a un fronte caldo: " + METRIC_LABELS[q2Metric] + ", fermo a " + fmt1(state.countryProfile[q2Metric]) + "/10. Qual è la proposta del partito?"
@@ -12947,7 +12967,8 @@
   }
   function buildAudienceQuestion(noun) {
     var askerName = generateStaffName();
-    var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5; });
+    var pFamily = state.player && state.player.family;
+    var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5 && !isExpectedWeakMetricFor(pFamily, k); });
     var metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
     var topicLabel = metric ? METRIC_LABELS[metric] : noun;
     return {
