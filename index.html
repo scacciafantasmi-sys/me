@@ -5839,11 +5839,18 @@
       return out;
     }
     var inCoalitionGov = !!((state.govEntity && state.govEntity.memberIds && state.govEntity.memberIds.length));
+    // Segnalato dall'utente: una riforma bocciata (dalla coalizione o dalla Corte dei Conti) si vedeva
+    // SOLO in un toast che sparisce da solo dopo pochi secondi — la materia intanto va comunque in
+    // cooldown, quindi "qualcosa è successo" ma in modo facile da non notare, e sembra che il bottone non
+    // abbia fatto nulla. Questo avviso resta visibile nel pannello finché non si ripropone una riforma.
+    var lastOutcomeHtml = (p.lastReformOutcome && p.lastReformOutcome.blocked)
+      ? '<p class="ci-hint chip negative" style="margin-top:0.4rem">La tua ultima proposta di riforma (settimana ' + p.lastReformOutcome.week + ') è stata bloccata: ' + p.lastReformOutcome.text + '</p>'
+      : '';
     var html = '<section aria-label="Riforme di Governo"><details class="log"><summary>Riforme di Governo<span>▾</span></summary>' +
       '<p class="ci-hint">Da governo puoi proporre una riforma vera su una di queste materie, al massimo una ogni ' + REFORM_COOLDOWN_TURNS + ' settimane in totale. Scegli una materia per aprire le 5 opzioni direttamente qui sotto: una volta realizzata, la riforma resta in vigore e quella materia non è più proponibile per il resto della partita.' +
       (onCooldown ? ' Potrai proporre la prossima riforma tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.' : '') +
       (inCoalitionGov ? ' Governi in coalizione: la riforma va prima approvata dagli alleati di maggioranza, e può essere bocciata.' : '') +
-      '</p><p class="ci-hint"><strong>Riforme comuni a ogni governo</strong></p><div class="option-grid">';
+      '</p>' + lastOutcomeHtml + '<p class="ci-hint"><strong>Riforme comuni a ogni governo</strong></p><div class="option-grid">';
     REFORM_DOMAINS.forEach(function (d) { html += renderDomainButton(d); });
     html += "</div>";
     if (famDomains.length) {
@@ -10304,7 +10311,7 @@
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
-    reformCooldownTurn: 0, completedReformDomains: [], civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
+    reformCooldownTurn: 0, completedReformDomains: [], lastReformOutcome: null, civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
@@ -17675,6 +17682,11 @@
               week: state.turn, title: topic.dossier.title, choiceLabel: "Bocciata dalla coalizione", result: blockedText,
               headlines: [], type: "dossier", cat: topic.dossier.cat
             });
+            // Segnalato dall'utente: un rifiuto di coalizione/Corte dei Conti si vedeva SOLO in un toast che
+            // sparisce da solo dopo pochi secondi — se non lo si nota subito, sembra che il clic sul bottone
+            // non abbia fatto nulla (la materia resta comunque in cooldown, quindi qualcosa "è successo", ma
+            // in modo invisibile). p.lastReformOutcome resta visibile nel pannello finché non si riprova.
+            p.lastReformOutcome = { blocked: true, text: blockedText, week: state.turn };
             showSaveStatus(blockedText, true);
             save();
             render();
@@ -17687,6 +17699,7 @@
               week: state.turn, title: topic.dossier.title, choiceLabel: "Bloccata dalla Corte dei Conti", result: corteBlockedText,
               headlines: [], type: "dossier", cat: topic.dossier.cat
             });
+            p.lastReformOutcome = { blocked: true, text: corteBlockedText, week: state.turn };
             showSaveStatus(corteBlockedText, true);
             save();
             render();
@@ -17696,6 +17709,7 @@
         if (topic.kind === "riforma") {
           if (!p.completedReformDomains) p.completedReformDomains = [];
           if (p.completedReformDomains.indexOf(topic.domainId) === -1) p.completedReformDomains.push(topic.domainId);
+          p.lastReformOutcome = null;
           // Le Riforme di Governo erano l'unica delle tre leve parlamentari (mozioni, leggi, riforme) a non
           // muovere mai le aliquote fiscali quando il tema era esplicitamente fiscale (es. dominio "Fisco ed
           // Economia") — nonostante il commento sopra applyIndirectFiscalNudge lo promettesse da tempo per
