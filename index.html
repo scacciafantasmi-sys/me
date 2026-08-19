@@ -8267,6 +8267,41 @@
     if (!state.player.resolvedTopicNouns) state.player.resolvedTopicNouns = [];
     if (state.player.resolvedTopicNouns.indexOf(noun) === -1) state.player.resolvedTopicNouns.push(noun);
   }
+  // markTopicNounResolved (sopra) è più recente di acceptedMozioni/acceptedLeggi/acceptedReferendum: su un
+  // salvataggio già in corso da prima che esistesse, mozioni e leggi accettate PRIMA di allora non hanno
+  // mai fatto scattare quella chiamata — il loro argomento non è mai entrato in resolvedTopicNouns, quindi
+  // restava comunque libero di ripresentarsi nei dossier settimanali (vedi filterUnresolvedNouns), anche
+  // dopo il fix. Qui si ricostruisce il sostantivo dal TITOLO già salvato (stesso involucro usato da
+  // MOZIONE_SHAPES/LAW_SHAPES/REFERENDUM_SHAPES: "Mozione di impegno su X", "Proposta di Legge su X",
+  // "Referendum per una nuova legge su X"...) e lo si segna risolto retroattivamente — una tantum, alla
+  // prima apertura di un salvataggio più vecchio di questa funzionalità, mai per le nuove partite (dove
+  // acceptedMozioni/acceptedLeggi/acceptedReferendum sono vuoti e questo passo non trova nulla da fare).
+  var TOPIC_TITLE_NOUN_PREFIXES = [
+    "mozione di impegno su ", "mozione di indirizzo politico su ", "mozione di contrasto sul governo riguardo a ",
+    "proposta di legge su ", "disegno di legge delega su ",
+    "referendum abrogativo su ", "referendum per una nuova legge su ", "referendum consultivo su "
+  ];
+  function extractNounFromTopicTitle(title) {
+    if (!title) return null;
+    var lower = title.toLowerCase();
+    for (var i = 0; i < TOPIC_TITLE_NOUN_PREFIXES.length; i++) {
+      var pref = TOPIC_TITLE_NOUN_PREFIXES[i];
+      if (lower.indexOf(pref) === 0) {
+        var rest = title.slice(pref.length).replace(/\s*\([A-Za-z]+\)\s*$/, "").trim();
+        return rest ? rest.charAt(0).toLowerCase() + rest.slice(1) : null;
+      }
+    }
+    return null;
+  }
+  function backfillResolvedTopicNouns(p) {
+    if (!p) return;
+    if (!p.resolvedTopicNouns) p.resolvedTopicNouns = [];
+    var titles = [].concat(p.acceptedMozioni || [], p.acceptedLeggi || [], p.acceptedReferendum || []);
+    titles.forEach(function (title) {
+      var noun = extractNounFromTopicTitle(title);
+      if (noun && p.resolvedTopicNouns.indexOf(noun) === -1) p.resolvedTopicNouns.push(noun);
+    });
+  }
   // Le mozioni/leggi proposte dai partiti CPU (buildCpuMozioneDossier, buildCpuLeggeDossier) pescavano da
   // tutto topicPool senza mai consultare questo registro: su una partita lunga (centinaia di proposte CPU
   // pescate da un pool finito di temi) capitava, prima o poi, che lo STESSO tema già passato in Aula e già
@@ -10523,6 +10558,7 @@
       });
     }
     if (parsed.player) mergeDefaults(parsed.player, PLAYER_FIELD_DEFAULTS);
+    if (parsed.player) backfillResolvedTopicNouns(parsed.player);
     // Le seguenti restano migrazioni "vere" (trasformano dati esistenti, non solo completano campi
     // assenti) e vanno mantenute a mano caso per caso.
     if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
