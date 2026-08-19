@@ -4109,6 +4109,23 @@
     if (recent.length > windowSize) recent.shift();
     return chosen;
   }
+  // Segnalato dall'utente: un argomento già chiuso per sempre con una mozione o una legge APPROVATA (vedi
+  // markTopicNounResolved/p.resolvedTopicNouns) continuava comunque a ripresentarsi nei dossier settimanali
+  // normali — perché generateFamilySpecificSituation, generateCombinatorialSituation e
+  // pickParliamentaryTopic pescano lo stesso identico elenco di sostantivi (FAMILY_ANGLE_NOUNS/
+  // SITUATION_THEMES) SOLO con la finestra di memoria a breve termine di pickFreshItem (10 elementi),
+  // senza mai consultare il registro permanente dei temi già risolti. Dopo poche altre settimane la
+  // finestra corta se lo "dimenticava" e il tema tornava a comparire come se non fosse mai stato affrontato
+  // — non è mai stato un reset dei dati (mozioni/leggi/riforme completate restano intatte, vedi
+  // p.acceptedMozioni/p.acceptedLeggi/p.completedReformDomains), solo un pool di sostantivi condiviso da
+  // più sistemi diversi che non si parlavano tra loro. Qui si filtrano PRIMA i sostantivi già risolti per
+  // sempre, e solo se non ne resta nessuno si ripesca dall'intero elenco (mai un pool vuoto).
+  function filterUnresolvedNouns(nouns, p) {
+    var resolved = (p && p.resolvedTopicNouns) || [];
+    if (!resolved.length) return nouns;
+    var fresh = nouns.filter(function (n) { return resolved.indexOf(n) === -1; });
+    return fresh.length ? fresh : nouns;
+  }
   // Motore combinatorio per le situazioni legate all'ideologia specifica del partito: stessa meccanica
   // di generateCombinatorialSituation qui sotto, ma pesca il "noun" da FAMILY_ANGLE_NOUNS invece che dal
   // sostantivo neutro di SITUATION_THEMES — così ogni situazione parla davvero il linguaggio di quella
@@ -4121,7 +4138,7 @@
     var themeId = pickWeighted(themeIds, themeUrgencyWeight);
     var nouns = angles[themeId];
     if (!nouns || !nouns.length) return null;
-    var noun = pickFreshItem(nouns, "recentSituationNouns", 10);
+    var noun = pickFreshItem(filterUnresolvedNouns(nouns, p), "recentSituationNouns", 10);
     var themeObj = SITUATION_THEME_BY_ID[themeId];
     var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
@@ -4145,7 +4162,7 @@
       var momentumMult = (momentumCat && th.label === momentumCat) ? 4 : 1;
       return momentumMult * themeUrgencyWeight(th.id);
     });
-    var noun = pickFreshItem(theme.nouns, "recentSituationNouns", 10);
+    var noun = pickFreshItem(filterUnresolvedNouns(theme.nouns, p), "recentSituationNouns", 10);
     var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
@@ -4926,11 +4943,11 @@
       if (themeIds && angles) {
         var themeId = pickWeighted(themeIds, themeUrgencyWeight);
         var nouns = angles[themeId];
-        if (nouns && nouns.length) return { noun: pickFreshItem(nouns, "recentSituationNouns", 10), themeObj: SITUATION_THEME_BY_ID[themeId] };
+        if (nouns && nouns.length) return { noun: pickFreshItem(filterUnresolvedNouns(nouns, p), "recentSituationNouns", 10), themeObj: SITUATION_THEME_BY_ID[themeId] };
       }
     }
     var theme = pickWeighted(SITUATION_THEMES, function (th) { return themeUrgencyWeight(th.id); });
-    return { noun: pickFreshItem(theme.nouns, "recentSituationNouns", 10), themeObj: theme };
+    return { noun: pickFreshItem(filterUnresolvedNouns(theme.nouns, p), "recentSituationNouns", 10), themeObj: theme };
   }
   function generateParliamentaryAction(p) {
     var kind = pickWeighted([
