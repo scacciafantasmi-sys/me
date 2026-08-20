@@ -10471,7 +10471,7 @@
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
     reformCooldownTurn: 0, completedReformDomains: [], lastReformOutcome: null, civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
-    cumulativeGovWeeks: 0,
+    cumulativeGovWeeks: 0, lingeringScandal: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
@@ -11011,6 +11011,14 @@
     var p = state.player;
     if (!p) return;
     if (p.parliamentRole === "governo") p.cumulativeGovWeeks = (p.cumulativeGovWeeks || 0) + 1;
+    // Uno scandalo vero (vedi collapse_moment sopra) continua a pesare un poco ogni settimana finché non
+    // si esaurisce, invece di essere un unico colpo secco che il resto della formula dimentica subito
+    // dopo — più realistico, e coerente con "nega tutto" che può costare molto più a lungo di "scuse".
+    if (p.lingeringScandal && p.lingeringScandal.weeksLeft > 0) {
+      p.sondaggi = clamp(p.sondaggi - p.lingeringScandal.dropPerWeek, 0, 40);
+      p.lingeringScandal.weeksLeft--;
+      if (p.lingeringScandal.weeksLeft <= 0) p.lingeringScandal = null;
+    }
     var style = effectiveLeaderStyle(p);
     var countryTrendDelta = computeCountryTrendDelta();
     driftConsensoGovernoByCountryTrend(countryTrendDelta);
@@ -11187,7 +11195,15 @@
       var momentumAvgDelta = (momentumWindow[momentumWindow.length - 1] - momentumWindow[0]) / (momentumWindow.length - 1);
       momentumTerm = clamp(momentumAvgDelta * 0.2, -0.3, 0.3);
     }
-    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3, 0, 40);
+    // I sondaggi veri diventano più numerosi e più ballerini avvicinandosi al voto (più istituti in campo,
+    // più attenzione mediatica, elettori che si decidono all'ultimo) — non un rumore costante tutto l'anno
+    // come prima. Il rumore settimanale sale gradualmente nelle ultime ~20 settimane di legislatura, fino
+    // quasi a raddoppiare (1.7x) proprio a ridosso del voto; lontano dalle elezioni resta come prima.
+    var weeksToElectionForNoise = weeksToNationalElection();
+    var electionNoiseMult = (weeksToElectionForNoise >= 0 && weeksToElectionForNoise <= 20)
+      ? 1 + (1 - weeksToElectionForNoise / 20) * 0.7
+      : 1;
+    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3 * electionNoiseMult, 0, 40);
     // Il tetto sul BERSAGLIO qui sopra (vedi EARLY_GROWTH_CEILING_VALUE) da solo non basta: diversi eventi
     // di partito e situazioni applicano un bonus DIRETTO ai sondaggi (eff.sondaggi in applyChoice, o gli
     // eventi di rivalità/regionali sotto), che bypassa del tutto la convergenza lenta verso il bersaglio e
@@ -17030,11 +17046,18 @@
         pco.sondaggi = clamp(pco.sondaggi - sondaggiDrop, 0, 40);
         pco.visibilita = clamp(pco.visibilita + rand(5, 12), 0, 100);
         pco.reputazione = clamp(pco.reputazione - (stratCo === "scuse" ? rand(1, 3) : rand(3, 7)), 0, 100);
+        // Uno scandalo vero, nella realtà, raramente si esaurisce nel colpo immediato: continua a pesare
+        // un po' nelle settimane successive, tanto più a lungo quanto peggio è stato gestito (vedi
+        // applyLingeringScandalDrag in recomputePeriodic) — chi si scusa subito la chiude prima, chi nega e
+        // gli va male se la porta dietro per mesi.
+        var lingerWeeks = stratCo === "scuse" ? rand(2, 4) : stratCo === "nega" ? (negaBad ? rand(6, 10) : rand(1, 2)) : rand(3, 6);
+        var lingerPerWeek = stratCo === "scuse" ? rand(0.2, 0.5) : stratCo === "nega" ? (negaBad ? rand(0.4, 0.9) : rand(0.1, 0.3)) : rand(0.3, 0.6);
+        pco.lingeringScandal = { weeksLeft: Math.round(lingerWeeks), dropPerWeek: lingerPerWeek };
         var esitoCo = stratCo === "scuse"
-          ? "Le scuse pubbliche contengono il danno, anche se costano in immagine nell'immediato."
+          ? "Le scuse pubbliche contengono il danno, anche se costano in immagine nell'immediato — l'eco si spegne comunque in fretta."
           : stratCo === "nega"
-            ? (negaBad ? "Negare tutto si rivela un errore: la vicenda si ingigantisce, rimbalzando sui media per giorni." : "Negare tutto funziona, almeno per ora: la vicenda perde slancio più in fretta del previsto.")
-            : "Minimizzare attenua parzialmente il colpo, senza però spegnere del tutto la vicenda.";
+            ? (negaBad ? "Negare tutto si rivela un errore: la vicenda si ingigantisce, rimbalzando sui media per settimane." : "Negare tutto funziona, almeno per ora: la vicenda perde slancio più in fretta del previsto.")
+            : "Minimizzare attenua parzialmente il colpo, ma la vicenda continua a trascinarsi per un po'.";
         choice.result = esitoCo;
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "whistleblower_leak") {
