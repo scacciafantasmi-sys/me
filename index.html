@@ -10471,6 +10471,7 @@
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
     reformCooldownTurn: 0, completedReformDomains: [], lastReformOutcome: null, civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
+    cumulativeGovWeeks: 0,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null,
@@ -10633,6 +10634,14 @@
     if (parsed.player) mergeDefaults(parsed.player, PLAYER_FIELD_DEFAULTS);
     if (parsed.player) backfillResolvedTopicNouns(parsed.player);
     if (parsed.player) backfillEnactedPolicies(parsed);
+    // p.cumulativeGovWeeks (usato dal freno di crescita delle ideologie di nicchia, vedi recomputePeriodic)
+    // è una funzionalità troppo recente per avere mai contato le settimane di un governo già in corso da
+    // prima: senza questo, un salvataggio con un governo di lunghissimo corso ripartirebbe da zero, perdendo
+    // di colpo lo sconto già maturato. Stima ragionevole una tantum: se il partito sta già governando ORA,
+    // gran parte della sua storia (weeksActive) è verosimilmente legata a quel governo.
+    if (parsed.player && parsed.player.parliamentRole === "governo" && !parsed.player.cumulativeGovWeeks) {
+      parsed.player.cumulativeGovWeeks = Math.max(0, parsed.turn - (parsed.player.foundedTurn || 0));
+    }
     // Le seguenti restano migrazioni "vere" (trasformano dati esistenti, non solo completano campi
     // assenti) e vanno mantenute a mano caso per caso.
     if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
@@ -11001,6 +11010,7 @@
   function recomputePeriodic() {
     var p = state.player;
     if (!p) return;
+    if (p.parliamentRole === "governo") p.cumulativeGovWeeks = (p.cumulativeGovWeeks || 0) + 1;
     var style = effectiveLeaderStyle(p);
     var countryTrendDelta = computeCountryTrendDelta();
     driftConsensoGovernoByCountryTrend(countryTrendDelta);
@@ -11079,11 +11089,12 @@
     // non lasciava mai spazio per crescere oltre. Nella realtà un movimento un tempo di nicchia che governa
     // a lungo si NORMALIZZA agli occhi dell'elettorato (è successo a più di un partito storicamente
     // marginale). Il tetto ora si allenta gradualmente (mai del tutto, resta comunque sotto un partito
-    // mainstream vero) SOLO per chi sta governando DAVVERO in questo momento — non basta essere un
-    // partito vecchio, serve un incumbency reale — e solo su una scala lentissima (fino a 500 settimane,
-    // quasi un decennio di gioco): non premia un breve governo fortunato, solo un lungo corso genuino.
-    var weeksActive = Math.max(0, state.turn - (p.foundedTurn || 0));
-    var incumbencyRelief = (p.parliamentRole === "governo") ? clamp(weeksActive / 500, 0, 1) * 0.2 : 0;
+    // mainstream vero) in base a QUANTO SI È GOVERNATO DAVVERO (p.cumulativeGovWeeks, incrementato una
+    // volta a settimana solo mentre si è al governo — non basta essere un partito vecchio, ed entrare al
+    // governo per la prima volta dopo una lunga storia da opposizione non dà alcuno sconto immediato) e
+    // solo su una scala lentissima (fino a 500 settimane di governo REALE, quasi un decennio di gioco): non
+    // premia un breve governo fortunato, solo un lungo corso genuino guadagnato settimana dopo settimana.
+    var incumbencyRelief = clamp((p.cumulativeGovWeeks || 0) / 500, 0, 1) * 0.2;
     var nicheMult = NICHE_FAMILIES[p.family] ? clamp(0.22 + p.reputazione / 200 + incumbencyRelief, 0.22, 0.72 + incumbencyRelief) : 1;
     // Le sezioni locali (vedi openLocalSection) contano soprattutto sul TERRITORIO (elezioni
     // comunali/provinciali/regionali, vedi triggerLocalElectionCycle), ma un radicamento reale deve
