@@ -8302,6 +8302,79 @@
       if (noun && p.resolvedTopicNouns.indexOf(noun) === -1) p.resolvedTopicNouns.push(noun);
     });
   }
+  // Segnalato da un giocatore che non trovava più, da nessuna parte nel gioco, traccia delle mozioni/leggi/
+  // riforme fatte tanto tempo fa: "Cambiamenti già sanciti nel paese" in Scheda Paese (vedi renderCountryProfile)
+  // è l'unico posto che le elenca TUTTE senza mai tagliarle, ma legge da state.enactedPolicies — un
+  // registro anch'esso più recente di acceptedMozioni/acceptedLeggi/completedReformDomains: tutto ciò che
+  // era già stato approvato prima che esistesse non vi è mai entrato, quindi restava sancito nei dati (mai
+  // riproponibile, vedi backfillResolvedTopicNouns sopra) ma INVISIBILE nell'unica schermata pensata per
+  // mostrarlo — esattamente il "conta come se non avessi fatto niente" lamentato. Ricostruisce una voce
+  // per ciascuna mozione/legge/referendum/riforma già accettata ma ancora assente qui, recuperando la
+  // settimana vera dal registro cronaca (state.log) quando possibile.
+  function findLogWeekForApprovedTitle(log, title) {
+    if (!log || !title) return null;
+    var norm = title.toLowerCase();
+    for (var i = 0; i < log.length; i++) {
+      var e = log[i];
+      if (e.type !== "mozione") continue;
+      var t = (e.title || "").toLowerCase();
+      var r = (e.result || "").toLowerCase();
+      if (t === norm && (r.indexOf("approvat") !== -1 || r.indexOf("entra ufficialmente") !== -1 || r.indexOf("diventa legge") !== -1)) {
+        return e.week;
+      }
+    }
+    return null;
+  }
+  function findLogWeekForReformDomain(log, domainLabel) {
+    if (!log || !domainLabel) return null;
+    var suffix = (": " + domainLabel).toLowerCase();
+    for (var i = 0; i < log.length; i++) {
+      var e = log[i];
+      if (e.type !== "dossier") continue;
+      if ((e.title || "").toLowerCase().indexOf(suffix) !== -1) return e.week;
+    }
+    return null;
+  }
+  function reformDomainLabel(domainId, familyId) {
+    var domain = REFORM_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
+    if (!domain && familyId && FAMILY_REFORM_DOMAINS[familyId]) {
+      domain = FAMILY_REFORM_DOMAINS[familyId].filter(function (d) { return d.id === domainId; })[0];
+    }
+    return domain ? domain.label : domainId;
+  }
+  function backfillEnactedPolicies(parsed) {
+    var p = parsed && parsed.player;
+    if (!p) return;
+    if (!parsed.enactedPolicies) parsed.enactedPolicies = [];
+    var log = parsed.log || [];
+    var existingTitles = {};
+    parsed.enactedPolicies.forEach(function (e) { existingTitles[(e.title || "").toLowerCase()] = true; });
+    var newEntries = [];
+    [
+      { list: p.acceptedMozioni, note: function (noun) { return "Mozione approvata: " + noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta."; } },
+      { list: p.acceptedLeggi, note: function (noun) { return "Legge approvata: " + noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta."; } },
+      { list: p.acceptedReferendum, note: function (noun) { return "Referendum approvato: " + noun + " cambia nella direzione richiesta. Il paese prende atto del cambiamento: non verrà riproposto."; } }
+    ].forEach(function (group) {
+      (group.list || []).forEach(function (title) {
+        if (existingTitles[(title || "").toLowerCase()]) return;
+        var noun = extractNounFromTopicTitle(title) || title;
+        newEntries.push({ week: findLogWeekForApprovedTitle(log, title), title: title, note: group.note(noun), metric: null });
+        existingTitles[(title || "").toLowerCase()] = true;
+      });
+    });
+    (p.completedReformDomains || []).forEach(function (domainId) {
+      var label = reformDomainLabel(domainId, p.family);
+      var labelLower = label.toLowerCase();
+      var alreadyThere = parsed.enactedPolicies.concat(newEntries).some(function (e) {
+        var t = (e.title || "").toLowerCase();
+        return t.indexOf(": " + labelLower) !== -1 || t.indexOf("— " + labelLower) !== -1;
+      });
+      if (alreadyThere) return;
+      newEntries.push({ week: findLogWeekForReformDomain(log, label), title: "Riforma di Governo — " + label, note: "Riforma di Governo attuata su " + label.toLowerCase() + ". Rimane in vigore per il resto della partita.", metric: null });
+    });
+    newEntries.sort(function (a, b) { return (a.week || 0) - (b.week || 0); });
+    newEntries.forEach(function (e) { parsed.enactedPolicies.unshift(e); });
+  }
   // Le mozioni/leggi proposte dai partiti CPU (buildCpuMozioneDossier, buildCpuLeggeDossier) pescavano da
   // tutto topicPool senza mai consultare questo registro: su una partita lunga (centinaia di proposte CPU
   // pescate da un pool finito di temi) capitava, prima o poi, che lo STESSO tema già passato in Aula e già
@@ -10559,6 +10632,7 @@
     }
     if (parsed.player) mergeDefaults(parsed.player, PLAYER_FIELD_DEFAULTS);
     if (parsed.player) backfillResolvedTopicNouns(parsed.player);
+    if (parsed.player) backfillEnactedPolicies(parsed);
     // Le seguenti restano migrazioni "vere" (trasformano dati esistenti, non solo completano campi
     // assenti) e vanno mantenute a mano caso per caso.
     if (!parsed.nextLocalElectionTurn) parsed.nextLocalElectionTurn = parsed.turn + 20;
@@ -15484,15 +15558,27 @@
       "</div></section>";
   }
 
+  // Prima si vedevano SEMPRE e solo le ultime 16 voci, senza alcun modo di scorrere più indietro —
+  // nonostante il titolo mostrasse il conteggio totale (es. "(3922)"), dando l'impressione che tutto il
+  // resto della cronologia fosse semplicemente sparito. Segnalato da un giocatore che non riusciva più a
+  // ritrovare, da nessuna parte, mozioni e riforme fatte tanto tempo prima: erano ancora tutte lì in
+  // state.log, solo irraggiungibili oltre le ultime 16. Stato di sola interfaccia (mai nel salvataggio,
+  // come navDrawerOpen), cresce di 50 alla volta col bottone "Mostra altre" invece di scaricare in una
+  // volta sola migliaia di voci su un telefono.
+  var logVisibleCount = 16;
   function renderLog() {
     if (!state.log.length) return "";
-    var items = state.log.slice(0, 16).map(function (e) {
+    var visible = Math.min(logVisibleCount, state.log.length);
+    var items = state.log.slice(0, visible).map(function (e) {
       var cls = (e.type === "election" || e.type === "locale" || e.type === "europee" || e.type === "referendum") ? " election"
         : e.type === "scissione" ? " scissione" : e.type === "cronaca" ? " cronaca" : "";
       return '<div class="log-entry' + cls + '"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong> — " + e.choiceLabel + "<br>" + e.result + renderDeltaChips(e.deltas) + "</div>";
     }).join("");
+    var moreBtn = visible < state.log.length
+      ? '<button type="button" class="staff-btn hire" id="log-show-more-btn">Mostra altre voci (' + visible + " di " + state.log.length + ")</button>"
+      : "";
     return '<section><details class="log"><summary>Registro delle decisioni (' + state.log.length + ")<span>▾</span></summary>" +
-      '<div class="log-entries">' + items + "</div></details></section>";
+      '<div class="log-entries">' + items + "</div>" + moreBtn + "</details></section>";
   }
 
   function renderElectionResult() {
@@ -17296,6 +17382,13 @@
 
   function bindInteractions() {
     bindPageNavDrawer(null);
+    var logShowMoreBtn = document.getElementById("log-show-more-btn");
+    if (logShowMoreBtn) {
+      logShowMoreBtn.addEventListener("click", function () {
+        logVisibleCount += 50;
+        render();
+      });
+    }
     var localSectionSelect = document.getElementById("local-section-select");
     if (localSectionSelect) {
       localSectionSelect.addEventListener("change", function () {
