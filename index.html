@@ -6332,6 +6332,47 @@
     else eff = { reputazione: rand(-0.3, 0.3), visibilita: rand(0.5, 1.5) };
     return scaleEffects(eff, 0.22 * (reachMult === undefined ? 1 : reachMult));
   }
+  // ---------- Iniziativa Libera: una vera proposta scritta a mano, collegata alla Scheda Paese ----------
+  // A differenza delle Dichiarazioni (che muovono solo reputazione/visibilità, fino a 5 a settimana), qui
+  // il tema riconosciuto nel testo — lo stesso motore, STATEMENT_THEME_KEYWORDS/detectStatementTheme —
+  // decide QUALE indicatore della Scheda Paese viene toccato, con un effetto reale e duraturo (via
+  // eff.national, poi amplificato o ridotto da applyChoice/institutionalPowerMultiplier a seconda che si
+  // sia al governo, in Parlamento, o fuori: la stessa logica già usata da mozioni e leggi). Serve un tema
+  // riconoscibile per contare come policy vera: un testo troppo generico resta un intervento pubblico che
+  // non tocca la Scheda Paese, non un fallimento, solo un'iniziativa senza un fronte preciso. Il tono
+  // decide quanto bene la proposta viene recepita, con lo stesso principio di rischio/rendimento appena
+  // corretto per le Dichiarazioni: nessun tono garantisce un successo automatico.
+  var INIZIATIVA_LIBERA_COOLDOWN_TURNS = 20;
+  function buildIniziativaLiberaEffects(text, classification) {
+    var boost = (text || "").trim().length >= 80 ? 1.15 : 1;
+    var metric = classification.themeMetric;
+    var eff = {};
+    if (!metric) {
+      eff.reputazione = rand(-0.3, 0.5);
+      eff.visibilita = rand(0.5, 1.5);
+      return { effects: eff, nationalMetric: null, nationalDelta: 0, backfire: false };
+    }
+    var tone = classification.tone;
+    var nationalDelta = 0, backfire = false;
+    if (tone === "aggressivo") {
+      backfire = Math.random() < 0.3;
+      if (backfire) { nationalDelta = -rand(0.1, 0.3); eff.reputazione = -rand(2, 5); eff.visibilita = rand(1, 3); }
+      else { nationalDelta = rand(0.25, 0.45) * boost; eff.reputazione = rand(1, 2); eff.visibilita = rand(3, 6) * boost; }
+    } else if (tone === "istituzionale") {
+      nationalDelta = rand(0.15, 0.3) * boost;
+      eff.reputazione = rand(1.5, 3) * boost; eff.visibilita = rand(0.5, 1.5);
+    } else if (tone === "positivo") {
+      backfire = Math.random() < 0.15;
+      if (backfire) { nationalDelta = -rand(0.05, 0.15); eff.reputazione = -rand(0.5, 1.5); eff.visibilita = rand(0.5, 1); }
+      else { nationalDelta = rand(0.2, 0.35) * boost; eff.reputazione = rand(1, 2.5) * boost; eff.visibilita = rand(1.5, 3); }
+    } else {
+      nationalDelta = rand(0.1, 0.2);
+      eff.reputazione = rand(0, 1); eff.visibilita = rand(0.5, 1.5);
+    }
+    eff.national = {};
+    eff.national[metric] = Math.round(nationalDelta * 100) / 100;
+    return { effects: eff, nationalMetric: metric, nationalDelta: eff.national[metric], backfire: backfire };
+  }
   // ---------- Gittata di una dichiarazione: dipende da dove si è nelle istituzioni ----------
   // Le stesse parole, dette da un attivista fuori dal Parlamento o dal Presidente del Consiglio, non
   // arrivano affatto alle stesse persone né pesano allo stesso modo: qui si definiscono 4 livelli
@@ -6635,6 +6676,59 @@
         });
       }
     }
+  }
+  // Elenco di riferimento (non esaustivo, solo i più leggibili come "argomento") dei fronti che il
+  // riconoscimento del tema sa individuare in un testo — vedi STATEMENT_THEME_KEYWORDS: mostrarli per
+  // esteso aiuta a scrivere un'iniziativa che il gioco sa davvero collegare a un indicatore.
+  var INIZIATIVA_LIBERA_TOPIC_HINTS = "scuola, sanità, casa, lavoro, sicurezza, giustizia, ambiente, immigrazione, energia, trasporti, difesa, economia, corruzione, welfare, ricerca e innovazione, commercio estero, relazioni diplomatiche";
+  function renderIniziativaLiberaPanel() {
+    var p = state.player;
+    if (!p) return "";
+    var weeksLeft = Math.max(0, (p.iniziativaLiberaCooldownTurn || 0) - state.turn);
+    var html = '<section aria-label="Iniziativa Libera"><details class="log"><summary>Iniziativa Libera — una proposta scritta di tua mano<span>▾</span></summary>' +
+      '<p class="ci-hint">Scrivi tu, con parole tue, una proposta concreta su un tema preciso. Se il testo lascia riconoscere con chiarezza l\'argomento (' + INIZIATIVA_LIBERA_TOPIC_HINTS +
+      ', e altri ancora) l\'iniziativa sposta davvero l\'indicatore corrispondente nella Scheda Paese — non solo reputazione e visibilità, un effetto reale e duraturo. ' +
+      'Il tono con cui scrivi decide quanto bene viene recepita (una linea aggressiva rende di più ma rischia di ritorcersi contro, una istituzionale è la più sicura), e il tuo peso ' +
+      'istituzionale del momento — governo, opposizione, o fuori dal Parlamento — amplifica o riduce l\'effetto reale, esattamente come per una mozione o una legge.</p>';
+    if (weeksLeft > 0) {
+      html += '<p class="ci-hint"><strong>Non ancora disponibile.</strong> Potrai presentarne un\'altra tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.</p>';
+    } else {
+      html += '<div class="field"><label class="field-label" for="iniziativa-libera-input">La tua proposta</label>' +
+        '<textarea id="iniziativa-libera-input" class="autogrow-textarea" rows="8" placeholder="Scrivi qui, con parole tue, una proposta concreta…"></textarea></div>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="iniziativa-libera-submit-btn"><span class="clabel">Presenta l\'iniziativa</span></button></div>';
+    }
+    html += "</details></section>";
+    return html;
+  }
+  function bindIniziativaLiberaInteractions() {
+    bindAutoGrowTextarea("iniziativa-libera-input");
+    var submitBtn = document.getElementById("iniziativa-libera-submit-btn");
+    if (!submitBtn) return;
+    submitBtn.addEventListener("click", function () {
+      var p = state.player;
+      if (!p || state.turn < (p.iniziativaLiberaCooldownTurn || 0)) return;
+      var input = document.getElementById("iniziativa-libera-input");
+      var text = (input ? input.value : "").trim();
+      if (!text) { showSaveStatus("Scrivi qualcosa prima di presentare l'iniziativa.", true); return; }
+      var classification = classifyStatement(text);
+      var built = buildIniziativaLiberaEffects(text, classification);
+      p.iniziativaLiberaCooldownTurn = state.turn + INIZIATIVA_LIBERA_COOLDOWN_TURNS;
+      var dossier = { title: "Iniziativa Libera — " + classification.topicLabel, cat: "Iniziativa Libera", topicLabel: classification.topicLabel };
+      var resultText = !built.nationalMetric
+        ? "L'iniziativa non lascia intendere con chiarezza un fronte preciso: resta un intervento pubblico, ma senza un tema riconoscibile non tocca la Scheda Paese."
+        : built.backfire
+          ? "L'iniziativa su " + classification.topicLabel.toLowerCase() + " non viene recepita come sperato, e si ritorce in parte contro chi l'ha proposta."
+          : "L'iniziativa su " + classification.topicLabel.toLowerCase() + " viene messa in pratica: " + METRIC_LABELS[built.nationalMetric] + " ne risente davvero, in modo duraturo.";
+      var choice = { label: "Iniziativa Libera", effects: built.effects, result: resultText };
+      var outcome = applyChoice(dossier, choice);
+      if (built.nationalMetric && !built.backfire) {
+        recordEnactedPolicy(dossier.title, "Iniziativa Libera attuata su " + classification.topicLabel.toLowerCase() + ".", built.nationalMetric);
+      }
+      showSaveStatus(outcome.resultText, false);
+      if (input) input.value = "";
+      save();
+      render();
+    });
   }
   function renderDichiarazioniPage() {
     // Disponibile sia in modalità partito (state.player) sia in Carriera Politica (state.career): in
@@ -10512,7 +10606,7 @@
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
     electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0,
     internationalCongressCooldownTurn: 0,
-    dichiarazioniWeek: 0, dichiarazioniCount: 0
+    dichiarazioniWeek: 0, dichiarazioniCount: 0, iniziativaLiberaCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -16058,7 +16152,7 @@
         return renderReunificationPanel() + renderCoalitionPanel();
       } },
     { id: "paese", label: "Scheda Paese e Bilancio dello Stato", render: function () {
-        return renderNationalStrip() + renderCountryProfile() + renderCountryHistory() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
+        return renderNationalStrip() + renderCountryProfile() + renderIniziativaLiberaPanel() + renderCountryHistory() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -18077,6 +18171,7 @@
       });
     });
     bindDichiarazioniInteractions();
+    bindIniziativaLiberaInteractions();
     app.querySelectorAll("[data-vita-pubblica]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
