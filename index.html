@@ -415,6 +415,12 @@
   .stat-tile .row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
   .stat-tile .value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 1.2rem; font-weight: 600; }
   .stat-tile svg.spark { display: block; margin-top: 0.35rem; width: 100%; height: 26px; }
+  /* Ogni indicatore della Scheda Paese è anche un bottone: tocca/clicca per aprire, sotto la stessa
+     scheda, l'elenco dei provvedimenti che hanno toccato proprio quell'indicatore — la "sottoscheda"
+     per singolo argomento, invece di dover scorrere lo storico completo per intero. */
+  button.stat-tile { cursor: pointer; text-align: left; font: inherit; color: inherit; width: 100%; display: block; }
+  button.stat-tile:hover, button.stat-tile:focus-visible { border-color: var(--accent); outline: none; }
+  button.stat-tile.open { border-color: var(--accent); background: var(--accent-soft); }
   .chip {
     display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; font-weight: 600;
     padding: 0.16rem 0.5rem; border-radius: 999px; white-space: nowrap;
@@ -14348,6 +14354,11 @@
   // "Scheda Paese": lo stato reale del paese su 15 indicatori 1-10. Cambia da solo nel tempo (piccola
   // deriva) e viene spinto dalle scelte del giocatore — poco se il partito è piccolo, molto se è in
   // parlamento/europarlamento, moltissimo se è a governo (vedi institutionalPowerMultiplier).
+  // Ogni indicatore è cliccabile: apre, subito sotto, l'elenco filtrato di SOLO i provvedimenti (riforme,
+  // leggi, mozioni, referendum) che hanno toccato proprio quell'indicatore — la stessa fonte già usata da
+  // renderPolicyHistoryPanel (state.enactedPolicies), solo filtrata per singolo argomento invece di tutta
+  // intera. Risponde a una richiesta esplicita: poter aprire, argomento per argomento, "cosa abbiamo fatto
+  // su questo fronte" senza dover scorrere lo storico completo per intero.
   function renderProfileMetricTile(m) {
     var prev = state.countryProfilePrev;
     var val = state.countryProfile[m.key];
@@ -14355,7 +14366,25 @@
     // avanzato) non esiste ancora nell'istantanea della settimana precedente: senza questo controllo
     // esplicito su undefined, "prima" restava undefined e la freccia di variazione mostrava "−NaN".
     var before = (prev && prev[m.key] !== undefined) ? prev[m.key] : val;
-    return '<div class="stat-tile"><div class="label">' + m.label + '</div><div class="row"><span class="value">' + fmt1(val) + "/10</span></div>" + deltaLabel(before, val, "") + "</div>";
+    var isOpen = expandedMetricTile === m.key;
+    var history = (state.enactedPolicies || []).filter(function (e) { return e.metric === m.key; });
+    var countNote = history.length
+      ? history.length + " provvediment" + (history.length === 1 ? "o" : "i") + " su questo fronte — tocca per vederli"
+      : "Nessun provvedimento ancora su questo fronte";
+    var html = '<button type="button" class="stat-tile' + (isOpen ? " open" : "") + '" data-metric-tile="' + m.key + '">' +
+      '<div class="label">' + m.label + '</div><div class="row"><span class="value">' + fmt1(val) + "/10</span></div>" + deltaLabel(before, val, "") +
+      '<div class="ci-hint" style="margin-top:.3rem">' + countNote + "</div></button>";
+    if (isOpen) {
+      var sorted = history.slice().sort(function (a, b) { return (a.week || 0) - (b.week || 0); });
+      html += '<div class="inline-topic-expand" style="grid-column:1/-1">' +
+        (sorted.length
+          ? '<ul class="enacted-policy-list">' + sorted.map(function (e) {
+              return '<li><strong>' + e.title + '</strong>' + (e.week ? ' <span class="ci-hint">(settimana ' + e.week + ' — ' + weekLabel(e.week) + ')</span>' : '') + '<br>' + e.note + '</li>';
+            }).join("") + '</ul>'
+          : '<p class="ci-hint">Nessun provvedimento registrato ancora su questo fronte specifico.</p>') +
+        "</div>";
+    }
+    return html;
   }
   function renderCountryProfile() {
     var pubblico = COUNTRY_PROFILE_METRICS.filter(function (m) { return m.sector !== "privato"; }).map(renderProfileMetricTile).join("");
@@ -16213,6 +16242,9 @@
   // ricostruisce sempre l'intero DOM da zero.
   var navDrawerOpen = false;
   var resignArmed = false;
+  // Quale indicatore della Scheda Paese è espanso in questo momento (vedi renderProfileMetricTile): puro
+  // stato di interfaccia, mai nel salvataggio, esattamente come navDrawerOpen sopra.
+  var expandedMetricTile = null;
   function renderPageNav() {
     var current = activePageDef().id;
     var items = PAGE_DEFS.map(function (pg) {
@@ -18210,6 +18242,13 @@
     });
     bindDichiarazioniInteractions();
     bindIniziativaLiberaInteractions();
+    app.querySelectorAll("[data-metric-tile]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var key = btn.getAttribute("data-metric-tile");
+        expandedMetricTile = expandedMetricTile === key ? null : key;
+        render();
+      });
+    });
     app.querySelectorAll("[data-vita-pubblica]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
