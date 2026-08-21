@@ -982,8 +982,22 @@
       });
     });
   }
+  // Quante settimane di andamento reale si conservano per ogni singolo indicatore della Scheda Paese
+  // (vedi renderProfileMetricTile): prima l'unico dato "nel tempo" disponibile era il confronto con la
+  // settimana precedente (countryProfilePrev, una sola freccia su/giù) — nessun modo di vedere se un
+  // indicatore sta davvero migliorando da mesi o solo oscillando. Non è un limite tecnico del tetto
+  // (COUNTRY_PROFILE_HISTORY_WEEKS), solo quanta memoria si tiene in giro: 20 settimane bastano a mostrare
+  // un vero andamento senza appesantire il salvataggio.
+  var COUNTRY_PROFILE_HISTORY_WEEKS = 20;
   function driftCountryProfile() {
     state.countryProfilePrev = Object.assign({}, state.countryProfile);
+    if (!state.countryProfileHistory) state.countryProfileHistory = {};
+    Object.keys(state.countryProfile).forEach(function (key) {
+      var hist = state.countryProfileHistory[key];
+      if (!hist) hist = state.countryProfileHistory[key] = [];
+      hist.push(Math.round(state.countryProfile[key] * 100) / 100);
+      if (hist.length > COUNTRY_PROFILE_HISTORY_WEEKS) hist.shift();
+    });
     COUNTRY_PROFILE_METRICS.forEach(function (m) {
       state.countryProfile[m.key] = clamp(state.countryProfile[m.key] + (Math.random() - 0.5) * 0.12, 1, 10);
     });
@@ -6234,7 +6248,9 @@
     welfare: ["welfare", "assistenza", "famiglie", "famiglia", "natalita", "asili", "pensioni", "pensione", "sussidio", "sussidi"],
     sanita: ["sanita", "ospedale", "ospedali", "medico", "medici", "liste d'attesa", "pronto soccorso", "cure", "malati", "infermieri"],
     corruzione: ["corruzione", "tangenti", "mazzette", "corrotti", "malaffare", "trasparenza"],
-    aziende: ["imprese", "aziende", "impresa", "azienda", "pmi", "industria", "industrie", "imprenditori"],
+    aziende: ["imprese", "aziende", "impresa", "azienda", "pmi", "industria", "industrie", "imprenditori",
+      "fabbrica", "fabbriche", "stabilimento", "stabilimenti", "siderurgic", "siderurgia", "acciaieria",
+      "acciaierie", "acciaio", "altoforno", "altiforni", "delocalizza", "ilva", "indotto produttivo"],
     economia: ["economia", "economico", "mercato", "mercati", "finanza", "conti pubblici"],
     pil: ["pil", "crescita economica", "prodotto interno lordo"],
     felicita: ["benessere", "felicita", "qualita della vita"],
@@ -6249,7 +6265,8 @@
     giustizia: ["giustizia", "magistrati", "tribunali", "processi", "carceri", "pene", "giudici"],
     casa: ["casa", "affitti", "affitto", "case popolari", "edilizia", "mutuo", "mutui", "abitare"],
     immigrazione: ["immigrazione", "migranti", "sbarchi", "stranieri", "accoglienza", "rimpatri", "frontiere"],
-    disoccupazione: ["lavoro", "occupazione", "disoccupazione", "disoccupati", "posti di lavoro", "licenziamenti"],
+    disoccupazione: ["lavoro", "occupazione", "disoccupazione", "disoccupati", "posti di lavoro", "licenziamenti",
+      "operai", "operaio", "cassa integrazione", "esuberi", "riconversione industriale"],
     energia: ["energia", "bollette", "gas", "elettricita", "rinnovabili", "nucleare", "petrolio"]
   };
   // Liste per RADICE (non parola intera) dove sicuro, cosicché il confronto per sottostringa già usato
@@ -14367,21 +14384,30 @@
     // esplicito su undefined, "prima" restava undefined e la freccia di variazione mostrava "−NaN".
     var before = (prev && prev[m.key] !== undefined) ? prev[m.key] : val;
     var isOpen = expandedMetricTile === m.key;
-    var history = (state.enactedPolicies || []).filter(function (e) { return e.metric === m.key; });
-    var countNote = history.length
-      ? history.length + " provvediment" + (history.length === 1 ? "o" : "i") + " su questo fronte — tocca per vederli"
-      : "Nessun provvedimento ancora su questo fronte";
+    var policies = (state.enactedPolicies || []).filter(function (e) { return e.metric === m.key; });
+    var countNote = "Tocca per vedere l'andamento" + (policies.length ? " e " + policies.length + " provvediment" + (policies.length === 1 ? "o" : "i") : "");
     var html = '<button type="button" class="stat-tile' + (isOpen ? " open" : "") + '" data-metric-tile="' + m.key + '">' +
       '<div class="label">' + m.label + '</div><div class="row"><span class="value">' + fmt1(val) + "/10</span></div>" + deltaLabel(before, val, "") +
       '<div class="ci-hint" style="margin-top:.3rem">' + countNote + "</div></button>";
     if (isOpen) {
-      var sorted = history.slice().sort(function (a, b) { return (a.week || 0) - (b.week || 0); });
-      html += '<div class="inline-topic-expand" style="grid-column:1/-1">' +
-        (sorted.length
-          ? '<ul class="enacted-policy-list">' + sorted.map(function (e) {
+      var hist = (state.countryProfileHistory && state.countryProfileHistory[m.key]) || [];
+      var trendHtml;
+      if (hist.length >= 2) {
+        var lo = Math.min.apply(null, hist), hi = Math.max.apply(null, hist);
+        var avg = hist.reduce(function (s, v) { return s + v; }, 0) / hist.length;
+        trendHtml = '<p class="eyebrow" style="margin:0 0 .3rem">Andamento reale, ultime ' + hist.length + ' settimane</p>' +
+          sparkline(hist, "var(--accent)") +
+          '<p class="ci-hint" style="margin-top:.4rem">Minimo ' + fmt1(lo) + " · Media " + fmt1(avg) + " · Massimo " + fmt1(hi) + "/10</p>";
+      } else {
+        trendHtml = '<p class="ci-hint">Non c\'è ancora abbastanza storico per questo indicatore — torna tra qualche settimana.</p>';
+      }
+      var sortedPolicies = policies.slice().sort(function (a, b) { return (a.week || 0) - (b.week || 0); });
+      html += '<div class="inline-topic-expand" style="grid-column:1/-1">' + trendHtml +
+        (sortedPolicies.length
+          ? '<p class="eyebrow" style="margin:.7rem 0 .3rem">Provvedimenti su questo fronte</p><ul class="enacted-policy-list">' + sortedPolicies.map(function (e) {
               return '<li><strong>' + e.title + '</strong>' + (e.week ? ' <span class="ci-hint">(settimana ' + e.week + ' — ' + weekLabel(e.week) + ')</span>' : '') + '<br>' + e.note + '</li>';
             }).join("") + '</ul>'
-          : '<p class="ci-hint">Nessun provvedimento registrato ancora su questo fronte specifico.</p>') +
+          : "") +
         "</div>";
     }
     return html;
