@@ -11461,6 +11461,7 @@
     }
     p.sondaggiHistory.push(Math.round(p.sondaggi * 10) / 10);
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
+    if (!p.peakSondaggi || p.sondaggi > p.peakSondaggi) p.peakSondaggi = Math.round(p.sondaggi * 10) / 10;
 
     // established parties: random walk, then renormalize so total + player + indecisi = 100,
     // pulling disproportionately from the player's ideological rival. L'ampiezza del movimento
@@ -14695,6 +14696,53 @@
     html += "</details></section>";
     return html;
   }
+  // Riepilogo di carriera del partito: nessun nuovo dato salvato oltre a p.peakSondaggi (aggiunto sopra
+  // accanto a sondaggiHistory), tutto il resto è calcolato al volo da campi già esistenti (log, legislature,
+  // acceptedMozioni/Leggi/Referendum, cumulativeGovWeeks). Puramente informativo, non tocca alcun equilibrio
+  // di gioco: una "Storia del Partito" leggibile in un colpo d'occhio invece di dover scorrere l'intero diario.
+  function renderCareerSummary() {
+    var p = state.player;
+    var weeksActive = Math.max(0, state.turn - (p.foundedTurn || 0));
+    var log = state.log || [];
+    var countType = function (t) { return log.filter(function (e) { return e.type === t; }).length; };
+    var elections = countType("election");
+    var euElections = countType("europee");
+    var scissioni = countType("scissione");
+    var regimeEvents = countType("regime");
+    var mozioniApprovate = (p.acceptedMozioni || []).length;
+    var leggiApprovate = (p.acceptedLeggi || []).length;
+    var referendumApprovati = (p.acceptedReferendum || []).length;
+    var emendamentiApprovati = (p.acceptedAmendments || []).length;
+    var totProvvedimenti = mozioniApprovate + leggiApprovate + referendumApprovati + emendamentiApprovati;
+    var govWeeks = p.cumulativeGovWeeks || 0;
+    var govShare = weeksActive > 0 ? Math.round((govWeeks / weeksActive) * 100) : 0;
+    var stats = [
+      { label: "Settimane di attività", value: weeksActive },
+      { label: "Iscritti attuali", value: Math.round(p.iscritti || 0).toLocaleString("it-IT") },
+      { label: "Picco storico nei sondaggi", value: (p.peakSondaggi || p.sondaggi || 0).toFixed(1) + "%" },
+      { label: "Legislature raggiunte", value: state.legislature || 1 },
+      { label: "Tornate elettorali politiche affrontate", value: elections },
+      { label: "Tornate europee affrontate", value: euElections },
+      { label: "Settimane passate al governo", value: govWeeks + " (" + govShare + "% del totale)" },
+      { label: "Provvedimenti totali approvati", value: totProvvedimenti },
+      { label: "— di cui mozioni", value: mozioniApprovate },
+      { label: "— di cui leggi", value: leggiApprovate },
+      { label: "— di cui referendum", value: referendumApprovati },
+      { label: "— di cui emendamenti", value: emendamentiApprovati },
+      { label: "Amministratori locali eletti", value: Math.round(p.amministratoriLocali || 0) },
+      { label: "Seggi europei attuali", value: p.seggiEuropei || 0 },
+      { label: "Correnti interne attuali", value: (p.currents || []).length || 1 },
+      { label: "Scissioni interne affrontate", value: scissioni },
+      { label: "Cambi di regime nel Paese", value: regimeEvents }
+    ];
+    var statsHtml = '<ul class="enacted-policy-list">' + stats.map(function (s) {
+      return "<li><strong>" + s.label + ":</strong> " + s.value + "</li>";
+    }).join("") + "</ul>";
+    var epochsHtml = renderCountryHistory();
+    return '<section aria-label="Storia del Partito"><details class="log" open><summary>Storia del Partito — riepilogo di carriera<span>▾</span></summary>' +
+      '<p class="ci-hint">Un colpo d\'occhio su tutto quello che ' + (p.name || "il partito") + ' ha fatto da quando è nato, senza dover scorrere l\'intero diario.</p>' +
+      statsHtml + "</details></section>" + epochsHtml;
+  }
   // Chi vincerebbe SE si votasse oggi, sui sondaggi attuali — non è chi governa davvero (quello resta
   // fisso a chi ha vinto l'ultima elezione reale, vedi state.govEntity in resolveElection, fino al voto
   // successivo). Con legislature lunghe i sondaggi possono ribaltarsi parecchio a metà mandato: senza
@@ -16316,7 +16364,7 @@
         return renderReunificationPanel() + renderCoalitionPanel();
       } },
     { id: "paese", label: "Scheda Paese e Bilancio dello Stato", render: function () {
-        return renderNationalStrip() + renderCountryProfile() + renderIniziativaLiberaPanel() + renderPolicyHistoryPanel() + renderCountryHistory() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
+        return renderNationalStrip() + renderCountryProfile() + renderIniziativaLiberaPanel() + renderPolicyHistoryPanel() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -16326,6 +16374,9 @@
       } },
     { id: "diario", label: "Diario di Partito — registro completo", render: function () {
         return renderLog();
+      } },
+    { id: "storia", label: "Storia del Partito — riepilogo di carriera", render: function () {
+        return renderCareerSummary();
       } }
   ];
   function activePageDef() {
