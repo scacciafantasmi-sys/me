@@ -9577,6 +9577,33 @@
     });
     return { resultText: "Hai depositato una proposta di legge su " + topic.noun + ". L'iter parlamentare richiederà qualche settimana.", headlines: [] };
   }
+  // ---------- Corte Costituzionale: revisione rara di una legge appena approvata ----------
+  // Solo per le Leggi vere e proprie (non mozioni, non referendum, non riforme di governo, non
+  // emendamenti): un contropotere reale ma di scope volutamente stretto, per non intaccare il resto del
+  // ciclo di approvazione delle leggi. Se scatta, annulla l'effetto sull'indicatore appena applicato
+  // (appliedDelta, lo stesso valore già usato in resolveLeggeIfDue) e libera di nuovo il tema
+  // (rimuovendolo da resolvedTopicNouns) perché il partito possa riprovarci in futuro con una versione
+  // diversa della stessa legge — niente di più drastico di così.
+  function checkConstitutionalReview(topic, appliedDelta) {
+    if (Math.random() > 0.07) return;
+    var p = state.player;
+    if (topic.metric && appliedDelta && state.countryProfile[topic.metric] !== undefined) {
+      state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] - appliedDelta, 1, 10);
+    }
+    if (p.resolvedTopicNouns) {
+      var idx = p.resolvedTopicNouns.indexOf(topic.noun);
+      if (idx !== -1) p.resolvedTopicNouns.splice(idx, 1);
+    }
+    p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
+    if (state.enactedPolicies && state.enactedPolicies[0] && state.enactedPolicies[0].title === topic.title) {
+      state.enactedPolicies[0].annulled = true;
+    }
+    var text = "La Corte Costituzionale dichiara l'illegittimità costituzionale della legge su " + topic.noun + ": il provvedimento viene annullato con effetto immediato, e il tema torna nella disponibilità del Parlamento.";
+    state.log.unshift({ week: state.turn, title: "La Corte Costituzionale annulla una legge", choiceLabel: topic.title, result: text, headlines: [], type: "corte" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ week: state.turn, cat: "Corte Costituzionale", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
   function resolveLeggeIfDue() {
     var p = state.player;
     if (!p.pendingLegge) return null;
@@ -9608,6 +9635,7 @@
       recordEnactedPolicy(topic.title, "Legge approvata: " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
       markTopicNounResolved(topic.noun);
       if (isFiscalTopic(topic.noun) || isFiscalTopic(topic.title)) applyIndirectFiscalNudge(p.family, 1);
+      checkConstitutionalReview(topic, delta * mult);
     }
     var rivalPool = activeParties();
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
@@ -14666,7 +14694,8 @@
     var withWeek = enacted.filter(function (e) { return e.week; }).sort(function (a, b) { return a.week - b.week; });
     var withoutWeek = enacted.filter(function (e) { return !e.week; });
     var itemHtml = function (e) {
-      return '<li><strong>' + e.title + '</strong>' + (e.week ? ' <span class="ci-hint">(settimana ' + e.week + ' — ' + weekLabel(e.week) + ')</span>' : '') + '<br>' + e.note + '</li>';
+      return '<li><strong>' + e.title + '</strong>' + (e.week ? ' <span class="ci-hint">(settimana ' + e.week + ' — ' + weekLabel(e.week) + ')</span>' : '') +
+        (e.annulled ? ' <span class="chip critical">annullata dalla Corte Costituzionale</span>' : '') + '<br>' + e.note + '</li>';
     };
     var html = '<section aria-label="Storico Completo dei Provvedimenti"><details class="log">' +
       '<summary>Storico Completo dei Provvedimenti — ' + enacted.length + ' in totale<span>▾</span></summary>' +
