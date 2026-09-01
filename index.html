@@ -1058,6 +1058,78 @@
     if (state.worldNews.length > 6) state.worldNews.length = 6;
     state.log.unshift({ week: state.turn, title: ev.title, choiceLabel: METRIC_LABELS[ev.metric] || ev.metric, result: ev.text, headlines: [], type: "cronaca", cat: "Cronaca" });
   }
+  // ---------- Shock esterni: eventi rari e imprevedibili, indipendenti da qualunque scelta ----------
+  // A differenza di MINOR_COUNTRY_EVENTS sopra (friction quotidiana, un solo indicatore, effetto piccolo),
+  // questi sono veri shock — crisi finanziarie, disastri naturali, emergenze sanitarie, incidenti
+  // internazionali — che toccano più indicatori insieme con un effetto sensibile, e capitano molto più di
+  // rado: non serve un evento del genere ogni poche settimane, altrimenti perderebbe peso e diventerebbe
+  // solo rumore in più. Nessuna scelta del giocatore li causa né li previene: sono il modo in cui il paese
+  // "vive di vita propria" anche indipendentemente dalla politica del momento, dando pressione reale da
+  // gestire invece di solo causa-effetto delle mosse del partito.
+  var COUNTRY_SHOCK_EVENTS = [
+    { id: "crisi_bancaria", cat: "Crisi finanziaria", title: "Turbolenza su una banca di media grandezza",
+      text: "Una banca di media grandezza entra in difficoltà per un buco di bilancio, innescando una giornata di forte nervosismo sui mercati e un balzo dello spread.",
+      metrics: { economia: -0.7, pil: -0.5 }, spreadDelta: 25 },
+    { id: "crollo_borsa", cat: "Crisi finanziaria", title: "Seduta nera in Borsa",
+      text: "Una seduta di forti vendite sui mercati internazionali si riflette pesantemente su Piazza Affari, bruciando valore alle imprese quotate.",
+      metrics: { economia: -0.6, aziende: -0.5 }, spreadDelta: 15 },
+    { id: "downgrade_shock", cat: "Crisi finanziaria", title: "Voci di un possibile downgrade",
+      text: "Indiscrezioni su un possibile downgrade del debito sovrano circolano tra gli analisti internazionali, spingendo al rialzo il costo del finanziamento pubblico.",
+      metrics: { economia: -0.4 }, spreadDelta: 30 },
+    { id: "alluvione", cat: "Disastro naturale", title: "Alluvione in una regione del Nord",
+      text: "Piogge eccezionali provocano una grave alluvione in una regione del Nord, con danni a infrastrutture, abitazioni e attività produttive.",
+      metrics: { trasporti: -0.8, ambientalismo: -0.5, casa: -0.4 } },
+    { id: "terremoto", cat: "Disastro naturale", title: "Scossa sismica nel Centro Italia",
+      text: "Una scossa sismica di media intensità colpisce un'area del Centro Italia, danneggiando alcuni edifici storici e causando l'evacuazione precauzionale di alcune scuole.",
+      metrics: { casa: -0.7, scuola: -0.4, sicurezza: -0.3 } },
+    { id: "ondata_caldo", cat: "Disastro naturale", title: "Ondata di calore record",
+      text: "Un'ondata di calore fuori stagione mette sotto pressione il sistema sanitario e agricolo, con un aumento degli accessi al pronto soccorso tra gli anziani.",
+      metrics: { sanita: -0.5, ambientalismo: -0.4 } },
+    { id: "incendi_boschivi", cat: "Disastro naturale", title: "Vasti incendi boschivi",
+      text: "Una serie di incendi boschivi devasta ettari di bosco in diverse regioni, mettendo a dura prova la macchina della protezione civile.",
+      metrics: { ambientalismo: -0.7, sicurezza: -0.3 } },
+    { id: "epidemia_stagionale", cat: "Emergenza sanitaria", title: "Epidemia influenzale fuori norma",
+      text: "Un'epidemia influenzale più aggressiva del solito riempie i pronto soccorso in tutto il paese, con diversi ospedali costretti ad attivare piani di emergenza.",
+      metrics: { sanita: -0.8, felicita: -0.3 } },
+    { id: "allerta_alimentare", cat: "Emergenza sanitaria", title: "Allerta per un lotto alimentare contaminato",
+      text: "Il Ministero della Salute ritira dal mercato un lotto di prodotti alimentari contaminati, riaccendendo il dibattito sui controlli sulla filiera.",
+      metrics: { sanita: -0.4, aziende: -0.3 } },
+    { id: "attacco_hacker", cat: "Incidente internazionale", title: "Attacco informatico a infrastrutture pubbliche",
+      text: "Un attacco informatico su vasta scala colpisce alcuni sistemi informatici della pubblica amministrazione, mettendo temporaneamente fuori uso diversi servizi digitali.",
+      metrics: { sicurezza: -0.6, economia: -0.3 } },
+    { id: "crisi_energetica_estera", cat: "Incidente internazionale", title: "Tensioni su una rotta energetica internazionale",
+      text: "Tensioni geopolitiche lungo una rotta energetica strategica fanno impennare per alcune settimane il prezzo del gas sui mercati internazionali.",
+      metrics: { energia: -0.7, inflazione: -0.4 } },
+    { id: "incidente_diplomatico", cat: "Incidente internazionale", title: "Incidente diplomatico con un paese partner",
+      text: "Una dichiarazione infelice di un funzionario straniero scatena un piccolo incidente diplomatico con un paese partner, con toni tesi tra le due cancellerie per alcuni giorni.",
+      metrics: { relazioniDiplomatiche: -0.6 } },
+    { id: "delocalizzazione_grande_gruppo", cat: "Shock industriale", title: "Un grande gruppo annuncia una delocalizzazione",
+      text: "Un grande gruppo industriale annuncia la chiusura di uno stabilimento e lo spostamento della produzione all'estero, con migliaia di posti di lavoro a rischio.",
+      metrics: { aziende: -0.9, disoccupazione: 0.6 } },
+    { id: "boom_export_improvviso", cat: "Sorpresa positiva", title: "Boom improvviso dell'export in un settore",
+      text: "Un settore manifatturiero registra un'impennata inattesa degli ordini dall'estero, spingendo al rialzo produzione e occupazione locale nel giro di poche settimane.",
+      metrics: { economia: 0.6, aziende: 0.5, disoccupazione: -0.4 } },
+    { id: "scoperta_giacimento", cat: "Sorpresa positiva", title: "Nuova scoperta energetica",
+      text: "La scoperta di un giacimento sfruttabile al largo delle coste italiane apre prospettive di maggiore autosufficienza energetica nel medio periodo.",
+      metrics: { energia: 0.6, economia: 0.3 } }
+  ];
+  // Rarissimo di proposito (circa una volta ogni 50 settimane in media): non è pensato per essere
+  // frequente come triggerMinorCountryEvent, ma per restare un vero evento imprevisto quando arriva.
+  function triggerCountryShock() {
+    if (Math.random() > 0.02) return;
+    var ev = COUNTRY_SHOCK_EVENTS[Math.floor(Math.random() * COUNTRY_SHOCK_EVENTS.length)];
+    Object.keys(ev.metrics).forEach(function (key) {
+      if (state.countryProfile[key] === undefined) return;
+      state.countryProfile[key] = clamp(state.countryProfile[key] + ev.metrics[key] + (Math.random() - 0.5) * 0.15, 1, 10);
+    });
+    if (ev.spreadDelta && state.spreadBps !== undefined) {
+      state.spreadBps = clamp(state.spreadBps + ev.spreadDelta * rand(0.6, 1.3), 30, 500);
+    }
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ week: state.turn, cat: ev.cat, text: ev.text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    state.log.unshift({ week: state.turn, title: ev.title, choiceLabel: ev.cat, result: ev.text, headlines: [], type: "shock", cat: ev.cat });
+  }
   // ---------- Tracce di lungo periodo: transizione ambientale e ricerca e sviluppo ----------
   // Oltre al drift settimanale della Scheda Paese, questi due indicatori hanno un loro filo narrativo
   // dedicato: quando attraversano una soglia critica o d'eccellenza, il paese lo nota, con un annuncio
@@ -18661,6 +18733,7 @@
     resolveMonthlyPartyTax();
     triggerWorldNews();
     triggerMinorCountryEvent();
+    triggerCountryShock();
     triggerNucleoUpdate();
     var localElectionSpotlight = triggerLocalElectionCycle();
     resolveEuropeanElection();
