@@ -282,6 +282,18 @@
     border-radius: 9px; border: 1px solid transparent; background: transparent; color: inherit;
     font-size: 0.92rem; font-weight: 600; cursor: pointer;
   }
+  .slots-panel {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(440px, 92vw); max-height: 82vh; overflow-y: auto; z-index: 47;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1rem; box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+  }
+  .slot-row {
+    border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.85rem; margin-bottom: 0.6rem;
+  }
+  .slot-row.active { border-color: var(--accent); background: var(--accent-soft); }
+  .slot-row-head { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; font-size: 0.9rem; font-weight: 700; }
+  .slot-row-actions { display: flex; gap: 0.4rem; margin-top: 0.5rem; flex-wrap: wrap; }
   .nav-drawer-item:hover { background: var(--panel-2); }
   .nav-drawer-item.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
@@ -701,8 +713,15 @@
     <span class="save-bar-label">Salva i tuoi progressi</span>
     <button class="save-bar-btn primary" id="export-btn" type="button">Esporta partita</button>
     <button class="save-bar-btn" id="import-btn" type="button">Importa partita</button>
+    <button class="save-bar-btn" id="slots-btn" type="button">Slot di salvataggio</button>
     <input type="file" id="import-input" accept="application/json,.json" style="display:none">
     <span class="save-status" id="save-status"></span>
+  </div>
+
+  <div class="nav-drawer-backdrop" id="slots-backdrop"></div>
+  <div class="slots-panel" id="slots-panel" hidden>
+    <div class="nav-drawer-head"><strong>Slot di salvataggio</strong><button type="button" class="nav-drawer-close" id="slots-close-btn" aria-label="Chiudi">✕</button></div>
+    <div id="slots-panel-body"></div>
   </div>
 
   <main id="app"></main>
@@ -2117,6 +2136,34 @@
     p.judicialRisk = clamp((p.judicialRisk || 8) + (riskTarget - (p.judicialRisk || 8)) * 0.03, 1, 95);
   }
   var STORAGE_KEY = "politisit_founder_save_v2";
+  // ---------- Slot di salvataggio multipli ----------
+  // Lo slot 1 usa esattamente STORAGE_KEY invariato: chi ha già una partita in corso non subisce alcuna
+  // migrazione, il suo salvataggio continua a caricarsi esattamente come prima. Gli slot 2-5 vivono sotto
+  // chiavi separate (STORAGE_KEY + "_slotN"). Quale slot è "attivo" in questo momento vive in una chiave
+  // localStorage a parte (ACTIVE_SLOT_KEY, un numero puro, mai dentro "state"): save()/load() la
+  // consultano per sapere su quale slot leggere/scrivere, così tutto il resto del gioco (autosave,
+  // export/import, reset) continua a funzionare invariato, senza sapere nulla degli slot.
+  var MAX_SAVE_SLOTS = 5;
+  var ACTIVE_SLOT_KEY = "politisit_active_slot";
+  function activeSlot() {
+    try {
+      var v = parseInt(localStorage.getItem(ACTIVE_SLOT_KEY) || "1", 10);
+      return (v >= 1 && v <= MAX_SAVE_SLOTS) ? v : 1;
+    } catch (e) { return 1; }
+  }
+  function slotStorageKey(n) {
+    return n === 1 ? STORAGE_KEY : STORAGE_KEY + "_slot" + n;
+  }
+  function currentStorageKey() { return slotStorageKey(activeSlot()); }
+  function readSlotSummary(n) {
+    try {
+      var raw = localStorage.getItem(slotStorageKey(n));
+      if (!raw) return { slot: n, empty: true };
+      var parsed = JSON.parse(raw);
+      var name = parsed.player ? parsed.player.name : (parsed.career ? parsed.career.name : null);
+      return { slot: n, empty: false, name: name || "Partita senza nome", turn: parsed.turn || 0 };
+    } catch (e) { return { slot: n, empty: true }; }
+  }
 
   var SWATCHES = ["#d6455c", "#3fa9dc", "#e0a53a", "#4a8f5c", "#8a5fc2", "#2f8f8f", "#b0468a", "#6b7280"];
 
@@ -10998,7 +11045,7 @@
     });
   }
   function save() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+    try { localStorage.setItem(currentStorageKey(), JSON.stringify(state)); } catch (e) {}
   }
   // Riempie automaticamente ogni campo strutturale mancante in un salvataggio (aggiunto in versioni
   // successive a quella del salvataggio) con il suo valore di default, più le migrazioni "vere" caso per
@@ -11114,7 +11161,7 @@
   }
   function load() {
     try {
-      var raw = localStorage.getItem(STORAGE_KEY);
+      var raw = localStorage.getItem(currentStorageKey());
       if (!raw) return null;
       var parsed = JSON.parse(raw);
       return normalizeLoadedState(parsed);
@@ -16646,7 +16693,7 @@
     if (newGameBtnCrash) {
       newGameBtnCrash.addEventListener("click", function () {
         if (!window.confirm("Sei sicuro? Il salvataggio attuale andrà perso definitivamente.")) return;
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(currentStorageKey());
         window.location.reload();
       });
     }
@@ -19406,6 +19453,64 @@
     };
     reader.readAsText(file);
   });
+
+  // ---------- Pannello Slot di salvataggio ----------
+  // Vive fuori da state/render(): è un piccolo overlay statico (vedi #slots-panel nell'HTML), popolato e
+  // svuotato via innerHTML diretto ogni volta che si apre, con un solo listener delegato per tutte le
+  // azioni sulle righe (switch/elimina) — così non serve toccare in alcun modo il ciclo di render() del
+  // gioco vero e proprio. Cambiare slot salva prima lo stato corrente sul suo slot attuale, poi aggiorna
+  // ACTIVE_SLOT_KEY e ricarica la pagina: il normale "load() || freshState()" all'avvio fa il resto,
+  // esattamente come già succede oggi per lo slot 1.
+  var slotsBtn = document.getElementById("slots-btn");
+  var slotsPanel = document.getElementById("slots-panel");
+  var slotsBackdrop = document.getElementById("slots-backdrop");
+  var slotsCloseBtn = document.getElementById("slots-close-btn");
+  var slotsPanelBody = document.getElementById("slots-panel-body");
+  function renderSlotsPanel() {
+    var current = activeSlot();
+    var html = '<p class="ci-hint">Fino a ' + MAX_SAVE_SLOTS + ' partite salvate in parallelo nello stesso browser: cambia slot per iniziarne una nuova senza perdere quella attuale.</p>';
+    for (var n = 1; n <= MAX_SAVE_SLOTS; n++) {
+      var s = readSlotSummary(n);
+      var isCurrent = n === current;
+      html += '<div class="slot-row' + (isCurrent ? " active" : "") + '">' +
+        '<div class="slot-row-head"><span>Slot ' + n + (isCurrent ? " — in uso" : "") + '</span></div>' +
+        '<p class="ci-hint" style="margin:0.2rem 0 0">' + (s.empty ? "Vuoto — pronto per una nuova partita." : s.name + " — settimana " + s.turn) + '</p>' +
+        '<div class="slot-row-actions">' +
+        (isCurrent ? "" : '<button type="button" class="save-bar-btn primary" data-slot-switch="' + n + '">' + (s.empty ? "Inizia qui" : "Continua questa partita") + '</button>') +
+        (!s.empty ? '<button type="button" class="save-bar-btn" data-slot-delete="' + n + '">Elimina</button>' : "") +
+        "</div></div>";
+    }
+    slotsPanelBody.innerHTML = html;
+  }
+  function openSlotsPanel() {
+    renderSlotsPanel();
+    slotsPanel.hidden = false;
+    slotsBackdrop.classList.add("open");
+  }
+  function closeSlotsPanel() {
+    slotsPanel.hidden = true;
+    slotsBackdrop.classList.remove("open");
+  }
+  if (slotsBtn) slotsBtn.addEventListener("click", openSlotsPanel);
+  if (slotsCloseBtn) slotsCloseBtn.addEventListener("click", closeSlotsPanel);
+  if (slotsBackdrop) slotsBackdrop.addEventListener("click", closeSlotsPanel);
+  if (slotsPanelBody) {
+    slotsPanelBody.addEventListener("click", function (e) {
+      var switchBtn = e.target.closest ? e.target.closest("[data-slot-switch]") : null;
+      var deleteBtn = e.target.closest ? e.target.closest("[data-slot-delete]") : null;
+      if (switchBtn) {
+        var n = parseInt(switchBtn.getAttribute("data-slot-switch"), 10);
+        save();
+        try { localStorage.setItem(ACTIVE_SLOT_KEY, String(n)); } catch (err) {}
+        window.location.reload();
+      } else if (deleteBtn) {
+        var dn = parseInt(deleteBtn.getAttribute("data-slot-delete"), 10);
+        if (!window.confirm("Eliminare definitivamente la partita nello Slot " + dn + "?")) return;
+        try { localStorage.removeItem(slotStorageKey(dn)); } catch (err) {}
+        renderSlotsPanel();
+      }
+    });
+  }
 
   // Migrazione una tantum: la squadra di governo con nomi reali è una funzione nuova — un salvataggio già
   // a metà legislatura (governo insediato da tempo) non ha mai avuto occasione di formarla. Se il partito
