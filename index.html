@@ -598,6 +598,9 @@
     border-bottom: 1px solid var(--border);
   }
   .party-row:last-child { border-bottom: none; }
+  button.party-row { cursor: pointer; text-align: left; font: inherit; color: inherit; width: 100%; background: none; border: none; border-bottom: 1px solid var(--border); flex-direction: column; }
+  button.party-row:hover, button.party-row:focus-visible { background: var(--accent-soft); outline: none; }
+  button.party-row.open { background: var(--accent-soft); }
   .party-row .sw { width: 12px; height: 12px; border-radius: 50%; margin-top: 0.3rem; flex-shrink: 0; }
   .party-row .party-logo { border-radius: 50%; object-fit: cover; flex-shrink: 0; margin-top: 0.1rem; }
   .party-row-body { flex: 1; min-width: 0; }
@@ -10538,21 +10541,80 @@
     state.log.unshift({ week: state.turn, title: wasEU ? "Un paese lascia l'Unione Europea" : "Un nuovo paese entra nell'Unione Europea", choiceLabel: nation.name, result: text, headlines: [], type: "cronaca" });
     state.worldNews.unshift({ cat: "Europa", text: text });
   }
+  // ---------- Azioni bilaterali su una singola nazione ----------
+  // Finora le relazioni con l'estero (state.foreignRelations) potevano solo derivare passivamente verso
+  // l'affinità ideologica ogni settimana (vedi updateForeignRelations sopra) o essere influenzate fondando
+  // un'organizzazione internazionale: nessun modo di agire direttamente su UNA nazione specifica. Tre
+  // azioni semplici, ciascuna con costo/cooldown proprio per nazione (p.nationActionCooldowns, chiave
+  // "nazione_azione"), colmano quel vuoto senza toccare il drift passivo già esistente.
+  var NATION_ACTIONS = {
+    accordo: { label: "Proponi un accordo commerciale", desc: "Rafforza il legame commerciale e le relazioni bilaterali con questa nazione.", cost: 350, cooldown: 10 },
+    visita: { label: "Organizza una visita di Stato", desc: "Un gesto diplomatico ad alto profilo: costa di più, ma pesa anche sul prestigio internazionale del governo.", cost: 600, cooldown: 14 },
+    tensione: { label: "Alza la tensione diplomatica", desc: "Una linea dura verso questa nazione: nessun costo, ma le relazioni bilaterali ne risentono.", cost: 0, cooldown: 8 }
+  };
+  function resolveNationAction(nationId, actionId) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return null;
+    var a = NATION_ACTIONS[actionId];
+    var nation = WORLD_NATIONS.filter(function (n) { return n.id === nationId; })[0];
+    if (!a || !nation) return null;
+    if (!p.nationActionCooldowns) p.nationActionCooldowns = {};
+    var key = nationId + "_" + actionId;
+    if (state.turn < (p.nationActionCooldowns[key] || 0)) return null;
+    if (p.fondi < a.cost) return null;
+    p.nationActionCooldowns[key] = state.turn + a.cooldown;
+    p.fondi -= a.cost;
+    if (!state.foreignRelations) state.foreignRelations = {};
+    var cur = state.foreignRelations[nationId] === undefined ? 50 : state.foreignRelations[nationId];
+    var resultText;
+    if (actionId === "accordo") {
+      state.foreignRelations[nationId] = clamp(cur + rand(4, 8), 0, 100);
+      state.countryProfile.commercio = clamp(state.countryProfile.commercio + 0.15, 1, 10);
+      resultText = "Il governo firma un accordo commerciale con " + nation.name + ": le relazioni bilaterali migliorano e il commercio ne beneficia.";
+    } else if (actionId === "visita") {
+      state.foreignRelations[nationId] = clamp(cur + rand(5, 10), 0, 100);
+      state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche + 0.2, 1, 10);
+      p.reputazione = clamp(p.reputazione + rand(0.5, 1.5), 0, 100);
+      resultText = "Una visita di Stato a " + nation.name + " rafforza il prestigio internazionale del governo e i legami bilaterali.";
+    } else {
+      state.foreignRelations[nationId] = clamp(cur - rand(6, 12), 0, 100);
+      p.visibilita = clamp(p.visibilita + rand(0.5, 1.5), 0, 100);
+      resultText = "Il governo alza i toni verso " + nation.name + ": la mossa fa notizia, ma le relazioni bilaterali ne risentono.";
+    }
+    state.log.unshift({ week: state.turn, title: a.label + ": " + nation.name, choiceLabel: nation.name, result: resultText, headlines: [], type: "geopolitica" });
+    return { resultText: resultText };
+  }
   function renderForeignRelations() {
     var p = state.player;
     if (p.parliamentRole !== "governo") return "";
     var rows = WORLD_NATIONS.map(function (n) {
       return { n: n, val: state.foreignRelations[n.id] || 50, eu: nationIsEU(n) };
     }).sort(function (a, b) { return b.val - a.val; });
+    if (!p.nationActionCooldowns) p.nationActionCooldowns = {};
     var html = '<section aria-label="Rapporti con l\'estero"><details class="log" open><summary>Rapporti con l\'estero (' + rows.length + ' nazioni)<span>▾</span></summary>' +
-      '<p class="ci-hint">Le relazioni con le principali potenze mondiali, sbloccate perché sei al governo: si avvicinano lentamente a quanto il tuo orientamento politico è affine al loro.</p>' +
+      '<p class="ci-hint">Le relazioni con le principali potenze mondiali, sbloccate perché sei al governo: si avvicinano lentamente a quanto il tuo orientamento politico è affine al loro, ma puoi anche agire direttamente su una singola nazione — tocca la riga per aprire le azioni disponibili.</p>' +
       '<div class="party-directory">';
     html += rows.map(function (r) {
       var chipClass = r.val >= 66 ? "good" : r.val <= 33 ? "critical" : "neutral";
       var fam = familyById(r.n.family);
-      return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + r.n.name +
+      var isOpen = expandedNationId === r.n.id;
+      var row = '<button type="button" class="party-row' + (isOpen ? " open" : "") + '" data-nation-tile="' + r.n.id + '">' +
+        '<div class="party-row-body"><div class="party-row-head"><strong>' + r.n.name +
         (r.eu ? ' <span class="chip">UE</span>' : "") + '</strong><span class="chip ' + chipClass + '">' + fmt1(r.val) + "%</span></div>" +
-        '<div class="party-row-sub">' + r.n.area + " — orientamento " + (fam ? fam.label : r.n.family) + "</div></div></div>";
+        '<div class="party-row-sub">' + r.n.area + " — orientamento " + (fam ? fam.label : r.n.family) + "</div></div></button>";
+      if (isOpen) {
+        row += '<div class="option-grid" style="margin:0.5rem 0 0.9rem">' + Object.keys(NATION_ACTIONS).map(function (id) {
+          var act = NATION_ACTIONS[id];
+          var cd = p.nationActionCooldowns[r.n.id + "_" + id] || 0;
+          var weeksLeft = cd - state.turn;
+          var disabled = weeksLeft > 0 || p.fondi < act.cost;
+          var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+            : p.fondi < act.cost ? "Fondi insufficienti (" + fmtEuro(act.cost) + ")" : (act.cost ? "Costo: " + fmtEuro(act.cost) : "Nessun costo");
+          return '<button type="button" class="option-card" data-nation-action="' + r.n.id + ":" + id + '"' + (disabled ? " disabled" : "") + '>' +
+            '<span class="olabel">' + act.label + '</span><span class="odesc">' + act.desc + " " + status + '</span></button>';
+        }).join("") + '</div>';
+      }
+      return row;
     }).join("");
     html += "</div></details></section>";
     return html;
@@ -16465,6 +16527,9 @@
   // Quale indicatore della Scheda Paese è espanso in questo momento (vedi renderProfileMetricTile): puro
   // stato di interfaccia, mai nel salvataggio, esattamente come navDrawerOpen sopra.
   var expandedMetricTile = null;
+  // Quale nazione è espansa in questo momento nel pannello "Rapporti con l'estero" (vedi
+  // renderForeignRelations): stesso pattern di expandedMetricTile sopra, puro stato di interfaccia.
+  var expandedNationId = null;
   function renderPageNav() {
     var current = activePageDef().id;
     var items = PAGE_DEFS.map(function (pg) {
@@ -18423,6 +18488,24 @@
       btn.addEventListener("click", function () {
         var key = btn.getAttribute("data-metric-tile");
         expandedMetricTile = expandedMetricTile === key ? null : key;
+        render();
+      });
+    });
+    app.querySelectorAll("[data-nation-tile]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-nation-tile");
+        expandedNationId = expandedNationId === id ? null : id;
+        render();
+      });
+    });
+    app.querySelectorAll("[data-nation-action]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var parts = btn.getAttribute("data-nation-action").split(":");
+        var res = resolveNationAction(parts[0], parts[1]);
+        if (!res) { showSaveStatus("Non puoi ancora agire su questa nazione (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
         render();
       });
     });
