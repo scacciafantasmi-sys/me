@@ -163,6 +163,18 @@ const NEGOZI = [
   {tipo:'bar', nome:'Bar Nina'}, {tipo:'bar', nome:'Circolo Notturno'}
 ];
 
+// Luoghi speciali: quando esiste un vero amenity OpenStreetMap dello stesso tipo vicino
+// al giocatore, il POI viene piazzato lì (con il suo nome reale se disponibile); altrimenti
+// finisce comunque in zona con un nome di fantasia. Ognuno ha una meccanica di gioco propria.
+const SPECIAL_LANDMARKS = [
+  {kind:'chiesa', emoji:'⛪', fallbackName:'Vecchia Cappella di Quartiere'},
+  {kind:'farmacia', emoji:'💊', fallbackName:'Farmacia di Turno'},
+  {kind:'caserma', emoji:'🚓', fallbackName:'Caserma dei Carabinieri'},
+  {kind:'banca', emoji:'🏦', fallbackName:'Filiale Bancaria'},
+  {kind:'casino', emoji:'🎰', fallbackName:'Circolo Privato'},
+  {kind:'cimitero', emoji:'⚰️', fallbackName:'Cimitero Comunale'}
+];
+
 // Frasi di riserva (con preposizione già inclusa) usate quando non ci sono dati reali di zona
 const PLACE_NOUNS = ['nel vicolo dietro il mercato','vicino alla stazione dei bus','sul molo vecchio','nel parcheggio del centro commerciale',"all'incrocio principale",'nella zona industriale','nel parco cittadino','dietro il supermercato','lungo la ferrovia dismessa','sul ponte vecchio','al distributore di benzina','in piazza del mercato'];
 // Nomi di riserva "nudi" (senza articolo iniziale) usati nei dialoghi di trama con {luogoReale}
@@ -341,7 +353,10 @@ const ACHIEVEMENTS = [
   {id:'finale', nome:'Resa dei Conti', desc:'Raggiungi un finale della storia.', check:s=>!!s.missions.ending},
   {id:'modalita_reale', nome:'La Tua Città, Vera', desc:'Gioca in Modalità Reale con il GPS attivo.', check:s=>s.world.mode==='reale'},
   {id:'zona_mappata', nome:'Cartografo di Quartiere', desc:'Fai generare il mondo di gioco da vie e luoghi reali della tua zona.', check:s=>!!(s.world.real && s.world.real.ok)},
-  {id:'esploratore', nome:'Esploratore Urbano', desc:'Interagisci con almeno un luogo di ogni tipo (nascondiglio, territorio, personaggio, negozio).', check:s=>s.stats.tipiVisitati && Object.keys(s.stats.tipiVisitati).length>=4}
+  {id:'esploratore', nome:'Esploratore Urbano', desc:'Interagisci con almeno un luogo di ogni tipo (nascondiglio, territorio, personaggio, negozio).', check:s=>s.stats.tipiVisitati && Object.keys(s.stats.tipiVisitati).length>=4},
+  {id:'anima_salva', nome:'Anima (quasi) Salva', desc:'Raggiungi 50 di coscienza confessandoti in chiesa.', check:s=>s.player.coscienza>=50},
+  {id:'fortuna_al_tavolo', nome:'Fortuna al Tavolo', desc:'Vinci 3 scommesse al casinò.', check:s=>s.stats.vinciteCasino>=3},
+  {id:'giro_completo_citta', nome:'Giro Completo della Città', desc:'Visita chiesa, farmacia, caserma, banca, casinò e cimitero.', check:s=>['chiesa','farmacia','caserma','banca','casino','cimitero'].every(t=>s.stats.tipiVisitati && s.stats.tipiVisitati[t])}
 ];
 
 /* ================= UTILITY ================= */
@@ -385,8 +400,8 @@ const SAVE_KEY = 'malavita_save_v1';
 const BOARD_SIZE = 18;
 // Raggio d'azione di un obiettivo: entrarci basta per interagire, anche con qualche metro
 // di margine (deriva del GPS in Modalità Reale, click non perfetto in Modalità Simulata).
-const MISSION_RADIUS_REALE = 60;
-const MISSION_RADIUS_SIMULATA = 40;
+const INTERACTION_RADIUS_REALE = 60;
+const INTERACTION_RADIUS_SIMULATA = 40;
 
 function newGame(){
   return {
@@ -395,15 +410,16 @@ function newGame(){
     player:{
       name:'', avatarEmoji:'🧍', archetype:'debuttante',
       money:500, health:100, maxHealth:100, level:1, xp:0, xpNext:100,
-      wanted:0,
+      wanted:0, coscienza:0,
       rep:{famiglia:0, cartello:0, sindacato:0},
       relazioni:{},
-      inventario:{armi:['coltello'], veicoli:[]}
+      inventario:{armi:['coltello'], veicoli:[]},
+      buffs:{ spaccioBoost:false, bribeReady:false }
     },
-    world:{ homeBase:null, mode:null, seed:0, pos:null, pois:[], real:null, watchId:null, policePos:null },
-    missions:{ pool:[], board:[], activeId:null, completedIds:[], storyProgress:{}, storyFlags:{}, storyPlaces:{}, ending:null, secondaryDone:{} },
+    world:{ homeBase:null, mode:null, seed:0, pos:null, pois:[], real:null, watchId:null, policePos:null, cooldowns:{} },
+    missions:{ pool:[], board:[], activeId:null, completedIds:[], storyProgress:{}, storyFlags:{}, storyPlaces:{}, ending:null, secondaryDone:{}, pendingFugaId:null },
     achievements:{ unlocked:[] },
-    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{}, missioniPerGiver:{} },
+    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{}, missioniPerGiver:{}, vinciteCasino:0 },
     log:[]
   };
 }
@@ -430,38 +446,69 @@ function hasSave(){ return !!localStorage.getItem(SAVE_KEY); }
 
 /* ================= DATI REALI (OpenStreetMap / Overpass) ================= */
 
+const SPECIAL_KIND_TAGS = [
+  {kind:'chiesa', filter:'"amenity"="place_of_worship"', radius:1500},
+  {kind:'farmacia', filter:'"amenity"="pharmacy"', radius:1500},
+  {kind:'caserma', filter:'"amenity"="police"', radius:2200},
+  {kind:'banca', filter:'"amenity"="bank"', radius:1500},
+  {kind:'casino', filter:'"amenity"="casino"', radius:3500},
+  {kind:'cimitero', filter:'"landuse"="cemetery"', radius:2200}
+];
+
 async function fetchRealWorldData(home){
   const lat = home.lat, lng = home.lng;
-  const q = '[out:json][timeout:25];(' +
+  let q = '[out:json][timeout:25];(' +
     'way["highway"]["name"](around:1600,'+lat+','+lng+');' +
     'node["shop"]["name"](around:1200,'+lat+','+lng+');' +
     'node["amenity"]["name"](around:1200,'+lat+','+lng+');' +
     'node["leisure"]["name"](around:1200,'+lat+','+lng+');' +
     'node["tourism"]["name"](around:1200,'+lat+','+lng+');' +
     'way["shop"]["name"](around:1200,'+lat+','+lng+');' +
-    'way["amenity"]["name"](around:1200,'+lat+','+lng+');' +
-    ');out center 180;';
+    'way["amenity"]["name"](around:1200,'+lat+','+lng+');';
+  SPECIAL_KIND_TAGS.forEach(sk=>{
+    q += 'node['+sk.filter+'](around:'+sk.radius+','+lat+','+lng+');';
+    q += 'way['+sk.filter+'](around:'+sk.radius+','+lat+','+lng+');';
+  });
+  q += ');out center 260;';
   try{
     const res = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:q });
     if(!res.ok) throw new Error('overpass status '+res.status);
     const data = await res.json();
     const streets = [], places = [];
+    const special = {};
+    SPECIAL_KIND_TAGS.forEach(sk=> special[sk.kind]=[]);
     const seen = new Set();
     (data.elements||[]).forEach(el=>{
-      const name = el.tags && el.tags.name;
-      if(!name) return;
+      const tags = el.tags || {};
       const lat2 = el.lat!==undefined ? el.lat : (el.center? el.center.lat: null);
       const lng2 = el.lon!==undefined ? el.lon : (el.center? el.center.lon: null);
       if(lat2==null || lng2==null) return;
+      let specialKind = null;
+      if(tags.amenity==='place_of_worship') specialKind='chiesa';
+      else if(tags.amenity==='pharmacy') specialKind='farmacia';
+      else if(tags.amenity==='police') specialKind='caserma';
+      else if(tags.amenity==='bank') specialKind='banca';
+      else if(tags.amenity==='casino') specialKind='casino';
+      else if(tags.landuse==='cemetery') specialKind='cimitero';
+      if(specialKind){
+        const skey = specialKind+':'+Math.round(lat2*3000)+','+Math.round(lng2*3000);
+        if(!seen.has(skey)){
+          seen.add(skey);
+          special[specialKind].push({ name: tags.name || null, lat:lat2, lng:lng2 });
+        }
+        return;
+      }
+      const name = tags.name;
+      if(!name) return;
       const key = el.type+':'+name+':'+Math.round(lat2*2000)+','+Math.round(lng2*2000);
       if(seen.has(key)) return;
       seen.add(key);
-      if(el.tags.highway){ streets.push({name, lat:lat2, lng:lng2}); }
-      else { places.push({name, lat:lat2, lng:lng2, kind: el.tags.shop||el.tags.amenity||el.tags.leisure||el.tags.tourism||'luogo'}); }
+      if(tags.highway){ streets.push({name, lat:lat2, lng:lng2}); }
+      else { places.push({name, lat:lat2, lng:lng2, kind: tags.shop||tags.amenity||tags.leisure||tags.tourism||'luogo'}); }
     });
-    return { streets: streets.slice(0,60), places: places.slice(0,60), ok:true };
+    return { streets: streets.slice(0,60), places: places.slice(0,60), special, ok:true };
   }catch(e){
-    return { streets:[], places:[], ok:false };
+    return { streets:[], places:[], special:{}, ok:false };
   }
 }
 
@@ -519,6 +566,16 @@ function genPOIs(rng, home, real){
   });
   CHARACTERS.forEach(c=> add('personaggio', c.nome, c.primario?[200,900]:[300,2000], {characterId:c.id}));
   NEGOZI.forEach(n=> add('negozio', n.nome, [200,1500], {negozioTipo:n.tipo}));
+  SPECIAL_LANDMARKS.forEach(sl=>{
+    const found = real && real.special && real.special[sl.kind] && real.special[sl.kind].length
+      ? rngPick(rng, real.special[sl.kind]) : null;
+    if(found){
+      pois.push({id:'poi'+(idc++), type:sl.kind, name: found.name || sl.fallbackName, lat:found.lat, lng:found.lng, reale:true});
+    } else {
+      const a = anchorPoint(rng, home, real, [300,2000]);
+      pois.push({id:'poi'+(idc++), type:sl.kind, name: sl.fallbackName, lat:a.lat, lng:a.lng, reale:false});
+    }
+  });
   return pois;
 }
 
@@ -669,9 +726,14 @@ function wantedTick(){
   const distPolice = haversine(S.world.pos.lat,S.world.pos.lng,S.world.policePos.lat,S.world.policePos.lng);
   const hideout = nearestPOIOfType('nascondiglio');
   const distHideout = hideout ? haversine(S.world.pos.lat,S.world.pos.lng,hideout.lat,hideout.lng) : Infinity;
+  const grave = nearestPOIOfType('cimitero');
+  const distGrave = grave ? haversine(S.world.pos.lat,S.world.pos.lng,grave.lat,grave.lng) : Infinity;
   const safeDist = 150 + S.player.wanted*120;
   const wasFive = S.player.wanted>=5;
-  if(distHideout < 70){
+  if(distGrave < 90){
+    S.player.wanted = Math.max(0, S.player.wanted-2);
+    log('Ti nascondi tra le lapidi del '+grave.name+'. Nessuno cerca un fuggitivo tra i morti: il ricercato crolla.');
+  } else if(distHideout < 70){
     S.player.wanted = Math.max(0, S.player.wanted-1);
     log('Ti nascondi al '+hideout.name+'. Il livello di ricercato scende.');
   } else if(distPolice > safeDist){
@@ -685,17 +747,41 @@ function wantedTick(){
     stopWantedTicker();
     S.stats.fugheSenzaCattura++;
     if(wasFive) S.stats.sopravvissutoA5 = true;
+    if(S.missions.pendingFugaId){
+      const fm = getMissionById(S.missions.pendingFugaId);
+      S.missions.pendingFugaId = null;
+      if(fm){ resolveMissionOutcome(fm, true); return; }
+    }
     achievementsCheck();
   }
   refreshHUD(); saveGame();
 }
 function catturato(){
+  if(S.player.buffs.bribeReady){
+    S.player.buffs.bribeReady = false;
+    S.player.wanted = 0;
+    log("L'agente Bianchi interviene all'ultimo momento: stavolta te la cavi senza conseguenze.");
+    toast('Il favore di Bianchi ti salva dall\'arresto!');
+    stopWantedTicker();
+    if(S.missions.pendingFugaId){
+      const fm = getMissionById(S.missions.pendingFugaId);
+      S.missions.pendingFugaId = null;
+      if(fm){ resolveMissionOutcome(fm, true); return; }
+    }
+    refreshHUD(); refreshWantedMap(); saveGame();
+    return;
+  }
   const fine = Math.round(S.player.money*0.25);
   S.player.money = Math.max(0, S.player.money - fine);
   S.player.health = Math.max(20, S.player.health-15);
   S.player.wanted = 0;
   log('Sei stato preso! Multa di '+fmtMoney(fine)+' e qualche colpo incassato prima del rilascio.');
   stopWantedTicker();
+  if(S.missions.pendingFugaId){
+    const fm = getMissionById(S.missions.pendingFugaId);
+    S.missions.pendingFugaId = null;
+    if(fm){ resolveMissionOutcome(fm, false); return; }
+  }
   refreshHUD(); refreshWantedMap(); saveGame();
 }
 
@@ -724,6 +810,14 @@ function markVisited(type){
   S.stats.tipiVisitati[type]=true;
 }
 
+function cooldownReady(key, ms){
+  return (Date.now() - (S.world.cooldowns[key]||0)) >= ms;
+}
+function cooldownRemainingMin(key, ms){
+  return Math.max(1, Math.ceil((ms - (Date.now()-(S.world.cooldowns[key]||0)))/60000));
+}
+function setCooldown(key){ S.world.cooldowns[key] = Date.now(); }
+
 /* ---- risoluzione missioni ---- */
 
 function setActiveMission(id){
@@ -739,7 +833,7 @@ function drawActiveMissionRadius(id){
   if(!map) return;
   const m = getMissionById(id);
   if(!m || m.targetLat===undefined) return;
-  const radius = S.world.mode==='reale' ? MISSION_RADIUS_REALE : MISSION_RADIUS_SIMULATA;
+  const radius = S.world.mode==='reale' ? INTERACTION_RADIUS_REALE : INTERACTION_RADIUS_SIMULATA;
   activeMissionCircle = L.circle([m.targetLat, m.targetLng], {radius, color:'#e0b84b', weight:2, fillOpacity:0.08}).addTo(map);
 }
 
@@ -758,7 +852,7 @@ function attemptActiveMission(){
   const m = getMissionById(S.missions.activeId);
   if(!m) return;
   const dist = distanceToMissionTarget(m);
-  const threshold = S.world.mode==='reale' ? MISSION_RADIUS_REALE : MISSION_RADIUS_SIMULATA;
+  const threshold = S.world.mode==='reale' ? INTERACTION_RADIUS_REALE : INTERACTION_RADIUS_SIMULATA;
   if(dist > threshold){
     toast('Sei a '+Math.round(dist)+' m dal luogo. Avvicinati per continuare.');
     return;
@@ -768,10 +862,11 @@ function attemptActiveMission(){
     return;
   }
   closeModal();
-  if(m.category==='furto'){
-    openHotwireMinigame(m);
-    return;
-  }
+  if(m.category==='furto'){ openHotwireMinigame(m); return; }
+  if(m.category==='consegna'){ openConsegnaMinigame(m); return; }
+  if(m.category==='spaccio'){ openSpaccioMinigame(m); return; }
+  if(m.category==='fuga'){ startFugaChallenge(m); return; }
+  if(m.category==='rapina'){ openSequenceMinigame(m); return; }
   resolveMissionOutcome(m, true);
 }
 
@@ -796,7 +891,7 @@ function resolveMissionOutcome(m, success){
       const h = HEIST_DEFS.find(hh=>hh.id===m.heistId);
       if(h && m.stageIndex === h.stages.length-1) S.stats.rapineCompletate++;
     }
-    if(m.wantedRisk) raiseWanted(m.wantedRisk);
+    if(m.wantedRisk && m.category!=='fuga') raiseWanted(m.wantedRisk);
     log('Missione completata: "'+m.title+'". Guadagno '+fmtMoney(m.reward)+'.');
     m.status='completata';
   } else {
@@ -806,6 +901,8 @@ function resolveMissionOutcome(m, success){
     if(rischiosa && Math.random() < probArresto){
       log('Missione fallita: "'+m.title+'". Le cose sono andate male sul posto.');
       catturato();
+    } else if(m.category==='fuga'){
+      log('Missione fallita: "'+m.title+'". Sei stato preso prima di riuscire a scappare.');
     } else {
       log('Missione fallita: "'+m.title+'".');
       if(m.wantedRisk) raiseWanted(Math.max(1,m.wantedRisk-1));
@@ -816,17 +913,19 @@ function resolveMissionOutcome(m, success){
   refreshHUD(); renderMissionsPanel(); saveGame();
 }
 
-function openHotwireMinigame(m){
+/* ---- meccaniche concrete per categoria di missione ---- */
+
+function openTimingMinigame(opts){
   const zoneStart = 30 + Math.random()*40;
-  const zoneWidth = Math.max(10, 26 - (m.tier||1)*5);
+  const zoneWidth = Math.max(10, 26 - (opts.tier||1)*5);
   showModal(`
-    <h3>Scassinare l'auto</h3>
-    <p class="muted">Premi "Ferma!" quando il cursore è dentro la zona verde.</p>
+    <h3>${esc(opts.title)}</h3>
+    <p class="muted">${esc(opts.instructions)}</p>
     <div class="minigame-track" id="mg-track">
       <div class="minigame-zone" style="left:${zoneStart}%; width:${zoneWidth}%"></div>
       <div class="minigame-cursor" id="mg-cursor" style="left:0%"></div>
     </div>
-    <div class="row"><button class="btn primary" id="mg-stop">Ferma!</button></div>
+    <div class="row"><button class="btn primary" id="mg-stop">${esc(opts.buttonLabel||'Vai!')}</button></div>
   `);
   let pos=0, dir=1, running=true;
   const cursor = document.getElementById('mg-cursor');
@@ -841,17 +940,132 @@ function openHotwireMinigame(m){
     running=false; clearInterval(iv);
     const success = pos >= zoneStart && pos <= zoneStart+zoneWidth;
     closeModal();
-    if(success){
-      const veicolo = {nome: rngPick(Math.random, ['Berlina','Utilitaria','SUV','Furgone','Coupé']), valore: 500 + (m.tier||1)*400};
-      S.player.inventario.veicoli.push(veicolo);
-      S.stats.furtiCompletati++;
-      resolveMissionOutcome(m, true);
-      toast('Auto rubata con successo: '+veicolo.nome);
-    } else {
-      toast("Hai fatto scattare l'allarme!");
-      resolveMissionOutcome(m, false);
-    }
+    opts.onResult(success);
   };
+}
+
+function openHotwireMinigame(m){
+  openTimingMinigame({
+    title: "Scassinare l'auto", tier: m.tier,
+    instructions: 'Premi "Ferma!" quando il cursore è dentro la zona verde: è il momento in cui i cavi sono scoperti.',
+    buttonLabel: 'Ferma!',
+    onResult: (success)=>{
+      if(success){
+        const veicolo = {nome: rngPick(Math.random, ['Berlina','Utilitaria','SUV','Furgone','Coupé']), valore: 500 + (m.tier||1)*400};
+        S.player.inventario.veicoli.push(veicolo);
+        S.stats.furtiCompletati++;
+        toast('Auto rubata con successo: '+veicolo.nome);
+        resolveMissionOutcome(m, true);
+      } else {
+        toast("Hai fatto scattare l'allarme!");
+        resolveMissionOutcome(m, false);
+      }
+    }
+  });
+}
+
+function openConsegnaMinigame(m){
+  openTimingMinigame({
+    title: 'Consegna discreta', tier: m.tier,
+    instructions: 'Aspetta che la strada sia libera, poi premi "Consegna" nel momento giusto: troppo presto o troppo tardi e qualcuno ti nota.',
+    buttonLabel: 'Consegna',
+    onResult: (success)=>{
+      if(success){ toast('Consegna effettuata senza intoppi.'); resolveMissionOutcome(m, true); }
+      else { toast('Qualcuno ti ha notato mentre consegnavi.'); resolveMissionOutcome(m, false); }
+    }
+  });
+}
+
+function openSpaccioMinigame(m){
+  const boosted = S.player.buffs.spaccioBoost;
+  showModal(`
+    <h3>Il cliente aspetta</h3>
+    <p class="muted">Qualcosa non ti convince: il cliente continua a guardarsi intorno, nervoso.${boosted?' Almeno stavolta hai qualcosa che ti tutela.':''}</p>
+    <div class="row" style="margin-top:0.8em">
+      <button class="btn primary" id="ist-consegna">Consegna comunque</button>
+      <button class="btn ghost" id="ist-scappa">Fidati dell'istinto, vattene</button>
+    </div>
+  `);
+  document.getElementById('ist-consegna').onclick = ()=>{
+    closeModal();
+    const rischioBase = Math.max(0.05, 0.35 - (boosted?0.2:0));
+    if(boosted) S.player.buffs.spaccioBoost = false;
+    const successo = Math.random() > rischioBase;
+    if(successo){ toast('Il cliente paga: tutto tranquillo.'); resolveMissionOutcome(m, true); }
+    else { toast('Era una trappola.'); resolveMissionOutcome(m, false); }
+  };
+  document.getElementById('ist-scappa').onclick = ()=>{
+    closeModal();
+    const consolazione = Math.round(m.reward*0.2);
+    S.player.money += consolazione;
+    m.status='disponibile';
+    S.missions.activeId=null;
+    S.missions.board = S.missions.board.filter(id=>id!==m.id);
+    if(activeMissionCircle && map){ map.removeLayer(activeMissionCircle); activeMissionCircle=null; }
+    log('Ti ritiri prima che le cose si mettano male. Guadagno ridotto: '+fmtMoney(consolazione)+'.');
+    refillBoard();
+    refreshHUD(); renderMissionsPanel(); saveGame();
+  };
+}
+
+function startFugaChallenge(m){
+  S.missions.pendingFugaId = m.id;
+  S.missions.activeId = null;
+  S.missions.board = S.missions.board.filter(id=>id!==m.id);
+  if(activeMissionCircle && map){ map.removeLayer(activeMissionCircle); activeMissionCircle=null; }
+  raiseWanted(Math.max(2, m.wantedRisk||2));
+  log('Sei stato notato! Scappa o nasconditi per portare a termine il lavoro.');
+  toast('Sei ricercato: sfuggi alla polizia per completare il lavoro.');
+  refillBoard();
+  refreshHUD(); renderMissionsPanel(); saveGame();
+}
+
+function openSequenceMinigame(m){
+  const symbols = ['🔴','🟡','🟢','🔵'];
+  const length = 3 + (m.tier||1);
+  const sequence = [];
+  for(let i=0;i<length;i++) sequence.push(symbols[Math.floor(Math.random()*symbols.length)]);
+  showModal(`
+    <h3>${esc(m.title)}</h3>
+    <p class="muted">Memorizza la sequenza, poi ripetila nello stesso ordine.</p>
+    <div id="seq-display" style="font-size:2em; text-align:center; margin:0.8em 0; letter-spacing:0.3em;"></div>
+    <div class="row" id="seq-buttons" style="justify-content:center; display:none;"></div>
+  `);
+  const display = document.getElementById('seq-display');
+  const buttonsWrap = document.getElementById('seq-buttons');
+  const userInput = [];
+  let i=0;
+  const showNext = ()=>{
+    if(i>=sequence.length){
+      display.textContent = '?';
+      buttonsWrap.style.display='flex';
+      symbols.forEach(s=>{
+        const b = document.createElement('button');
+        b.className='btn'; b.style.fontSize='1.4em'; b.textContent=s;
+        b.onclick = ()=>{
+          userInput.push(s);
+          const idx = userInput.length-1;
+          if(userInput[idx] !== sequence[idx]){
+            closeModal();
+            toast('Hai sbagliato la sequenza!');
+            resolveMissionOutcome(m, false);
+            return;
+          }
+          if(userInput.length === sequence.length){
+            closeModal();
+            toast('Sequenza perfetta!');
+            resolveMissionOutcome(m, true);
+          }
+        };
+        buttonsWrap.appendChild(b);
+      });
+      return;
+    }
+    display.textContent = sequence[i];
+    i++;
+    setTimeout(showNext, 700);
+  };
+  setTimeout(showNext, 400);
 }
 
 /* ---- personaggi / storia ---- */
@@ -1260,7 +1474,7 @@ function initHub(){
 function emojiIcon(emoji, cls){
   return L.divIcon({html:'<div class="'+(cls||'poi-icon')+'">'+emoji+'</div>', className:'', iconSize:[28,28]});
 }
-const POI_EMOJI = {nascondiglio:'🕳️', territorio:'🚩', personaggio:'👤', negozio:'🏪'};
+const POI_EMOJI = {nascondiglio:'🕳️', territorio:'🚩', personaggio:'👤', negozio:'🏪', chiesa:'⛪', farmacia:'💊', caserma:'🚓', banca:'🏦', casino:'🎰', cimitero:'⚰️'};
 const CATEGORY_EMOJI = {consegna:'📦', spaccio:'🎒', furto:'🚗', fuga:'🏃', rapina:'💎'};
 const CATEGORY_LABEL = {consegna:'Consegna', spaccio:'Piazza', furto:'Furto Auto', fuga:'Fuga', rapina:'Rapina'};
 
@@ -1305,12 +1519,174 @@ function onMissionPinClick(id){
 }
 
 function onPoiClick(poi){
+  const dist = haversine(S.world.pos.lat, S.world.pos.lng, poi.lat, poi.lng);
+  const range = S.world.mode==='reale' ? INTERACTION_RADIUS_REALE : INTERACTION_RADIUS_SIMULATA;
+  if(dist > range){
+    toast(poi.name+' è a '+Math.round(dist)+' m. Avvicinati per interagire.');
+    return;
+  }
   if(poi.type==='negozio'){ openShop(poi); return; }
   if(poi.type==='personaggio'){ talkTo(poi.characterId); return; }
   if(poi.type==='nascondiglio'){ toast(poi.name+' — un buon posto per sparire se hai la polizia alle calcagna.'); markVisited('nascondiglio'); return; }
   if(poi.type==='territorio'){
     toast(poi.name+' — reputazione attuale: '+(S.player.rep[poi.factionId]||0));
     markVisited('territorio');
+    return;
+  }
+  if(poi.type==='chiesa'){ openChiesa(poi); return; }
+  if(poi.type==='farmacia'){ openFarmacia(poi); return; }
+  if(poi.type==='caserma'){ openCaserma(poi); return; }
+  if(poi.type==='banca'){ openBanca(poi); return; }
+  if(poi.type==='casino'){ openCasino(poi); return; }
+  if(poi.type==='cimitero'){ openCimitero(poi); return; }
+}
+
+/* ---- luoghi speciali: meccaniche concrete legate al tipo reale del posto ---- */
+
+function openChiesa(poi){
+  markVisited('chiesa');
+  const cdKey = 'chiesa_confessione', cdMs = 3*60*1000;
+  const ready = cooldownReady(cdKey, cdMs);
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un prete anziano ti osserva dal confessionale. "Vieni a scaricare la coscienza, figliolo?"</p>';
+  if(S.player.wanted>0){
+    html += ready
+      ? '<button class="btn tiny primary" onclick="window.__malavita.confessati()">Confessati (calma il ricercato)</button>'
+      : '<p class="small muted">Devi aspettare prima di confessarti di nuovo (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
+  } else {
+    html += '<p class="small muted">Per ora non hai nulla da farti perdonare... o forse sì.</p>';
+  }
+  html += '<div class="row" style="margin-top:0.5em"><button class="btn tiny" onclick="window.__malavita.donazione()">Fai un\'offerta silenziosa (100€)</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function confessati(){
+  S.player.wanted = Math.max(0, S.player.wanted-1);
+  S.player.coscienza = Math.min(100, S.player.coscienza+5);
+  setCooldown('chiesa_confessione');
+  if(S.player.wanted===0){ stopWantedTicker(); }
+  refreshWantedMap();
+  log('Ti confessi. Il peso sulla coscienza si allevia, e con esso il ricercato.');
+  toast('Ricercato ridotto di 1 stella.');
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+function donazione(){
+  if(S.player.money<100){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= 100;
+  S.player.coscienza = Math.min(100, S.player.coscienza+10);
+  log("Fai un'offerta silenziosa. Nessuno fa domande su da dove vengano quei soldi.");
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+
+function openFarmacia(poi){
+  markVisited('farmacia');
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Il farmacista ti squadra da dietro il bancone.</p>';
+  html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.healUp(120)">Kit di pronto soccorso (120€, cura piena)</button></div>';
+  if((S.player.rep.cartello||0) >= 10){
+    html += '<div style="margin-top:0.6em"><p class="small muted">Ti riconosce. "Per i clienti giusti, ho anche altro sul retro."</p>';
+    html += S.player.buffs.spaccioBoost
+      ? '<p class="small muted">Hai già una "spinta" pronta per il prossimo giro di piazza.</p>'
+      : '<button class="btn tiny" onclick="window.__malavita.buySpaccioBoost()">Compra una "spinta" per il prossimo giro (300€)</button>';
+    html += '</div>';
+  }
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function buySpaccioBoost(){
+  if(S.player.money<300){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= 300;
+  S.player.buffs.spaccioBoost = true;
+  log('Il farmacista ti passa qualcosa sottobanco. Il prossimo giro di piazza sarà più sicuro.');
+  refreshHUD(); saveGame(); closeModal();
+}
+
+function openCaserma(poi){
+  markVisited('caserma');
+  if(S.player.wanted>0){
+    const rischio = 0.35 + S.player.wanted*0.1;
+    const protetto = (S.player.relazioni.bianchi||0) >= 30;
+    if(!protetto && Math.random() < rischio){
+      log('Ti sei fatto vedere in caserma con la fedina sporca. Grave errore.');
+      catturato();
+      return;
+    }
+    toast(protetto ? "L'agente Bianchi ti copre e ti lascia filare." : "Nessuno ti ha riconosciuto, per il momento.");
+  }
+  const relBianchi = S.player.relazioni.bianchi||0;
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">La caserma dove presta servizio l\'agente Bianchi.</p>';
+  if(relBianchi >= 20){
+    html += S.player.buffs.bribeReady
+      ? '<p class="small muted">Bianchi ti deve già un favore: la prossima volta che rischi l\'arresto, chiuderà un occhio.</p>'
+      : '<button class="btn tiny primary" onclick="window.__malavita.buyBribeInsurance()">Paga un favore anticipato (500€)</button>';
+  } else {
+    html += '<p class="small muted">Non ti fidi ancora abbastanza di Bianchi (o lui di te). Parlaci più spesso in giro per la città.</p>';
+  }
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function buyBribeInsurance(){
+  if(S.player.money<500){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= 500;
+  S.player.buffs.bribeReady = true;
+  log('Bianchi intasca la bustarella. "La prossima volta, non mi hai visto."');
+  refreshHUD(); saveGame(); closeModal();
+}
+
+function openBanca(poi){
+  markVisited('banca');
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un direttore compiacente, per chi sa come chiedere.</p>';
+  if((S.player.rep.sindacato||0) >= 15){
+    html += '<p class="small muted">Puoi far sparire un po\' di contanti dai libri contabili, per una commissione.</p>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000)">Ripulisci 1.000€</button>';
+    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000)">Ripulisci 5.000€</button></div>';
+  } else {
+    html += '<p class="small muted">Il direttore non ti conosce ancora. Fatti notare prima dal Sindacato.</p>';
+  }
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function riciclaggio(amount){
+  if(S.player.money < amount){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= amount;
+  addRep('sindacato', Math.round(amount/150));
+  log('Ripulisci '+fmtMoney(amount)+' attraverso la banca. Il Sindacato apprezza la fiducia.');
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+
+function openCasino(poi){
+  markVisited('casino');
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Fumo, carte, e la casa che vince quasi sempre.</p>';
+  html += '<div class="row">';
+  [50,200,500].forEach(b=>{ html += '<button class="btn tiny" onclick="window.__malavita.giocaAzzardo('+b+')">Scommetti '+fmtMoney(b)+'</button>'; });
+  html += '</div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function giocaAzzardo(bet){
+  if(S.player.money<bet){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= bet;
+  if(Math.random() < 0.45){
+    S.player.money += bet*2;
+    S.stats.vinciteCasino++;
+    log('Vinci al tavolo: +'+fmtMoney(bet)+' netti.');
+    toast('Hai vinto '+fmtMoney(bet*2)+'!');
+  } else {
+    log('La casa vince. Perdi '+fmtMoney(bet)+' al tavolo.');
+    toast('Hai perso la puntata.');
+  }
+  if(S.player.money>=5000) S.stats.hadBigMoney = true;
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+
+function openCimitero(poi){
+  markVisited('cimitero');
+  if(Math.random() < 0.3){
+    const trovato = rngInt(Math.random, 50, 150);
+    S.player.money += trovato;
+    log('Tra le lapidi del '+poi.name+' trovi una busta lasciata da un contatto anonimo: '+fmtMoney(trovato)+'.');
+    toast('Trovato: '+fmtMoney(trovato)+'.');
+    refreshHUD(); saveGame();
+  } else {
+    toast(poi.name+' — silenzioso e appartato: un ottimo posto per sparire se hai la polizia alle calcagna.');
   }
 }
 
@@ -1495,7 +1871,7 @@ function exportSave(){
 
 /* ================= AVVIO ================= */
 
-window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale, getState: ()=>S };
+window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale, confessati, donazione, buySpaccioBoost, buyBribeInsurance, riciclaggio, giocaAzzardo, getState: ()=>S };
 
 renderBoot();
 
