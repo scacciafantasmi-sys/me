@@ -8,7 +8,7 @@
 <meta http-equiv="Expires" content="0">
 <title>Malavita — La Tua Città</title>
 <!-- Pagina autonoma a file singolo, ospitata accanto a Politis-IT, Villa Franca 1980 e Notti Azzurre sullo stesso dominio. -->
-<meta name="description" content="Open world criminale ispirato a GTA, ambientato sulla mappa reale della tua città: missioni, fughe, rapine, fazioni e una storia a bivi. Client-side, salvataggio locale.">
+<meta name="description" content="Open world criminale ispirato a GTA, ambientato sulla mappa reale della tua città: vie e luoghi veri, missioni sulla mappa, fughe, rapine, fazioni e una storia a bivi. Client-side, salvataggio locale.">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
@@ -60,6 +60,9 @@
   .disclaimer { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1em 1.2em; margin: 1.4em 0; font-size: 0.85em; color: var(--text-dim); }
   .disclaimer strong { color: var(--text); }
   .boot-actions { display: flex; flex-direction: column; gap: 0.6em; max-width: 380px; margin: 1.2em auto 0; }
+  .loading { max-width: 480px; margin: 4rem auto; text-align: center; }
+  .spinner { width: 34px; height: 34px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; margin: 1.2em auto; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   .wizard { max-width: 640px; margin: 0 auto; padding: 2rem 1rem; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1.4rem; box-shadow: var(--shadow); margin-bottom: 1em; }
@@ -92,6 +95,7 @@
   .mission-item, .char-item, .ach-item, .shop-item { border: 1px solid var(--border); border-radius: 8px; padding: 0.7em 0.8em; margin-bottom: 0.6em; background: var(--panel-2); }
   .mission-item h4, .char-item h4 { margin: 0 0 0.2em; font-size: 0.92em; color: var(--accent); }
   .mission-item p, .char-item p { margin: 0.2em 0; font-size: 0.8em; color: var(--text-dim); }
+  .mission-item .locref { color: var(--accent-2); }
   .mission-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
   .tag { display: inline-block; font-size: 0.68em; padding: 0.15em 0.5em; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); margin-right: 0.3em; }
   .ach-item.unlocked { border-color: var(--good); }
@@ -114,6 +118,7 @@
 
   .poi-icon { font-size: 20px; text-align: center; line-height: 26px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8)); }
   .player-icon { font-size: 24px; text-align: center; line-height: 28px; filter: drop-shadow(0 0 4px var(--accent)); }
+  .mission-icon { font-size: 22px; text-align: center; line-height: 26px; filter: drop-shadow(0 0 3px #000) drop-shadow(0 0 5px var(--accent)); }
 
   .minigame-track { position: relative; height: 34px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; margin: 1em 0; overflow: hidden; }
   .minigame-zone { position: absolute; top: 0; bottom: 0; background: var(--good-soft); border-left: 2px solid var(--good); border-right: 2px solid var(--good); }
@@ -157,7 +162,11 @@ const NEGOZI = [
   {tipo:'ricettatore', nome:'Compro Oro & Non Solo'}, {tipo:'ricettatore', nome:'Magazzino del Ricettatore'},
   {tipo:'bar', nome:'Bar Nina'}, {tipo:'bar', nome:'Circolo Notturno'}
 ];
-const PLACE_NOUNS = ['il vicolo dietro il mercato','la stazione dei bus','il molo vecchio','il parcheggio del centro commerciale','l\'incrocio principale','la zona industriale','il parco cittadino','il retro del supermercato','la ferrovia dismessa','il ponte vecchio','il distributore di benzina','la piazza del mercato'];
+
+// Frasi di riserva (con preposizione già inclusa) usate quando non ci sono dati reali di zona
+const PLACE_NOUNS = ['nel vicolo dietro il mercato','vicino alla stazione dei bus','sul molo vecchio','nel parcheggio del centro commerciale',"all'incrocio principale",'nella zona industriale','nel parco cittadino','dietro il supermercato','lungo la ferrovia dismessa','sul ponte vecchio','al distributore di benzina','in piazza del mercato'];
+// Nomi di riserva "nudi" (senza articolo iniziale) usati nei dialoghi di trama con {luogoReale}
+const PLACE_NAMES_BARE = ['un vecchio deposito ferroviario','una traversa isolata vicino al centro','uno spiazzo dietro il mercato','un parcheggio abbandonato','un incrocio poco illuminato','una traversa vicino alla stazione'];
 
 const WEAPONS = [
   {id:'coltello', nome:'Coltello', prezzo:0, potenza:1},
@@ -168,110 +177,131 @@ const WEAPONS = [
   {id:'mitra', nome:'Mitra', prezzo:9000, potenza:9}
 ];
 
+// {luogo} è già una frase completa con preposizione (vedi describeLocation)
 const TEMPLATES = {
   consegna: [
-    {title:'Consegna per {char}', desc:'Porta un pacco fino a {poi} senza farti fermare. {char} vuole discrezione assoluta.'},
-    {title:'Corriere di fiducia', desc:'{char} ha bisogno che tu porti della merce fino a {luogo}, in fretta e senza intoppi.'},
-    {title:'Pacco urgente', desc:'Un pacco sigillato deve arrivare a {poi} entro stasera. Nessuna domanda, nessun ritardo.'},
-    {title:'Scambio silenzioso', desc:'Incontra un contatto vicino a {luogo} e lascia il pacco senza farti notare.'}
+    {title:'Consegna per {char}', desc:'Porta un pacco {luogo} senza farti fermare. {char} vuole discrezione assoluta.'},
+    {title:'Corriere di fiducia', desc:'{char} ha bisogno che tu porti della merce {luogo}, in fretta e senza intoppi.'},
+    {title:'Pacco urgente', desc:'Un pacco sigillato deve arrivare {luogo} entro stasera. Nessuna domanda, nessun ritardo.'},
+    {title:'Scambio silenzioso', desc:'Incontra un contatto {luogo} e lascia il pacco senza farti notare.'}
   ],
   spaccio: [
-    {title:'Consegna riservata per {char}', desc:'Porta una borsa a un cliente fidato vicino a {poi}. Occhi aperti sulle volanti.'},
-    {title:'Piazza calda', desc:'{char} ti manda a coprire un giro vicino a {luogo}. Muoviti e non farti notare.'},
-    {title:'Cliente difficile', desc:'Un cliente vicino a {poi} vuole trattare di persona. {char} si fida di te per questo.'},
-    {title:'Giro di consegne', desc:'Copri un punto di scambio vicino a {luogo} prima che passi una pattuglia.'}
+    {title:'Consegna riservata per {char}', desc:'Porta una borsa a un cliente fidato {luogo}. Occhi aperti sulle volanti.'},
+    {title:'Piazza calda', desc:'{char} ti manda a coprire un giro {luogo}. Muoviti e non farti notare.'},
+    {title:'Cliente difficile', desc:'Un cliente {luogo} vuole trattare di persona. {char} si fida di te per questo.'},
+    {title:'Giro di consegne', desc:'Copri un punto di scambio {luogo} prima che passi una pattuglia.'}
   ],
   furto: [
-    {title:"Ruba un'auto per {char}", desc:"C'è un'auto parcheggiata vicino a {poi}. {char} la vuole nel suo garage, oggi stesso."},
-    {title:'Colpo veloce', desc:"Fai sparire un veicolo vicino a {luogo} prima che il proprietario se ne accorga."},
-    {title:'Su commissione', desc:'{char} ha un cliente che paga bene per un veicolo specifico vicino a {poi}.'},
-    {title:'Notte di lavoro', desc:'Approfitta del buio vicino a {luogo}: un\'auto sta per cambiare proprietario.'}
+    {title:"Ruba un'auto per {char}", desc:"C'è un'auto parcheggiata {luogo}. {char} la vuole nel suo garage, oggi stesso."},
+    {title:'Colpo veloce', desc:"Fai sparire un veicolo {luogo} prima che il proprietario se ne accorga."},
+    {title:'Su commissione', desc:'{char} ha un cliente che paga bene per un veicolo parcheggiato {luogo}.'},
+    {title:'Notte di lavoro', desc:"Approfitta del buio {luogo}: un'auto sta per cambiare proprietario."}
   ],
   fuga: [
-    {title:'Fuori dai guai', desc:'Le cose sono andate storte vicino a {poi}. Sparisci prima che arrivino in forze.'},
-    {title:'Testa bassa', desc:'{char} ti avverte: qualcuno ti ha visto vicino a {luogo}. Nasconditi subito.'},
-    {title:"Caccia all'uomo", desc:'Le volanti battono la zona di {poi}. Trova un buco e resta fermo.'},
-    {title:'Il prezzo della fretta', desc:'Un lavoro per {char} è saltato vicino a {luogo}. Ora tocca correre.'}
+    {title:'Fuori dai guai', desc:'Le cose sono andate storte {luogo}. Sparisci prima che arrivino in forze.'},
+    {title:'Testa bassa', desc:'{char} ti avverte: qualcuno ti ha visto {luogo}. Nasconditi subito.'},
+    {title:"Caccia all'uomo", desc:'Le volanti battono {luogo}. Trova un buco e resta fermo.'},
+    {title:'Il prezzo della fretta', desc:'Un lavoro per {char} è saltato {luogo}. Ora tocca correre.'}
   ]
 };
 
 const HEIST_DEFS = [
-  {id:'heist_deposito', nome:'Colpo al Deposito', factionId:'famiglia', giverId:'conti', minRep:20,
+  {id:'heist_deposito', nome:'Colpo al Deposito', factionId:'famiglia', giverId:'conti', minRep:15,
     stages:[
       {title:'Sopralluogo', desc:'Studia i turni delle guardie al deposito prima di colpire.', wantedRisk:0, reward:300},
-      {title:'Ingresso', desc:'Entra nel deposito ed evita le telecomere. Pixel ti copre da remoto.', wantedRisk:2, reward:800},
+      {title:'Ingresso', desc:'Entra nel deposito ed evita le telecamere. Pixel ti copre da remoto.', wantedRisk:2, reward:800},
       {title:'Fuga col bottino', desc:'Porta il bottino fuori dalla zona prima che scattino gli allarmi.', wantedRisk:2, reward:1500}
     ]},
-  {id:'heist_porto', nome:'Il Carico del Porto', factionId:'cartello', giverId:'reyes', minRep:20,
+  {id:'heist_porto', nome:'Il Carico del Porto', factionId:'cartello', giverId:'reyes', minRep:15,
     stages:[
       {title:'Informazioni', desc:'Scopri quando arriva il carico al molo.', wantedRisk:0, reward:350},
       {title:'Assalto al carico', desc:'Intercetta il carico prima che venga scaricato.', wantedRisk:3, reward:1000},
-      {title:'Sparire prima dell\'alba', desc:'Nascondi il carico e sparisci prima che faccia giorno.', wantedRisk:2, reward:1700}
+      {title:"Sparire prima dell'alba", desc:'Nascondi il carico e sparisci prima che faccia giorno.', wantedRisk:2, reward:1700}
     ]},
-  {id:'heist_banca', nome:'Frode al Sindacato', factionId:'sindacato', giverId:'kessler', minRep:20,
+  {id:'heist_banca', nome:'Frode al Sindacato', factionId:'sindacato', giverId:'kessler', minRep:15,
     stages:[
       {title:'Accesso ai conti', desc:'Pixel deve entrare nei server della banca senza lasciare tracce.', wantedRisk:1, reward:400},
       {title:'Ripulire il denaro', desc:'Fai passare il denaro attraverso tre società di comodo.', wantedRisk:1, reward:1100},
       {title:'Sparire dai radar', desc:'Cancella ogni traccia digitale del colpo.', wantedRisk:1, reward:1900}
     ]},
-  {id:'heist_resa', nome:'Resa dei Conti', factionId:null, giverId:'conti', minRep:60,
+  {id:'heist_resa', nome:'Resa dei Conti', factionId:null, giverId:'conti', minRep:55,
     stages:[
-      {title:'Scelta di campo', desc:'Le tre fazioni si muovono l\'una contro l\'altra. Devi decidere da che parte stare.', wantedRisk:1, reward:600},
+      {title:'Scelta di campo', desc:"Le tre fazioni si muovono l'una contro l'altra. Devi decidere da che parte stare.", wantedRisk:1, reward:600},
       {title:'Il colpo grosso', desc:'Un ultimo grande lavoro, rischioso quanto redditizio.', wantedRisk:3, reward:2500},
       {title:'Dopo la tempesta', desc:'Metti al sicuro tutto quello che hai guadagnato.', wantedRisk:2, reward:3500}
     ]}
 ];
 
-// Storia principale a bivi per i tre personaggi primari
+// Storia principale a bivi. requireMissions = lavori generici completati per quel boss
+// prima che accetti di parlarti del capitolo successivo. {luogoReale} viene sostituito
+// con un vero luogo/via vicino a casa del giocatore, quando disponibile.
 const STORY = {
   conti: [
-    {text:'Don Conti ti guarda dritto negli occhi. "Ho un lavoro semplice per te. Fallo bene e vedremo se sei uno dei miei."',
+    {requireMissions:0, text:'Don Conti ti guarda dritto negli occhi. "Ho un lavoro semplice per te. Fallo bene e vedremo se sei uno dei miei."',
       choices:[{label:'Accetto senza fare domande', effects:{rep:{famiglia:8}, relazione:5, next:1}},
                {label:'Chiedo prima i dettagli', effects:{rep:{famiglia:3}, relazione:2, next:1}}]},
-    {text:'"Bene. In città si muove gente nuova, il Cartello. Non mi piace." Il Don aspetta di sapere cosa pensi.',
-      choices:[{label:'"Restiamo uniti, Don. Sono con la Famiglia."', effects:{rep:{famiglia:12}, relazione:8, flag:'lealeConti', next:2}},
-               {label:'"Forse conviene parlare con loro, non solo combattere."', effects:{rep:{famiglia:2}, rep2:{cartello:5}, relazione:2, next:2}}]},
-    {text:'Sara, sua figlia, ti ferma per strada. "Mio padre ti tratta come un figlio che non ha mai avuto. Ma questa vita lo sta divorando. E divorerà anche te."',
+    {requireMissions:2, text:'"Bene. In città si muove gente nuova, il Cartello. Non mi piace." Il Don aspetta di sapere cosa pensi.',
+      choices:[{label:'"Restiamo uniti, Don. Sono con la Famiglia."', effects:{rep:{famiglia:12}, rep2:{cartello:-10}, relazione:8, flag:'lealeConti', next:2}},
+               {label:'"Forse conviene parlare con loro, non solo combattere."', effects:{rep:{famiglia:2}, rep2:{cartello:5}, relazione:2, flag:'diplomaticoConti', next:2}}]},
+    {requireMissions:3, text:'Sara, sua figlia, ti ferma per strada. "Mio padre ti tratta come un figlio che non ha mai avuto. Ma questa vita lo sta divorando. E divorerà anche te."',
       choices:[{label:'"Sara, io ho fatto la mia scelta."', effects:{relazioneChar:{sara:-5}, flag:'ambizioso', next:3}},
                {label:'"Forse hai ragione. Non voglio finire come lui."', effects:{relazioneChar:{sara:10}, flag:'dubbioso', next:3}}]},
-    {text:'Il Don ti offre di entrare ufficialmente nella Famiglia. È un punto di non ritorno.',
-      choices:[{label:'Giuro fedeltà alla Famiglia Conti', effects:{rep:{famiglia:25}, flag:'famigliaUfficiale', next:4}},
-               {label:'Rimango un uomo libero, solo un collaboratore', effects:{rep:{famiglia:5}, flag:'indipendente', next:4}}]},
-    {text:'"Un giorno tutto questo potrebbe essere tuo," dice il Don, guardando la città dalla finestra del suo ufficio. Per ora, c\'è ancora lavoro da fare.',
-      choices:[{label:'Continua a lavorare per la Famiglia', effects:{rep:{famiglia:10}, next:5}}]},
-    {text:'Non hai più nulla di nuovo da dirgli, per ora. "Torna quando avrai fatto qualcosa di grosso," ti dice il Don.', choices:[]}
+    {requireMissions:5, text:'"Corre voce di una talpa vicino a {luogoReale}, qualcuno che parla con gli sbirri della Famiglia." Il Don ti fissa. "Occupatene."',
+      choices:[{label:'Scopri la verità e riferiscila senza pietà', effects:{rep:{famiglia:20}, flag:'lealeAllaFine', relazioneChar:{sara:-5}, next:4}},
+               {label:'Lascia perdere: forse non ne vale la pena', effects:{rep:{famiglia:3}, flag:'protettivoConti', relazioneChar:{sara:5}, next:4}}]},
+    {requireMissions:7, text:'Il Don ti offre di entrare ufficialmente nella Famiglia. È un punto di non ritorno.',
+      choices:[{label:'Giuro fedeltà alla Famiglia Conti', effects:{rep:{famiglia:25}, flag:'famigliaUfficiale', next:5}},
+               {label:'Rimango un uomo libero, solo un collaboratore', effects:{rep:{famiglia:5}, flag:'indipendenteConti', next:5}}]},
+    {requireMissions:9, text:'"Ti metto a capo di una zona della città. Con più potere arrivano più nemici." Il Don osserva come reagisci.',
+      choices:[{label:'Governa con il pugno di ferro', effects:{rep:{famiglia:15}, rep2:{cartello:-5}, flag:'tirannoConti', next:6}},
+               {label:'Governa con equilibrio, mantenendo alleanze', effects:{rep:{famiglia:8}, flag:'equilibratoConti', next:6}}]},
+    {requireMissions:12, text:'"Un giorno tutto questo potrebbe essere tuo," dice il Don, guardando la città dalla finestra del suo ufficio. Per ora, c\'è ancora lavoro da fare.',
+      choices:[{label:'Continua a lavorare per la Famiglia', effects:{rep:{famiglia:10}, next:7}}]},
+    {requireMissions:15, text:'Non hai più nulla di nuovo da dirgli, per ora. "Torna quando avrai fatto qualcosa di ancora più grosso," ti dice il Don.', choices:[]}
   ],
   reyes: [
-    {text:'Reyes ti offre da bere, ma i suoi occhi non sorridono mai davvero. "Il tuo primo lavoro per me. Non deludermi."',
+    {requireMissions:0, text:'Reyes ti offre da bere, ma i suoi occhi non sorridono mai davvero. "Il tuo primo lavoro per me. Non deludermi."',
       choices:[{label:'"Non deluderò nessuno."', effects:{rep:{cartello:8}, relazione:5, next:1}},
                {label:'"Dipende da quanto paghi."', effects:{rep:{cartello:5}, relazione:1, next:1}}]},
-    {text:'"La Famiglia Conti ci sta col fiato sul collo. Voglio espandermi comunque, in fretta." Ti chiede quanto sei disposto a rischiare.',
-      choices:[{label:'"Andiamo fino in fondo, senza esitazioni."', effects:{rep:{cartello:15}, flag:'aggressivoCartello', next:2}},
-               {label:'"Meglio muoversi con più calma."', effects:{rep:{cartello:5}, relazione:3, next:2}}]},
-    {text:'Reyes ti chiede di fare da esempio a un fornitore che ha sgarrato. Quello che deciderai definirà come ti vede.',
+    {requireMissions:2, text:'"La Famiglia Conti ci sta col fiato sul collo. Voglio espandermi comunque, in fretta." Ti chiede quanto sei disposto a rischiare.',
+      choices:[{label:'"Andiamo fino in fondo, senza esitazioni."', effects:{rep:{cartello:15}, rep2:{famiglia:-10}, flag:'aggressivoCartello', next:2}},
+               {label:'"Meglio muoversi con più calma."', effects:{rep:{cartello:5}, flag:'cautoCartello', relazione:3, next:2}}]},
+    {requireMissions:3, text:'Reyes ti chiede di fare da esempio a un fornitore che ha sgarrato. Quello che deciderai definirà come ti vede.',
       choices:[{label:'Fai capire chiaramente che non si scherza', effects:{rep:{cartello:20}, flag:'spietato', next:3}},
                {label:'Trova un modo per risolverla senza esagerare', effects:{rep:{cartello:8}, flag:'pragmatico', next:3}}]},
-    {text:'"Mi piaci. Sei uno dei pochi di cui mi fido qui." Reyes ti offre un posto fisso nella sua organizzazione.',
-      choices:[{label:'Accetta ed entra nel Cartello Nero', effects:{rep:{cartello:25}, flag:'cartelloUfficiale', next:4}},
-               {label:'Rimani un contractor indipendente', effects:{rep:{cartello:5}, flag:'indipendente', next:4}}]},
-    {text:'Il Cartello continua a crescere in città. Reyes conta su di te per il prossimo passo.', choices:[{label:'Continua a lavorare per il Cartello', effects:{rep:{cartello:10}, next:5}}]},
-    {text:'"Torna quando avrai qualcosa di grosso da propormi," dice Reyes, tornando ai suoi affari.', choices:[]}
+    {requireMissions:5, text:'"Un carico deve passare vicino a {luogoReale}, ma la Famiglia controlla quella strada." Reyes aspetta una decisione.',
+      choices:[{label:'Forza il passaggio, scontro aperto', effects:{rep:{cartello:18}, rep2:{famiglia:-15}, flag:'guerraAperta', next:4}},
+               {label:'Trova una rotta alternativa, più lenta ma sicura', effects:{rep:{cartello:8}, flag:'prudenteCartello', next:4}}]},
+    {requireMissions:7, text:'"Mi piaci. Sei uno dei pochi di cui mi fido qui." Reyes ti offre un posto fisso nella sua organizzazione.',
+      choices:[{label:'Accetta ed entra nel Cartello Nero', effects:{rep:{cartello:25}, flag:'cartelloUfficiale', next:5}},
+               {label:'Rimani un contractor indipendente', effects:{rep:{cartello:5}, flag:'indipendenteCartello', next:5}}]},
+    {requireMissions:9, text:"Reyes vuole espandersi in un nuovo quartiere, ma è territorio del Sindacato. \"Come lo prendiamo?\"",
+      choices:[{label:'Prendilo con la forza', effects:{rep:{cartello:15}, rep2:{sindacato:-10}, flag:'predatoreCartello', next:6}},
+               {label:'Negozia una spartizione', effects:{rep:{cartello:8}, rep2:{sindacato:3}, flag:'negoziatoreCartello', next:6}}]},
+    {requireMissions:12, text:'Il Cartello continua a crescere in città. Reyes conta su di te per il prossimo passo.', choices:[{label:'Continua a lavorare per il Cartello', effects:{rep:{cartello:10}, next:7}}]},
+    {requireMissions:15, text:'"Torna quando avrai qualcosa di grosso da propormi," dice Reyes, tornando ai suoi affari.', choices:[]}
   ],
   kessler: [
-    {text:'Vivian Kessler non alza mai la voce. "Il mio lavoro è pulito sulla carta e sporco ovunque altrove. Vediamo se sai muoverti."',
+    {requireMissions:0, text:'Vivian Kessler non alza mai la voce. "Il mio lavoro è pulito sulla carta e sporco ovunque altrove. Vediamo se sai muoverti."',
       choices:[{label:'"Sono discreto, non si preoccupi."', effects:{rep:{sindacato:8}, relazione:5, next:1}},
                {label:'"Mi interessano solo i risultati."', effects:{rep:{sindacato:5}, relazione:1, next:1}}]},
-    {text:'"C\'è un funzionario che possiamo ricattare, oppure convincere con soldi puliti. Tu cosa faresti?"',
+    {requireMissions:2, text:'"C\'è un funzionario che possiamo ricattare, oppure convincere con soldi puliti. Tu cosa faresti?"',
       choices:[{label:'Il ricatto è più efficace ed economico', effects:{rep:{sindacato:15}, flag:'ricattatore', next:2}},
-               {label:'Meglio comprarlo, meno rischi legali', effects:{rep:{sindacato:8}, flag:'diplomatico', next:2}}]},
-    {text:'Kessler ti mostra come si ripulisce il denaro attraverso società fantasma. "Questo è il vero potere in questa città."',
-      choices:[{label:'Impara in fretta, vuoi far parte di questo mondo', effects:{rep:{sindacato:20}, flag:'ambizioso', next:3}},
+               {label:'Meglio comprarlo, meno rischi legali', effects:{rep:{sindacato:8}, flag:'diplomaticoKessler', next:2}}]},
+    {requireMissions:3, text:'Kessler ti mostra come si ripulisce il denaro attraverso società fantasma. "Questo è il vero potere in questa città."',
+      choices:[{label:"Impara in fretta, vuoi far parte di questo mondo", effects:{rep:{sindacato:20}, flag:'ambiziosoKessler', next:3}},
                {label:'Fai solo quello che ti viene chiesto, niente di più', effects:{rep:{sindacato:8}, next:3}}]},
-    {text:'"Ti offro un posto stabile nel Sindacato. Niente armi, solo numeri e leva. È un\'offerta che non rifarò."',
-      choices:[{label:'Entra ufficialmente nel Sindacato', effects:{rep:{sindacato:25}, flag:'sindacatoUfficiale', next:4}},
-               {label:'Preferisci restare fuori dai libri contabili', effects:{rep:{sindacato:5}, flag:'indipendente', next:4}}]},
-    {text:'Il Sindacato si infiltra sempre più a fondo nella città. Kessler ha in mente il prossimo passo.', choices:[{label:'Continua a lavorare per il Sindacato', effects:{rep:{sindacato:10}, next:5}}]},
-    {text:'"Torna con qualcosa di rilevante," dice Kessler senza distogliere lo sguardo dai suoi documenti.', choices:[]}
+    {requireMissions:5, text:'"Una piccola impresa vicino a {luogoReale} rischia di chiudere per colpa nostra. Il proprietario non ha colpe." Kessler resta impassibile.',
+      choices:[{label:'Gli affari sono affari, andiamo avanti', effects:{rep:{sindacato:18}, flag:'spietataKessler', relazioneChar:{nina:-5}, next:4}},
+               {label:'Trova un modo per salvarlo comunque', effects:{rep:{sindacato:6}, flag:'eticaKessler', relazioneChar:{nina:5}, next:4}}]},
+    {requireMissions:7, text:"\"Ti offro un posto stabile nel Sindacato. Niente armi, solo numeri e leva. È un'offerta che non rifarò.\"",
+      choices:[{label:'Entra ufficialmente nel Sindacato', effects:{rep:{sindacato:25}, flag:'sindacatoUfficiale', next:5}},
+               {label:'Preferisci restare fuori dai libri contabili', effects:{rep:{sindacato:5}, flag:'indipendenteKessler', next:5}}]},
+    {requireMissions:9, text:'Il Sindacato vuole mettere le mani su un politico locale. La Famiglia lo protegge. "Come procediamo?"',
+      choices:[{label:'Procedi comunque, con discrezione', effects:{rep:{sindacato:15}, rep2:{famiglia:-8}, flag:'infiltrazioneKessler', next:6}},
+               {label:'Lascialo stare, troppo rischioso', effects:{rep:{sindacato:6}, flag:'cautaKessler', next:6}}]},
+    {requireMissions:12, text:'Il Sindacato si infiltra sempre più a fondo nella città. Kessler ha in mente il prossimo passo.', choices:[{label:'Continua a lavorare per il Sindacato', effects:{rep:{sindacato:10}, next:7}}]},
+    {requireMissions:15, text:'"Torna con qualcosa di rilevante," dice Kessler senza distogliere lo sguardo dai suoi documenti.', choices:[]}
   ]
 };
 
@@ -307,8 +337,10 @@ const ACHIEVEMENTS = [
   {id:'missioni_150', nome:'150 Missioni', desc:'Completa 150 missioni in totale.', check:s=>s.stats.missioniCompletate>=150},
   {id:'livello_10', nome:'Veterano della Strada', desc:'Raggiungi il livello 10.', check:s=>s.player.level>=10},
   {id:'capitolo1', nome:'Nel Giro', desc:'Completa il primo capitolo della storia con un boss primario.', check:s=>Object.values(s.missions.storyProgress||{}).some(v=>v>=2)},
+  {id:'capitolo_avanzato', nome:'Uomo di Fiducia', desc:'Raggiungi il capitolo 5 nella storia di un boss primario.', check:s=>Object.values(s.missions.storyProgress||{}).some(v=>v>=5)},
   {id:'finale', nome:'Resa dei Conti', desc:'Raggiungi un finale della storia.', check:s=>!!s.missions.ending},
   {id:'modalita_reale', nome:'La Tua Città, Vera', desc:'Gioca in Modalità Reale con il GPS attivo.', check:s=>s.world.mode==='reale'},
+  {id:'zona_mappata', nome:'Cartografo di Quartiere', desc:'Fai generare il mondo di gioco da vie e luoghi reali della tua zona.', check:s=>!!(s.world.real && s.world.real.ok)},
   {id:'esploratore', nome:'Esploratore Urbano', desc:'Interagisci con almeno un luogo di ogni tipo (nascondiglio, territorio, personaggio, negozio).', check:s=>s.stats.tipiVisitati && Object.keys(s.stats.tipiVisitati).length>=4}
 ];
 
@@ -347,13 +379,14 @@ function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;
 /* ================= STATO ================= */
 
 let S = null;
-let map = null, playerMarker = null, poiLayer = null, policeCircle = null;
+let map = null, playerMarker = null, poiLayer = null, missionLayer = null, policeCircle = null;
 let activeTab = 'missioni';
 const SAVE_KEY = 'malavita_save_v1';
+const BOARD_SIZE = 18;
 
 function newGame(){
   return {
-    version:1,
+    version:2,
     createdAt: Date.now(),
     player:{
       name:'', avatarEmoji:'🧍', archetype:'debuttante',
@@ -363,10 +396,10 @@ function newGame(){
       relazioni:{},
       inventario:{armi:['coltello'], veicoli:[]}
     },
-    world:{ homeBase:null, mode:null, seed:0, pos:null, pois:[], watchId:null },
-    missions:{ pool:[], activeId:null, completedIds:[], storyProgress:{}, storyFlags:{}, ending:null, secondaryDone:{} },
+    world:{ homeBase:null, mode:null, seed:0, pos:null, pois:[], real:null, watchId:null, policePos:null },
+    missions:{ pool:[], board:[], activeId:null, completedIds:[], storyProgress:{}, storyFlags:{}, storyPlaces:{}, ending:null, secondaryDone:{} },
     achievements:{ unlocked:[] },
-    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{} },
+    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{}, missioniPerGiver:{} },
     log:[]
   };
 }
@@ -391,15 +424,89 @@ function loadGame(){
 }
 function hasSave(){ return !!localStorage.getItem(SAVE_KEY); }
 
+/* ================= DATI REALI (OpenStreetMap / Overpass) ================= */
+
+async function fetchRealWorldData(home){
+  const lat = home.lat, lng = home.lng;
+  const q = '[out:json][timeout:25];(' +
+    'way["highway"]["name"](around:1600,'+lat+','+lng+');' +
+    'node["shop"]["name"](around:1200,'+lat+','+lng+');' +
+    'node["amenity"]["name"](around:1200,'+lat+','+lng+');' +
+    'node["leisure"]["name"](around:1200,'+lat+','+lng+');' +
+    'node["tourism"]["name"](around:1200,'+lat+','+lng+');' +
+    'way["shop"]["name"](around:1200,'+lat+','+lng+');' +
+    'way["amenity"]["name"](around:1200,'+lat+','+lng+');' +
+    ');out center 180;';
+  try{
+    const res = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:q });
+    if(!res.ok) throw new Error('overpass status '+res.status);
+    const data = await res.json();
+    const streets = [], places = [];
+    const seen = new Set();
+    (data.elements||[]).forEach(el=>{
+      const name = el.tags && el.tags.name;
+      if(!name) return;
+      const lat2 = el.lat!==undefined ? el.lat : (el.center? el.center.lat: null);
+      const lng2 = el.lon!==undefined ? el.lon : (el.center? el.center.lon: null);
+      if(lat2==null || lng2==null) return;
+      const key = el.type+':'+name+':'+Math.round(lat2*2000)+','+Math.round(lng2*2000);
+      if(seen.has(key)) return;
+      seen.add(key);
+      if(el.tags.highway){ streets.push({name, lat:lat2, lng:lng2}); }
+      else { places.push({name, lat:lat2, lng:lng2, kind: el.tags.shop||el.tags.amenity||el.tags.leisure||el.tags.tourism||'luogo'}); }
+    });
+    return { streets: streets.slice(0,60), places: places.slice(0,60), ok:true };
+  }catch(e){
+    return { streets:[], places:[], ok:false };
+  }
+}
+
+function anchorPoint(rng, home, real, distRange){
+  if(real && real.streets && real.streets.length>0 && rng()<0.75){
+    const st = rngPick(rng, real.streets);
+    const off = rngInt(rng,20,120);
+    const bearing = rng()*360;
+    const p = offsetLatLng(st.lat, st.lng, off, bearing);
+    return { lat:p.lat, lng:p.lng, streetName: st.name };
+  }
+  const dist = rngInt(rng, distRange[0], distRange[1]);
+  const bearing = rng()*360;
+  const p = offsetLatLng(home.lat, home.lng, dist, bearing);
+  return { lat:p.lat, lng:p.lng, streetName:null };
+}
+
+function describeLocation(anchor, real, rng){
+  if(real && real.places && real.places.length>0 && rng()<0.55){
+    let best=null, bestD=280;
+    real.places.forEach(p=>{ const d=haversine(anchor.lat,anchor.lng,p.lat,p.lng); if(d<bestD){ bestD=d; best=p; } });
+    if(best) return 'vicino a '+best.name;
+  }
+  if(anchor.streetName) return 'in '+anchor.streetName;
+  return rngPick(rng, PLACE_NOUNS);
+}
+
+function assignStoryPlaces(rng, real){
+  const used = new Set();
+  const places = {};
+  CHARACTERS.filter(c=>c.primario).forEach(c=>{
+    let name = null;
+    if(real && real.places && real.places.length){
+      const avail = real.places.filter(p=>!used.has(p.name));
+      if(avail.length){ name = rngPick(rng, avail).name; used.add(name); }
+    }
+    if(!name) name = rngPick(rng, PLACE_NAMES_BARE);
+    places[c.id] = name;
+  });
+  return places;
+}
+
 /* ================= GENERAZIONE MONDO ================= */
 
-function genPOIs(rng, home){
+function genPOIs(rng, home, real){
   const pois = []; let idc=0;
   function add(type,name,distRange,extra){
-    const dist = rngInt(rng,distRange[0],distRange[1]);
-    const bearing = rng()*360;
-    const {lat,lng} = offsetLatLng(home.lat, home.lng, dist, bearing);
-    pois.push(Object.assign({id:'poi'+(idc++), type, name, lat, lng, dist:Math.round(dist)}, extra||{}));
+    const a = anchorPoint(rng, home, real, distRange);
+    pois.push(Object.assign({id:'poi'+(idc++), type, name, lat:a.lat, lng:a.lng}, extra||{}));
   }
   NASCONDIGLI_NAMES.forEach(n=>add('nascondiglio', n, [300,1800]));
   FACTIONS.forEach(f=>{
@@ -411,7 +518,7 @@ function genPOIs(rng, home){
   return pois;
 }
 
-function genMissionPool(rng, pois){
+function genMissionPool(rng, home, real){
   const pool = []; let idc=0;
   const categorie = ['consegna','spaccio','furto','fuga'];
   const tiers = [1,2,3];
@@ -420,15 +527,15 @@ function genMissionPool(rng, pois){
       tiers.forEach(tier=>{
         for(let v=0; v<2; v++){
           const tpl = rngPick(rng, TEMPLATES[cat]);
-          const luogo = rngPick(rng, PLACE_NOUNS);
-          const targetPoi = rngPick(rng, pois);
+          const anchor = anchorPoint(rng, home, real, [250,2200]);
+          const locationLabel = describeLocation(anchor, real, rng);
           const baseReward = tier*rngInt(rng,80,220) + (giver.primario?100:0);
           const wantedRisk = (cat==='spaccio'||cat==='furto') ? Math.min(3,tier) : (cat==='consegna'?0:1);
           const title = tpl.title.replace('{char}', giver.nome);
-          const desc = tpl.desc.replace(/{luogo}/g, luogo).replace(/{char}/g, giver.nome).replace(/{poi}/g, targetPoi.name);
+          const desc = tpl.desc.replace(/{luogo}/g, locationLabel).replace(/{char}/g, giver.nome);
           pool.push({
             id:'m'+(idc++), category:cat, tier, giverId:giver.id,
-            title, desc, targetPoiId: targetPoi.id,
+            title, desc, targetLat:anchor.lat, targetLng:anchor.lng, locationLabel,
             reward: Math.round(baseReward), repFactionId: giver.factionId, repAmount: tier*3,
             wantedRisk, minLevel: tier===1?1:(tier===2?4:8),
             status:'disponibile'
@@ -440,34 +547,24 @@ function genMissionPool(rng, pois){
   return pool;
 }
 
-function genHeistMissions(pois, rng){
+function heistEligible(h){
+  if(!h.factionId) return Math.max(S.player.rep.famiglia, S.player.rep.cartello, S.player.rep.sindacato) >= h.minRep;
+  return (S.player.rep[h.factionId]||0) >= h.minRep;
+}
+
+function genHeistMissions(rng, home, real){
   const list = [];
   HEIST_DEFS.forEach(h=>{
     h.stages.forEach((stg, i)=>{
-      const poi = rngPick(rng, pois);
+      const anchor = anchorPoint(rng, home, real, [300,2000]);
+      const locationLabel = describeLocation(anchor, real, rng);
       list.push({
         id:'heist_'+h.id+'_'+i, category:'rapina', heistId:h.id, stageIndex:i, tier: i+1,
-        giverId:h.giverId, title:h.nome+' — '+stg.title, desc:stg.desc, targetPoiId:poi.id,
+        giverId:h.giverId, title:h.nome+' — '+stg.title, desc:stg.desc,
+        targetLat:anchor.lat, targetLng:anchor.lng, locationLabel,
         reward: stg.reward, repFactionId:h.factionId, repAmount: 15, wantedRisk: stg.wantedRisk,
-        minLevel: h.minRep, requiresPrevStage: i>0 ? 'heist_'+h.id+'_'+(i-1) : null,
-        minRepAmount: i===0? h.minRep : 0,
+        minLevel: 2, requiresPrevStage: i>0 ? 'heist_'+h.id+'_'+(i-1) : null,
         status:'disponibile'
-      });
-    });
-  });
-  return list;
-}
-
-function genDialogueMissions(pois, rng){
-  const list = []; let idc=0;
-  Object.keys(STORY_SECONDARY).forEach(charId=>{
-    STORY_SECONDARY[charId].forEach((node, i)=>{
-      const poi = rngPick(rng, pois.filter(p=>p.characterId===charId)) || rngPick(rng, pois);
-      const ch = CHARACTERS.find(c=>c.id===charId);
-      list.push({
-        id:'dlg_'+charId+'_'+(idc++), category:'dialogo', giverId:charId, title:'Parla con '+ch.nome, desc:node.text,
-        targetPoiId: poi.id, reward: node.reward||0, repFactionId: ch.factionId, repAmount: 5, wantedRisk:0,
-        minLevel:1, special: node.special||null, status:'disponibile'
       });
     });
   });
@@ -485,14 +582,51 @@ function nearestPOIOfType(type){
   return best;
 }
 
+function getMissionById(id){ return S.missions.pool.find(m=>m.id===id); }
+
+function missionEligible(m){
+  if(S.player.level < m.minLevel) return false;
+  if(m.requiresPrevStage) return false;
+  if(m.category==='rapina' && m.stageIndex===0){
+    const h = HEIST_DEFS.find(hh=>hh.id===m.heistId);
+    if(h && !heistEligible(h)) return false;
+  }
+  return true;
+}
+
+function refillBoard(){
+  S.missions.board = (S.missions.board||[]).filter(id=>{
+    const m = getMissionById(id);
+    return m && !S.missions.completedIds.includes(id) && S.player.level>=m.minLevel;
+  });
+  // sblocca automaticamente la fase successiva di una rapina appena completata la precedente
+  S.missions.pool.forEach(m=>{
+    if(m.requiresPrevStage && S.missions.completedIds.includes(m.requiresPrevStage) &&
+       !S.missions.completedIds.includes(m.id) && !S.missions.board.includes(m.id)){
+      S.missions.board.push(m.id);
+    }
+  });
+  const haveSet = new Set(S.missions.board);
+  const eligible = S.missions.pool.filter(m=> !S.missions.completedIds.includes(m.id) && !haveSet.has(m.id) && missionEligible(m));
+  while(S.missions.board.length < BOARD_SIZE && eligible.length>0){
+    const idx = Math.floor(Math.random()*eligible.length);
+    S.missions.board.push(eligible.splice(idx,1)[0].id);
+  }
+  renderMissionMarkers();
+  if(activeTab==='missioni') renderMissionsPanel();
+}
+
 function addXp(amount){
   S.player.xp += amount;
+  let leveledUp = false;
   while(S.player.xp >= S.player.xpNext){
     S.player.xp -= S.player.xpNext;
     S.player.level++;
     S.player.xpNext = Math.round(S.player.xpNext*1.25);
+    leveledUp = true;
     toast('Sei salito al livello '+S.player.level+'!');
   }
+  if(leveledUp) refillBoard();
 }
 
 function addRep(factionId, amount){
@@ -502,6 +636,10 @@ function addRep(factionId, amount){
 
 function addRelazione(charId, amount){
   S.player.relazioni[charId] = Math.max(-100, Math.min(100, (S.player.relazioni[charId]||0)+amount));
+}
+
+function giverMissionsCompleted(giverId){
+  return (S.stats.missioniPerGiver && S.stats.missioniPerGiver[giverId]) || 0;
 }
 
 function raiseWanted(amount){
@@ -537,7 +675,7 @@ function wantedTick(){
     else log('Sei ancora nella loro rete, ma ti stai allontanando.');
   } else {
     if(Math.random() < 0.2 + S.player.wanted*0.08){ catturato(); return; }
-    else log('Le volanti battono la zona. Resta all\'erta.');
+    else log("Le volanti battono la zona. Resta all'erta.");
   }
   if(S.player.wanted===0){
     stopWantedTicker();
@@ -591,19 +729,15 @@ function setActiveMission(id){
   saveGame();
 }
 
-function getMissionById(id){ return S.missions.pool.find(m=>m.id===id); }
-
 function focusMapOnMission(id){
   const m = getMissionById(id);
   if(!m || !map) return;
-  const poi = S.world.pois.find(p=>p.id===m.targetPoiId);
-  if(poi) map.setView([poi.lat, poi.lng], 16);
+  map.setView([m.targetLat, m.targetLng], 16);
 }
 
 function distanceToMissionTarget(m){
-  const poi = S.world.pois.find(p=>p.id===m.targetPoiId);
-  if(!poi) return Infinity;
-  return haversine(S.world.pos.lat, S.world.pos.lng, poi.lat, poi.lng);
+  if(m.targetLat===undefined || m.targetLng===undefined) return Infinity;
+  return haversine(S.world.pos.lat, S.world.pos.lng, m.targetLat, m.targetLng);
 }
 
 function attemptActiveMission(){
@@ -619,15 +753,9 @@ function attemptActiveMission(){
     toast('Devi prima completare la fase precedente della rapina.');
     return;
   }
-  const poi = S.world.pois.find(p=>p.id===m.targetPoiId);
-  if(poi) markVisited(poi.type);
-
+  closeModal();
   if(m.category==='furto'){
     openHotwireMinigame(m);
-    return;
-  }
-  if(m.category==='dialogo'){
-    resolveDialogueMission(m);
     return;
   }
   resolveMissionOutcome(m, true);
@@ -635,6 +763,7 @@ function attemptActiveMission(){
 
 function resolveMissionOutcome(m, success){
   S.missions.activeId = null;
+  S.missions.board = S.missions.board.filter(id=>id!==m.id);
   if(success){
     S.player.money += m.reward;
     if(S.player.money>=5000) S.stats.hadBigMoney = true;
@@ -642,10 +771,14 @@ function resolveMissionOutcome(m, success){
     addXp(20 * (m.tier||1));
     if(!S.missions.completedIds.includes(m.id)) S.missions.completedIds.push(m.id);
     S.stats.missioniCompletate++;
+    if(m.giverId){
+      S.stats.missioniPerGiver = S.stats.missioniPerGiver||{};
+      S.stats.missioniPerGiver[m.giverId] = (S.stats.missioniPerGiver[m.giverId]||0)+1;
+    }
     if(m.category==='consegna') S.stats.consegneCompletate++;
     if(m.category==='spaccio') S.stats.spaccioCompletate++;
     if(m.category==='rapina'){
-      const h = HEIST_DEFS.find(h=>h.id===m.heistId);
+      const h = HEIST_DEFS.find(hh=>hh.id===m.heistId);
       if(h && m.stageIndex === h.stages.length-1) S.stats.rapineCompletate++;
     }
     if(m.wantedRisk) raiseWanted(m.wantedRisk);
@@ -657,6 +790,7 @@ function resolveMissionOutcome(m, success){
     if(m.wantedRisk) raiseWanted(Math.max(1,m.wantedRisk-1));
   }
   achievementsCheck();
+  refillBoard();
   refreshHUD(); renderMissionsPanel(); saveGame();
 }
 
@@ -686,28 +820,16 @@ function openHotwireMinigame(m){
     const success = pos >= zoneStart && pos <= zoneStart+zoneWidth;
     closeModal();
     if(success){
-      const veicolo = {nome: rngPick(Math.random, ['Berlina','Utilitaria','SUV','Furgone','Coupé']) , valore: 500 + (m.tier||1)*400};
+      const veicolo = {nome: rngPick(Math.random, ['Berlina','Utilitaria','SUV','Furgone','Coupé']), valore: 500 + (m.tier||1)*400};
       S.player.inventario.veicoli.push(veicolo);
       S.stats.furtiCompletati++;
       resolveMissionOutcome(m, true);
       toast('Auto rubata con successo: '+veicolo.nome);
     } else {
-      toast('Hai fatto scattare l\'allarme!');
+      toast("Hai fatto scattare l'allarme!");
       resolveMissionOutcome(m, false);
     }
   };
-}
-
-function resolveDialogueMission(m){
-  if(m.special==='corruzione'){
-    S.player.wanted = 0; stopWantedTicker(); refreshWantedMap();
-    log('L\'agente Bianchi ha ripulito la tua fedina per stasera.');
-  } else if(m.special==='aiutoSara'){
-    S.missions.storyFlags.aiutatoSara = true;
-    log('Hai aiutato Sara con la sua associazione di quartiere. Non tutti i soldi in città sono sporchi.');
-  }
-  addRelazione(m.giverId, 8);
-  resolveMissionOutcome(m, true);
 }
 
 /* ---- personaggi / storia ---- */
@@ -723,7 +845,14 @@ function talkTo(charId){
       return;
     }
     const node = nodes[idx];
-    let html = '<h3>'+esc(ch.nome)+'</h3><p>'+esc(node.text)+'</p>';
+    const need = node.requireMissions||0;
+    const have = giverMissionsCompleted(charId);
+    if(have < need){
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Non hai ancora dimostrato abbastanza. Fai qualche altro lavoro per me, poi ne riparliamo."</p><p class="muted small">Lavori completati per '+esc(ch.nome)+': '+have+' / '+need+'</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      return;
+    }
+    const txt = node.text.replace(/\{luogoReale\}/g, S.missions.storyPlaces[charId] || 'una zona della città');
+    let html = '<h3>'+esc(ch.nome)+'</h3><p>'+esc(txt)+'</p>';
     if(node.choices.length===0){
       html += '<button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>';
     } else {
@@ -776,7 +905,7 @@ function acceptSecondaryGig(charId){
   S.missions.secondaryDone[charId] = true;
   if(node.reward) S.player.money += node.reward;
   addRelazione(charId, 12);
-  if(node.special==='corruzione'){ S.player.wanted=0; stopWantedTicker(); refreshWantedMap(); log('L\'agente Bianchi ti copre le spalle.'); }
+  if(node.special==='corruzione'){ S.player.wanted=0; stopWantedTicker(); refreshWantedMap(); log("L'agente Bianchi ti copre le spalle."); }
   if(node.special==='aiutoSara'){ S.missions.storyFlags.aiutatoSara = true; log('Hai dato una mano a Sara e alla sua causa.'); }
   closeModal();
   achievementsCheck();
@@ -792,13 +921,15 @@ function computeEnding(){
   const top = Object.keys(rep).reduce((a,b)=> rep[a]>=rep[b]?a:b);
   const flags = S.missions.storyFlags;
   if(flags.aiutatoSara && rep.famiglia<40 && rep.cartello<40 && rep.sindacato<40){
-    return {id:'redenzione', titolo:'Redenzione', testo:'Hai voltato le spalle alla strada prima che fosse troppo tardi. In città si racconta ancora di te, ma con un tono diverso: quello di chi ce l\'ha fatta a uscirne.'};
+    return {id:'redenzione', titolo:'Redenzione', testo:"Hai voltato le spalle alla strada prima che fosse troppo tardi. In città si racconta ancora di te, ma con un tono diverso: quello di chi ce l'ha fatta a uscirne."};
   }
   if(rep[top] >= 100){
     const f = FACTIONS.find(f=>f.id===top);
-    return {id:'impero_'+top, titolo:'Impero Criminale — '+f.nome, testo:'Il tuo nome è ormai sinonimo di potere in città. '+f.nome+' domina, e tu ne sei il volto più temuto e rispettato.'};
+    const duro = flags.tirannoConti || flags.spietato || flags.spietataKessler || flags.guerraAperta;
+    const sfumatura = duro ? 'Ci sei arrivato col pugno di ferro, e la città lo sa.' : "Ci sei arrivato con equilibrio, ed è per questo che nessuno osa ancora sfidarti apertamente.";
+    return {id:'impero_'+top, titolo:'Impero Criminale — '+f.nome, testo:'Il tuo nome è ormai sinonimo di potere in città. '+f.nome+' domina, e tu ne sei il volto più temuto e rispettato. '+sfumatura};
   }
-  return {id:'aperto', titolo:'Ancora in Gioco', testo:'La tua storia in città non è ancora scritta del tutto. Le fazioni si muovono, e tu con loro. C\'è ancora molto da decidere.'};
+  return {id:'aperto', titolo:'Ancora in Gioco', testo:"La tua storia in città non è ancora scritta del tutto. Le fazioni si muovono, e tu con loro. C'è ancora molto da decidere."};
 }
 
 function tryFinale(){
@@ -900,7 +1031,7 @@ function renderBoot(){
       <h1>MALAVITA</h1>
       <p class="tagline">La tua città, il tuo impero.</p>
       <div class="disclaimer">
-        <strong>Nota:</strong> Malavita è un gioco di finzione a scopo di intrattenimento, ispirato ai classici open-world criminali. Spaccio, furti e rapine sono meccaniche di gioco astratte, senza alcuna istruzione reale su attività illegali. La tua posizione geografica resta sempre ed esclusivamente nel tuo browser: non viene mai inviata a nessun server nostro. Le mappe sono fornite da OpenStreetMap e richiedono una connessione internet per caricare le tessere; il resto del gioco funziona offline con salvataggio automatico locale.
+        <strong>Nota:</strong> Malavita è un gioco di finzione a scopo di intrattenimento, ispirato ai classici open-world criminali. Spaccio, furti e rapine sono meccaniche di gioco astratte, senza alcuna istruzione reale su attività illegali. La tua posizione geografica resta sempre ed esclusivamente nel tuo browser: non viene mai inviata a nessun server nostro. Le vie e i luoghi reali intorno a te vengono recuperati da OpenStreetMap solo per generare il mondo di gioco; il resto del gioco funziona offline con salvataggio automatico locale.
       </div>
       <div class="boot-actions">
         <button class="btn primary" id="btn-new">Nuova Partita</button>
@@ -989,7 +1120,7 @@ function renderLocationSetup(){
     <div class="wizard">
       <div class="card">
         <h2>Scegli la tua città</h2>
-        <p class="muted">Malavita genera il mondo di gioco intorno a un punto reale sulla mappa: la tua zona diventerà il tuo territorio, con covi, personaggi e negozi generati nei dintorni.</p>
+        <p class="muted">Malavita genera il mondo di gioco intorno a un punto reale sulla mappa, usando anche le vie e i luoghi con nome davvero presenti in quella zona su OpenStreetMap.</p>
         <div class="boot-actions" style="margin:0">
           <button class="btn primary" id="loc-gps">📍 Usa la mia posizione (Modalità Reale)</button>
           <button class="btn" id="loc-demo">🏙️ Modalità Demo (Roma, nessun GPS)</button>
@@ -1033,17 +1164,33 @@ function renderLocationSetup(){
   };
 }
 
-function finishLocationSetup(home, mode){
+function renderLoadingScreen(msg){
+  document.getElementById('app').innerHTML = `
+    <div class="loading">
+      <h2>Malavita</h2>
+      <div class="spinner"></div>
+      <p class="muted">${esc(msg)}</p>
+    </div>
+  `;
+}
+
+async function finishLocationSetup(home, mode){
   S.world.homeBase = home;
   S.world.mode = mode;
   S.world.pos = {lat:home.lat, lng:home.lng};
   S.world.seed = seedFromLatLng(home.lat, home.lng);
+  renderLoadingScreen('Sto analizzando le vie e i luoghi reali della tua zona...');
+  const real = await fetchRealWorldData(home);
+  S.world.real = real;
   const rng = mulberry32(S.world.seed);
-  S.world.pois = genPOIs(rng, home);
-  S.missions.pool = genMissionPool(rng, S.world.pois)
-    .concat(genHeistMissions(S.world.pois, rng))
-    .concat(genDialogueMissions(S.world.pois, rng));
-  log('Sei arrivato a '+home.label+'. '+S.missions.pool.length+' missioni ti aspettano in città.');
+  S.world.pois = genPOIs(rng, home, real);
+  S.missions.pool = genMissionPool(rng, home, real).concat(genHeistMissions(rng, home, real));
+  S.missions.storyPlaces = assignStoryPlaces(rng, real);
+  refillBoard();
+  log(real.ok
+    ? ('Zona mappata: '+real.streets.length+' vie e '+real.places.length+' luoghi reali trovati intorno a te.')
+    : 'Non sono riuscito a recuperare i dati reali della zona (rete assente o servizio non raggiungibile): userò nomi generici.');
+  log('Sei arrivato a '+home.label+'. '+S.missions.pool.length+' contratti generati per la tua città nel tempo.');
   saveGame();
   initHub();
 }
@@ -1074,7 +1221,9 @@ function initHub(){
   }).addTo(map);
   playerMarker = L.marker([S.world.pos.lat, S.world.pos.lng], {icon: emojiIcon(S.player.avatarEmoji, 'player-icon')}).addTo(map);
   poiLayer = L.layerGroup().addTo(map);
+  missionLayer = L.layerGroup().addTo(map);
   renderPOIMarkers();
+  renderMissionMarkers();
   if(S.world.mode==='reale'){
     startWatch();
   } else {
@@ -1090,6 +1239,8 @@ function emojiIcon(emoji, cls){
   return L.divIcon({html:'<div class="'+(cls||'poi-icon')+'">'+emoji+'</div>', className:'', iconSize:[28,28]});
 }
 const POI_EMOJI = {nascondiglio:'🕳️', territorio:'🚩', personaggio:'👤', negozio:'🏪'};
+const CATEGORY_EMOJI = {consegna:'📦', spaccio:'🎒', furto:'🚗', fuga:'🏃', rapina:'💎'};
+const CATEGORY_LABEL = {consegna:'Consegna', spaccio:'Piazza', furto:'Furto Auto', fuga:'Fuga', rapina:'Rapina'};
 
 function renderPOIMarkers(){
   poiLayer.clearLayers();
@@ -1105,12 +1256,37 @@ function renderPOIMarkers(){
   });
 }
 
+function renderMissionMarkers(){
+  if(!missionLayer) return;
+  missionLayer.clearLayers();
+  (S.missions.board||[]).forEach(id=>{
+    const m = getMissionById(id);
+    if(!m || m.targetLat===undefined) return;
+    const marker = L.marker([m.targetLat, m.targetLng], {icon: emojiIcon(CATEGORY_EMOJI[m.category]||'❗', 'mission-icon')}).addTo(missionLayer);
+    marker.bindTooltip(m.title, {direction:'top'});
+    marker.on('click', ()=> onMissionPinClick(m.id));
+  });
+}
+
+function onMissionPinClick(id){
+  const m = getMissionById(id);
+  if(!m) return;
+  setActiveMission(id);
+  let html = '<h3>'+esc(m.title)+'</h3><p>'+esc(m.desc)+'</p>';
+  html += '<span class="tag">'+CATEGORY_LABEL[m.category]+'</span><span class="tag">Ricompensa '+fmtMoney(m.reward)+'</span>';
+  if(m.wantedRisk) html += '<span class="tag">Rischio ★'+m.wantedRisk+'</span>';
+  html += '<div class="row" style="margin-top:0.7em">';
+  html += '<button class="btn primary" onclick="window.__malavita.attemptActiveMission()">Agisci qui</button>';
+  html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Chiudi</button>';
+  html += '</div>';
+  showModal(html);
+}
+
 function onPoiClick(poi){
   if(poi.type==='negozio'){ openShop(poi); return; }
   if(poi.type==='personaggio'){ talkTo(poi.characterId); return; }
   if(poi.type==='nascondiglio'){ toast(poi.name+' — un buon posto per sparire se hai la polizia alle calcagna.'); markVisited('nascondiglio'); return; }
   if(poi.type==='territorio'){
-    const f = FACTIONS.find(f=>f.id===poi.factionId);
     toast(poi.name+' — reputazione attuale: '+(S.player.rep[poi.factionId]||0));
     markVisited('territorio');
   }
@@ -1156,39 +1332,45 @@ function setActiveTab(tab){
 
 /* ---- pannelli ---- */
 
-const CATEGORY_LABEL = {consegna:'Consegna', spaccio:'Piazza', furto:'Furto Auto', fuga:'Fuga', rapina:'Rapina', dialogo:'Dialogo'};
-
 function renderMissionsPanel(){
   if(activeTab!=='missioni') return;
   const el = document.getElementById('tab-content');
-  const available = S.missions.pool.filter(m=> !S.missions.completedIds.includes(m.id) && S.player.level>=m.minLevel);
+  if(!el) return;
+  const board = (S.missions.board||[]).map(id=>getMissionById(id)).filter(Boolean);
   const grouped = {};
-  available.slice(0,60).forEach(m=>{ (grouped[m.category]=grouped[m.category]||[]).push(m); });
-  let html = '<p class="muted small">'+available.length+' missioni disponibili su '+S.missions.pool.length+' totali generate per la tua zona.</p>';
+  board.forEach(m=>{ (grouped[m.category]=grouped[m.category]||[]).push(m); });
+  let html = '<p class="muted small">'+board.length+' contratti attivi in città (su '+S.missions.pool.length+' generati totali per la tua zona). Clicca un pin sulla mappa o "Avvia" qui sotto.</p>';
   Object.keys(grouped).forEach(cat=>{
     html += '<h4 style="color:var(--text-dim); font-size:0.8em; margin-top:0.8em;">'+CATEGORY_LABEL[cat]+'</h4>';
-    grouped[cat].slice(0,8).forEach(m=>{
+    grouped[cat].forEach(m=>{
       const isActive = S.missions.activeId===m.id;
       html += '<div class="mission-item'+(isActive?' active':'')+'">'+
         '<h4>'+esc(m.title)+'</h4><p>'+esc(m.desc)+'</p>'+
         '<span class="tag">Ricompensa '+fmtMoney(m.reward)+'</span>'+
         (m.wantedRisk?'<span class="tag">Rischio ★'+m.wantedRisk+'</span>':'')+
         '<div class="row" style="margin-top:0.4em">'+
-        (isActive ? '<button class="btn tiny primary" onclick="window.__malavita.attemptActiveMission()">Agisci qui</button>' : '<button class="btn tiny" onclick="window.__malavita.setActiveMission(\''+m.id+'\')">Avvia</button>')+
+        (isActive ? '<button class="btn tiny primary" onclick="window.__malavita.attemptActiveMission()">Agisci qui</button>' : '<button class="btn tiny" onclick="window.__malavita.setActiveMission(\''+m.id+'\')">Vai lì</button>')+
         '</div></div>';
     });
   });
-  el.innerHTML = html || '<p class="muted">Nessuna missione disponibile al tuo livello attuale. Sali di livello per sbloccarne altre.</p>';
+  el.innerHTML = html || '<p class="muted">Nessun contratto disponibile al momento. Sali di livello o completa qualche lavoro per sbloccarne altri.</p>';
 }
 
 function renderCharactersPanel(){
   if(activeTab!=='personaggi') return;
   const el = document.getElementById('tab-content');
+  if(!el) return;
   let html = '';
   CHARACTERS.forEach(c=>{
     const rel = S.player.relazioni[c.id]||0;
+    let extra = '';
+    if(c.primario){
+      const done = giverMissionsCompleted(c.id);
+      const idx = S.missions.storyProgress[c.id]||0;
+      extra = '<p class="small">Capitolo storia: '+Math.min(idx+1, STORY[c.id].length)+' / '+STORY[c.id].length+' — lavori fatti per lui/lei: '+done+'</p>';
+    }
     html += '<div class="char-item"><h4>'+c.emoji+' '+esc(c.nome)+(c.primario?' <span class="tag">Boss</span>':'')+'</h4>'+
-      '<p>'+esc(c.bio)+'</p>'+
+      '<p>'+esc(c.bio)+'</p>'+ extra +
       '<div class="relbar-wrap"><div class="relbar" style="width:'+Math.max(0,(rel+100)/2)+'%"></div></div>'+
       '<div class="row"><button class="btn tiny" onclick="window.__malavita.talkTo(\''+c.id+'\')">Parla</button></div></div>';
   });
@@ -1198,6 +1380,7 @@ function renderCharactersPanel(){
 function renderInventoryPanel(){
   if(activeTab!=='inventario') return;
   const el = document.getElementById('tab-content');
+  if(!el) return;
   let html = '<h4>Armi</h4>';
   WEAPONS.forEach(w=>{
     if(S.player.inventario.armi.includes(w.id)) html += '<span class="tag">'+w.nome+'</span> ';
@@ -1211,6 +1394,7 @@ function renderInventoryPanel(){
 function renderAchievementsPanel(){
   if(activeTab!=='traguardi') return;
   const el = document.getElementById('tab-content');
+  if(!el) return;
   let html = '<p class="muted small">'+S.achievements.unlocked.length+' / '+ACHIEVEMENTS.length+' sbloccati</p>';
   ACHIEVEMENTS.forEach(a=>{
     const un = S.achievements.unlocked.includes(a.id);
@@ -1222,7 +1406,8 @@ function renderAchievementsPanel(){
 function renderStoryPanel(){
   if(activeTab!=='storia') return;
   const el = document.getElementById('tab-content');
-  let html = '<p class="muted small">Le tre fazioni si contendono la città. Le tue scelte con i boss determinano il finale.</p>';
+  if(!el) return;
+  let html = '<p class="muted small">Le tre fazioni si contendono la città. Le tue scelte con i boss, e i lavori che fai per loro, determinano il finale.</p>';
   FACTIONS.forEach(f=>{
     const rep = S.player.rep[f.id]||0;
     html += '<div class="char-item"><h4 style="color:'+f.colore+'">'+esc(f.nome)+'</h4><p>'+esc(f.desc)+'</p>'+
@@ -1237,6 +1422,7 @@ function renderStoryPanel(){
 function renderLogPanel(){
   if(activeTab!=='log') return;
   const el = document.getElementById('tab-content');
+  if(!el) return;
   let html = '<div id="log-panel">';
   S.log.slice(-60).forEach(e=>{
     html += '<div class="entry">'+esc(e.msg)+'</div>';
@@ -1287,7 +1473,7 @@ function exportSave(){
 
 /* ================= AVVIO ================= */
 
-window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale };
+window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale, getState: ()=>S };
 
 renderBoot();
 
