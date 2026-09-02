@@ -172,7 +172,13 @@ const SPECIAL_LANDMARKS = [
   {kind:'caserma', emoji:'🚓', fallbackName:'Caserma dei Carabinieri'},
   {kind:'banca', emoji:'🏦', fallbackName:'Filiale Bancaria'},
   {kind:'casino', emoji:'🎰', fallbackName:'Circolo Privato'},
-  {kind:'cimitero', emoji:'⚰️', fallbackName:'Cimitero Comunale'}
+  {kind:'cimitero', emoji:'⚰️', fallbackName:'Cimitero Comunale'},
+  {kind:'ristorante', emoji:'🍝', fallbackName:'Trattoria "Da Salvatore"'},
+  {kind:'autolavaggio', emoji:'🚿', fallbackName:'Autolavaggio Express'},
+  {kind:'sindacatolavoro', emoji:'🏛️', fallbackName:'Sede Sindacale di Quartiere'},
+  {kind:'posta', emoji:'📮', fallbackName:'Ufficio Postale Centrale'},
+  {kind:'gioielleria', emoji:'💍', fallbackName:'Gioielleria Antica'},
+  {kind:'tribunale', emoji:'⚖️', fallbackName:'Tribunale Cittadino'}
 ];
 
 // Frasi di riserva (con preposizione già inclusa) usate quando non ci sono dati reali di zona
@@ -356,7 +362,10 @@ const ACHIEVEMENTS = [
   {id:'esploratore', nome:'Esploratore Urbano', desc:'Interagisci con almeno un luogo di ogni tipo (nascondiglio, territorio, personaggio, negozio).', check:s=>s.stats.tipiVisitati && Object.keys(s.stats.tipiVisitati).length>=4},
   {id:'anima_salva', nome:'Anima (quasi) Salva', desc:'Raggiungi 50 di coscienza confessandoti in chiesa.', check:s=>s.player.coscienza>=50},
   {id:'fortuna_al_tavolo', nome:'Fortuna al Tavolo', desc:'Vinci 3 scommesse al casinò.', check:s=>s.stats.vinciteCasino>=3},
-  {id:'giro_completo_citta', nome:'Giro Completo della Città', desc:'Visita chiesa, farmacia, caserma, banca, casinò e cimitero.', check:s=>['chiesa','farmacia','caserma','banca','casino','cimitero'].every(t=>s.stats.tipiVisitati && s.stats.tipiVisitati[t])}
+  {id:'giro_completo_citta', nome:'Giro Completo della Città', desc:'Visita chiesa, farmacia, caserma, banca, casinò e cimitero.', check:s=>['chiesa','farmacia','caserma','banca','casino','cimitero'].every(t=>s.stats.tipiVisitati && s.stats.tipiVisitati[t])},
+  {id:'tre_fronti', nome:'Tre Facciate Pulite', desc:'Visita ristorante, autolavaggio e banca: i tre fronti di riciclaggio delle fazioni.', check:s=>['ristorante','autolavaggio','banca'].every(t=>s.stats.tipiVisitati && s.stats.tipiVisitati[t])},
+  {id:'gioielliere_fiducia', nome:'Cliente Speciale', desc:'Vendi 3 veicoli alla gioielleria.', check:s=>s.stats.venditeGioielleria>=3},
+  {id:'fedina_pulita', nome:'Fedina Pulita', desc:'Fatti "aggiustare" un processo dal giudice corrotto in tribunale.', check:s=>!!s.stats.processoAggiustato}
 ];
 
 /* ================= UTILITY ================= */
@@ -419,7 +428,7 @@ function newGame(){
     world:{ homeBase:null, mode:null, seed:0, pos:null, pois:[], real:null, watchId:null, policePos:null, cooldowns:{} },
     missions:{ pool:[], board:[], activeId:null, completedIds:[], storyProgress:{}, storyFlags:{}, storyPlaces:{}, ending:null, secondaryDone:{}, pendingFugaId:null },
     achievements:{ unlocked:[] },
-    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{}, missioniPerGiver:{}, vinciteCasino:0 },
+    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{}, missioniPerGiver:{}, vinciteCasino:0, venditeGioielleria:0, processoAggiustato:false },
     log:[]
   };
 }
@@ -446,13 +455,22 @@ function hasSave(){ return !!localStorage.getItem(SAVE_KEY); }
 
 /* ================= DATI REALI (OpenStreetMap / Overpass) ================= */
 
+// Ogni voce descrive un vero tag OpenStreetMap (chiave/valore) usato sia per interrogare
+// Overpass sia per riconoscere l'elemento nella risposta: aggiungere un nuovo luogo speciale
+// basta farlo qui, senza toccare il resto della logica di recupero dati.
 const SPECIAL_KIND_TAGS = [
-  {kind:'chiesa', filter:'"amenity"="place_of_worship"', radius:1500},
-  {kind:'farmacia', filter:'"amenity"="pharmacy"', radius:1500},
-  {kind:'caserma', filter:'"amenity"="police"', radius:2200},
-  {kind:'banca', filter:'"amenity"="bank"', radius:1500},
-  {kind:'casino', filter:'"amenity"="casino"', radius:3500},
-  {kind:'cimitero', filter:'"landuse"="cemetery"', radius:2200}
+  {kind:'chiesa', key:'amenity', value:'place_of_worship', radius:1500},
+  {kind:'farmacia', key:'amenity', value:'pharmacy', radius:1500},
+  {kind:'caserma', key:'amenity', value:'police', radius:2200},
+  {kind:'banca', key:'amenity', value:'bank', radius:1500},
+  {kind:'casino', key:'amenity', value:'casino', radius:3500},
+  {kind:'cimitero', key:'landuse', value:'cemetery', radius:2200},
+  {kind:'ristorante', key:'amenity', value:'restaurant', radius:1200},
+  {kind:'autolavaggio', key:'amenity', value:'car_wash', radius:1800},
+  {kind:'sindacatolavoro', key:'office', value:'trade_union', radius:2500},
+  {kind:'posta', key:'amenity', value:'post_office', radius:1500},
+  {kind:'gioielleria', key:'shop', value:'jewelry', radius:1500},
+  {kind:'tribunale', key:'amenity', value:'courthouse', radius:3000}
 ];
 
 async function fetchRealWorldData(home){
@@ -466,10 +484,11 @@ async function fetchRealWorldData(home){
     'way["shop"]["name"](around:1200,'+lat+','+lng+');' +
     'way["amenity"]["name"](around:1200,'+lat+','+lng+');';
   SPECIAL_KIND_TAGS.forEach(sk=>{
-    q += 'node['+sk.filter+'](around:'+sk.radius+','+lat+','+lng+');';
-    q += 'way['+sk.filter+'](around:'+sk.radius+','+lat+','+lng+');';
+    const filter = '"'+sk.key+'"="'+sk.value+'"';
+    q += 'node['+filter+'](around:'+sk.radius+','+lat+','+lng+');';
+    q += 'way['+filter+'](around:'+sk.radius+','+lat+','+lng+');';
   });
-  q += ');out center 260;';
+  q += ');out center 320;';
   try{
     const res = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:q });
     if(!res.ok) throw new Error('overpass status '+res.status);
@@ -483,13 +502,8 @@ async function fetchRealWorldData(home){
       const lat2 = el.lat!==undefined ? el.lat : (el.center? el.center.lat: null);
       const lng2 = el.lon!==undefined ? el.lon : (el.center? el.center.lon: null);
       if(lat2==null || lng2==null) return;
-      let specialKind = null;
-      if(tags.amenity==='place_of_worship') specialKind='chiesa';
-      else if(tags.amenity==='pharmacy') specialKind='farmacia';
-      else if(tags.amenity==='police') specialKind='caserma';
-      else if(tags.amenity==='bank') specialKind='banca';
-      else if(tags.amenity==='casino') specialKind='casino';
-      else if(tags.landuse==='cemetery') specialKind='cimitero';
+      const matched = SPECIAL_KIND_TAGS.find(sk=> tags[sk.key]===sk.value);
+      const specialKind = matched ? matched.kind : null;
       if(specialKind){
         const skey = specialKind+':'+Math.round(lat2*3000)+','+Math.round(lng2*3000);
         if(!seen.has(skey)){
@@ -1474,7 +1488,7 @@ function initHub(){
 function emojiIcon(emoji, cls){
   return L.divIcon({html:'<div class="'+(cls||'poi-icon')+'">'+emoji+'</div>', className:'', iconSize:[28,28]});
 }
-const POI_EMOJI = {nascondiglio:'🕳️', territorio:'🚩', personaggio:'👤', negozio:'🏪', chiesa:'⛪', farmacia:'💊', caserma:'🚓', banca:'🏦', casino:'🎰', cimitero:'⚰️'};
+const POI_EMOJI = {nascondiglio:'🕳️', territorio:'🚩', personaggio:'👤', negozio:'🏪', chiesa:'⛪', farmacia:'💊', caserma:'🚓', banca:'🏦', casino:'🎰', cimitero:'⚰️', ristorante:'🍝', autolavaggio:'🚿', sindacatolavoro:'🏛️', posta:'📮', gioielleria:'💍', tribunale:'⚖️'};
 const CATEGORY_EMOJI = {consegna:'📦', spaccio:'🎒', furto:'🚗', fuga:'🏃', rapina:'💎'};
 const CATEGORY_LABEL = {consegna:'Consegna', spaccio:'Piazza', furto:'Furto Auto', fuga:'Fuga', rapina:'Rapina'};
 
@@ -1539,6 +1553,12 @@ function onPoiClick(poi){
   if(poi.type==='banca'){ openBanca(poi); return; }
   if(poi.type==='casino'){ openCasino(poi); return; }
   if(poi.type==='cimitero'){ openCimitero(poi); return; }
+  if(poi.type==='ristorante'){ openRistorante(poi); return; }
+  if(poi.type==='autolavaggio'){ openAutolavaggio(poi); return; }
+  if(poi.type==='sindacatolavoro'){ openSindacatoLavoro(poi); return; }
+  if(poi.type==='posta'){ openPosta(poi); return; }
+  if(poi.type==='gioielleria'){ openGioielleria(poi); return; }
+  if(poi.type==='tribunale'){ openTribunale(poi); return; }
 }
 
 /* ---- luoghi speciali: meccaniche concrete legate al tipo reale del posto ---- */
@@ -1636,19 +1656,20 @@ function openBanca(poi){
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un direttore compiacente, per chi sa come chiedere.</p>';
   if((S.player.rep.sindacato||0) >= 15){
     html += '<p class="small muted">Puoi far sparire un po\' di contanti dai libri contabili, per una commissione.</p>';
-    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000)">Ripulisci 1.000€</button>';
-    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000)">Ripulisci 5.000€</button></div>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000,\'sindacato\',\'banca\')">Ripulisci 1.000€</button>';
+    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000,\'sindacato\',\'banca\')">Ripulisci 5.000€</button></div>';
   } else {
     html += '<p class="small muted">Il direttore non ti conosce ancora. Fatti notare prima dal Sindacato.</p>';
   }
   html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
   showModal(html);
 }
-function riciclaggio(amount){
+const RICICLAGGIO_LUOGHI = {banca:'la banca', ristorante:'il ristorante', autolavaggio:"l'autolavaggio"};
+function riciclaggio(amount, factionId, luogoKey){
   if(S.player.money < amount){ toast('Non hai abbastanza denaro.'); return; }
   S.player.money -= amount;
-  addRep('sindacato', Math.round(amount/150));
-  log('Ripulisci '+fmtMoney(amount)+' attraverso la banca. Il Sindacato apprezza la fiducia.');
+  addRep(factionId, Math.round(amount/150));
+  log('Ripulisci '+fmtMoney(amount)+' attraverso '+(RICICLAGGIO_LUOGHI[luogoKey]||luogoKey)+'.');
   achievementsCheck(); refreshHUD(); saveGame(); closeModal();
 }
 
@@ -1688,6 +1709,155 @@ function openCimitero(poi){
   } else {
     toast(poi.name+' — silenzioso e appartato: un ottimo posto per sparire se hai la polizia alle calcagna.');
   }
+}
+
+function openRistorante(poi){
+  markVisited('ristorante');
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un\'insegna qualunque in vetrina. Il retro, però, lo conosce solo chi deve conoscerlo.</p>';
+  if((S.player.rep.famiglia||0) >= 15){
+    html += '<p class="small muted">Il proprietario tiene due contabilità, una vera e una di cortesia per la Famiglia Conti.</p>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000,\'famiglia\',\'ristorante\')">Ripulisci 1.000€</button>';
+    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000,\'famiglia\',\'ristorante\')">Ripulisci 5.000€</button></div>';
+  } else {
+    html += '<p class="small muted">Non sei ancora un cliente "di fiducia" per la Famiglia, qui.</p>';
+  }
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn tiny" onclick="window.__malavita.healUp(60)">Cena e riposa (60€, cura piena)</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+
+function openAutolavaggio(poi){
+  markVisited('autolavaggio');
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Lavaggio auto standard, ma con un servizio speciale per chi paga bene.</p>';
+  if(S.player.wanted>0){
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.cambioTarga()">Cambia targhe e rifinisci l\'auto (250€)</button></div>';
+  }
+  if((S.player.rep.cartello||0) >= 15){
+    html += '<div style="margin-top:0.6em"><p class="small muted">Il proprietario fa girare anche altro, oltre alle auto, per conto del Cartello Nero.</p>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000,\'cartello\',\'autolavaggio\')">Ripulisci 1.000€</button>';
+    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000,\'cartello\',\'autolavaggio\')">Ripulisci 5.000€</button></div></div>';
+  } else {
+    html += '<p class="small muted" style="margin-top:0.6em">Non ti conoscono ancora bene abbastanza, qui.</p>';
+  }
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function cambioTarga(){
+  if(S.player.wanted<=0){ toast('Non ne hai bisogno ora.'); return; }
+  if(S.player.money<250){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= 250;
+  S.player.wanted = Math.max(0, S.player.wanted-1);
+  if(S.player.wanted===0) stopWantedTicker();
+  refreshWantedMap();
+  log("Targhe cambiate e auto irriconoscibile all'uscita dall'autolavaggio. Il ricercato scende.");
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+
+function openSindacatoLavoro(poi){
+  markVisited('sindacatolavoro');
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Sulla carta, un\'associazione di categoria come tante. Le quote degli iscritti, però, finiscono altrove: è così che il Sindacato di Vivian Kessler si è preso questa città.</p>';
+  const cdKey = 'sindacato_racket', cdMs = 5*60*1000;
+  if((S.player.rep.sindacato||0) >= 10){
+    html += cooldownReady(cdKey, cdMs)
+      ? '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.raccogliQuote()">Raccogli le quote degli iscritti</button></div>'
+      : '<p class="small muted">Le quote sono già state raccolte di recente (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
+  } else {
+    html += '<p class="small muted">Il Sindacato non ti ha ancora messo al lavoro qui.</p>';
+  }
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function raccogliQuote(){
+  const importo = rngInt(Math.random, 150, 400);
+  S.player.money += importo;
+  addRep('sindacato', 3);
+  setCooldown('sindacato_racket');
+  log('Raccogli le quote sindacali "in ritardo" degli iscritti: +'+fmtMoney(importo)+'.');
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+
+function openPosta(poi){
+  markVisited('posta');
+  const cdKey = 'posta_intercetta', cdMs = 4*60*1000;
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Elvira, dietro lo sportello, alza un sopracciglio. "Cerchi qualcosa che non dovrebbe arrivarti?"</p>';
+  html += cooldownReady(cdKey, cdMs)
+    ? '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.intercettaPosta()">Fatti "perdere" un pacco sospetto (150€)</button></div>'
+    : '<p class="small muted">Elvira non può rischiare così spesso (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function intercettaPosta(){
+  if(S.player.money<150){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= 150;
+  setCooldown('posta_intercetta');
+  const scelta = Math.floor(Math.random()*3);
+  if(scelta===0){
+    const v = rngInt(Math.random, 200, 500);
+    S.player.money += v;
+    log('Il pacco intercettato conteneva più di quanto pensassi: +'+fmtMoney(v)+'.');
+  } else if(scelta===1){
+    const fazioni = ['famiglia','cartello','sindacato'];
+    const f = rngPick(Math.random, fazioni);
+    addRep(f, 8);
+    log('Tra le carte intercettate, informazioni utili per la '+FACTIONS.find(x=>x.id===f).nome+'.');
+  } else {
+    S.player.coscienza = Math.max(-100, S.player.coscienza-5);
+    log('Il pacco era indirizzato a una famiglia povera del quartiere. Non ti senti benissimo, ma i soldi sono soldi.');
+  }
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+
+function openGioielleria(poi){
+  markVisited('gioielleria');
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Vetrine blindate, clienti selezionati. Compra e vende senza troppe domande.</p>';
+  if(S.player.inventario.veicoli.length===0){
+    html += '<p class="small muted">Non hai nulla di prezioso da piazzare qui, oggi.</p>';
+  } else {
+    S.player.inventario.veicoli.forEach((v,i)=>{
+      const prezzo = Math.round(v.valore*1.35);
+      html += '<div class="shop-item">'+esc(v.nome)+' — offerta speciale '+fmtMoney(prezzo)+' <button class="btn tiny" onclick="window.__malavita.sellVehicleGioielleria('+i+')">Vendi</button></div>';
+    });
+  }
+  html += '<p class="small muted" style="margin-top:0.4em">Paga il 35% in più del solito ricettatore, ma solo per pezzi di qualità.</p>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function sellVehicleGioielleria(i){
+  const v = S.player.inventario.veicoli[i];
+  if(!v) return;
+  const prezzo = Math.round(v.valore*1.35);
+  S.player.money += prezzo;
+  S.player.inventario.veicoli.splice(i,1);
+  S.stats.venditeGioielleria = (S.stats.venditeGioielleria||0)+1;
+  toast('Venduto a prezzo pieno: '+fmtMoney(prezzo));
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+
+function openTribunale(poi){
+  markVisited('tribunale');
+  const cdKey = 'tribunale_giudice', cdMs = 10*60*1000;
+  let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Nei corridoi si dice che il giudice Ferretti abbia un prezzo, come tutti.</p>';
+  if((S.player.rep.sindacato||0) >= 25){
+    html += cooldownReady(cdKey, cdMs)
+      ? '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.aggiustaProcesso()">"Aggiusta" la tua fedina (2.000€)</button></div>'
+      : '<p class="small muted">Il giudice non può rischiare così spesso (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
+  } else {
+    html += '<p class="small muted">Un giudice non parla con chiunque. Serve la leva giusta con il Sindacato (reputazione 25+).</p>';
+  }
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  showModal(html);
+}
+function aggiustaProcesso(){
+  if(S.player.wanted<=0){ toast('Non hai nulla da aggiustare ora.'); return; }
+  if(S.player.money<2000){ toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= 2000;
+  S.player.wanted = 0;
+  stopWantedTicker();
+  setCooldown('tribunale_giudice');
+  S.stats.processoAggiustato = true;
+  log('Il giudice Ferretti archivia tutto. La tua fedina torna pulita.');
+  toast('Ricercato azzerato.');
+  achievementsCheck(); refreshHUD(); refreshWantedMap(); saveGame(); closeModal();
 }
 
 function onMapClickSim(e){
@@ -1871,7 +2041,7 @@ function exportSave(){
 
 /* ================= AVVIO ================= */
 
-window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale, confessati, donazione, buySpaccioBoost, buyBribeInsurance, riciclaggio, giocaAzzardo, getState: ()=>S };
+window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale, confessati, donazione, buySpaccioBoost, buyBribeInsurance, riciclaggio, giocaAzzardo, cambioTarga, raccogliQuote, intercettaPosta, sellVehicleGioielleria, aggiustaProcesso, getState: ()=>S };
 
 renderBoot();
 
