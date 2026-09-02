@@ -379,10 +379,14 @@ function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;
 /* ================= STATO ================= */
 
 let S = null;
-let map = null, playerMarker = null, poiLayer = null, missionLayer = null, policeCircle = null;
+let map = null, playerMarker = null, poiLayer = null, missionLayer = null, policeCircle = null, activeMissionCircle = null;
 let activeTab = 'missioni';
 const SAVE_KEY = 'malavita_save_v1';
 const BOARD_SIZE = 18;
+// Raggio d'azione di un obiettivo: entrarci basta per interagire, anche con qualche metro
+// di margine (deriva del GPS in Modalità Reale, click non perfetto in Modalità Simulata).
+const MISSION_RADIUS_REALE = 60;
+const MISSION_RADIUS_SIMULATA = 40;
 
 function newGame(){
   return {
@@ -726,7 +730,17 @@ function setActiveMission(id){
   S.missions.activeId = id;
   renderMissionsPanel();
   focusMapOnMission(id);
+  drawActiveMissionRadius(id);
   saveGame();
+}
+
+function drawActiveMissionRadius(id){
+  if(activeMissionCircle && map){ map.removeLayer(activeMissionCircle); activeMissionCircle=null; }
+  if(!map) return;
+  const m = getMissionById(id);
+  if(!m || m.targetLat===undefined) return;
+  const radius = S.world.mode==='reale' ? MISSION_RADIUS_REALE : MISSION_RADIUS_SIMULATA;
+  activeMissionCircle = L.circle([m.targetLat, m.targetLng], {radius, color:'#e0b84b', weight:2, fillOpacity:0.08}).addTo(map);
 }
 
 function focusMapOnMission(id){
@@ -744,7 +758,7 @@ function attemptActiveMission(){
   const m = getMissionById(S.missions.activeId);
   if(!m) return;
   const dist = distanceToMissionTarget(m);
-  const threshold = S.world.mode==='reale' ? 60 : 40;
+  const threshold = S.world.mode==='reale' ? MISSION_RADIUS_REALE : MISSION_RADIUS_SIMULATA;
   if(dist > threshold){
     toast('Sei a '+Math.round(dist)+' m dal luogo. Avvicinati per continuare.');
     return;
@@ -764,6 +778,7 @@ function attemptActiveMission(){
 function resolveMissionOutcome(m, success){
   S.missions.activeId = null;
   S.missions.board = S.missions.board.filter(id=>id!==m.id);
+  if(activeMissionCircle && map){ map.removeLayer(activeMissionCircle); activeMissionCircle=null; }
   if(success){
     S.player.money += m.reward;
     if(S.player.money>=5000) S.stats.hadBigMoney = true;
@@ -785,9 +800,16 @@ function resolveMissionOutcome(m, success){
     log('Missione completata: "'+m.title+'". Guadagno '+fmtMoney(m.reward)+'.');
     m.status='completata';
   } else {
-    log('Missione fallita: "'+m.title+'".');
     m.status='disponibile';
-    if(m.wantedRisk) raiseWanted(Math.max(1,m.wantedRisk-1));
+    const rischiosa = (m.category==='spaccio' || m.category==='furto' || m.category==='rapina');
+    const probArresto = rischiosa ? (0.25 + (m.tier||1)*0.05) : 0;
+    if(rischiosa && Math.random() < probArresto){
+      log('Missione fallita: "'+m.title+'". Le cose sono andate male sul posto.');
+      catturato();
+    } else {
+      log('Missione fallita: "'+m.title+'".');
+      if(m.wantedRisk) raiseWanted(Math.max(1,m.wantedRisk-1));
+    }
   }
   achievementsCheck();
   refillBoard();
