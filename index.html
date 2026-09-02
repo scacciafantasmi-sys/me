@@ -789,6 +789,12 @@
     <div id="slots-panel-body"></div>
   </div>
 
+  <div class="nav-drawer-backdrop" id="tutorial-backdrop"></div>
+  <div class="slots-panel" id="tutorial-panel" hidden>
+    <div class="nav-drawer-head"><strong>Guida rapida</strong><button type="button" class="nav-drawer-close" id="tutorial-close-btn" aria-label="Chiudi">✕</button></div>
+    <div id="tutorial-panel-body"></div>
+  </div>
+
   <main id="app"></main>
 
   <footer>
@@ -13519,6 +13525,13 @@
           ? "Da oggi " + state.player.name + " è nelle mie mani. Eredito una storia che non ho scritto io, ma da qui in avanti la direzione la do io."
           : "Oggi nasce " + state.player.name + ". Non abbiamo ancora nulla — solo un nome, un'idea, e la voglia di provarci sul serio.");
       if (isTakeover) {
+        // Salvato per poterlo ritrovare più avanti (vedi renderCareerSummary in Storia del Partito): un
+        // partito preso in mano ha una storia reale precedente alla presa di comando, che le statistiche
+        // di carriera (calcolate solo da qui in avanti) da sole non raccontano.
+        state.player.takeoverPartyId = takeoverParty.id;
+        state.player.takeoverPartyLeader = takeoverParty.leader;
+        state.player.takeoverPartyFamiglia = takeoverParty.famiglia;
+        state.player.takeoverPartyCorrente = takeoverParty.corrente;
         // Prendere il comando di un partito reale significa ereditarne davvero la forza attuale, non
         // ripartire da zero: consensi, iscritti stimati e radicamento territoriale proporzionati ai
         // sondaggi reali di quel partito. Il partito originale esce dal roster degli avversari (come un
@@ -13560,6 +13573,7 @@
       state.currentDossierId = CONGRESSO_DOSSIER.id;
       save();
       render();
+      openTutorialPanel();
     });
   }
 
@@ -15107,6 +15121,7 @@
   // di gioco: una "Storia del Partito" leggibile in un colpo d'occhio invece di dover scorrere l'intero diario.
   function renderCareerSummary() {
     var p = state.player;
+    var isTakeoverParty = !!p.takeoverPartyId;
     var weeksActive = Math.max(0, state.turn - (p.foundedTurn || 0));
     var log = state.log || [];
     var countType = function (t) { return log.filter(function (e) { return e.type === t; }).length; };
@@ -15122,9 +15137,9 @@
     var govWeeks = p.cumulativeGovWeeks || 0;
     var govShare = weeksActive > 0 ? Math.round((govWeeks / weeksActive) * 100) : 0;
     var stats = [
-      { label: "Settimane di attività", value: weeksActive },
+      { label: isTakeoverParty ? "Settimane sotto la tua guida" : "Settimane di attività", value: weeksActive },
       { label: "Iscritti attuali", value: Math.round(p.iscritti || 0).toLocaleString("it-IT") },
-      { label: "Picco storico nei sondaggi", value: (p.peakSondaggi || p.sondaggi || 0).toFixed(1) + "%" },
+      { label: isTakeoverParty ? "Picco nei sondaggi sotto la tua guida" : "Picco storico nei sondaggi", value: (p.peakSondaggi || p.sondaggi || 0).toFixed(1) + "%" },
       { label: "Legislature raggiunte", value: state.legislature || 1 },
       { label: "Tornate elettorali politiche affrontate", value: elections },
       { label: "Tornate europee affrontate", value: euElections },
@@ -15168,10 +15183,26 @@
       '<p class="eyebrow" style="margin:0">Punteggio storico del partito</p>' +
       '<p style="font-size:1.8rem;font-weight:800;margin:0.2rem 0">' + score + '/100 — ' + tier.label + '</p>' +
       '<p class="ci-hint" style="margin:0">' + tier.desc + '</p></div>';
+    // Chi prende in mano un partito già esistente eredita una storia vera che il gioco non ha simulato
+    // settimana per settimana (il partito reale esisteva ben prima della settimana 1): le statistiche
+    // sopra possono quindi raccontare solo il periodo sotto la guida del giocatore, mai l'intera vita del
+    // partito. Questo blocco lo rende esplicito invece di lasciar intendere che la storia cominci qui.
+    var legacyHtml = "";
+    if (isTakeoverParty) {
+      var legacyBits = [];
+      if (p.takeoverPartyFamiglia) legacyBits.push("<strong>Area politica storica:</strong> " + p.takeoverPartyFamiglia);
+      if (p.takeoverPartyCorrente) legacyBits.push("<strong>Corrente storica:</strong> " + p.takeoverPartyCorrente);
+      if (p.takeoverPartyLeader) legacyBits.push("<strong>Leadership precedente:</strong> " + p.takeoverPartyLeader);
+      legacyHtml = '<div class="notice-block" style="border-color:var(--accent);background:var(--accent-soft)">' +
+        '<p class="ci-hint" style="margin:0;color:var(--text)"><strong>Un partito con una storia propria.</strong> ' + (p.name || "Questo partito") +
+        ' esisteva già prima che tu ne prendessi il comando: le statistiche e il punteggio qui sotto misurano solo cosa hai fatto tu da quando sei alla guida, non l\'intera vita del partito, che il gioco non ripercorre settimana per settimana.</p>' +
+        (legacyBits.length ? '<p class="ci-hint" style="margin:0.5rem 0 0">' + legacyBits.join(" — ") + "</p>" : "") +
+        "</div>";
+    }
     var epochsHtml = renderCountryHistory();
     return '<section aria-label="Storia del Partito"><details class="log" open><summary>Storia del Partito — riepilogo di carriera<span>▾</span></summary>' +
       '<p class="ci-hint">Un colpo d\'occhio su tutto quello che ' + (p.name || "il partito") + ' ha fatto da quando è nato, senza dover scorrere l\'intero diario.</p>' +
-      scoreHtml + statsHtml + "</details></section>" + epochsHtml;
+      legacyHtml + scoreHtml + statsHtml + "</details></section>" + epochsHtml;
   }
   // Chi vincerebbe SE si votasse oggi, sui sondaggi attuali — non è chi governa davvero (quello resta
   // fisso a chi ha vinto l'ultima elezione reale, vedi state.govEntity in resolveElection, fino al voto
@@ -16839,6 +16870,7 @@
       '<div class="nav-drawer-backdrop' + (navDrawerOpen ? " open" : "") + '" id="nav-drawer-backdrop"></div>' +
       '<aside class="nav-drawer' + (navDrawerOpen ? " open" : "") + '" id="nav-drawer" aria-label="Sezioni di gioco">' +
       '<div class="nav-drawer-head"><strong>Sezioni di gioco</strong><button type="button" class="nav-drawer-close" id="nav-drawer-close" aria-label="Chiudi il menu">✕</button></div>' +
+      '<button type="button" class="nav-drawer-item" id="nav-drawer-tutorial-btn">💡 Guida rapida</button>' +
       items + "</aside></nav>";
   }
   // Lega i comandi del cassetto laterale (icona, chiusura, sfondo, voci di menu) — condiviso sia dal
@@ -16853,6 +16885,12 @@
     if (navClose) navClose.addEventListener("click", function () { navDrawerOpen = false; render(); });
     var navBackdrop = document.getElementById("nav-drawer-backdrop");
     if (navBackdrop) navBackdrop.addEventListener("click", function () { navDrawerOpen = false; render(); });
+    var navTutorialBtn = document.getElementById("nav-drawer-tutorial-btn");
+    if (navTutorialBtn) navTutorialBtn.addEventListener("click", function () {
+      navDrawerOpen = false;
+      render();
+      openTutorialPanel();
+    });
     app.querySelectorAll("[data-nav-page]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (onBeforeNavigate) onBeforeNavigate();
@@ -19759,6 +19797,66 @@
       }
     });
   }
+
+  // ---------- Guida rapida (tutorial introduttivo) ----------
+  // Stessa filosofia del pannello Slot sopra: vive fuori da state/render(), un piccolo overlay a passi
+  // (vedi #tutorial-panel nell'HTML) che si apre da solo alla prima partita e che si può saltare o
+  // chiudere in qualunque momento, non solo all'inizio — nessuno stato di gioco viene toccato, quindi non
+  // può mai bloccare o alterare la partita. Riapribile in qualsiasi momento dal cassetto laterale
+  // ("Guida rapida"), per chi vuole rivederla più avanti.
+  var TUTORIAL_STEPS = [
+    { title: "Benvenuto in Politis-IT", body: "Guidi un partito politico italiano, settimana dopo settimana: dalle prime tessere fino, magari, al governo del Paese. Ogni scelta che fai — dichiarazioni, leggi, alleanze — lascia un segno reale sul Paese e sui tuoi sondaggi. Questa guida dura pochi passaggi: puoi saltarla quando vuoi con \"Salta il tutorial\"." },
+    { title: "I turni settimanali", body: "Il gioco avanza una settimana alla volta. Ogni settimana ti viene proposto un dossier con scelte diverse: rispondi, poi tocca \"Avanza\" per passare alla settimana successiva. Alcune settimane portano eventi speciali — interviste, Question Time, congressi, elezioni — che si giocano come scene a parte." },
+    { title: "Il menu delle sezioni", body: "L'icona ☰ in alto a sinistra apre il menu con tutte le sezioni di gioco: Il Partito (eventi, staff, fondi), Territorio (sezioni locali, mappa), Parlamento e Governo, Europa e Mondo, Coalizioni, Scheda Paese e Bilancio, Partiti Politici, Dichiarazioni, Diario di Partito e Storia del Partito." },
+    { title: "Sondaggi e Scheda Paese", body: "In cima alla pagina trovi i sondaggi di tutti i partiti, il tuo compreso. Nella sezione \"Scheda Paese\" trovi lo stato reale del Paese, indicatore per indicatore: tocca un indicatore per vedere il suo andamento nel tempo e i provvedimenti collegati a quel tema." },
+    { title: "Il salvataggio", body: "Il gioco si salva da solo nel browser a ogni azione. Usa \"Esporta partita\" per portarla su un altro dispositivo o metterla al sicuro, e \"Slot di salvataggio\" se vuoi tenere più partite in parallelo nello stesso browser." },
+    { title: "Si comincia", body: "Questo è tutto quello che ti serve per iniziare — il resto lo scoprirai giocando. Puoi riaprire questa guida in ogni momento dal menu ☰, voce \"Guida rapida\". Buona partita!" }
+  ];
+  var tutorialStepIndex = 0;
+  var tutorialPanel = document.getElementById("tutorial-panel");
+  var tutorialBackdrop = document.getElementById("tutorial-backdrop");
+  var tutorialCloseBtn = document.getElementById("tutorial-close-btn");
+  var tutorialPanelBody = document.getElementById("tutorial-panel-body");
+  function renderTutorialPanel() {
+    var step = TUTORIAL_STEPS[tutorialStepIndex];
+    var isLast = tutorialStepIndex === TUTORIAL_STEPS.length - 1;
+    var isFirst = tutorialStepIndex === 0;
+    tutorialPanelBody.innerHTML =
+      '<p class="eyebrow" style="margin:0 0 0.3rem">Passo ' + (tutorialStepIndex + 1) + ' di ' + TUTORIAL_STEPS.length + '</p>' +
+      '<h3 style="font-family:var(--font-display);font-size:1.15rem;margin:0 0 0.6rem">' + step.title + '</h3>' +
+      '<p class="ci-hint" style="font-size:0.86rem;max-width:none">' + step.body + '</p>' +
+      '<div class="slot-row-actions" style="margin-top:1rem;justify-content:space-between">' +
+      '<button type="button" class="save-bar-btn" id="tutorial-skip-btn">Salta il tutorial</button>' +
+      '<div style="display:flex;gap:0.4rem">' +
+      (isFirst ? "" : '<button type="button" class="save-bar-btn" id="tutorial-prev-btn">Indietro</button>') +
+      '<button type="button" class="save-bar-btn primary" id="tutorial-next-btn">' + (isLast ? "Ho capito, si gioca!" : "Avanti") + '</button>' +
+      "</div></div>";
+    var skipBtn = document.getElementById("tutorial-skip-btn");
+    if (skipBtn) skipBtn.addEventListener("click", closeTutorialPanel);
+    var nextBtn = document.getElementById("tutorial-next-btn");
+    if (nextBtn) nextBtn.addEventListener("click", function () {
+      if (tutorialStepIndex >= TUTORIAL_STEPS.length - 1) { closeTutorialPanel(); return; }
+      tutorialStepIndex++;
+      renderTutorialPanel();
+    });
+    var prevBtn = document.getElementById("tutorial-prev-btn");
+    if (prevBtn) prevBtn.addEventListener("click", function () {
+      if (tutorialStepIndex > 0) tutorialStepIndex--;
+      renderTutorialPanel();
+    });
+  }
+  function openTutorialPanel() {
+    tutorialStepIndex = 0;
+    renderTutorialPanel();
+    tutorialPanel.hidden = false;
+    tutorialBackdrop.classList.add("open");
+  }
+  function closeTutorialPanel() {
+    tutorialPanel.hidden = true;
+    tutorialBackdrop.classList.remove("open");
+  }
+  if (tutorialCloseBtn) tutorialCloseBtn.addEventListener("click", closeTutorialPanel);
+  if (tutorialBackdrop) tutorialBackdrop.addEventListener("click", closeTutorialPanel);
 
   // Migrazione una tantum: la squadra di governo con nomi reali è una funzione nuova — un salvataggio già
   // a metà legislatura (governo insediato da tempo) non ha mai avuto occasione di formarla. Se il partito
