@@ -1031,6 +1031,52 @@
     });
     applyCollectivistPrivateSectorDecay();
   }
+  // ---------- Economia settoriale: uno spaccato per settore, non solo indicatori aggregati ----------
+  // Finora "economia"/"pil"/"aziende" nella Scheda Paese erano gli unici numeri sull'economia reale: un
+  // aggregato unico, senza modo di vedere se a tirare è il turismo o l'industria, o di investire su un
+  // settore in particolare. Cinque settori (1-10 come gli altri indicatori), con un proprio piccolo drift
+  // indipendente ma agganciato debolmente all'andamento generale dell'economia (così restano coerenti col
+  // resto della Scheda Paese, senza diventare un sistema economico separato e scollegato). Lazy-init (come
+  // state.foreignRelations): un salvataggio già in corso li ottiene automaticamente al primo drift utile.
+  var ECONOMY_SECTORS = [
+    { key: "agricoltura", label: "Agricoltura e Filiera Alimentare" },
+    { key: "turismo", label: "Turismo e Ospitalità" },
+    { key: "industria", label: "Industria Manifatturiera" },
+    { key: "tecnologia", label: "Tecnologia e Digitale" },
+    { key: "servizi", label: "Servizi e Terziario" }
+  ];
+  function driftEconomySectors() {
+    if (!state.economySectors) {
+      state.economySectors = {};
+      ECONOMY_SECTORS.forEach(function (s) { state.economySectors[s.key] = clamp(5 + (Math.random() - 0.5) * 2, 1, 10); });
+    }
+    var econ = state.countryProfile.economia;
+    ECONOMY_SECTORS.forEach(function (s) {
+      var v = state.economySectors[s.key];
+      state.economySectors[s.key] = clamp(v + (econ - v) * 0.02 + (Math.random() - 0.5) * 0.15, 1, 10);
+    });
+    var avg = ECONOMY_SECTORS.reduce(function (sum, s) { return sum + state.economySectors[s.key]; }, 0) / ECONOMY_SECTORS.length;
+    state.countryProfile.aziende = clamp(state.countryProfile.aziende + (avg - state.countryProfile.aziende) * 0.01, 1, 10);
+  }
+  var SECTOR_INVEST_COST = 400;
+  var SECTOR_INVEST_COOLDOWN_TURNS = 8;
+  function investInSector(key) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return null;
+    var sector = ECONOMY_SECTORS.filter(function (s) { return s.key === key; })[0];
+    if (!sector) return null;
+    if (!state.economySectors) driftEconomySectors();
+    if (!p.sectorInvestCooldowns) p.sectorInvestCooldowns = {};
+    if (state.turn < (p.sectorInvestCooldowns[key] || 0)) return null;
+    if (p.fondi < SECTOR_INVEST_COST) return null;
+    p.sectorInvestCooldowns[key] = state.turn + SECTOR_INVEST_COOLDOWN_TURNS;
+    p.fondi -= SECTOR_INVEST_COST;
+    var mult = institutionalPowerMultiplier(p);
+    state.economySectors[key] = clamp(state.economySectors[key] + rand(0.3, 0.6) * mult, 1, 10);
+    var resultText = "Il governo vara un piano di investimento mirato per " + sector.label.toLowerCase() + ", con effetti misurabili sul settore.";
+    state.log.unshift({ week: state.turn, title: "Investimento settoriale: " + sector.label, choiceLabel: sector.label, result: resultText, headlines: [], type: "cronaca" });
+    return { resultText: resultText };
+  }
   // ---------- Piccoli eventi di cronaca: friction realistica indipendente dalle scelte del giocatore ----------
   // A differenza del drift simmetrico sopra (rumore impercettibile, +/- su tutto), questi sono episodi
   // concreti e riconoscibili — un guasto, un'inchiesta, un rincaro, una fabbrica che delocalizza — che
@@ -1133,7 +1179,13 @@
       metrics: { economia: 0.6, aziende: 0.5, disoccupazione: -0.4 } },
     { id: "scoperta_giacimento", cat: "Sorpresa positiva", title: "Nuova scoperta energetica",
       text: "La scoperta di un giacimento sfruttabile al largo delle coste italiane apre prospettive di maggiore autosufficienza energetica nel medio periodo.",
-      metrics: { energia: 0.6, economia: 0.3 } }
+      metrics: { energia: 0.6, economia: 0.3 } },
+    { id: "scontro_frontiera_alleati", cat: "Conflitto Internazionale", title: "Scontro di frontiera tra due paesi alleati",
+      text: "Uno scontro armato lungo la frontiera tra due paesi alleati dell'Italia fa salire la tensione nella regione, con ripercussioni immediate sulla stabilità diplomatica.",
+      metrics: { relazioniDiplomatiche: -0.5, difesa: 0.2, sicurezza: -0.3 } },
+    { id: "incidente_navale", cat: "Conflitto Internazionale", title: "Incidente navale in acque contese",
+      text: "Un incidente tra unità navali in acque contese fa temporaneamente salire la tensione militare internazionale, con effetti immediati sui mercati dell'energia.",
+      metrics: { sicurezza: -0.4, energia: -0.3, difesa: 0.15 } }
   ];
   // Rarissimo di proposito (circa una volta ogni 50 settimane in media): non è pensato per essere
   // frequente come triggerMinorCountryEvent, ma per restare un vero evento imprevisto quando arriva.
@@ -1210,6 +1262,53 @@
         { label: "Lascia il tema ad altri, senza prendere posizione netta", hint: "Nessun effetto sui trend nazionali", effects: {},
           result: "Il partito preferisce non esporsi apertamente su questi temi in questo momento." }
       ]
+    };
+  }
+  // ---------- Crisi militare internazionale: un vero conflitto armato da gestire, non solo un indicatore ----------
+  // Fino ad ora "difesa" nella Scheda Paese era solo un numero che saliva o scendeva con le scelte di
+  // routine: nessun vero momento in cui il governo deve decidere come reagire a un conflitto armato reale.
+  // Rara (circa 1.5% a settimana, con un tetto minimo di 60 settimane tra un episodio e l'altro) e riservata
+  // a quando il partito è al governo — solo chi governa può davvero decidere se intervenire — con quattro
+  // vere posture, dall'invio di un contingente alla neutralità dichiarata. Usa applyOutcomeVariance come le
+  // altre scelte multiple del gioco: anche qui nessun esito è mai scontato al 100%.
+  var MILITARY_CRISIS_MIN_GAP_TURNS = 60;
+  var MILITARY_CRISIS_SCENARIOS = [
+    { label: "Alleanza sotto attacco", title: "Un alleato NATO chiede solidarietà militare",
+      brief: "Un paese alleato della NATO subisce un attacco armato ai propri confini e invoca la clausola di difesa collettiva, chiedendo un contributo concreto agli alleati, Italia compresa." },
+    { label: "Rotta energetica in fiamme", title: "Scoppia un conflitto lungo una rotta energetica strategica",
+      brief: "Un conflitto armato esplode lungo una rotta energetica da cui dipende buona parte dell'approvvigionamento italiano, mettendo a rischio le forniture e la stabilità dei prezzi." },
+    { label: "Missione di pace attaccata", title: "Un contingente italiano in missione di pace viene attaccato",
+      brief: "Un contingente italiano impegnato in una missione di pace internazionale subisce un attacco armato, riaprendo bruscamente il dibattito sul futuro della missione." },
+    { label: "Escalation tra potenze rivali", title: "Cresce la tensione militare tra due potenze rivali",
+      brief: "La tensione militare tra due potenze rivali sale bruscamente, e la comunità internazionale, Italia compresa, è chiamata a prendere posizione." }
+  ];
+  function triggerMilitaryCrisis() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return null;
+    if (state.turn < (state.nextMilitaryCrisisTurn || 0)) return null;
+    if (Math.random() > 0.015) return null;
+    state.nextMilitaryCrisisTurn = state.turn + MILITARY_CRISIS_MIN_GAP_TURNS;
+    var scenario = MILITARY_CRISIS_SCENARIOS[Math.floor(Math.random() * MILITARY_CRISIS_SCENARIOS.length)];
+    var rawChoices = [
+      { label: "Intervento diretto: invia un contingente militare", hint: "Il più costoso, il più netto sulla difesa",
+        effects: { fondi: -rand(900, 1600), reputazione: rand(-2, 3), visibilita: rand(4, 8), national: { difesa: 0.5, relazioniDiplomatiche: 0.35, economia: -0.25 } },
+        result: "Il governo dispone l'invio di un contingente militare: un impegno concreto che rafforza la postura di difesa del paese sulla scena internazionale, ma pesa sui conti pubblici." },
+      { label: "Supporto logistico e diplomatico, senza truppe sul terreno", hint: "Una via di mezzo, impegno più contenuto",
+        effects: { fondi: -rand(300, 600), visibilita: rand(1, 3), national: { difesa: 0.2, relazioniDiplomatiche: 0.25 } },
+        result: "Il governo sceglie una via intermedia: supporto logistico e diplomatico senza inviare truppe, un impegno concreto ma più contenuto." },
+      { label: "Guida un'iniziativa di mediazione diplomatica", hint: "Punta sul prestigio, non sulla forza",
+        effects: { reputazione: rand(1, 3), visibilita: rand(2, 4), national: { relazioniDiplomatiche: 0.4, difesa: -0.05 } },
+        result: "Il governo si intesta un ruolo di mediazione diplomatica, puntando sul prestigio internazionale più che sulla forza militare." },
+      { label: "Dichiara la neutralità: nessun coinvolgimento", hint: "Nessun costo, ma raffredda gli alleati",
+        effects: { visibilita: rand(0, 1), national: { sovranitaNazionale: 0.3, relazioniDiplomatiche: -0.3 } },
+        result: "Il governo sceglie la non belligeranza: una scelta che rafforza chi guarda alla sovranità nazionale, ma raffredda i rapporti con gli alleati che si aspettavano un impegno." }
+    ];
+    return {
+      id: "military_crisis", kind: "crisis", cat: "Crisi Internazionale",
+      eyebrow: "Crisi internazionale — " + scenario.label,
+      title: scenario.title,
+      brief: scenario.brief,
+      choices: rawChoices.map(function (c) { return applyOutcomeVariance(c); })
     };
   }
   // Bilancio dello Stato semplificato (miliardi di euro): entrate e uscite si muovono piano nel tempo,
@@ -10659,6 +10758,36 @@
     state.log.unshift({ week: state.turn, title: a.label + ": " + nation.name, choiceLabel: nation.name, result: resultText, headlines: [], type: "geopolitica" });
     return { resultText: resultText };
   }
+  function renderEconomySectors() {
+    if (!state.economySectors) driftEconomySectors();
+    var p = state.player;
+    var isGoverno = p.parliamentRole === "governo";
+    if (!p.sectorInvestCooldowns) p.sectorInvestCooldowns = {};
+    var html = '<section aria-label="Economia Settoriale"><details class="log"><summary>Economia Settoriale<span>▾</span></summary>' +
+      '<p class="ci-hint">Uno spaccato per settore dell\'economia reale, da 1 (in crisi) a 10 (in forte crescita): si muove lentamente in modo indipendente, restando comunque legato all\'andamento generale dell\'economia nella Scheda Paese.' +
+      (isGoverno ? " Tocca un settore per investirci direttamente." : "") + '</p><div class="party-directory">';
+    html += ECONOMY_SECTORS.map(function (s) {
+      var val = state.economySectors[s.key];
+      var chipClass = val >= 6.6 ? "good" : val <= 3.3 ? "critical" : "neutral";
+      var isOpen = expandedSectorId === s.key;
+      var row = isGoverno
+        ? '<button type="button" class="party-row' + (isOpen ? " open" : "") + '" data-sector-tile="' + s.key + '">' +
+          '<div class="party-row-body"><div class="party-row-head"><strong>' + s.label + '</strong><span class="chip ' + chipClass + '">' + fmt1(val) + '/10</span></div></div></button>'
+        : '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + s.label + '</strong><span class="chip ' + chipClass + '">' + fmt1(val) + '/10</span></div></div></div>';
+      if (isGoverno && isOpen) {
+        var cd = p.sectorInvestCooldowns[s.key] || 0;
+        var weeksLeft = cd - state.turn;
+        var disabled = weeksLeft > 0 || p.fondi < SECTOR_INVEST_COST;
+        var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+          : p.fondi < SECTOR_INVEST_COST ? "Fondi insufficienti (" + fmtEuro(SECTOR_INVEST_COST) + ")" : "Costo: " + fmtEuro(SECTOR_INVEST_COST);
+        row += '<div class="option-grid" style="margin:0.5rem 0 0.9rem"><button type="button" class="option-card" data-sector-invest="' + s.key + '"' + (disabled ? " disabled" : "") + '>' +
+          '<span class="olabel">Investi in ' + s.label.toLowerCase() + '</span><span class="odesc">Un piano di investimento mirato per rilanciare il settore. ' + status + '</span></button></div>';
+      }
+      return row;
+    }).join("");
+    html += "</div></details></section>";
+    return html;
+  }
   function renderForeignRelations() {
     var p = state.player;
     if (p.parliamentRole !== "governo") return "";
@@ -11476,6 +11605,7 @@
     var countryTrendDelta = computeCountryTrendDelta();
     driftConsensoGovernoByCountryTrend(countryTrendDelta);
     driftCountryProfile();
+    driftEconomySectors();
     checkLongTermTrackMilestones();
     driftPartyRelations();
     driftInstitutionalRelations();
@@ -14948,10 +15078,35 @@
     var statsHtml = '<ul class="enacted-policy-list">' + stats.map(function (s) {
       return "<li><strong>" + s.label + ":</strong> " + s.value + "</li>";
     }).join("") + "</ul>";
+    // ---------- Punteggio storico: una condizione di "vittoria" leggibile, mai una regola dura ----------
+    // Puramente informativo (nessun effetto sul gioco, nessun campo salvato): una sintesi ponderata delle
+    // stesse statistiche già mostrate sopra, con un tetto morbido per ciascuna voce così che nessun singolo
+    // fattore da solo possa spingere il punteggio a 100, e una piccola penalità per scissioni e leggi
+    // annullate dalla Corte Costituzionale — la storia di un partito non è mai solo una linea che sale.
+    var annullate = (state.enactedPolicies || []).filter(function (e) { return e.annulled; }).length;
+    var score = 0;
+    score += Math.min((p.peakSondaggi || p.sondaggi || 0) * 1.5, 60);
+    score += Math.min(govShare * 0.4, 40);
+    score += Math.min(totProvvedimenti * 1.5, 30);
+    score += Math.min(elections * 4, 20);
+    score += Math.min((p.seggiEuropei || 0) * 3, 15) + Math.min(euElections * 2, 10);
+    score += Math.min((p.amministratoriLocali || 0) * 0.3, 15);
+    score -= Math.min(scissioni * 3, 15);
+    score -= Math.min(annullate * 2, 10);
+    score = Math.round(clamp(score, 0, 100));
+    var tier = score >= 80 ? { label: "Storico", desc: "Un partito che ha lasciato un segno duraturo nella storia politica del paese." }
+      : score >= 60 ? { label: "Solido", desc: "Un partito radicato, con un impatto reale e continuativo sulla vita del paese." }
+      : score >= 40 ? { label: "Consolidato", desc: "Un partito che ha trovato il suo spazio, con risultati concreti ma ancora margini di crescita." }
+      : score >= 20 ? { label: "Marginale", desc: "Un partito che è riuscito a farsi notare, ma senza incidere davvero sugli equilibri del paese." }
+      : { label: "Effimero", desc: "Un partito ancora agli inizi del suo percorso, o che non è mai riuscito davvero a decollare." };
+    var scoreHtml = '<div class="stat-tile" style="margin-bottom:0.8rem;cursor:default">' +
+      '<p class="eyebrow" style="margin:0">Punteggio storico del partito</p>' +
+      '<p style="font-size:1.8rem;font-weight:800;margin:0.2rem 0">' + score + '/100 — ' + tier.label + '</p>' +
+      '<p class="ci-hint" style="margin:0">' + tier.desc + '</p></div>';
     var epochsHtml = renderCountryHistory();
     return '<section aria-label="Storia del Partito"><details class="log" open><summary>Storia del Partito — riepilogo di carriera<span>▾</span></summary>' +
       '<p class="ci-hint">Un colpo d\'occhio su tutto quello che ' + (p.name || "il partito") + ' ha fatto da quando è nato, senza dover scorrere l\'intero diario.</p>' +
-      statsHtml + "</details></section>" + epochsHtml;
+      scoreHtml + statsHtml + "</details></section>" + epochsHtml;
   }
   // Chi vincerebbe SE si votasse oggi, sui sondaggi attuali — non è chi governa davvero (quello resta
   // fisso a chi ha vinto l'ultima elezione reale, vedi state.govEntity in resolveElection, fino al voto
@@ -16574,7 +16729,7 @@
         return renderReunificationPanel() + renderCoalitionPanel();
       } },
     { id: "paese", label: "Scheda Paese e Bilancio dello Stato", render: function () {
-        return renderNationalStrip() + renderCountryProfile() + renderIniziativaLiberaPanel() + renderPolicyHistoryPanel() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
+        return renderNationalStrip() + renderCountryProfile() + renderEconomySectors() + renderIniziativaLiberaPanel() + renderPolicyHistoryPanel() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -16606,6 +16761,9 @@
   // Quale nazione è espansa in questo momento nel pannello "Rapporti con l'estero" (vedi
   // renderForeignRelations): stesso pattern di expandedMetricTile sopra, puro stato di interfaccia.
   var expandedNationId = null;
+  // Quale settore economico è espanso in questo momento nel pannello "Economia Settoriale": stesso
+  // pattern di expandedNationId sopra, puro stato di interfaccia.
+  var expandedSectorId = null;
   function renderPageNav() {
     var current = activePageDef().id;
     var items = PAGE_DEFS.map(function (pg) {
@@ -18585,6 +18743,23 @@
         render();
       });
     });
+    app.querySelectorAll("[data-sector-tile]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-sector-tile");
+        expandedSectorId = expandedSectorId === id ? null : id;
+        render();
+      });
+    });
+    app.querySelectorAll("[data-sector-invest]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var res = investInSector(btn.getAttribute("data-sector-invest"));
+        if (!res) { showSaveStatus("Non puoi ancora investire in questo settore (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
     app.querySelectorAll("[data-vita-pubblica]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
@@ -19290,6 +19465,14 @@
     var trendDossier = triggerTrendCheckIn();
     if (trendDossier) {
       state.aiDynamicDossier = trendDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var militaryCrisisDossier = triggerMilitaryCrisis();
+    if (militaryCrisisDossier) {
+      state.aiDynamicDossier = militaryCrisisDossier;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
