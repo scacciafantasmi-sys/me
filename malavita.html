@@ -1,0 +1,1297 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>Malavita — La Tua Città</title>
+<!-- Pagina autonoma a file singolo, ospitata accanto a Politis-IT, Villa Franca 1980 e Notti Azzurre sullo stesso dominio. -->
+<meta name="description" content="Open world criminale ispirato a GTA, ambientato sulla mappa reale della tua città: missioni, fughe, rapine, fazioni e una storia a bivi. Client-side, salvataggio locale.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --bg: #0a0c12;
+    --panel: #10131c;
+    --panel-2: #171b27;
+    --border: #2a3040;
+    --text: #e7e9f0;
+    --text-dim: #8b93a7;
+    --accent: #e0b84b;
+    --accent-2: #4caf7d;
+    --accent-soft: rgba(224,184,75,0.14);
+    --good: #4caf7d;
+    --good-soft: rgba(76,175,125,0.16);
+    --warning: #e0b84b;
+    --critical: #d1453b;
+    --critical-soft: rgba(209,69,59,0.18);
+    --font-display: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, monospace;
+    --shadow: 0 1px 2px rgba(0,0,0,0.5), 0 8px 24px rgba(0,0,0,0.45);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); }
+  body { min-height: 100vh; }
+  h1, h2, h3 { font-family: var(--font-display); letter-spacing: 0.01em; margin: 0 0 0.4em; }
+  p { line-height: 1.5; }
+  button { font-family: inherit; cursor: pointer; }
+  input, select, textarea { font-family: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0.5em 0.6em; font-size: 0.95em; }
+  a { color: var(--accent); }
+  .muted { color: var(--text-dim); font-size: 0.85em; }
+  .small { font-size: 0.8em; }
+
+  .btn { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.55em 1em; font-size: 0.92em; box-shadow: var(--shadow); transition: transform .08s, border-color .15s; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); color: #1a1408; border-color: var(--accent); font-weight: bold; }
+  .btn.danger { background: var(--critical); color: #fff; border-color: var(--critical); }
+  .btn.ghost { background: transparent; }
+  .btn.tiny { padding: 0.2em 0.6em; font-size: 0.85em; }
+  .row { display: flex; gap: 0.5em; flex-wrap: wrap; align-items: center; }
+
+  /* boot */
+  #app { min-height: 100vh; }
+  .boot { max-width: 640px; margin: 0 auto; padding: 3rem 1rem; text-align: center; }
+  .boot h1 { font-size: 2.6rem; color: var(--accent); letter-spacing: 0.04em; }
+  .boot .tagline { color: var(--text-dim); font-style: italic; margin-top: -0.4em; }
+  .disclaimer { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1em 1.2em; margin: 1.4em 0; font-size: 0.85em; color: var(--text-dim); }
+  .disclaimer strong { color: var(--text); }
+  .boot-actions { display: flex; flex-direction: column; gap: 0.6em; max-width: 380px; margin: 1.2em auto 0; }
+
+  .wizard { max-width: 640px; margin: 0 auto; padding: 2rem 1rem; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1.4rem; box-shadow: var(--shadow); margin-bottom: 1em; }
+  .archetype-grid, .avatar-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 0.7em; }
+  .pickable { border: 1px solid var(--border); border-radius: 8px; padding: 0.8em; cursor: pointer; background: var(--panel-2); }
+  .pickable.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .pickable h3 { margin: 0 0 0.2em; font-size: 1em; color: var(--accent); }
+  .pickable p { margin: 0; font-size: 0.82em; color: var(--text-dim); }
+  .avatar-opt { font-size: 1.8em; text-align: center; padding: 0.3em; }
+
+  /* hub */
+  .hub-top { display: flex; flex-wrap: wrap; gap: 0.8em; align-items: center; justify-content: space-between; background: var(--panel); border-bottom: 1px solid var(--border); padding: 0.6em 1em; position: sticky; top: 0; z-index: 500; }
+  .stat { font-family: var(--font-mono); font-size: 0.95em; display: flex; align-items: center; gap: 0.3em; }
+  .stat .lbl { color: var(--text-dim); font-size: 0.75em; }
+  .stars { color: var(--critical); letter-spacing: 1px; }
+  .stars .off { color: #3a3f4d; }
+  .healthbar, .repbar { width: 90px; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
+  .healthbar > div { height: 100%; background: var(--critical); }
+  .repbar > div { height: 100%; background: var(--accent-2); }
+
+  .hub-body { display: grid; grid-template-columns: 340px 1fr; gap: 0; height: calc(100vh - 54px); }
+  @media (max-width: 880px) { .hub-body { grid-template-columns: 1fr; height: auto; } #map { height: 50vh !important; } }
+  .sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; background: var(--panel); overflow: hidden; }
+  .tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .tab { flex: 1; padding: 0.6em 0.3em; text-align: center; background: transparent; border: none; color: var(--text-dim); font-size: 0.78em; border-bottom: 2px solid transparent; }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { flex: 1; overflow-y: auto; padding: 0.8em; }
+  #map { width: 100%; height: 100%; background: #1a1a1a; }
+
+  .mission-item, .char-item, .ach-item, .shop-item { border: 1px solid var(--border); border-radius: 8px; padding: 0.7em 0.8em; margin-bottom: 0.6em; background: var(--panel-2); }
+  .mission-item h4, .char-item h4 { margin: 0 0 0.2em; font-size: 0.92em; color: var(--accent); }
+  .mission-item p, .char-item p { margin: 0.2em 0; font-size: 0.8em; color: var(--text-dim); }
+  .mission-item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .tag { display: inline-block; font-size: 0.68em; padding: 0.15em 0.5em; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); margin-right: 0.3em; }
+  .ach-item.unlocked { border-color: var(--good); }
+  .ach-item.locked { opacity: 0.45; }
+  .relbar-wrap { background: var(--panel); border-radius: 4px; height: 6px; overflow: hidden; margin: 0.3em 0; border: 1px solid var(--border); }
+  .relbar { height: 100%; background: var(--accent-2); }
+
+  #log-panel { font-size: 0.8em; display: flex; flex-direction: column-reverse; gap: 0.3em; }
+  #log-panel .entry { border-left: 2px solid var(--border); padding-left: 0.5em; color: var(--text-dim); }
+
+  /* modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 1em; }
+  .modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1.4em; max-width: 480px; width: 100%; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow); }
+  .modal-box h3 { color: var(--accent); }
+  .choice-btn { display: block; width: 100%; text-align: left; margin-top: 0.5em; }
+
+  .toast-wrap { position: fixed; top: 60px; right: 12px; display: flex; flex-direction: column; gap: 0.5em; z-index: 3000; }
+  .toast { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; padding: 0.6em 1em; font-size: 0.85em; box-shadow: var(--shadow); animation: fadein .2s ease; max-width: 260px; }
+  @keyframes fadein { from { opacity:0; transform: translateY(-6px);} to {opacity:1; transform:none;} }
+
+  .poi-icon { font-size: 20px; text-align: center; line-height: 26px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8)); }
+  .player-icon { font-size: 24px; text-align: center; line-height: 28px; filter: drop-shadow(0 0 4px var(--accent)); }
+
+  .minigame-track { position: relative; height: 34px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; margin: 1em 0; overflow: hidden; }
+  .minigame-zone { position: absolute; top: 0; bottom: 0; background: var(--good-soft); border-left: 2px solid var(--good); border-right: 2px solid var(--good); }
+  .minigame-cursor { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* ================= DATI DI GIOCO ================= */
+
+const FACTIONS = [
+  {id:'famiglia', nome:'Famiglia Conti', tipo:'Mafia tradizionale', colore:'#e0b84b', desc:'Vecchia guardia: rispetto, territorio, lealtà. Chi tradisce non viene perdonato.'},
+  {id:'cartello', nome:'Cartello Nero', tipo:'Rete di contrabbando', colore:'#d1453b', desc:'Espansione rapida e violenta. Pagano bene, chiedono sangue freddo.'},
+  {id:'sindacato', nome:'Sindacato', tipo:'Colletti bianchi', colore:'#4caf7d', desc:'Riciclaggio, finanza, ricatti eleganti. Nessuna arma, solo leva.'}
+];
+
+const CHARACTERS = [
+  {id:'conti', nome:'Don Salvatore Conti', primario:true, factionId:'famiglia', emoji:'🎩', bio:'Il capo della Famiglia Conti. Ti ha dato la prima occasione.'},
+  {id:'reyes', nome:"Yamil 'El Cartel' Reyes", primario:true, factionId:'cartello', emoji:'🕶️', bio:'Ambizioso, spietato, vuole espandersi in fretta e non guarda in faccia nessuno.'},
+  {id:'kessler', nome:'Vivian Kessler', primario:true, factionId:'sindacato', emoji:'💼', bio:'Fredda e calcolatrice. Preferisce un ricatto ben scritto a una pistola.'},
+  {id:'franco', nome:'Franco il Meccanico', primario:false, factionId:'famiglia', emoji:'🔧', bio:'Gestisce il garage. Ripara auto e non fa domande.'},
+  {id:'nina', nome:'Nina la Barista', primario:false, factionId:null, emoji:'☕', bio:'Sa tutto quello che succede in città, se le offri da bere.'},
+  {id:'ray', nome:"Ray 'Due Volte'", primario:false, factionId:'cartello', emoji:'🃏', bio:'Piccolo ladro con grandi ambizioni e una fortuna discutibile.'},
+  {id:'bianchi', nome:'Agente Bianchi', primario:false, factionId:null, emoji:'👮', bio:'Poliziotto corrotto. Per un prezzo, guarda altrove.'},
+  {id:'sara', nome:'Sara Conti', primario:false, factionId:'famiglia', emoji:'🌹', bio:'Figlia del Don. Non crede nella vita che suo padre le ha costruito intorno.'},
+  {id:'doc', nome:'Doc Halloran', primario:false, factionId:null, emoji:'⚕️', bio:'Medico clandestino. Cura tutto, chiede solo contanti.'},
+  {id:'pixel', nome:"Pixel", primario:false, factionId:'sindacato', emoji:'💻', bio:'Giovanissima hacker. Disattiva telecamere e allarmi per chi paga.'}
+];
+
+const NASCONDIGLI_NAMES = ['Vecchio Magazzino','Scantinato del Bar','Cantiere Abbandonato','Garage sul Retro','Deposito Ferroviario'];
+const NEGOZI = [
+  {tipo:'armeria', nome:'Armeria "Il Falco"'}, {tipo:'armeria', nome:'Surplus Militare'},
+  {tipo:'meccanico', nome:'Garage di Franco'}, {tipo:'meccanico', nome:'Autofficina 24h'},
+  {tipo:'ricettatore', nome:'Compro Oro & Non Solo'}, {tipo:'ricettatore', nome:'Magazzino del Ricettatore'},
+  {tipo:'bar', nome:'Bar Nina'}, {tipo:'bar', nome:'Circolo Notturno'}
+];
+const PLACE_NOUNS = ['il vicolo dietro il mercato','la stazione dei bus','il molo vecchio','il parcheggio del centro commerciale','l\'incrocio principale','la zona industriale','il parco cittadino','il retro del supermercato','la ferrovia dismessa','il ponte vecchio','il distributore di benzina','la piazza del mercato'];
+
+const WEAPONS = [
+  {id:'coltello', nome:'Coltello', prezzo:0, potenza:1},
+  {id:'tirapugni', nome:'Tirapugni', prezzo:150, potenza:2},
+  {id:'pistola', nome:'Pistola', prezzo:1200, potenza:4},
+  {id:'mazza', nome:'Mazza da Baseball', prezzo:400, potenza:3},
+  {id:'fucile', nome:'Fucile a Pompa', prezzo:4500, potenza:7},
+  {id:'mitra', nome:'Mitra', prezzo:9000, potenza:9}
+];
+
+const TEMPLATES = {
+  consegna: [
+    {title:'Consegna per {char}', desc:'Porta un pacco fino a {poi} senza farti fermare. {char} vuole discrezione assoluta.'},
+    {title:'Corriere di fiducia', desc:'{char} ha bisogno che tu porti della merce fino a {luogo}, in fretta e senza intoppi.'},
+    {title:'Pacco urgente', desc:'Un pacco sigillato deve arrivare a {poi} entro stasera. Nessuna domanda, nessun ritardo.'},
+    {title:'Scambio silenzioso', desc:'Incontra un contatto vicino a {luogo} e lascia il pacco senza farti notare.'}
+  ],
+  spaccio: [
+    {title:'Consegna riservata per {char}', desc:'Porta una borsa a un cliente fidato vicino a {poi}. Occhi aperti sulle volanti.'},
+    {title:'Piazza calda', desc:'{char} ti manda a coprire un giro vicino a {luogo}. Muoviti e non farti notare.'},
+    {title:'Cliente difficile', desc:'Un cliente vicino a {poi} vuole trattare di persona. {char} si fida di te per questo.'},
+    {title:'Giro di consegne', desc:'Copri un punto di scambio vicino a {luogo} prima che passi una pattuglia.'}
+  ],
+  furto: [
+    {title:"Ruba un'auto per {char}", desc:"C'è un'auto parcheggiata vicino a {poi}. {char} la vuole nel suo garage, oggi stesso."},
+    {title:'Colpo veloce', desc:"Fai sparire un veicolo vicino a {luogo} prima che il proprietario se ne accorga."},
+    {title:'Su commissione', desc:'{char} ha un cliente che paga bene per un veicolo specifico vicino a {poi}.'},
+    {title:'Notte di lavoro', desc:'Approfitta del buio vicino a {luogo}: un\'auto sta per cambiare proprietario.'}
+  ],
+  fuga: [
+    {title:'Fuori dai guai', desc:'Le cose sono andate storte vicino a {poi}. Sparisci prima che arrivino in forze.'},
+    {title:'Testa bassa', desc:'{char} ti avverte: qualcuno ti ha visto vicino a {luogo}. Nasconditi subito.'},
+    {title:"Caccia all'uomo", desc:'Le volanti battono la zona di {poi}. Trova un buco e resta fermo.'},
+    {title:'Il prezzo della fretta', desc:'Un lavoro per {char} è saltato vicino a {luogo}. Ora tocca correre.'}
+  ]
+};
+
+const HEIST_DEFS = [
+  {id:'heist_deposito', nome:'Colpo al Deposito', factionId:'famiglia', giverId:'conti', minRep:20,
+    stages:[
+      {title:'Sopralluogo', desc:'Studia i turni delle guardie al deposito prima di colpire.', wantedRisk:0, reward:300},
+      {title:'Ingresso', desc:'Entra nel deposito ed evita le telecomere. Pixel ti copre da remoto.', wantedRisk:2, reward:800},
+      {title:'Fuga col bottino', desc:'Porta il bottino fuori dalla zona prima che scattino gli allarmi.', wantedRisk:2, reward:1500}
+    ]},
+  {id:'heist_porto', nome:'Il Carico del Porto', factionId:'cartello', giverId:'reyes', minRep:20,
+    stages:[
+      {title:'Informazioni', desc:'Scopri quando arriva il carico al molo.', wantedRisk:0, reward:350},
+      {title:'Assalto al carico', desc:'Intercetta il carico prima che venga scaricato.', wantedRisk:3, reward:1000},
+      {title:'Sparire prima dell\'alba', desc:'Nascondi il carico e sparisci prima che faccia giorno.', wantedRisk:2, reward:1700}
+    ]},
+  {id:'heist_banca', nome:'Frode al Sindacato', factionId:'sindacato', giverId:'kessler', minRep:20,
+    stages:[
+      {title:'Accesso ai conti', desc:'Pixel deve entrare nei server della banca senza lasciare tracce.', wantedRisk:1, reward:400},
+      {title:'Ripulire il denaro', desc:'Fai passare il denaro attraverso tre società di comodo.', wantedRisk:1, reward:1100},
+      {title:'Sparire dai radar', desc:'Cancella ogni traccia digitale del colpo.', wantedRisk:1, reward:1900}
+    ]},
+  {id:'heist_resa', nome:'Resa dei Conti', factionId:null, giverId:'conti', minRep:60,
+    stages:[
+      {title:'Scelta di campo', desc:'Le tre fazioni si muovono l\'una contro l\'altra. Devi decidere da che parte stare.', wantedRisk:1, reward:600},
+      {title:'Il colpo grosso', desc:'Un ultimo grande lavoro, rischioso quanto redditizio.', wantedRisk:3, reward:2500},
+      {title:'Dopo la tempesta', desc:'Metti al sicuro tutto quello che hai guadagnato.', wantedRisk:2, reward:3500}
+    ]}
+];
+
+// Storia principale a bivi per i tre personaggi primari
+const STORY = {
+  conti: [
+    {text:'Don Conti ti guarda dritto negli occhi. "Ho un lavoro semplice per te. Fallo bene e vedremo se sei uno dei miei."',
+      choices:[{label:'Accetto senza fare domande', effects:{rep:{famiglia:8}, relazione:5, next:1}},
+               {label:'Chiedo prima i dettagli', effects:{rep:{famiglia:3}, relazione:2, next:1}}]},
+    {text:'"Bene. In città si muove gente nuova, il Cartello. Non mi piace." Il Don aspetta di sapere cosa pensi.',
+      choices:[{label:'"Restiamo uniti, Don. Sono con la Famiglia."', effects:{rep:{famiglia:12}, relazione:8, flag:'lealeConti', next:2}},
+               {label:'"Forse conviene parlare con loro, non solo combattere."', effects:{rep:{famiglia:2}, rep2:{cartello:5}, relazione:2, next:2}}]},
+    {text:'Sara, sua figlia, ti ferma per strada. "Mio padre ti tratta come un figlio che non ha mai avuto. Ma questa vita lo sta divorando. E divorerà anche te."',
+      choices:[{label:'"Sara, io ho fatto la mia scelta."', effects:{relazioneChar:{sara:-5}, flag:'ambizioso', next:3}},
+               {label:'"Forse hai ragione. Non voglio finire come lui."', effects:{relazioneChar:{sara:10}, flag:'dubbioso', next:3}}]},
+    {text:'Il Don ti offre di entrare ufficialmente nella Famiglia. È un punto di non ritorno.',
+      choices:[{label:'Giuro fedeltà alla Famiglia Conti', effects:{rep:{famiglia:25}, flag:'famigliaUfficiale', next:4}},
+               {label:'Rimango un uomo libero, solo un collaboratore', effects:{rep:{famiglia:5}, flag:'indipendente', next:4}}]},
+    {text:'"Un giorno tutto questo potrebbe essere tuo," dice il Don, guardando la città dalla finestra del suo ufficio. Per ora, c\'è ancora lavoro da fare.',
+      choices:[{label:'Continua a lavorare per la Famiglia', effects:{rep:{famiglia:10}, next:5}}]},
+    {text:'Non hai più nulla di nuovo da dirgli, per ora. "Torna quando avrai fatto qualcosa di grosso," ti dice il Don.', choices:[]}
+  ],
+  reyes: [
+    {text:'Reyes ti offre da bere, ma i suoi occhi non sorridono mai davvero. "Il tuo primo lavoro per me. Non deludermi."',
+      choices:[{label:'"Non deluderò nessuno."', effects:{rep:{cartello:8}, relazione:5, next:1}},
+               {label:'"Dipende da quanto paghi."', effects:{rep:{cartello:5}, relazione:1, next:1}}]},
+    {text:'"La Famiglia Conti ci sta col fiato sul collo. Voglio espandermi comunque, in fretta." Ti chiede quanto sei disposto a rischiare.',
+      choices:[{label:'"Andiamo fino in fondo, senza esitazioni."', effects:{rep:{cartello:15}, flag:'aggressivoCartello', next:2}},
+               {label:'"Meglio muoversi con più calma."', effects:{rep:{cartello:5}, relazione:3, next:2}}]},
+    {text:'Reyes ti chiede di fare da esempio a un fornitore che ha sgarrato. Quello che deciderai definirà come ti vede.',
+      choices:[{label:'Fai capire chiaramente che non si scherza', effects:{rep:{cartello:20}, flag:'spietato', next:3}},
+               {label:'Trova un modo per risolverla senza esagerare', effects:{rep:{cartello:8}, flag:'pragmatico', next:3}}]},
+    {text:'"Mi piaci. Sei uno dei pochi di cui mi fido qui." Reyes ti offre un posto fisso nella sua organizzazione.',
+      choices:[{label:'Accetta ed entra nel Cartello Nero', effects:{rep:{cartello:25}, flag:'cartelloUfficiale', next:4}},
+               {label:'Rimani un contractor indipendente', effects:{rep:{cartello:5}, flag:'indipendente', next:4}}]},
+    {text:'Il Cartello continua a crescere in città. Reyes conta su di te per il prossimo passo.', choices:[{label:'Continua a lavorare per il Cartello', effects:{rep:{cartello:10}, next:5}}]},
+    {text:'"Torna quando avrai qualcosa di grosso da propormi," dice Reyes, tornando ai suoi affari.', choices:[]}
+  ],
+  kessler: [
+    {text:'Vivian Kessler non alza mai la voce. "Il mio lavoro è pulito sulla carta e sporco ovunque altrove. Vediamo se sai muoverti."',
+      choices:[{label:'"Sono discreto, non si preoccupi."', effects:{rep:{sindacato:8}, relazione:5, next:1}},
+               {label:'"Mi interessano solo i risultati."', effects:{rep:{sindacato:5}, relazione:1, next:1}}]},
+    {text:'"C\'è un funzionario che possiamo ricattare, oppure convincere con soldi puliti. Tu cosa faresti?"',
+      choices:[{label:'Il ricatto è più efficace ed economico', effects:{rep:{sindacato:15}, flag:'ricattatore', next:2}},
+               {label:'Meglio comprarlo, meno rischi legali', effects:{rep:{sindacato:8}, flag:'diplomatico', next:2}}]},
+    {text:'Kessler ti mostra come si ripulisce il denaro attraverso società fantasma. "Questo è il vero potere in questa città."',
+      choices:[{label:'Impara in fretta, vuoi far parte di questo mondo', effects:{rep:{sindacato:20}, flag:'ambizioso', next:3}},
+               {label:'Fai solo quello che ti viene chiesto, niente di più', effects:{rep:{sindacato:8}, next:3}}]},
+    {text:'"Ti offro un posto stabile nel Sindacato. Niente armi, solo numeri e leva. È un\'offerta che non rifarò."',
+      choices:[{label:'Entra ufficialmente nel Sindacato', effects:{rep:{sindacato:25}, flag:'sindacatoUfficiale', next:4}},
+               {label:'Preferisci restare fuori dai libri contabili', effects:{rep:{sindacato:5}, flag:'indipendente', next:4}}]},
+    {text:'Il Sindacato si infiltra sempre più a fondo nella città. Kessler ha in mente il prossimo passo.', choices:[{label:'Continua a lavorare per il Sindacato', effects:{rep:{sindacato:10}, next:5}}]},
+    {text:'"Torna con qualcosa di rilevante," dice Kessler senza distogliere lo sguardo dai suoi documenti.', choices:[]}
+  ]
+};
+
+const STORY_SECONDARY = {
+  franco: [{text:'"Portami un\'auto in buono stato e ti tratto bene sui prezzi," dice Franco pulendosi le mani sullo straccio.', reward:150}],
+  nina: [{text:'"Ho sentito certe cose al bancone stanotte. Fammi un favore e te le racconto."', reward:100}],
+  ray: [{text:'"Ho un colpo facile in mente, ma mi serve una mano." Ray ha sempre un\'idea, quasi mai una buona.', reward:180}],
+  bianchi: [{text:'"Per un\'offerta ragionevole, certe pattuglie stasera prendono un\'altra strada," sussurra l\'agente Bianchi.', reward:0, special:'corruzione'}],
+  sara: [{text:'"Non voglio i tuoi soldi sporchi. Ma se vuoi aiutarmi davvero, ascolta." Sara lavora con un\'associazione del quartiere.', reward:0, special:'aiutoSara'}],
+  doc: [{text:'"Portami rifornimenti e la prossima cura è gratis," dice Doc controllando i suoi strumenti.', reward:80}],
+  pixel: [{text:'"Ho bisogno di hardware specifico per craccare certi sistemi. Occupatene e ti do una mano su qualunque colpo."', reward:200}]
+};
+
+const ACHIEVEMENTS = [
+  {id:'primo_lavoro', nome:'Primo Lavoro', desc:'Completa la tua prima missione.', check:s=>s.stats.missioniCompletate>=1},
+  {id:'consegne_10', nome:'Corriere Provetto', desc:'Completa 10 consegne.', check:s=>s.stats.consegneCompletate>=10},
+  {id:'spaccio_15', nome:'Contrabbandiere', desc:'Completa 15 missioni di piazza.', check:s=>s.stats.spaccioCompletate>=15},
+  {id:'furti_10', nome:'Ladro Seriale', desc:'Ruba 10 veicoli.', check:s=>s.stats.furtiCompletati>=10},
+  {id:'fantasma', nome:'Fantasma', desc:'Evadi la polizia 5 volte senza essere catturato.', check:s=>s.stats.fugheSenzaCattura>=5},
+  {id:'rapina1', nome:'Rapinatore', desc:'Completa la tua prima rapina a più fasi.', check:s=>s.stats.rapineCompletate>=1},
+  {id:'rapina3', nome:'Testa della Banda', desc:'Completa 3 rapine a più fasi.', check:s=>s.stats.rapineCompletate>=3},
+  {id:'stelle5', nome:'Nemico Pubblico', desc:'Raggiungi 5 stelle di ricercato.', check:s=>s.stats.stelleMassime>=5},
+  {id:'sopravvissuto', nome:'Sopravvissuto', desc:'Torna a 0 stelle dopo essere stato a 5.', check:s=>s.stats.sopravvissutoA5},
+  {id:'famiglia_max', nome:'Uomo di Famiglia', desc:'Raggiungi 100 di reputazione con la Famiglia Conti.', check:s=>s.player.rep.famiglia>=100},
+  {id:'cartello_max', nome:'Signore della Piazza', desc:'Raggiungi 100 di reputazione con il Cartello Nero.', check:s=>s.player.rep.cartello>=100},
+  {id:'sindacato_max', nome:'Colletto Bianco', desc:'Raggiungi 100 di reputazione con il Sindacato.', check:s=>s.player.rep.sindacato>=100},
+  {id:'milionario', nome:'Milionario di Strada', desc:'Accumula 100.000€.', check:s=>s.player.money>=100000},
+  {id:'al_verde', nome:'Al Verde', desc:'Scendi a meno di 50€ dopo aver avuto almeno 5.000€.', check:s=>s.stats.hadBigMoney && s.player.money<50},
+  {id:'amico_tutti', nome:'Amico di Tutti', desc:'Raggiungi relazione 50+ con almeno 5 personaggi.', check:s=>Object.values(s.player.relazioni).filter(v=>v>=50).length>=5},
+  {id:'collezionista', nome:'Collezionista', desc:'Possiedi 5 veicoli.', check:s=>s.player.inventario.veicoli.length>=5},
+  {id:'armato', nome:'Armato Fino ai Denti', desc:'Possiedi tutte le armi disponibili.', check:s=>WEAPONS.every(w=>s.player.inventario.armi.includes(w.id))},
+  {id:'missioni_50', nome:'50 Missioni', desc:'Completa 50 missioni in totale.', check:s=>s.stats.missioniCompletate>=50},
+  {id:'missioni_150', nome:'150 Missioni', desc:'Completa 150 missioni in totale.', check:s=>s.stats.missioniCompletate>=150},
+  {id:'livello_10', nome:'Veterano della Strada', desc:'Raggiungi il livello 10.', check:s=>s.player.level>=10},
+  {id:'capitolo1', nome:'Nel Giro', desc:'Completa il primo capitolo della storia con un boss primario.', check:s=>Object.values(s.missions.storyProgress||{}).some(v=>v>=2)},
+  {id:'finale', nome:'Resa dei Conti', desc:'Raggiungi un finale della storia.', check:s=>!!s.missions.ending},
+  {id:'modalita_reale', nome:'La Tua Città, Vera', desc:'Gioca in Modalità Reale con il GPS attivo.', check:s=>s.world.mode==='reale'},
+  {id:'esploratore', nome:'Esploratore Urbano', desc:'Interagisci con almeno un luogo di ogni tipo (nascondiglio, territorio, personaggio, negozio).', check:s=>s.stats.tipiVisitati && Object.keys(s.stats.tipiVisitati).length>=4}
+];
+
+/* ================= UTILITY ================= */
+
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function seedFromLatLng(lat,lng){
+  const s = (Math.round(lat*10000) ^ Math.imul(Math.round(lng*10000), 2654435761));
+  return (s >>> 0) || 1;
+}
+function rngInt(rng,min,max){ return Math.floor(rng()*(max-min+1))+min; }
+function rngPick(rng,arr){ return arr[Math.floor(rng()*arr.length)]; }
+function haversine(lat1,lng1,lat2,lng2){
+  const R=6371000, toRad=d=>d*Math.PI/180;
+  const dLat=toRad(lat2-lat1), dLng=toRad(lng2-lng1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+function offsetLatLng(lat,lng,distM,bearingDeg){
+  const R=6371000, brng=bearingDeg*Math.PI/180;
+  const lat1=lat*Math.PI/180, lng1=lng*Math.PI/180;
+  const lat2=Math.asin(Math.sin(lat1)*Math.cos(distM/R)+Math.cos(lat1)*Math.sin(distM/R)*Math.cos(brng));
+  const lng2=lng1+Math.atan2(Math.sin(brng)*Math.sin(distM/R)*Math.cos(lat1), Math.cos(distM/R)-Math.sin(lat1)*Math.sin(lat2));
+  return {lat: lat2*180/Math.PI, lng: ((lng2*180/Math.PI+540)%360)-180};
+}
+function fmtMoney(n){ return '€' + Math.round(n).toLocaleString('it-IT'); }
+function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ================= STATO ================= */
+
+let S = null;
+let map = null, playerMarker = null, poiLayer = null, policeCircle = null;
+let activeTab = 'missioni';
+const SAVE_KEY = 'malavita_save_v1';
+
+function newGame(){
+  return {
+    version:1,
+    createdAt: Date.now(),
+    player:{
+      name:'', avatarEmoji:'🧍', archetype:'debuttante',
+      money:500, health:100, maxHealth:100, level:1, xp:0, xpNext:100,
+      wanted:0,
+      rep:{famiglia:0, cartello:0, sindacato:0},
+      relazioni:{},
+      inventario:{armi:['coltello'], veicoli:[]}
+    },
+    world:{ homeBase:null, mode:null, seed:0, pos:null, pois:[], watchId:null },
+    missions:{ pool:[], activeId:null, completedIds:[], storyProgress:{}, storyFlags:{}, ending:null, secondaryDone:{} },
+    achievements:{ unlocked:[] },
+    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{} },
+    log:[]
+  };
+}
+
+function log(msg){
+  S.log.push({t:Date.now(), msg});
+  if(S.log.length>200) S.log.shift();
+  renderLogPanel();
+}
+
+function saveGame(){
+  try{
+    const copy = JSON.parse(JSON.stringify(S));
+    copy.world.watchId = null;
+    localStorage.setItem(SAVE_KEY, JSON.stringify(copy));
+  }catch(e){ console.error('Salvataggio fallito', e); }
+}
+function loadGame(){
+  const raw = localStorage.getItem(SAVE_KEY);
+  if(!raw) return null;
+  try{ return JSON.parse(raw); }catch(e){ return null; }
+}
+function hasSave(){ return !!localStorage.getItem(SAVE_KEY); }
+
+/* ================= GENERAZIONE MONDO ================= */
+
+function genPOIs(rng, home){
+  const pois = []; let idc=0;
+  function add(type,name,distRange,extra){
+    const dist = rngInt(rng,distRange[0],distRange[1]);
+    const bearing = rng()*360;
+    const {lat,lng} = offsetLatLng(home.lat, home.lng, dist, bearing);
+    pois.push(Object.assign({id:'poi'+(idc++), type, name, lat, lng, dist:Math.round(dist)}, extra||{}));
+  }
+  NASCONDIGLI_NAMES.forEach(n=>add('nascondiglio', n, [300,1800]));
+  FACTIONS.forEach(f=>{
+    add('territorio', 'Territorio: '+f.nome, [400,2200], {factionId:f.id});
+    add('territorio', 'Territorio: '+f.nome, [400,2200], {factionId:f.id});
+  });
+  CHARACTERS.forEach(c=> add('personaggio', c.nome, c.primario?[200,900]:[300,2000], {characterId:c.id}));
+  NEGOZI.forEach(n=> add('negozio', n.nome, [200,1500], {negozioTipo:n.tipo}));
+  return pois;
+}
+
+function genMissionPool(rng, pois){
+  const pool = []; let idc=0;
+  const categorie = ['consegna','spaccio','furto','fuga'];
+  const tiers = [1,2,3];
+  CHARACTERS.forEach(giver=>{
+    categorie.forEach(cat=>{
+      tiers.forEach(tier=>{
+        for(let v=0; v<2; v++){
+          const tpl = rngPick(rng, TEMPLATES[cat]);
+          const luogo = rngPick(rng, PLACE_NOUNS);
+          const targetPoi = rngPick(rng, pois);
+          const baseReward = tier*rngInt(rng,80,220) + (giver.primario?100:0);
+          const wantedRisk = (cat==='spaccio'||cat==='furto') ? Math.min(3,tier) : (cat==='consegna'?0:1);
+          const title = tpl.title.replace('{char}', giver.nome);
+          const desc = tpl.desc.replace(/{luogo}/g, luogo).replace(/{char}/g, giver.nome).replace(/{poi}/g, targetPoi.name);
+          pool.push({
+            id:'m'+(idc++), category:cat, tier, giverId:giver.id,
+            title, desc, targetPoiId: targetPoi.id,
+            reward: Math.round(baseReward), repFactionId: giver.factionId, repAmount: tier*3,
+            wantedRisk, minLevel: tier===1?1:(tier===2?4:8),
+            status:'disponibile'
+          });
+        }
+      });
+    });
+  });
+  return pool;
+}
+
+function genHeistMissions(pois, rng){
+  const list = [];
+  HEIST_DEFS.forEach(h=>{
+    h.stages.forEach((stg, i)=>{
+      const poi = rngPick(rng, pois);
+      list.push({
+        id:'heist_'+h.id+'_'+i, category:'rapina', heistId:h.id, stageIndex:i, tier: i+1,
+        giverId:h.giverId, title:h.nome+' — '+stg.title, desc:stg.desc, targetPoiId:poi.id,
+        reward: stg.reward, repFactionId:h.factionId, repAmount: 15, wantedRisk: stg.wantedRisk,
+        minLevel: h.minRep, requiresPrevStage: i>0 ? 'heist_'+h.id+'_'+(i-1) : null,
+        minRepAmount: i===0? h.minRep : 0,
+        status:'disponibile'
+      });
+    });
+  });
+  return list;
+}
+
+function genDialogueMissions(pois, rng){
+  const list = []; let idc=0;
+  Object.keys(STORY_SECONDARY).forEach(charId=>{
+    STORY_SECONDARY[charId].forEach((node, i)=>{
+      const poi = rngPick(rng, pois.filter(p=>p.characterId===charId)) || rngPick(rng, pois);
+      const ch = CHARACTERS.find(c=>c.id===charId);
+      list.push({
+        id:'dlg_'+charId+'_'+(idc++), category:'dialogo', giverId:charId, title:'Parla con '+ch.nome, desc:node.text,
+        targetPoiId: poi.id, reward: node.reward||0, repFactionId: ch.factionId, repAmount: 5, wantedRisk:0,
+        minLevel:1, special: node.special||null, status:'disponibile'
+      });
+    });
+  });
+  return list;
+}
+
+/* ================= LOGICA DI GIOCO ================= */
+
+function nearestPOIOfType(type){
+  let best=null, bestD=Infinity;
+  S.world.pois.filter(p=>p.type===type).forEach(p=>{
+    const d = haversine(S.world.pos.lat,S.world.pos.lng,p.lat,p.lng);
+    if(d<bestD){ bestD=d; best=p; }
+  });
+  return best;
+}
+
+function addXp(amount){
+  S.player.xp += amount;
+  while(S.player.xp >= S.player.xpNext){
+    S.player.xp -= S.player.xpNext;
+    S.player.level++;
+    S.player.xpNext = Math.round(S.player.xpNext*1.25);
+    toast('Sei salito al livello '+S.player.level+'!');
+  }
+}
+
+function addRep(factionId, amount){
+  if(!factionId) return;
+  S.player.rep[factionId] = Math.max(-100, Math.min(200, S.player.rep[factionId]+amount));
+}
+
+function addRelazione(charId, amount){
+  S.player.relazioni[charId] = Math.max(-100, Math.min(100, (S.player.relazioni[charId]||0)+amount));
+}
+
+function raiseWanted(amount){
+  if(amount<=0) return;
+  S.player.wanted = Math.min(5, S.player.wanted+amount);
+  S.world.policePos = {lat:S.world.pos.lat, lng:S.world.pos.lng};
+  S.stats.stelleMassime = Math.max(S.stats.stelleMassime, S.player.wanted);
+  startWantedTicker();
+  refreshWantedMap();
+}
+
+let wantedTimer = null;
+function startWantedTicker(){
+  if(wantedTimer) return;
+  wantedTimer = setInterval(wantedTick, 4000);
+}
+function stopWantedTicker(){
+  if(wantedTimer){ clearInterval(wantedTimer); wantedTimer=null; }
+  if(policeCircle){ map.removeLayer(policeCircle); policeCircle=null; }
+}
+function wantedTick(){
+  if(!S.player.wanted || S.player.wanted<=0){ stopWantedTicker(); return; }
+  const distPolice = haversine(S.world.pos.lat,S.world.pos.lng,S.world.policePos.lat,S.world.policePos.lng);
+  const hideout = nearestPOIOfType('nascondiglio');
+  const distHideout = hideout ? haversine(S.world.pos.lat,S.world.pos.lng,hideout.lat,hideout.lng) : Infinity;
+  const safeDist = 150 + S.player.wanted*120;
+  const wasFive = S.player.wanted>=5;
+  if(distHideout < 70){
+    S.player.wanted = Math.max(0, S.player.wanted-1);
+    log('Ti nascondi al '+hideout.name+'. Il livello di ricercato scende.');
+  } else if(distPolice > safeDist){
+    if(Math.random()<0.5){ S.player.wanted = Math.max(0, S.player.wanted-1); log('Hai seminato la polizia. Ricercato in calo.'); }
+    else log('Sei ancora nella loro rete, ma ti stai allontanando.');
+  } else {
+    if(Math.random() < 0.2 + S.player.wanted*0.08){ catturato(); return; }
+    else log('Le volanti battono la zona. Resta all\'erta.');
+  }
+  if(S.player.wanted===0){
+    stopWantedTicker();
+    S.stats.fugheSenzaCattura++;
+    if(wasFive) S.stats.sopravvissutoA5 = true;
+    achievementsCheck();
+  }
+  refreshHUD(); saveGame();
+}
+function catturato(){
+  const fine = Math.round(S.player.money*0.25);
+  S.player.money = Math.max(0, S.player.money - fine);
+  S.player.health = Math.max(20, S.player.health-15);
+  S.player.wanted = 0;
+  log('Sei stato preso! Multa di '+fmtMoney(fine)+' e qualche colpo incassato prima del rilascio.');
+  stopWantedTicker();
+  refreshHUD(); refreshWantedMap(); saveGame();
+}
+
+function toast(msg){
+  const wrap = document.getElementById('toast-wrap');
+  const el = document.createElement('div');
+  el.className='toast'; el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(()=>{ el.remove(); }, 4200);
+}
+
+function achievementsCheck(){
+  let any=false;
+  ACHIEVEMENTS.forEach(a=>{
+    if(!S.achievements.unlocked.includes(a.id) && a.check(S)){
+      S.achievements.unlocked.push(a.id);
+      toast('🏆 Traguardo sbloccato: '+a.nome);
+      any=true;
+    }
+  });
+  if(any){ renderAchievementsPanel(); saveGame(); }
+}
+
+function markVisited(type){
+  S.stats.tipiVisitati = S.stats.tipiVisitati||{};
+  S.stats.tipiVisitati[type]=true;
+}
+
+/* ---- risoluzione missioni ---- */
+
+function setActiveMission(id){
+  S.missions.activeId = id;
+  renderMissionsPanel();
+  focusMapOnMission(id);
+  saveGame();
+}
+
+function getMissionById(id){ return S.missions.pool.find(m=>m.id===id); }
+
+function focusMapOnMission(id){
+  const m = getMissionById(id);
+  if(!m || !map) return;
+  const poi = S.world.pois.find(p=>p.id===m.targetPoiId);
+  if(poi) map.setView([poi.lat, poi.lng], 16);
+}
+
+function distanceToMissionTarget(m){
+  const poi = S.world.pois.find(p=>p.id===m.targetPoiId);
+  if(!poi) return Infinity;
+  return haversine(S.world.pos.lat, S.world.pos.lng, poi.lat, poi.lng);
+}
+
+function attemptActiveMission(){
+  const m = getMissionById(S.missions.activeId);
+  if(!m) return;
+  const dist = distanceToMissionTarget(m);
+  const threshold = S.world.mode==='reale' ? 60 : 40;
+  if(dist > threshold){
+    toast('Sei a '+Math.round(dist)+' m dal luogo. Avvicinati per continuare.');
+    return;
+  }
+  if(m.requiresPrevStage && !S.missions.completedIds.includes(m.requiresPrevStage)){
+    toast('Devi prima completare la fase precedente della rapina.');
+    return;
+  }
+  const poi = S.world.pois.find(p=>p.id===m.targetPoiId);
+  if(poi) markVisited(poi.type);
+
+  if(m.category==='furto'){
+    openHotwireMinigame(m);
+    return;
+  }
+  if(m.category==='dialogo'){
+    resolveDialogueMission(m);
+    return;
+  }
+  resolveMissionOutcome(m, true);
+}
+
+function resolveMissionOutcome(m, success){
+  S.missions.activeId = null;
+  if(success){
+    S.player.money += m.reward;
+    if(S.player.money>=5000) S.stats.hadBigMoney = true;
+    addRep(m.repFactionId, m.repAmount||0);
+    addXp(20 * (m.tier||1));
+    if(!S.missions.completedIds.includes(m.id)) S.missions.completedIds.push(m.id);
+    S.stats.missioniCompletate++;
+    if(m.category==='consegna') S.stats.consegneCompletate++;
+    if(m.category==='spaccio') S.stats.spaccioCompletate++;
+    if(m.category==='rapina'){
+      const h = HEIST_DEFS.find(h=>h.id===m.heistId);
+      if(h && m.stageIndex === h.stages.length-1) S.stats.rapineCompletate++;
+    }
+    if(m.wantedRisk) raiseWanted(m.wantedRisk);
+    log('Missione completata: "'+m.title+'". Guadagno '+fmtMoney(m.reward)+'.');
+    m.status='completata';
+  } else {
+    log('Missione fallita: "'+m.title+'".');
+    m.status='disponibile';
+    if(m.wantedRisk) raiseWanted(Math.max(1,m.wantedRisk-1));
+  }
+  achievementsCheck();
+  refreshHUD(); renderMissionsPanel(); saveGame();
+}
+
+function openHotwireMinigame(m){
+  const zoneStart = 30 + Math.random()*40;
+  const zoneWidth = Math.max(10, 26 - (m.tier||1)*5);
+  showModal(`
+    <h3>Scassinare l'auto</h3>
+    <p class="muted">Premi "Ferma!" quando il cursore è dentro la zona verde.</p>
+    <div class="minigame-track" id="mg-track">
+      <div class="minigame-zone" style="left:${zoneStart}%; width:${zoneWidth}%"></div>
+      <div class="minigame-cursor" id="mg-cursor" style="left:0%"></div>
+    </div>
+    <div class="row"><button class="btn primary" id="mg-stop">Ferma!</button></div>
+  `);
+  let pos=0, dir=1, running=true;
+  const cursor = document.getElementById('mg-cursor');
+  const iv = setInterval(()=>{
+    if(!running) return;
+    pos += dir*4;
+    if(pos>=100){ pos=100; dir=-1; }
+    if(pos<=0){ pos=0; dir=1; }
+    if(cursor) cursor.style.left = pos+'%';
+  }, 40);
+  document.getElementById('mg-stop').onclick = ()=>{
+    running=false; clearInterval(iv);
+    const success = pos >= zoneStart && pos <= zoneStart+zoneWidth;
+    closeModal();
+    if(success){
+      const veicolo = {nome: rngPick(Math.random, ['Berlina','Utilitaria','SUV','Furgone','Coupé']) , valore: 500 + (m.tier||1)*400};
+      S.player.inventario.veicoli.push(veicolo);
+      S.stats.furtiCompletati++;
+      resolveMissionOutcome(m, true);
+      toast('Auto rubata con successo: '+veicolo.nome);
+    } else {
+      toast('Hai fatto scattare l\'allarme!');
+      resolveMissionOutcome(m, false);
+    }
+  };
+}
+
+function resolveDialogueMission(m){
+  if(m.special==='corruzione'){
+    S.player.wanted = 0; stopWantedTicker(); refreshWantedMap();
+    log('L\'agente Bianchi ha ripulito la tua fedina per stasera.');
+  } else if(m.special==='aiutoSara'){
+    S.missions.storyFlags.aiutatoSara = true;
+    log('Hai aiutato Sara con la sua associazione di quartiere. Non tutti i soldi in città sono sporchi.');
+  }
+  addRelazione(m.giverId, 8);
+  resolveMissionOutcome(m, true);
+}
+
+/* ---- personaggi / storia ---- */
+
+function talkTo(charId){
+  const ch = CHARACTERS.find(c=>c.id===charId);
+  if(!ch) return;
+  if(ch.primario){
+    const idx = S.missions.storyProgress[charId] || 0;
+    const nodes = STORY[charId];
+    if(idx >= nodes.length){
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Non ho nulla per te ora. Torna quando avrai fatto qualcosa di grosso."</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      return;
+    }
+    const node = nodes[idx];
+    let html = '<h3>'+esc(ch.nome)+'</h3><p>'+esc(node.text)+'</p>';
+    if(node.choices.length===0){
+      html += '<button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>';
+    } else {
+      node.choices.forEach((c,i)=>{
+        html += '<button class="btn choice-btn" onclick="window.__malavita.pickStoryChoice(\''+charId+'\','+i+')">'+esc(c.label)+'</button>';
+      });
+    }
+    showModal(html);
+  } else {
+    const gigs = STORY_SECONDARY[charId];
+    if(!gigs){
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"'+esc(ch.bio)+'" Non ha nulla per te al momento.</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      return;
+    }
+    const done = S.missions.secondaryDone[charId];
+    if(done){
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Grazie ancora per l\'aiuto. Torna a trovarmi."</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      return;
+    }
+    const node = gigs[0];
+    let html = '<h3>'+esc(ch.nome)+'</h3><p>'+esc(node.text)+'</p>';
+    html += '<button class="btn primary choice-btn" onclick="window.__malavita.acceptSecondaryGig(\''+charId+'\')">Accetta</button>';
+    html += '<button class="btn ghost choice-btn" onclick="window.__malavita.closeModal()">Rifiuta</button>';
+    showModal(html);
+  }
+}
+
+function pickStoryChoice(charId, choiceIdx){
+  const idx = S.missions.storyProgress[charId] || 0;
+  const node = STORY[charId][idx];
+  const choice = node.choices[choiceIdx];
+  const eff = choice.effects || {};
+  if(eff.rep) Object.keys(eff.rep).forEach(f=>addRep(f, eff.rep[f]));
+  if(eff.rep2) Object.keys(eff.rep2).forEach(f=>addRep(f, eff.rep2[f]));
+  if(eff.relazione) addRelazione(charId, eff.relazione);
+  if(eff.relazioneChar) Object.keys(eff.relazioneChar).forEach(c=>addRelazione(c, eff.relazioneChar[c]));
+  if(eff.flag) S.missions.storyFlags[eff.flag] = true;
+  S.missions.storyProgress[charId] = (eff.next !== undefined) ? eff.next : idx+1;
+  addXp(15);
+  closeModal();
+  achievementsCheck();
+  renderCharactersPanel();
+  refreshHUD();
+  saveGame();
+  toast('La tua relazione con '+CHARACTERS.find(c=>c.id===charId).nome+' si evolve.');
+}
+
+function acceptSecondaryGig(charId){
+  const node = STORY_SECONDARY[charId][0];
+  S.missions.secondaryDone[charId] = true;
+  if(node.reward) S.player.money += node.reward;
+  addRelazione(charId, 12);
+  if(node.special==='corruzione'){ S.player.wanted=0; stopWantedTicker(); refreshWantedMap(); log('L\'agente Bianchi ti copre le spalle.'); }
+  if(node.special==='aiutoSara'){ S.missions.storyFlags.aiutatoSara = true; log('Hai dato una mano a Sara e alla sua causa.'); }
+  closeModal();
+  achievementsCheck();
+  renderCharactersPanel();
+  refreshHUD();
+  saveGame();
+}
+
+/* ---- finale ---- */
+
+function computeEnding(){
+  const rep = S.player.rep;
+  const top = Object.keys(rep).reduce((a,b)=> rep[a]>=rep[b]?a:b);
+  const flags = S.missions.storyFlags;
+  if(flags.aiutatoSara && rep.famiglia<40 && rep.cartello<40 && rep.sindacato<40){
+    return {id:'redenzione', titolo:'Redenzione', testo:'Hai voltato le spalle alla strada prima che fosse troppo tardi. In città si racconta ancora di te, ma con un tono diverso: quello di chi ce l\'ha fatta a uscirne.'};
+  }
+  if(rep[top] >= 100){
+    const f = FACTIONS.find(f=>f.id===top);
+    return {id:'impero_'+top, titolo:'Impero Criminale — '+f.nome, testo:'Il tuo nome è ormai sinonimo di potere in città. '+f.nome+' domina, e tu ne sei il volto più temuto e rispettato.'};
+  }
+  return {id:'aperto', titolo:'Ancora in Gioco', testo:'La tua storia in città non è ancora scritta del tutto. Le fazioni si muovono, e tu con loro. C\'è ancora molto da decidere.'};
+}
+
+function tryFinale(){
+  if(S.stats.missioniCompletate < 25){
+    toast('Serve più esperienza sulla strada prima della resa dei conti (25 missioni completate).');
+    return;
+  }
+  const ending = computeEnding();
+  S.missions.ending = ending.id;
+  showModal('<h3>'+esc(ending.titolo)+'</h3><p>'+esc(ending.testo)+'</p><p class="muted">Puoi continuare a giocare liberamente anche dopo questo momento.</p><button class="btn primary" onclick="window.__malavita.closeModal()">Continua</button>');
+  achievementsCheck();
+  saveGame();
+}
+
+/* ================= NEGOZI ================= */
+
+function openShop(poi){
+  markVisited('negozio');
+  if(poi.negozioTipo==='armeria'){
+    let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Armeria</p>';
+    WEAPONS.forEach(w=>{
+      const owned = S.player.inventario.armi.includes(w.id);
+      html += '<div class="shop-item"><b>'+esc(w.nome)+'</b> — potenza '+w.potenza+' — '+(owned?'<span class="muted">posseduta</span>':fmtMoney(w.prezzo))+
+        (owned?'':' <button class="btn tiny" onclick="window.__malavita.buyWeapon(\''+w.id+'\')">Compra</button>')+'</div>';
+    });
+    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    showModal(html);
+  } else if(poi.negozioTipo==='ricettatore'){
+    let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Vendi qui i veicoli "recuperati".</p>';
+    if(S.player.inventario.veicoli.length===0) html += '<p class="muted">Non hai veicoli da vendere.</p>';
+    S.player.inventario.veicoli.forEach((v,i)=>{
+      html += '<div class="shop-item">'+esc(v.nome)+' — valore '+fmtMoney(v.valore)+' <button class="btn tiny" onclick="window.__malavita.sellVehicle('+i+')">Vendi</button></div>';
+    });
+    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    showModal(html);
+  } else if(poi.negozioTipo==='meccanico'){
+    let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Riparazione e garage.</p>';
+    html += '<div class="shop-item">Veicoli posseduti: '+S.player.inventario.veicoli.length+'</div>';
+    html += '<button class="btn tiny primary" onclick="window.__malavita.healUp(0)">Ripara mezzo (gratis)</button>';
+    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    showModal(html);
+  } else if(poi.negozioTipo==='bar'){
+    let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un drink, due chiacchiere.</p>';
+    html += '<button class="btn tiny primary" onclick="window.__malavita.healUp(50)">Riposa e cura ('+fmtMoney(50)+')</button>';
+    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    showModal(html);
+  }
+}
+function buyWeapon(id){
+  const w = WEAPONS.find(w=>w.id===id);
+  if(!w || S.player.money<w.prezzo) { toast('Non hai abbastanza denaro.'); return; }
+  S.player.money -= w.prezzo;
+  S.player.inventario.armi.push(id);
+  toast('Hai comprato: '+w.nome);
+  achievementsCheck(); refreshHUD(); saveGame(); closeModal();
+}
+function sellVehicle(i){
+  const v = S.player.inventario.veicoli[i];
+  if(!v) return;
+  S.player.money += v.valore;
+  S.player.inventario.veicoli.splice(i,1);
+  toast('Venduto: '+v.nome+' per '+fmtMoney(v.valore));
+  refreshHUD(); saveGame(); closeModal();
+}
+function healUp(cost){
+  if(cost>0){
+    if(S.player.money<cost){ toast('Non hai abbastanza denaro.'); return; }
+    S.player.money -= cost;
+  }
+  S.player.health = S.player.maxHealth;
+  toast('Salute ripristinata.');
+  refreshHUD(); saveGame(); closeModal();
+}
+
+/* ================= MODALE / TOAST ================= */
+
+function showModal(html){
+  let ov = document.getElementById('modal-overlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id='modal-overlay'; ov.className='modal-overlay';
+    ov.onclick = (e)=>{ if(e.target===ov) closeModal(); };
+    document.body.appendChild(ov);
+  }
+  ov.innerHTML = '<div class="modal-box">'+html+'</div>';
+  ov.style.display='flex';
+}
+function closeModal(){
+  const ov = document.getElementById('modal-overlay');
+  if(ov) ov.style.display='none';
+}
+
+/* ================= UI: SCHERMATE INIZIALI ================= */
+
+function renderBoot(){
+  const save = hasSave();
+  document.getElementById('app').innerHTML = `
+    <div class="boot">
+      <h1>MALAVITA</h1>
+      <p class="tagline">La tua città, il tuo impero.</p>
+      <div class="disclaimer">
+        <strong>Nota:</strong> Malavita è un gioco di finzione a scopo di intrattenimento, ispirato ai classici open-world criminali. Spaccio, furti e rapine sono meccaniche di gioco astratte, senza alcuna istruzione reale su attività illegali. La tua posizione geografica resta sempre ed esclusivamente nel tuo browser: non viene mai inviata a nessun server nostro. Le mappe sono fornite da OpenStreetMap e richiedono una connessione internet per caricare le tessere; il resto del gioco funziona offline con salvataggio automatico locale.
+      </div>
+      <div class="boot-actions">
+        <button class="btn primary" id="btn-new">Nuova Partita</button>
+        ${save ? '<button class="btn" id="btn-continue">Continua Partita</button>' : ''}
+        <button class="btn ghost" id="btn-import">Importa Salvataggio</button>
+        <input type="file" id="import-file" accept="application/json" style="display:none">
+      </div>
+      <p class="muted small">${save ? 'Hai già una partita salvata su questo browser.' : ''}</p>
+    </div>
+  `;
+  document.getElementById('btn-new').onclick = ()=>{ S = newGame(); renderCreation(); };
+  if(save) document.getElementById('btn-continue').onclick = ()=>{ S = loadGame(); resumeGame(); };
+  document.getElementById('btn-import').onclick = ()=> document.getElementById('import-file').click();
+  document.getElementById('import-file').onchange = (e)=>{
+    const f = e.target.files[0]; if(!f) return;
+    const reader = new FileReader();
+    reader.onload = ()=>{ try{ S = JSON.parse(reader.result); resumeGame(); }catch(err){ alert('File non valido.'); } };
+    reader.readAsText(f);
+  };
+}
+
+function resumeGame(){
+  if(!S.world.pos){ renderCreation(); return; }
+  initHub();
+}
+
+const ARCHETYPES = [
+  {id:'debuttante', nome:'Il Debuttante', desc:'Nessun vantaggio, nessuno svantaggio. Un foglio bianco.', bonus:{}},
+  {id:'ladro', nome:'Il Ladro', desc:"Più bravo a rubare veicoli, parte con qualche soldo in meno.", bonus:{money:-100}},
+  {id:'corriere', nome:'Il Corriere', desc:'Conosce già alcune strade secondarie. Parte con più contanti.', bonus:{money:300}},
+  {id:'fixer', nome:'Il Fixer', desc:'Ottimi contatti fin da subito: reputazione iniziale con tutte le fazioni.', bonus:{rep:5}}
+];
+const AVATARS = ['🧍','🧑','👩','🧔','🧑‍🦱','👨‍🦲','🧑‍🦰','👱'];
+
+function renderCreation(){
+  document.getElementById('app').innerHTML = `
+    <div class="wizard">
+      <div class="card">
+        <h2>Crea il tuo personaggio</h2>
+        <label>Nome<br><input id="c-name" type="text" maxlength="24" placeholder="Come ti chiami per strada?"></label>
+      </div>
+      <div class="card">
+        <h3>Avatar</h3>
+        <div class="avatar-grid" id="avatar-grid"></div>
+      </div>
+      <div class="card">
+        <h3>Passato</h3>
+        <div class="archetype-grid" id="arche-grid"></div>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="c-next">Continua</button>
+      </div>
+    </div>
+  `;
+  const ag = document.getElementById('avatar-grid');
+  let chosenAvatar = AVATARS[0], chosenArche = ARCHETYPES[0].id;
+  AVATARS.forEach(a=>{
+    const d = document.createElement('div');
+    d.className='pickable avatar-opt'+(a===chosenAvatar?' selected':'');
+    d.textContent = a;
+    d.onclick = ()=>{ chosenAvatar=a; [...ag.children].forEach(c=>c.classList.remove('selected')); d.classList.add('selected'); };
+    ag.appendChild(d);
+  });
+  const arg = document.getElementById('arche-grid');
+  ARCHETYPES.forEach(a=>{
+    const d = document.createElement('div');
+    d.className='pickable'+(a.id===chosenArche?' selected':'');
+    d.innerHTML = '<h3>'+esc(a.nome)+'</h3><p>'+esc(a.desc)+'</p>';
+    d.onclick = ()=>{ chosenArche=a.id; [...arg.children].forEach(c=>c.classList.remove('selected')); d.classList.add('selected'); };
+    arg.appendChild(d);
+  });
+  document.getElementById('c-next').onclick = ()=>{
+    const name = document.getElementById('c-name').value.trim() || 'Senza Nome';
+    S.player.name = name;
+    S.player.avatarEmoji = chosenAvatar;
+    S.player.archetype = chosenArche;
+    const arche = ARCHETYPES.find(a=>a.id===chosenArche);
+    if(arche.bonus.money) S.player.money += arche.bonus.money;
+    if(arche.bonus.rep) FACTIONS.forEach(f=> addRep(f.id, arche.bonus.rep));
+    renderLocationSetup();
+  };
+}
+
+function renderLocationSetup(){
+  document.getElementById('app').innerHTML = `
+    <div class="wizard">
+      <div class="card">
+        <h2>Scegli la tua città</h2>
+        <p class="muted">Malavita genera il mondo di gioco intorno a un punto reale sulla mappa: la tua zona diventerà il tuo territorio, con covi, personaggi e negozi generati nei dintorni.</p>
+        <div class="boot-actions" style="margin:0">
+          <button class="btn primary" id="loc-gps">📍 Usa la mia posizione (Modalità Reale)</button>
+          <button class="btn" id="loc-demo">🏙️ Modalità Demo (Roma, nessun GPS)</button>
+        </div>
+        <div style="margin-top:1.2em">
+          <label>Oppure cerca un indirizzo o una città (Modalità Simulata)<br>
+          <input id="loc-search" type="text" placeholder="Es. Milano, Piazza Duomo"></label>
+          <button class="btn" id="loc-search-btn">Cerca</button>
+          <p class="muted small" id="loc-status"></p>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('loc-gps').onclick = ()=>{
+    if(!navigator.geolocation){ alert('Geolocalizzazione non supportata da questo browser.'); return; }
+    document.getElementById('loc-status').textContent = 'Rilevamento posizione in corso...';
+    navigator.geolocation.getCurrentPosition(pos=>{
+      finishLocationSetup({lat:pos.coords.latitude, lng:pos.coords.longitude, label:'La tua posizione'}, 'reale');
+    }, err=>{
+      document.getElementById('loc-status').textContent = 'Impossibile ottenere la posizione ('+err.message+'). Prova la modalità demo o la ricerca.';
+    }, {enableHighAccuracy:true, timeout:10000});
+  };
+  document.getElementById('loc-demo').onclick = ()=>{
+    finishLocationSetup({lat:41.9028, lng:12.4964, label:'Roma (demo)'}, 'simulata');
+  };
+  document.getElementById('loc-search-btn').onclick = async ()=>{
+    const q = document.getElementById('loc-search').value.trim();
+    if(!q) return;
+    document.getElementById('loc-status').textContent = 'Ricerca in corso...';
+    try{
+      const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q));
+      const data = await res.json();
+      if(data && data[0]){
+        finishLocationSetup({lat:parseFloat(data[0].lat), lng:parseFloat(data[0].lon), label:data[0].display_name}, 'simulata');
+      } else {
+        document.getElementById('loc-status').textContent = 'Nessun risultato trovato. Prova con un altro indirizzo.';
+      }
+    }catch(e){
+      document.getElementById('loc-status').textContent = 'Ricerca non disponibile (serve connessione internet).';
+    }
+  };
+}
+
+function finishLocationSetup(home, mode){
+  S.world.homeBase = home;
+  S.world.mode = mode;
+  S.world.pos = {lat:home.lat, lng:home.lng};
+  S.world.seed = seedFromLatLng(home.lat, home.lng);
+  const rng = mulberry32(S.world.seed);
+  S.world.pois = genPOIs(rng, home);
+  S.missions.pool = genMissionPool(rng, S.world.pois)
+    .concat(genHeistMissions(S.world.pois, rng))
+    .concat(genDialogueMissions(S.world.pois, rng));
+  log('Sei arrivato a '+home.label+'. '+S.missions.pool.length+' missioni ti aspettano in città.');
+  saveGame();
+  initHub();
+}
+
+/* ================= HUB ================= */
+
+function initHub(){
+  document.getElementById('app').innerHTML = `
+    <div class="hub-top" id="hub-top"></div>
+    <div class="hub-body">
+      <div class="sidebar">
+        <div class="tabs" id="tabs">
+          <button class="tab" data-tab="missioni">Missioni</button>
+          <button class="tab" data-tab="personaggi">Personaggi</button>
+          <button class="tab" data-tab="inventario">Inventario</button>
+          <button class="tab" data-tab="traguardi">Traguardi</button>
+          <button class="tab" data-tab="storia">Storia</button>
+          <button class="tab" data-tab="log">Registro</button>
+        </div>
+        <div class="tab-content" id="tab-content"></div>
+      </div>
+      <div id="map"></div>
+    </div>
+  `;
+  map = L.map('map').setView([S.world.pos.lat, S.world.pos.lng], 16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  playerMarker = L.marker([S.world.pos.lat, S.world.pos.lng], {icon: emojiIcon(S.player.avatarEmoji, 'player-icon')}).addTo(map);
+  poiLayer = L.layerGroup().addTo(map);
+  renderPOIMarkers();
+  if(S.world.mode==='reale'){
+    startWatch();
+  } else {
+    map.on('click', onMapClickSim);
+  }
+  bindTabs();
+  setActiveTab('missioni');
+  refreshHUD();
+  if(S.player.wanted>0){ startWantedTicker(); refreshWantedMap(); }
+}
+
+function emojiIcon(emoji, cls){
+  return L.divIcon({html:'<div class="'+(cls||'poi-icon')+'">'+emoji+'</div>', className:'', iconSize:[28,28]});
+}
+const POI_EMOJI = {nascondiglio:'🕳️', territorio:'🚩', personaggio:'👤', negozio:'🏪'};
+
+function renderPOIMarkers(){
+  poiLayer.clearLayers();
+  S.world.pois.forEach(p=>{
+    let emoji = POI_EMOJI[p.type] || '📍';
+    if(p.type==='personaggio'){
+      const ch = CHARACTERS.find(c=>c.id===p.characterId);
+      if(ch) emoji = ch.emoji;
+    }
+    const marker = L.marker([p.lat, p.lng], {icon: emojiIcon(emoji)}).addTo(poiLayer);
+    marker.bindTooltip(p.name, {direction:'top'});
+    marker.on('click', ()=> onPoiClick(p));
+  });
+}
+
+function onPoiClick(poi){
+  if(poi.type==='negozio'){ openShop(poi); return; }
+  if(poi.type==='personaggio'){ talkTo(poi.characterId); return; }
+  if(poi.type==='nascondiglio'){ toast(poi.name+' — un buon posto per sparire se hai la polizia alle calcagna.'); markVisited('nascondiglio'); return; }
+  if(poi.type==='territorio'){
+    const f = FACTIONS.find(f=>f.id===poi.factionId);
+    toast(poi.name+' — reputazione attuale: '+(S.player.rep[poi.factionId]||0));
+    markVisited('territorio');
+  }
+}
+
+function onMapClickSim(e){
+  S.world.pos = {lat:e.latlng.lat, lng:e.latlng.lng};
+  playerMarker.setLatLng([S.world.pos.lat, S.world.pos.lng]);
+  saveGame();
+}
+
+function startWatch(){
+  S.world.watchId = navigator.geolocation.watchPosition(pos=>{
+    S.world.pos = {lat:pos.coords.latitude, lng:pos.coords.longitude};
+    if(playerMarker) playerMarker.setLatLng([S.world.pos.lat, S.world.pos.lng]);
+    saveGame();
+  }, ()=>{}, {enableHighAccuracy:true, maximumAge:5000});
+}
+
+function refreshWantedMap(){
+  if(policeCircle){ map.removeLayer(policeCircle); policeCircle=null; }
+  if(S.player.wanted>0 && S.world.policePos){
+    const safeDist = 150 + S.player.wanted*120;
+    policeCircle = L.circle([S.world.policePos.lat, S.world.policePos.lng], {radius:safeDist, color:'#d1453b', fillOpacity:0.05}).addTo(map);
+  }
+}
+
+function bindTabs(){
+  document.querySelectorAll('.tab').forEach(btn=>{
+    btn.onclick = ()=> setActiveTab(btn.dataset.tab);
+  });
+}
+function setActiveTab(tab){
+  activeTab = tab;
+  document.querySelectorAll('.tab').forEach(b=> b.classList.toggle('active', b.dataset.tab===tab));
+  if(tab==='missioni') renderMissionsPanel();
+  else if(tab==='personaggi') renderCharactersPanel();
+  else if(tab==='inventario') renderInventoryPanel();
+  else if(tab==='traguardi') renderAchievementsPanel();
+  else if(tab==='storia') renderStoryPanel();
+  else if(tab==='log') renderLogPanel();
+}
+
+/* ---- pannelli ---- */
+
+const CATEGORY_LABEL = {consegna:'Consegna', spaccio:'Piazza', furto:'Furto Auto', fuga:'Fuga', rapina:'Rapina', dialogo:'Dialogo'};
+
+function renderMissionsPanel(){
+  if(activeTab!=='missioni') return;
+  const el = document.getElementById('tab-content');
+  const available = S.missions.pool.filter(m=> !S.missions.completedIds.includes(m.id) && S.player.level>=m.minLevel);
+  const grouped = {};
+  available.slice(0,60).forEach(m=>{ (grouped[m.category]=grouped[m.category]||[]).push(m); });
+  let html = '<p class="muted small">'+available.length+' missioni disponibili su '+S.missions.pool.length+' totali generate per la tua zona.</p>';
+  Object.keys(grouped).forEach(cat=>{
+    html += '<h4 style="color:var(--text-dim); font-size:0.8em; margin-top:0.8em;">'+CATEGORY_LABEL[cat]+'</h4>';
+    grouped[cat].slice(0,8).forEach(m=>{
+      const isActive = S.missions.activeId===m.id;
+      html += '<div class="mission-item'+(isActive?' active':'')+'">'+
+        '<h4>'+esc(m.title)+'</h4><p>'+esc(m.desc)+'</p>'+
+        '<span class="tag">Ricompensa '+fmtMoney(m.reward)+'</span>'+
+        (m.wantedRisk?'<span class="tag">Rischio ★'+m.wantedRisk+'</span>':'')+
+        '<div class="row" style="margin-top:0.4em">'+
+        (isActive ? '<button class="btn tiny primary" onclick="window.__malavita.attemptActiveMission()">Agisci qui</button>' : '<button class="btn tiny" onclick="window.__malavita.setActiveMission(\''+m.id+'\')">Avvia</button>')+
+        '</div></div>';
+    });
+  });
+  el.innerHTML = html || '<p class="muted">Nessuna missione disponibile al tuo livello attuale. Sali di livello per sbloccarne altre.</p>';
+}
+
+function renderCharactersPanel(){
+  if(activeTab!=='personaggi') return;
+  const el = document.getElementById('tab-content');
+  let html = '';
+  CHARACTERS.forEach(c=>{
+    const rel = S.player.relazioni[c.id]||0;
+    html += '<div class="char-item"><h4>'+c.emoji+' '+esc(c.nome)+(c.primario?' <span class="tag">Boss</span>':'')+'</h4>'+
+      '<p>'+esc(c.bio)+'</p>'+
+      '<div class="relbar-wrap"><div class="relbar" style="width:'+Math.max(0,(rel+100)/2)+'%"></div></div>'+
+      '<div class="row"><button class="btn tiny" onclick="window.__malavita.talkTo(\''+c.id+'\')">Parla</button></div></div>';
+  });
+  el.innerHTML = html;
+}
+
+function renderInventoryPanel(){
+  if(activeTab!=='inventario') return;
+  const el = document.getElementById('tab-content');
+  let html = '<h4>Armi</h4>';
+  WEAPONS.forEach(w=>{
+    if(S.player.inventario.armi.includes(w.id)) html += '<span class="tag">'+w.nome+'</span> ';
+  });
+  html += '<h4 style="margin-top:1em">Veicoli ('+S.player.inventario.veicoli.length+')</h4>';
+  if(S.player.inventario.veicoli.length===0) html += '<p class="muted">Nessun veicolo posseduto. Ruba qualcosa di bello.</p>';
+  S.player.inventario.veicoli.forEach(v=>{ html += '<div class="shop-item">'+esc(v.nome)+' — '+fmtMoney(v.valore)+'</div>'; });
+  el.innerHTML = html;
+}
+
+function renderAchievementsPanel(){
+  if(activeTab!=='traguardi') return;
+  const el = document.getElementById('tab-content');
+  let html = '<p class="muted small">'+S.achievements.unlocked.length+' / '+ACHIEVEMENTS.length+' sbloccati</p>';
+  ACHIEVEMENTS.forEach(a=>{
+    const un = S.achievements.unlocked.includes(a.id);
+    html += '<div class="ach-item '+(un?'unlocked':'locked')+'"><h4 style="margin:0;font-size:0.9em;color:'+(un?'var(--good)':'var(--text-dim)')+'">'+(un?'🏆':'🔒')+' '+esc(a.nome)+'</h4><p class="small" style="margin:0.2em 0 0">'+esc(a.desc)+'</p></div>';
+  });
+  el.innerHTML = html;
+}
+
+function renderStoryPanel(){
+  if(activeTab!=='storia') return;
+  const el = document.getElementById('tab-content');
+  let html = '<p class="muted small">Le tre fazioni si contendono la città. Le tue scelte con i boss determinano il finale.</p>';
+  FACTIONS.forEach(f=>{
+    const rep = S.player.rep[f.id]||0;
+    html += '<div class="char-item"><h4 style="color:'+f.colore+'">'+esc(f.nome)+'</h4><p>'+esc(f.desc)+'</p>'+
+      '<div class="repbar"><div style="width:'+Math.max(0,Math.min(100,(rep+100)/3))+'%"></div></div>'+
+      '<p class="small muted">Reputazione: '+rep+'</p></div>';
+  });
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn primary" onclick="window.__malavita.tryFinale()">Tenta la Resa dei Conti</button></div>';
+  if(S.missions.ending) html += '<p class="small muted" style="margin-top:0.5em">Finale raggiunto: '+esc(S.missions.ending)+'</p>';
+  el.innerHTML = html;
+}
+
+function renderLogPanel(){
+  if(activeTab!=='log') return;
+  const el = document.getElementById('tab-content');
+  let html = '<div id="log-panel">';
+  S.log.slice(-60).forEach(e=>{
+    html += '<div class="entry">'+esc(e.msg)+'</div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function refreshHUD(){
+  const el = document.getElementById('hub-top');
+  if(!el) return;
+  const stars = '★★★★★'.split('').map((s,i)=> i<S.player.wanted ? s : '<span class="off">'+s+'</span>').join('');
+  el.innerHTML = `
+    <div class="row">
+      <div class="stat"><span class="lbl">GIOCATORE</span><br>${S.player.avatarEmoji} ${esc(S.player.name)} (Lv.${S.player.level})</div>
+      <div class="stat"><span class="lbl">SOLDI</span><br>${fmtMoney(S.player.money)}</div>
+      <div class="stat"><span class="lbl">SALUTE</span><br><div class="healthbar"><div style="width:${Math.max(0,S.player.health)}%"></div></div></div>
+      <div class="stat"><span class="lbl">RICERCATO</span><br><span class="stars">${stars}</span></div>
+    </div>
+    <div class="row">
+      <button class="btn tiny" id="hud-save">Salva</button>
+      <button class="btn tiny" id="hud-export">Esporta</button>
+      <button class="btn tiny danger" id="hud-reset">Nuova Partita</button>
+    </div>
+  `;
+  document.getElementById('hud-save').onclick = ()=>{ saveGame(); toast('Partita salvata.'); };
+  document.getElementById('hud-export').onclick = exportSave;
+  document.getElementById('hud-reset').onclick = ()=>{
+    if(confirm('Sei sicuro di voler abbandonare la partita attuale e iniziarne una nuova? Il salvataggio corrente verrà sovrascritto solo se salvi.')){
+      if(S.world.watchId) navigator.geolocation.clearWatch(S.world.watchId);
+      stopWantedTicker();
+      S = newGame();
+      renderCreation();
+    }
+  };
+}
+
+function exportSave(){
+  const copy = JSON.parse(JSON.stringify(S));
+  copy.world.watchId = null;
+  const blob = new Blob([JSON.stringify(copy, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'malavita-salvataggio.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ================= AVVIO ================= */
+
+window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale };
+
+renderBoot();
+
+})();
+</script>
+</body>
+</html>
