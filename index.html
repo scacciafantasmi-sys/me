@@ -74,6 +74,11 @@
     margin: 0; padding: 0;
     background: var(--bg); color: var(--text);
     font-family: var(--font-body);
+    /* Rete di sicurezza contro qualunque overflow orizzontale: un giocatore ha segnalato una fascia nera
+       comparsa sul bordo destro dopo un po' di gioco (probabile scroll orizzontale che rivela lo sfondo
+       della pagina, mai riprodotto sui motori disponibili per testare qui) — a prescindere dalla causa
+       esatta, il contenuto non deve mai poter scorrere in orizzontale su questo layout a colonna singola. */
+    overflow-x: hidden;
   }
   body {
     padding: 1.75rem 1rem 4rem;
@@ -81,7 +86,9 @@
       radial-gradient(1100px 620px at 12% -8%, color-mix(in srgb, var(--accent) 20%, transparent) 0%, transparent 60%),
       radial-gradient(900px 560px at 100% 0%, color-mix(in srgb, var(--accent-2) 14%, transparent) 0%, transparent 55%),
       linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 46%);
-    background-attachment: fixed;
+    /* background-attachment:fixed rimosso: su iOS Safari è una combinazione storicamente instabile
+       insieme al backdrop-filter usato dai pannelli in vetro, e qui è puramente decorativo (nessuna
+       perdita funzionale a rimuoverlo). */
   }
   ::selection { background: var(--accent-soft); }
   /* Scrollbar coerente col resto dell'interfaccia (solo motori WebKit/Blink: nessun impatto altrove). */
@@ -853,6 +860,17 @@
     { id: "ora", name: "Ora!",                        short: "ORA",   color: "#e0883a", coalition: "opposizione", familyId: "movimentista",
       leader: "Coordinamento nazionale", famiglia: "Civico e Riformista", corrente: "Lista civica nazionale, ricambio generazionale, partecipazione diretta" }
   ];
+  // Stessi numeri dell'oggetto "parties" di freshState() qui sotto (agosto 2026, dati reali di partenza):
+  // duplicati qui a parte perché freshState() è invocata una sola volta, alla creazione della partita, e
+  // non è più consultabile più avanti nel tempo per recuperare "da dove erano partiti" i partiti veri.
+  // Usato solo come ancora di partenza per state.partyBaselines (vedi la deriva settimanale dei sondaggi
+  // CPU): senza un vero equilibrio a cui tendere, un partito reale come la Lega poteva vagare senza meta
+  // fino al minimo consentito e restarci per sempre, un errore segnalato da un giocatore.
+  var PARTY_BASELINE_SEED = {
+    fdi: 24.0, lega: 5.9, fi: 7.5, fn: 7.8, pd: 22.0, m5s: 13.0, avs: 6.8,
+    noimoderati: 1.5, azione: 3.4, italiaviva: 3.0, piueuropa: 1.5, poterealpopolo: 1.0, svp: 0.3, sudchiamanord: 0.6,
+    liberaldemocratico: 0.7, ora: 1.5, rifondazionecomunista: 0.5
+  };
   // Nota di ordinamento: questo blocco deve stare PRIMA di "var state = load() || freshState();" più
   // sotto nel file, perché load() chiama initPartyRelations per le vecchie partite salvate — se questi
   // var fossero dichiarati dopo quella riga, al momento della chiamata sarebbero ancora undefined
@@ -11873,26 +11891,59 @@
     if (p.sondaggiHistory.length > 12) p.sondaggiHistory.shift();
     if (!p.peakSondaggi || p.sondaggi > p.peakSondaggi) p.peakSondaggi = Math.round(p.sondaggi * 10) / 10;
 
-    // established parties: random walk, then renormalize so total + player + indecisi = 100,
-    // pulling disproportionately from the player's ideological rival. L'ampiezza del movimento
-    // settimanale è moderata di proposito (non deve sembrare un sondaggio elettorale in tempo reale),
-    // ma abbastanza percepibile da rendere i partiti vivi settimana dopo settimana. Stesso principio del
-    // giocatore: i partiti della maggioranza di governo ricevono credito/colpa diretti dall'andamento del
-    // paese, gli altri un effetto opposto più tenue — la rinormalizzazione subito sotto mantiene i totali
-    // coerenti, quindi qui basta spostare le proporzioni relative nella direzione giusta.
+    // established parties: pull verso un vero equilibrio di lungo periodo (state.partyBaselines), non più
+    // una pura passeggiata casuale senza meta. PRIMA ogni partito CPU si muoveva di puro rumore
+    // (±0.275/settimana) senza alcuna forza di richiamo: su una partita lunga, il rumore lo faceva prima
+    // o poi toccare il minimo assoluto (0.3%, vedi Math.max sotto), e una volta lì la rinormalizzazione
+    // (che scala TUTTI i partiti quando il totale deve restringersi, vedi scale2 poco più sotto) lo
+    // ributtava giù ogni volta appena provava a risalire di un soffio — un partito vero come la Lega
+    // poteva restare bloccato esattamente a 0.3% per centinaia di settimane, segnalato da un giocatore.
+    // Ora ogni partito CPU tende verso il proprio "centro di gravità" (l'equilibrio reale di partenza —
+    // vedi PARTY_BASELINE_SEED — per i 17 partiti reali del roster iniziale, il valore alla propria
+    // nascita per un partito dinamico nato più avanti), con un richiamo del 12% della distanza a
+    // settimana: chi scivola sotto il proprio equilibrio ora risale da solo, chi sale sopra si raffredda
+    // da solo, esattamente come un vero partito oscilla intorno al proprio consenso di fondo invece di
+    // vagare senza meta. Il rumore settimanale resta (la vita politica non è mai piatta) ma dimezzato
+    // (0.55 -> 0.28) per essere più realistico: un partito reale non perde/guadagna 2-3 punti in 10-20
+    // settimane senza un vero motivo (evento, scelta, congiuntura), solo oscillazioni più contenute.
+    // Il centro di gravità stesso si sposta, ma pianissimo (15% del già piccolo bias di governo/clima a
+    // settimana): un partito che governa bene o male per anni interi vede lentamente cambiare il proprio
+    // equilibrio reale, non una singola settimana buona o cattiva.
     var rivalId = familyById(p.family).rival;
     var others = activeParties();
     var govMemberIdsForGrowth = (state.govEntity && state.govEntity.memberIds) || [];
+    if (!state.partyBaselines) state.partyBaselines = {};
     others.forEach(function (party) {
+      if (state.partyBaselines[party.id] === undefined) {
+        state.partyBaselines[party.id] = PARTY_BASELINE_SEED[party.id] !== undefined ? PARTY_BASELINE_SEED[party.id] : state.parties[party.id];
+      }
       var isGovMemberForGrowth = govMemberIdsForGrowth.indexOf(party.id) !== -1;
       var partyCountryBias = clamp(countryTrendDelta * (isGovMemberForGrowth ? 0.25 : -0.1), isGovMemberForGrowth ? -1 : -0.4, isGovMemberForGrowth ? 1 : 0.4);
-      state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (Math.random() - 0.5) * 0.55 + partyCountryBias);
+      state.partyBaselines[party.id] = clamp(state.partyBaselines[party.id] + partyCountryBias * 0.15, 0.3, 40);
+      var baseline = state.partyBaselines[party.id];
+      var noise = (Math.random() - 0.5) * 0.28;
+      var pull = (baseline - state.parties[party.id]) * 0.12;
+      state.parties[party.id] = Math.max(0.3, state.parties[party.id] + noise + pull);
     });
     var totalOthers = others.reduce(function (s, party) { return s + state.parties[party.id]; }, 0);
     var targetOthers = clamp(100 - p.sondaggi - state.indecisi, 20, 99);
     var deficit = totalOthers - targetOthers;
     if (deficit !== 0) {
-      var rivalShare = deficit > 0 ? Math.min(state.parties[rivalId] - 0.3, deficit * 0.6) : Math.max(deficit * 0.3, -(50 - state.parties[rivalId]));
+      // Il rivale ideologico del giocatore assorbe la crescita del giocatore più degli altri (narrativamente
+      // corretto: chi cresce, cresce soprattutto a scapito di chi gli è più direttamente contrapposto), ma
+      // PRIMA non aveva alcun limite reale — poteva essere prosciugato fin quasi al pavimento (0.3%) in UNA
+      // sola settimana (fino al 60% del deficit), e se il giocatore restava grande per molte settimane di
+      // fila ci restava bloccato per centinaia di settimane, perché ogni settimana veniva ri-schiacciato
+      // giù prima ancora che il richiamo verso il proprio equilibrio (vedi "pull" sopra) potesse rialzarlo
+      // — segnalato da un giocatore su un salvataggio dove un partito reale come Futuro Nazionale restava
+      // fermo a 0.3% per centinaia di settimane consecutive. Ora il rivale non può mai essere spremuto sotto
+      // il 35% del proprio equilibrio reale in un colpo solo, e la quota massima prelevabile in una singola
+      // settimana scende dal 60% al 40% del deficit: continua a perdere più degli altri, ma con un pavimento
+      // vero che lascia sempre spazio al richiamo verso l'equilibrio per farlo risalire tra un'ondata di
+      // crescita del giocatore e l'altra, invece di restarci bloccato per sempre.
+      var rivalBaseline = state.partyBaselines[rivalId] !== undefined ? state.partyBaselines[rivalId] : (PARTY_BASELINE_SEED[rivalId] !== undefined ? PARTY_BASELINE_SEED[rivalId] : state.parties[rivalId]);
+      var rivalProtectedFloor = Math.max(0.3, rivalBaseline * 0.35);
+      var rivalShare = deficit > 0 ? Math.min(state.parties[rivalId] - rivalProtectedFloor, deficit * 0.4) : Math.max(deficit * 0.3, -(50 - state.parties[rivalId]));
       rivalShare = deficit > 0 ? Math.max(0, rivalShare) : Math.min(0, rivalShare);
       state.parties[rivalId] -= rivalShare;
       var remaining = deficit - rivalShare;
@@ -11901,6 +11952,21 @@
       var scale2 = restTotal > 0 ? (restTotal - remaining) / restTotal : 1;
       others.forEach(function (party) {
         if (party.id !== rivalId) state.parties[party.id] = Math.max(0.3, state.parties[party.id] * scale2);
+      });
+      // Questa compressione è MOLTIPLICATIVA (scala tutti allo stesso modo): su un partito già piccolo di
+      // suo (es. un partito regionale con equilibrio all'1-2%) il richiamo verso l'equilibrio applicato
+      // sopra, PRIMA di questa compressione, non basta da solo a compensare settimane di fila di scale2<1
+      // (che il giocatore in crescita costante produce quasi ogni settimana) — restava comunque bloccato
+      // al pavimento per centinaia di settimane, segnalato da un giocatore su un partito come Noi Moderati.
+      // Un secondo richiamo, più leggero (6% della distanza), applicato qui — DOPO la compressione, non
+      // prima — assicura che l'ultima parola di ogni settimana sia sempre "torna verso il tuo equilibrio",
+      // mai "vieni schiacciato": lo scostamento dal totale che questo introduce è minimo e si riassesta da
+      // solo al giro successivo, esattamente come già tollerato altrove in questo calcolo.
+      others.forEach(function (party) {
+        if (party.id === rivalId) return;
+        var partyBaseline = state.partyBaselines[party.id];
+        if (partyBaseline === undefined) return;
+        state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (partyBaseline - state.parties[party.id]) * 0.06);
       });
     }
 
@@ -17098,7 +17164,7 @@
         state.phase = "result";
         save();
       } else {
-        app.innerHTML = renderQuestionTimeScene() + renderPageNav();
+        app.innerHTML = renderPollGrid(state.prevSnapshot) + renderQuestionTimeScene() + renderPageNav();
         bindPageNavDrawer(function () {
           var qtAuto2 = state.qtScene;
           var autoChoiceList2 = qtAuto2.playerTurn.mode === "answer" ? qtAuto2.playerTurn.choices : null;
@@ -17164,7 +17230,7 @@
         state.phase = "result";
         save();
       } else {
-        app.innerHTML = renderQtManualScene() + renderPageNav();
+        app.innerHTML = renderPollGrid(state.prevSnapshot) + renderQtManualScene() + renderPageNav();
         bindPageNavDrawer(function () {
           var qtmAutoChoice2 = qtm.choices[Math.floor(Math.random() * qtm.choices.length)];
           var qtmAutoDossier2 = { title: "Question Time — " + qtm.noun, cat: "Opposizione" };
@@ -17193,7 +17259,7 @@
     // p.playerIsLeader per scattare, quindi qui non serve un ramo di auto-play per lo sfiduciato — se il
     // giocatore non è più leader, questa scena non si genera affatto).
     if (state.phase === "leader_interview_scene") {
-      app.innerHTML = renderLeaderInterviewScene() + renderPageNav();
+      app.innerHTML = renderPollGrid(state.prevSnapshot) + renderLeaderInterviewScene() + renderPageNav();
       bindPageNavDrawer(function () {
         state.leaderInterview = null;
         state.currentDossierId = null;
@@ -17230,7 +17296,7 @@
     // viene anche pubblicato come una vera dichiarazione pubblica (pushStatement), visibile nel registro
     // Dichiarazioni: parlare a un congresso internazionale resta comunque una presa di posizione pubblica.
     if (state.phase === "international_congress_scene") {
-      app.innerHTML = renderInternationalCongressScene() + renderPageNav();
+      app.innerHTML = renderPollGrid(state.prevSnapshot) + renderInternationalCongressScene() + renderPageNav();
       bindPageNavDrawer(function () {
         state.internationalCongress = null;
         state.currentDossierId = null;
@@ -17275,7 +17341,7 @@
     // Congresso/manifestazione/cena di partito: scena in due passi, avviata dal giocatore stesso (non un
     // trigger periodico), vedi launchPartyEventScene richiamata dal pannello Eventi di Partito più sotto.
     if (state.phase === "party_event_scene") {
-      app.innerHTML = renderPartyEventScene() + renderPageNav();
+      app.innerHTML = renderPollGrid(state.prevSnapshot) + renderPartyEventScene() + renderPageNav();
       bindPageNavDrawer(function () {
         state.partyEventScene = null;
         state.currentDossierId = null;
@@ -17314,7 +17380,7 @@
     }
 
     if (state.phase === "consiglio_comunale_scene") {
-      app.innerHTML = renderConsiglioComunaleScene() + renderPageNav();
+      app.innerHTML = renderPollGrid(state.prevSnapshot) + renderConsiglioComunaleScene() + renderPageNav();
       bindPageNavDrawer(function () {
         state.consiglioComunaleScene = null;
         state.currentDossierId = null;
@@ -17340,7 +17406,7 @@
     // Riunione di programma: checkProgramMeetingTrigger già richiede p.playerIsLeader per scattare, come
     // l'intervista al leader — nessun ramo di auto-play necessario per lo sfiduciato.
     if (state.phase === "program_meeting_scene") {
-      app.innerHTML = renderProgramMeetingScene() + renderPageNav();
+      app.innerHTML = renderPollGrid(state.prevSnapshot) + renderProgramMeetingScene() + renderPageNav();
       bindPageNavDrawer(function () {
         state.programMeeting = null;
         state.currentDossierId = null;
@@ -17474,7 +17540,7 @@
     // Salotto TV: checkSalottoTrigger già richiede p.playerIsLeader per scattare, come intervista al
     // leader e riunione di programma — nessun ramo di auto-play necessario per lo sfiduciato.
     if (state.phase === "salotto_scene") {
-      app.innerHTML = renderSalottoScene() + renderPageNav();
+      app.innerHTML = renderPollGrid(state.prevSnapshot) + renderSalottoScene() + renderPageNav();
       bindPageNavDrawer(function () {
         state.salottoScene = null;
         state.currentDossierId = null;
@@ -17507,7 +17573,7 @@
     }
 
     if (state.phase === "ufficio_scene") {
-      app.innerHTML = renderUfficioScene() + renderPageNav();
+      app.innerHTML = renderPollGrid(state.prevSnapshot) + renderUfficioScene() + renderPageNav();
       bindPageNavDrawer(function () {
         state.ufficioScene = null;
         state.currentDossierId = null;
