@@ -6,9 +6,9 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Malavita — La Tua Città</title>
+<title>Omertà — Un GTA Reale</title>
 <!-- Pagina autonoma a file singolo, ospitata accanto a Politis-IT, Villa Franca 1980 e Notti Azzurre sullo stesso dominio. -->
-<meta name="description" content="Open world criminale ispirato a GTA, ambientato sulla mappa reale della tua città: vie e luoghi veri, missioni sulla mappa, fughe, rapine, fazioni e una storia a bivi. Client-side, salvataggio locale.">
+<meta name="description" content="Un GTA reale ispirato a Grand Theft Auto, ambientato sulla mappa vera della tua città: vie e luoghi veri, decine di tipi di missione diverse sulla mappa, fughe, rapine, fazioni e una storia a bivi. Client-side, salvataggio locale.">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root {
@@ -220,6 +220,30 @@ const TEMPLATES = {
     {title:'Testa bassa', desc:'{char} ti avverte: qualcuno ti ha visto {luogo}. Nasconditi subito.'},
     {title:"Caccia all'uomo", desc:'Le volanti battono {luogo}. Trova un buco e resta fermo.'},
     {title:'Il prezzo della fretta', desc:'Un lavoro per {char} è saltato {luogo}. Ora tocca correre.'}
+  ],
+  corsa: [
+    {title:'Sfida su strada', desc:"Un rivale ti aspetta {luogo} per una gara veloce. {char} ha scommesso su di te."},
+    {title:'Gara clandestina', desc:"Raggiungi {luogo} prima che scada il cronometro: in palio c'è la tua reputazione."},
+    {title:'Chi arriva primo', desc:'{char} vuole vedere se meriti la tua fama: battiti in gara {luogo}.'},
+    {title:'Scommessa veloce', desc:'Vinci la corsa {luogo} e {char} raddoppia la posta.'}
+  ],
+  passaggio: [
+    {title:'Un passaggio per {char}', desc:'{char} ti chiede un favore innocente: un passaggio {luogo}. Niente di losco, per una volta.'},
+    {title:'Corsa gentile', desc:'Un cliente onesto aspetta {luogo}. Portalo a destinazione e guadagna qualche soldo pulito.'},
+    {title:'Favore da vicino di casa', desc:'{char} conosce qualcuno che ha bisogno di un passaggio {luogo}. Semplice, veloce, legale.'},
+    {title:'Buona azione', desc:'Non tutti i lavori sono sporchi: accompagna un passeggero {luogo}.'}
+  ],
+  intimidazione: [
+    {title:'Riscossione per {char}', desc:'Un negozio {luogo} è indietro con i pagamenti. {char} vuole che tu vada a ricordarglielo.'},
+    {title:'Voce grossa', desc:'{char} ha bisogno che qualcuno {luogo} capisca chi comanda in zona.'},
+    {title:'Debito da recuperare', desc:'Un vecchio debito non pagato {luogo}. Fatti valere per conto di {char}.'},
+    {title:'Messaggio chiaro', desc:'{char} vuole mandare un messaggio a chi non paga più il "pizzo" {luogo}.'}
+  ],
+  sabotaggio: [
+    {title:'Sabotaggio per {char}', desc:'{char} vuole fuori uso la concorrenza: disattiva tutto quello che trovi {luogo}.'},
+    {title:'Danno mirato', desc:'Un rivale di {char} tiene la sua attività {luogo}. Rendile la vita difficile.'},
+    {title:'Colpo silenzioso', desc:"Metti fuori uso l'impianto di sicurezza {luogo}, per conto di {char}."},
+    {title:'Messaggio nella notte', desc:'{char} vuole che qualcosa {luogo} smetta di funzionare, stanotte stessa.'}
   ]
 };
 
@@ -365,7 +389,11 @@ const ACHIEVEMENTS = [
   {id:'giro_completo_citta', nome:'Giro Completo della Città', desc:'Visita chiesa, farmacia, caserma, banca, casinò e cimitero.', check:s=>['chiesa','farmacia','caserma','banca','casino','cimitero'].every(t=>s.stats.tipiVisitati && s.stats.tipiVisitati[t])},
   {id:'tre_fronti', nome:'Tre Facciate Pulite', desc:'Visita ristorante, autolavaggio e banca: i tre fronti di riciclaggio delle fazioni.', check:s=>['ristorante','autolavaggio','banca'].every(t=>s.stats.tipiVisitati && s.stats.tipiVisitati[t])},
   {id:'gioielliere_fiducia', nome:'Cliente Speciale', desc:'Vendi 3 veicoli alla gioielleria.', check:s=>s.stats.venditeGioielleria>=3},
-  {id:'fedina_pulita', nome:'Fedina Pulita', desc:'Fatti "aggiustare" un processo dal giudice corrotto in tribunale.', check:s=>!!s.stats.processoAggiustato}
+  {id:'fedina_pulita', nome:'Fedina Pulita', desc:'Fatti "aggiustare" un processo dal giudice corrotto in tribunale.', check:s=>!!s.stats.processoAggiustato},
+  {id:'uomo_ogni_stagione', nome:'Uomo per Tutte le Stagioni', desc:'Completa almeno 3 missioni in ogni categoria diversa (consegne, piazza, furti, fughe, rapine, corse, passaggi, intimidazioni, sabotaggi).', check:s=>{
+    const cats = ['consegna','spaccio','furto','fuga','rapina','corsa','passaggio','intimidazione','sabotaggio'];
+    return s.stats.missioniPerCategoria && cats.every(c=>(s.stats.missioniPerCategoria[c]||0)>=3);
+  }}
 ];
 
 /* ================= UTILITY ================= */
@@ -405,8 +433,8 @@ function esc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;
 let S = null;
 let map = null, playerMarker = null, poiLayer = null, missionLayer = null, policeCircle = null, activeMissionCircle = null;
 let activeTab = 'missioni';
-const SAVE_KEY = 'malavita_save_v1';
-const BOARD_SIZE = 18;
+const SAVE_KEY = 'omerta_save_v1';
+const BOARD_SIZE = 24;
 // Raggio d'azione di un obiettivo: entrarci basta per interagire, anche con qualche metro
 // di margine (deriva del GPS in Modalità Reale, click non perfetto in Modalità Simulata).
 const INTERACTION_RADIUS_REALE = 60;
@@ -428,7 +456,7 @@ function newGame(){
     world:{ homeBase:null, mode:null, seed:0, pos:null, pois:[], real:null, watchId:null, policePos:null, cooldowns:{} },
     missions:{ pool:[], board:[], activeId:null, completedIds:[], storyProgress:{}, storyFlags:{}, storyPlaces:{}, ending:null, secondaryDone:{}, pendingFugaId:null },
     achievements:{ unlocked:[] },
-    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{}, missioniPerGiver:{}, vinciteCasino:0, venditeGioielleria:0, processoAggiustato:false },
+    stats:{ missioniCompletate:0, consegneCompletate:0, spaccioCompletate:0, furtiCompletati:0, fugheSenzaCattura:0, rapineCompletate:0, stelleMassime:0, sopravvissutoA5:false, hadBigMoney:false, tipiVisitati:{}, missioniPerGiver:{}, missioniPerCategoria:{}, vinciteCasino:0, venditeGioielleria:0, processoAggiustato:false },
     log:[]
   };
 }
@@ -593,10 +621,16 @@ function genPOIs(rng, home, real){
   return pois;
 }
 
-function genMissionPool(rng, home, real){
+// Categorie che si svolgono in due tappe reali: "Agisci qui" avvia il lavoro nel primo punto,
+// poi bisogna fisicamente raggiungere un secondo punto della città per chiuderlo davvero
+// (consegnare il pacco altrove, portare l'auto rubata al compratore, tornare dal mandante...).
+const TWO_PHASE_CATEGORIES = ['consegna','spaccio','furto','sabotaggio'];
+
+function genMissionPool(rng, home, real, pois){
   const pool = []; let idc=0;
-  const categorie = ['consegna','spaccio','furto','fuga'];
+  const categorie = ['consegna','spaccio','furto','fuga','corsa','passaggio','intimidazione','sabotaggio'];
   const tiers = [1,2,3];
+  const negoziAutoVeicoli = (pois||[]).filter(p=>p.type==='negozio' && (p.negozioTipo==='meccanico'||p.negozioTipo==='ricettatore'));
   CHARACTERS.forEach(giver=>{
     categorie.forEach(cat=>{
       tiers.forEach(tier=>{
@@ -605,16 +639,44 @@ function genMissionPool(rng, home, real){
           const anchor = anchorPoint(rng, home, real, [250,2200]);
           const locationLabel = describeLocation(anchor, real, rng);
           const baseReward = tier*rngInt(rng,80,220) + (giver.primario?100:0);
-          const wantedRisk = (cat==='spaccio'||cat==='furto') ? Math.min(3,tier) : (cat==='consegna'?0:1);
+          let wantedRisk;
+          if(cat==='spaccio'||cat==='furto') wantedRisk = Math.min(3,tier);
+          else if(cat==='sabotaggio') wantedRisk = Math.min(3,tier+1);
+          else if(cat==='intimidazione') wantedRisk = tier;
+          else if(cat==='corsa') wantedRisk = tier>=2 ? 1 : 0;
+          else if(cat==='consegna'||cat==='passaggio') wantedRisk = 0;
+          else wantedRisk = 1; // fuga
           const title = tpl.title.replace('{char}', giver.nome);
           const desc = tpl.desc.replace(/{luogo}/g, locationLabel).replace(/{char}/g, giver.nome);
-          pool.push({
+          const mission = {
             id:'m'+(idc++), category:cat, tier, giverId:giver.id,
             title, desc, targetLat:anchor.lat, targetLng:anchor.lng, locationLabel,
             reward: Math.round(baseReward), repFactionId: giver.factionId, repAmount: tier*3,
             wantedRisk, minLevel: tier===1?1:(tier===2?4:8),
             status:'disponibile'
-          });
+          };
+          if(TWO_PHASE_CATEGORIES.includes(cat)){
+            mission.twoPhase = true;
+            mission.phase = 1;
+            if(cat==='furto'){
+              const shop = negoziAutoVeicoli.length ? rngPick(rng, negoziAutoVeicoli) : null;
+              if(shop){ mission.targetLat2 = shop.lat; mission.targetLng2 = shop.lng; mission.locationLabel2 = 'a '+shop.name; }
+              else { const a2 = anchorPoint(rng, home, real, [250,2200]); mission.targetLat2 = a2.lat; mission.targetLng2 = a2.lng; mission.locationLabel2 = describeLocation(a2, real, rng); }
+              mission.desc2 = "L'auto è tua: portala "+mission.locationLabel2+" per chiudere l'accordo.";
+            } else if(cat==='sabotaggio'){
+              const giverPoi = (pois||[]).find(p=>p.type==='personaggio' && p.characterId===giver.id);
+              if(giverPoi){ mission.targetLat2 = giverPoi.lat; mission.targetLng2 = giverPoi.lng; mission.locationLabel2 = 'da '+giver.nome; }
+              mission.desc2 = 'Il lavoro è fatto: torna da '+giver.nome+' per confermarlo e ritirare il pagamento.';
+            } else {
+              const a2 = anchorPoint(rng, home, real, [250,2200]);
+              mission.targetLat2 = a2.lat; mission.targetLng2 = a2.lng;
+              mission.locationLabel2 = describeLocation(a2, real, rng);
+              mission.desc2 = cat==='consegna'
+                ? 'Ora porta il pacco '+mission.locationLabel2+'.'
+                : 'Ora porta la borsa dal compratore, '+mission.locationLabel2+'.';
+            }
+          }
+          pool.push(mission);
         }
       });
     });
@@ -842,24 +904,56 @@ function setActiveMission(id){
   saveGame();
 }
 
+// Per una missione a due tappe, il "target" attivo dipende dalla fase in corso.
+function missionTargetCoords(m){
+  if(m.twoPhase && m.phase===2) return {lat:m.targetLat2, lng:m.targetLng2};
+  return {lat:m.targetLat, lng:m.targetLng};
+}
+
 function drawActiveMissionRadius(id){
   if(activeMissionCircle && map){ map.removeLayer(activeMissionCircle); activeMissionCircle=null; }
   if(!map) return;
   const m = getMissionById(id);
-  if(!m || m.targetLat===undefined) return;
+  if(!m) return;
+  const c = missionTargetCoords(m);
+  if(c.lat===undefined) return;
   const radius = S.world.mode==='reale' ? INTERACTION_RADIUS_REALE : INTERACTION_RADIUS_SIMULATA;
-  activeMissionCircle = L.circle([m.targetLat, m.targetLng], {radius, color:'#e0b84b', weight:2, fillOpacity:0.08}).addTo(map);
+  activeMissionCircle = L.circle([c.lat, c.lng], {radius, color:'#e0b84b', weight:2, fillOpacity:0.08}).addTo(map);
 }
 
 function focusMapOnMission(id){
   const m = getMissionById(id);
   if(!m || !map) return;
-  map.setView([m.targetLat, m.targetLng], 16);
+  const c = missionTargetCoords(m);
+  if(c.lat===undefined) return;
+  map.setView([c.lat, c.lng], 16);
 }
 
 function distanceToMissionTarget(m){
-  if(m.targetLat===undefined || m.targetLng===undefined) return Infinity;
-  return haversine(S.world.pos.lat, S.world.pos.lng, m.targetLat, m.targetLng);
+  const c = missionTargetCoords(m);
+  if(c.lat===undefined || c.lng===undefined) return Infinity;
+  return haversine(S.world.pos.lat, S.world.pos.lng, c.lat, c.lng);
+}
+
+function advanceToPhase2(m, toastMsg){
+  m.phase = 2;
+  renderMissionMarkers();
+  focusMapOnMission(m.id);
+  drawActiveMissionRadius(m.id);
+  toast(toastMsg);
+  log(toastMsg);
+  if(activeTab==='missioni') renderMissionsPanel();
+  saveGame();
+}
+
+function confirmDelivery(m, msg){
+  showModal('<h3>'+esc(m.title)+'</h3><p class="muted">'+esc(msg)+'</p><button class="btn primary" onclick="window.__omerta.finalizeTwoPhase(\''+m.id+'\')">Conferma</button>');
+}
+function finalizeTwoPhase(id){
+  const m = getMissionById(id);
+  if(!m) return;
+  closeModal();
+  resolveMissionOutcome(m, true);
 }
 
 function attemptActiveMission(){
@@ -876,11 +970,28 @@ function attemptActiveMission(){
     return;
   }
   closeModal();
-  if(m.category==='furto'){ openHotwireMinigame(m); return; }
+  const phase = m.twoPhase ? (m.phase||1) : 1;
+  if(m.category==='furto'){
+    if(m.twoPhase && phase===2){ confirmDelivery(m, m.desc2 || "Consegni l'auto al compratore."); return; }
+    openHotwireMinigame(m);
+    return;
+  }
   if(m.category==='consegna'){ openConsegnaMinigame(m); return; }
-  if(m.category==='spaccio'){ openSpaccioMinigame(m); return; }
+  if(m.category==='spaccio'){
+    if(phase===1){ openPickupMerce(m); return; }
+    openSpaccioMinigame(m);
+    return;
+  }
+  if(m.category==='sabotaggio'){
+    if(m.twoPhase && phase===2){ confirmDelivery(m, m.desc2 || 'Torni da chi te lo ha chiesto per confermare il lavoro.'); return; }
+    openSequenceMinigame(m);
+    return;
+  }
   if(m.category==='fuga'){ startFugaChallenge(m); return; }
   if(m.category==='rapina'){ openSequenceMinigame(m); return; }
+  if(m.category==='corsa'){ openCorsaMinigame(m); return; }
+  if(m.category==='passaggio'){ openPassaggioMinigame(m); return; }
+  if(m.category==='intimidazione'){ openIntimidazioneMinigame(m); return; }
   resolveMissionOutcome(m, true);
 }
 
@@ -905,12 +1016,15 @@ function resolveMissionOutcome(m, success){
       const h = HEIST_DEFS.find(hh=>hh.id===m.heistId);
       if(h && m.stageIndex === h.stages.length-1) S.stats.rapineCompletate++;
     }
+    S.stats.missioniPerCategoria = S.stats.missioniPerCategoria||{};
+    S.stats.missioniPerCategoria[m.category] = (S.stats.missioniPerCategoria[m.category]||0)+1;
     if(m.wantedRisk && m.category!=='fuga') raiseWanted(m.wantedRisk);
     log('Missione completata: "'+m.title+'". Guadagno '+fmtMoney(m.reward)+'.');
     m.status='completata';
   } else {
     m.status='disponibile';
-    const rischiosa = (m.category==='spaccio' || m.category==='furto' || m.category==='rapina');
+    if(m.twoPhase) m.phase = 1;
+    const rischiosa = (m.category==='spaccio' || m.category==='furto' || m.category==='rapina' || m.category==='intimidazione' || m.category==='sabotaggio');
     const probArresto = rischiosa ? (0.25 + (m.tier||1)*0.05) : 0;
     if(rischiosa && Math.random() < probArresto){
       log('Missione fallita: "'+m.title+'". Le cose sono andate male sul posto.');
@@ -969,7 +1083,8 @@ function openHotwireMinigame(m){
         S.player.inventario.veicoli.push(veicolo);
         S.stats.furtiCompletati++;
         toast('Auto rubata con successo: '+veicolo.nome);
-        resolveMissionOutcome(m, true);
+        if(m.twoPhase){ advanceToPhase2(m, 'Ora porta l\'auto '+(m.locationLabel2||'dal compratore')+'.'); }
+        else { resolveMissionOutcome(m, true); }
       } else {
         toast("Hai fatto scattare l'allarme!");
         resolveMissionOutcome(m, false);
@@ -979,15 +1094,32 @@ function openHotwireMinigame(m){
 }
 
 function openConsegnaMinigame(m){
+  const phase = m.twoPhase ? (m.phase||1) : 1;
+  const isPickup = m.twoPhase && phase===1;
   openTimingMinigame({
-    title: 'Consegna discreta', tier: m.tier,
-    instructions: 'Aspetta che la strada sia libera, poi premi "Consegna" nel momento giusto: troppo presto o troppo tardi e qualcuno ti nota.',
-    buttonLabel: 'Consegna',
+    title: isPickup ? 'Ritiro del pacco' : 'Consegna discreta', tier: m.tier,
+    instructions: isPickup
+      ? 'Ritira il pacco senza farti notare: premi "Ritira" al momento giusto.'
+      : 'Aspetta che la strada sia libera, poi premi "Consegna" nel momento giusto: troppo presto o troppo tardi e qualcuno ti nota.',
+    buttonLabel: isPickup ? 'Ritira' : 'Consegna',
     onResult: (success)=>{
-      if(success){ toast('Consegna effettuata senza intoppi.'); resolveMissionOutcome(m, true); }
-      else { toast('Qualcuno ti ha notato mentre consegnavi.'); resolveMissionOutcome(m, false); }
+      if(success){
+        if(isPickup){ toast('Hai il pacco.'); advanceToPhase2(m, 'Ora porta il pacco '+(m.locationLabel2||'a destinazione')+'.'); }
+        else { toast('Consegna effettuata senza intoppi.'); resolveMissionOutcome(m, true); }
+      } else {
+        toast(isPickup ? 'Qualcuno ti ha visto ritirare il pacco.' : 'Qualcuno ti ha notato mentre consegnavi.');
+        resolveMissionOutcome(m, false);
+      }
     }
   });
+}
+
+function openPickupMerce(m){
+  showModal('<h3>Ritiro della borsa</h3><p class="muted">Il fornitore ti passa la borsa senza una parola. Allontanati con calma.</p><button class="btn primary" id="pk-ok">Ritira la borsa</button>');
+  document.getElementById('pk-ok').onclick = ()=>{
+    closeModal();
+    advanceToPhase2(m, 'Hai la borsa. '+(m.desc2||'Ora portala dal compratore, in un altro punto della città.'));
+  };
 }
 
 function openSpaccioMinigame(m){
@@ -1013,6 +1145,7 @@ function openSpaccioMinigame(m){
     const consolazione = Math.round(m.reward*0.2);
     S.player.money += consolazione;
     m.status='disponibile';
+    if(m.twoPhase) m.phase = 1;
     S.missions.activeId=null;
     S.missions.board = S.missions.board.filter(id=>id!==m.id);
     if(activeMissionCircle && map){ map.removeLayer(activeMissionCircle); activeMissionCircle=null; }
@@ -1067,8 +1200,12 @@ function openSequenceMinigame(m){
           }
           if(userInput.length === sequence.length){
             closeModal();
-            toast('Sequenza perfetta!');
-            resolveMissionOutcome(m, true);
+            if(m.twoPhase && (m.phase||1)===1){
+              advanceToPhase2(m, m.desc2 || 'Fatto. Ora torna a riferire.');
+            } else {
+              toast('Sequenza perfetta!');
+              resolveMissionOutcome(m, true);
+            }
           }
         };
         buttonsWrap.appendChild(b);
@@ -1082,6 +1219,80 @@ function openSequenceMinigame(m){
   setTimeout(showNext, 400);
 }
 
+function openCorsaMinigame(m){
+  showModal(`
+    <h3>${esc(m.title)}</h3>
+    <p class="muted" id="corsa-msg">Ai vostri posti... aspetta il via.</p>
+    <div class="row"><button class="btn" id="corsa-btn">Attendi...</button></div>
+  `);
+  const btn = document.getElementById('corsa-btn');
+  const msg = document.getElementById('corsa-msg');
+  let started = false, startTime = 0, ended = false;
+  const delay = 1200 + Math.random()*2200;
+  btn.onclick = ()=>{
+    if(ended) return;
+    ended = true;
+    if(!started){
+      closeModal();
+      toast('Falsa partenza!');
+      resolveMissionOutcome(m, false);
+      return;
+    }
+    const reaction = Date.now() - startTime;
+    closeModal();
+    const soglia = 320 + (m.tier||1)*40;
+    if(reaction <= soglia){ toast('Parti fulmineo e vinci la gara!'); resolveMissionOutcome(m, true); }
+    else { toast('Reagisci troppo tardi: perdi la gara.'); resolveMissionOutcome(m, false); }
+  };
+  setTimeout(()=>{
+    if(ended) return;
+    started = true;
+    startTime = Date.now();
+    msg.textContent = 'VIA!!';
+    btn.textContent = 'PARTI!';
+    btn.classList.add('primary');
+  }, delay);
+}
+
+function openPassaggioMinigame(m){
+  showModal('<h3>'+esc(m.title)+'</h3><p class="muted">Il passeggero sale, ringrazia, e parla del più e del meno per tutto il tragitto.</p><button class="btn primary" id="pass-ok">Accompagnalo a destinazione</button>');
+  document.getElementById('pass-ok').onclick = ()=>{
+    closeModal();
+    if(Math.random()<0.25){
+      const mancia = rngInt(Math.random, 20, 60);
+      S.player.money += mancia;
+      log('Il passeggero lascia una mancia extra: +'+fmtMoney(mancia)+'.');
+    }
+    resolveMissionOutcome(m, true);
+  };
+}
+
+function openIntimidazioneMinigame(m){
+  showModal(`
+    <h3>${esc(m.title)}</h3>
+    <p class="muted">Il proprietario ti guarda spaventato. Come vuoi gestirla?</p>
+    <div class="row" style="margin-top:0.8em">
+      <button class="btn primary" id="int-forte">Fai capire che non si scherza</button>
+      <button class="btn ghost" id="int-buone">Convincilo con le buone</button>
+    </div>
+  `);
+  document.getElementById('int-forte').onclick = ()=>{
+    closeModal();
+    m.reward = Math.round(m.reward*1.4);
+    S.player.coscienza = Math.max(-100, S.player.coscienza-8);
+    const successo = Math.random() > (0.15 + (m.tier||1)*0.05);
+    if(successo){ toast('Il messaggio è passato forte e chiaro.'); resolveMissionOutcome(m, true); }
+    else { toast('È degenerato più del previsto.'); resolveMissionOutcome(m, false); }
+  };
+  document.getElementById('int-buone').onclick = ()=>{
+    closeModal();
+    m.reward = Math.round(m.reward*0.7);
+    S.player.coscienza = Math.min(100, S.player.coscienza+3);
+    toast('Paga senza storie: nessun problema.');
+    resolveMissionOutcome(m, true);
+  };
+}
+
 /* ---- personaggi / storia ---- */
 
 function talkTo(charId){
@@ -1091,41 +1302,41 @@ function talkTo(charId){
     const idx = S.missions.storyProgress[charId] || 0;
     const nodes = STORY[charId];
     if(idx >= nodes.length){
-      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Non ho nulla per te ora. Torna quando avrai fatto qualcosa di grosso."</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Non ho nulla per te ora. Torna quando avrai fatto qualcosa di grosso."</p><button class="btn" onclick="window.__omerta.closeModal()">Chiudi</button>');
       return;
     }
     const node = nodes[idx];
     const need = node.requireMissions||0;
     const have = giverMissionsCompleted(charId);
     if(have < need){
-      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Non hai ancora dimostrato abbastanza. Fai qualche altro lavoro per me, poi ne riparliamo."</p><p class="muted small">Lavori completati per '+esc(ch.nome)+': '+have+' / '+need+'</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Non hai ancora dimostrato abbastanza. Fai qualche altro lavoro per me, poi ne riparliamo."</p><p class="muted small">Lavori completati per '+esc(ch.nome)+': '+have+' / '+need+'</p><button class="btn" onclick="window.__omerta.closeModal()">Chiudi</button>');
       return;
     }
     const txt = node.text.replace(/\{luogoReale\}/g, S.missions.storyPlaces[charId] || 'una zona della città');
     let html = '<h3>'+esc(ch.nome)+'</h3><p>'+esc(txt)+'</p>';
     if(node.choices.length===0){
-      html += '<button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>';
+      html += '<button class="btn" onclick="window.__omerta.closeModal()">Chiudi</button>';
     } else {
       node.choices.forEach((c,i)=>{
-        html += '<button class="btn choice-btn" onclick="window.__malavita.pickStoryChoice(\''+charId+'\','+i+')">'+esc(c.label)+'</button>';
+        html += '<button class="btn choice-btn" onclick="window.__omerta.pickStoryChoice(\''+charId+'\','+i+')">'+esc(c.label)+'</button>';
       });
     }
     showModal(html);
   } else {
     const gigs = STORY_SECONDARY[charId];
     if(!gigs){
-      showModal('<h3>'+esc(ch.nome)+'</h3><p>"'+esc(ch.bio)+'" Non ha nulla per te al momento.</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"'+esc(ch.bio)+'" Non ha nulla per te al momento.</p><button class="btn" onclick="window.__omerta.closeModal()">Chiudi</button>');
       return;
     }
     const done = S.missions.secondaryDone[charId];
     if(done){
-      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Grazie ancora per l\'aiuto. Torna a trovarmi."</p><button class="btn" onclick="window.__malavita.closeModal()">Chiudi</button>');
+      showModal('<h3>'+esc(ch.nome)+'</h3><p>"Grazie ancora per l\'aiuto. Torna a trovarmi."</p><button class="btn" onclick="window.__omerta.closeModal()">Chiudi</button>');
       return;
     }
     const node = gigs[0];
     let html = '<h3>'+esc(ch.nome)+'</h3><p>'+esc(node.text)+'</p>';
-    html += '<button class="btn primary choice-btn" onclick="window.__malavita.acceptSecondaryGig(\''+charId+'\')">Accetta</button>';
-    html += '<button class="btn ghost choice-btn" onclick="window.__malavita.closeModal()">Rifiuta</button>';
+    html += '<button class="btn primary choice-btn" onclick="window.__omerta.acceptSecondaryGig(\''+charId+'\')">Accetta</button>';
+    html += '<button class="btn ghost choice-btn" onclick="window.__omerta.closeModal()">Rifiuta</button>';
     showModal(html);
   }
 }
@@ -1189,7 +1400,7 @@ function tryFinale(){
   }
   const ending = computeEnding();
   S.missions.ending = ending.id;
-  showModal('<h3>'+esc(ending.titolo)+'</h3><p>'+esc(ending.testo)+'</p><p class="muted">Puoi continuare a giocare liberamente anche dopo questo momento.</p><button class="btn primary" onclick="window.__malavita.closeModal()">Continua</button>');
+  showModal('<h3>'+esc(ending.titolo)+'</h3><p>'+esc(ending.testo)+'</p><p class="muted">Puoi continuare a giocare liberamente anche dopo questo momento.</p><button class="btn primary" onclick="window.__omerta.closeModal()">Continua</button>');
   achievementsCheck();
   saveGame();
 }
@@ -1203,28 +1414,28 @@ function openShop(poi){
     WEAPONS.forEach(w=>{
       const owned = S.player.inventario.armi.includes(w.id);
       html += '<div class="shop-item"><b>'+esc(w.nome)+'</b> — potenza '+w.potenza+' — '+(owned?'<span class="muted">posseduta</span>':fmtMoney(w.prezzo))+
-        (owned?'':' <button class="btn tiny" onclick="window.__malavita.buyWeapon(\''+w.id+'\')">Compra</button>')+'</div>';
+        (owned?'':' <button class="btn tiny" onclick="window.__omerta.buyWeapon(\''+w.id+'\')">Compra</button>')+'</div>';
     });
-    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    html += '<button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button>';
     showModal(html);
   } else if(poi.negozioTipo==='ricettatore'){
     let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Vendi qui i veicoli "recuperati".</p>';
     if(S.player.inventario.veicoli.length===0) html += '<p class="muted">Non hai veicoli da vendere.</p>';
     S.player.inventario.veicoli.forEach((v,i)=>{
-      html += '<div class="shop-item">'+esc(v.nome)+' — valore '+fmtMoney(v.valore)+' <button class="btn tiny" onclick="window.__malavita.sellVehicle('+i+')">Vendi</button></div>';
+      html += '<div class="shop-item">'+esc(v.nome)+' — valore '+fmtMoney(v.valore)+' <button class="btn tiny" onclick="window.__omerta.sellVehicle('+i+')">Vendi</button></div>';
     });
-    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    html += '<button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button>';
     showModal(html);
   } else if(poi.negozioTipo==='meccanico'){
     let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Riparazione e garage.</p>';
     html += '<div class="shop-item">Veicoli posseduti: '+S.player.inventario.veicoli.length+'</div>';
-    html += '<button class="btn tiny primary" onclick="window.__malavita.healUp(0)">Ripara mezzo (gratis)</button>';
-    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    html += '<button class="btn tiny primary" onclick="window.__omerta.healUp(0)">Ripara mezzo (gratis)</button>';
+    html += '<button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button>';
     showModal(html);
   } else if(poi.negozioTipo==='bar'){
     let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un drink, due chiacchiere.</p>';
-    html += '<button class="btn tiny primary" onclick="window.__malavita.healUp(50)">Riposa e cura ('+fmtMoney(50)+')</button>';
-    html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button>';
+    html += '<button class="btn tiny primary" onclick="window.__omerta.healUp(50)">Riposa e cura ('+fmtMoney(50)+')</button>';
+    html += '<button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button>';
     showModal(html);
   }
 }
@@ -1278,10 +1489,10 @@ function renderBoot(){
   const save = hasSave();
   document.getElementById('app').innerHTML = `
     <div class="boot">
-      <h1>MALAVITA</h1>
-      <p class="tagline">La tua città, il tuo impero.</p>
+      <h1>OMERTÀ</h1>
+      <p class="tagline">Un GTA reale. La tua città è la mappa.</p>
       <div class="disclaimer">
-        <strong>Nota:</strong> Malavita è un gioco di finzione a scopo di intrattenimento, ispirato ai classici open-world criminali. Spaccio, furti e rapine sono meccaniche di gioco astratte, senza alcuna istruzione reale su attività illegali. La tua posizione geografica resta sempre ed esclusivamente nel tuo browser: non viene mai inviata a nessun server nostro. Le vie e i luoghi reali intorno a te vengono recuperati da OpenStreetMap solo per generare il mondo di gioco; il resto del gioco funziona offline con salvataggio automatico locale.
+        <strong>Nota:</strong> Omertà è un gioco di finzione a scopo di intrattenimento, ispirato a GTA (Grand Theft Auto) e ai classici open-world criminali. Spaccio, furti, rapine, intimidazioni e sabotaggi sono meccaniche di gioco astratte, senza alcuna istruzione reale su attività illegali. La tua posizione geografica resta sempre ed esclusivamente nel tuo browser: non viene mai inviata a nessun server nostro. Le vie e i luoghi reali intorno a te vengono recuperati da OpenStreetMap solo per generare il mondo di gioco; il resto del gioco funziona offline con salvataggio automatico locale.
       </div>
       <div class="boot-actions">
         <button class="btn primary" id="btn-new">Nuova Partita</button>
@@ -1370,7 +1581,7 @@ function renderLocationSetup(){
     <div class="wizard">
       <div class="card">
         <h2>Scegli la tua città</h2>
-        <p class="muted">Malavita genera il mondo di gioco intorno a un punto reale sulla mappa, usando anche le vie e i luoghi con nome davvero presenti in quella zona su OpenStreetMap.</p>
+        <p class="muted">Omertà genera il mondo di gioco intorno a un punto reale sulla mappa, usando anche le vie e i luoghi con nome davvero presenti in quella zona su OpenStreetMap.</p>
         <div class="boot-actions" style="margin:0">
           <button class="btn primary" id="loc-gps">📍 Usa la mia posizione (Modalità Reale)</button>
           <button class="btn" id="loc-demo">🏙️ Modalità Demo (Roma, nessun GPS)</button>
@@ -1417,7 +1628,7 @@ function renderLocationSetup(){
 function renderLoadingScreen(msg){
   document.getElementById('app').innerHTML = `
     <div class="loading">
-      <h2>Malavita</h2>
+      <h2>Omertà</h2>
       <div class="spinner"></div>
       <p class="muted">${esc(msg)}</p>
     </div>
@@ -1434,7 +1645,7 @@ async function finishLocationSetup(home, mode){
   S.world.real = real;
   const rng = mulberry32(S.world.seed);
   S.world.pois = genPOIs(rng, home, real);
-  S.missions.pool = genMissionPool(rng, home, real).concat(genHeistMissions(rng, home, real));
+  S.missions.pool = genMissionPool(rng, home, real, S.world.pois).concat(genHeistMissions(rng, home, real));
   S.missions.storyPlaces = assignStoryPlaces(rng, real);
   refillBoard();
   log(real.ok
@@ -1489,8 +1700,8 @@ function emojiIcon(emoji, cls){
   return L.divIcon({html:'<div class="'+(cls||'poi-icon')+'">'+emoji+'</div>', className:'', iconSize:[28,28]});
 }
 const POI_EMOJI = {nascondiglio:'🕳️', territorio:'🚩', personaggio:'👤', negozio:'🏪', chiesa:'⛪', farmacia:'💊', caserma:'🚓', banca:'🏦', casino:'🎰', cimitero:'⚰️', ristorante:'🍝', autolavaggio:'🚿', sindacatolavoro:'🏛️', posta:'📮', gioielleria:'💍', tribunale:'⚖️'};
-const CATEGORY_EMOJI = {consegna:'📦', spaccio:'🎒', furto:'🚗', fuga:'🏃', rapina:'💎'};
-const CATEGORY_LABEL = {consegna:'Consegna', spaccio:'Piazza', furto:'Furto Auto', fuga:'Fuga', rapina:'Rapina'};
+const CATEGORY_EMOJI = {consegna:'📦', spaccio:'🎒', furto:'🚗', fuga:'🏃', rapina:'💎', corsa:'🏁', passaggio:'🚕', intimidazione:'✊', sabotaggio:'💣'};
+const CATEGORY_LABEL = {consegna:'Consegna', spaccio:'Piazza', furto:'Furto Auto', fuga:'Fuga', rapina:'Rapina', corsa:'Corsa', passaggio:'Passaggio', intimidazione:'Intimidazione', sabotaggio:'Sabotaggio'};
 
 function renderPOIMarkers(){
   poiLayer.clearLayers();
@@ -1511,9 +1722,12 @@ function renderMissionMarkers(){
   missionLayer.clearLayers();
   (S.missions.board||[]).forEach(id=>{
     const m = getMissionById(id);
-    if(!m || m.targetLat===undefined) return;
-    const marker = L.marker([m.targetLat, m.targetLng], {icon: emojiIcon(CATEGORY_EMOJI[m.category]||'❗', 'mission-icon')}).addTo(missionLayer);
-    marker.bindTooltip(m.title, {direction:'top'});
+    if(!m) return;
+    const c = missionTargetCoords(m);
+    if(c.lat===undefined) return;
+    const label = (m.twoPhase && m.phase===2) ? m.title+' — fase 2' : m.title;
+    const marker = L.marker([c.lat, c.lng], {icon: emojiIcon(CATEGORY_EMOJI[m.category]||'❗', 'mission-icon')}).addTo(missionLayer);
+    marker.bindTooltip(label, {direction:'top'});
     marker.on('click', ()=> onMissionPinClick(m.id));
   });
 }
@@ -1522,12 +1736,14 @@ function onMissionPinClick(id){
   const m = getMissionById(id);
   if(!m) return;
   setActiveMission(id);
-  let html = '<h3>'+esc(m.title)+'</h3><p>'+esc(m.desc)+'</p>';
-  html += '<span class="tag">'+CATEGORY_LABEL[m.category]+'</span><span class="tag">Ricompensa '+fmtMoney(m.reward)+'</span>';
+  const showDesc = (m.twoPhase && m.phase===2 && m.desc2) ? m.desc2 : m.desc;
+  const faseTag = m.twoPhase ? '<span class="tag">'+(m.phase===2?'Fase 2 di 2':'Fase 1 di 2')+'</span>' : '';
+  let html = '<h3>'+esc(m.title)+'</h3><p>'+esc(showDesc)+'</p>';
+  html += '<span class="tag">'+CATEGORY_LABEL[m.category]+'</span>'+faseTag+'<span class="tag">Ricompensa '+fmtMoney(m.reward)+'</span>';
   if(m.wantedRisk) html += '<span class="tag">Rischio ★'+m.wantedRisk+'</span>';
   html += '<div class="row" style="margin-top:0.7em">';
-  html += '<button class="btn primary" onclick="window.__malavita.attemptActiveMission()">Agisci qui</button>';
-  html += '<button class="btn ghost" onclick="window.__malavita.closeModal()">Chiudi</button>';
+  html += '<button class="btn primary" onclick="window.__omerta.attemptActiveMission()">Agisci qui</button>';
+  html += '<button class="btn ghost" onclick="window.__omerta.closeModal()">Chiudi</button>';
   html += '</div>';
   showModal(html);
 }
@@ -1570,13 +1786,13 @@ function openChiesa(poi){
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un prete anziano ti osserva dal confessionale. "Vieni a scaricare la coscienza, figliolo?"</p>';
   if(S.player.wanted>0){
     html += ready
-      ? '<button class="btn tiny primary" onclick="window.__malavita.confessati()">Confessati (calma il ricercato)</button>'
+      ? '<button class="btn tiny primary" onclick="window.__omerta.confessati()">Confessati (calma il ricercato)</button>'
       : '<p class="small muted">Devi aspettare prima di confessarti di nuovo (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
   } else {
     html += '<p class="small muted">Per ora non hai nulla da farti perdonare... o forse sì.</p>';
   }
-  html += '<div class="row" style="margin-top:0.5em"><button class="btn tiny" onclick="window.__malavita.donazione()">Fai un\'offerta silenziosa (100€)</button></div>';
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.5em"><button class="btn tiny" onclick="window.__omerta.donazione()">Fai un\'offerta silenziosa (100€)</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function confessati(){
@@ -1600,15 +1816,15 @@ function donazione(){
 function openFarmacia(poi){
   markVisited('farmacia');
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Il farmacista ti squadra da dietro il bancone.</p>';
-  html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.healUp(120)">Kit di pronto soccorso (120€, cura piena)</button></div>';
+  html += '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.healUp(120)">Kit di pronto soccorso (120€, cura piena)</button></div>';
   if((S.player.rep.cartello||0) >= 10){
     html += '<div style="margin-top:0.6em"><p class="small muted">Ti riconosce. "Per i clienti giusti, ho anche altro sul retro."</p>';
     html += S.player.buffs.spaccioBoost
       ? '<p class="small muted">Hai già una "spinta" pronta per il prossimo giro di piazza.</p>'
-      : '<button class="btn tiny" onclick="window.__malavita.buySpaccioBoost()">Compra una "spinta" per il prossimo giro (300€)</button>';
+      : '<button class="btn tiny" onclick="window.__omerta.buySpaccioBoost()">Compra una "spinta" per il prossimo giro (300€)</button>';
     html += '</div>';
   }
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function buySpaccioBoost(){
@@ -1636,11 +1852,11 @@ function openCaserma(poi){
   if(relBianchi >= 20){
     html += S.player.buffs.bribeReady
       ? '<p class="small muted">Bianchi ti deve già un favore: la prossima volta che rischi l\'arresto, chiuderà un occhio.</p>'
-      : '<button class="btn tiny primary" onclick="window.__malavita.buyBribeInsurance()">Paga un favore anticipato (500€)</button>';
+      : '<button class="btn tiny primary" onclick="window.__omerta.buyBribeInsurance()">Paga un favore anticipato (500€)</button>';
   } else {
     html += '<p class="small muted">Non ti fidi ancora abbastanza di Bianchi (o lui di te). Parlaci più spesso in giro per la città.</p>';
   }
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function buyBribeInsurance(){
@@ -1656,12 +1872,12 @@ function openBanca(poi){
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un direttore compiacente, per chi sa come chiedere.</p>';
   if((S.player.rep.sindacato||0) >= 15){
     html += '<p class="small muted">Puoi far sparire un po\' di contanti dai libri contabili, per una commissione.</p>';
-    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000,\'sindacato\',\'banca\')">Ripulisci 1.000€</button>';
-    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000,\'sindacato\',\'banca\')">Ripulisci 5.000€</button></div>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.riciclaggio(1000,\'sindacato\',\'banca\')">Ripulisci 1.000€</button>';
+    html += '<button class="btn tiny primary" onclick="window.__omerta.riciclaggio(5000,\'sindacato\',\'banca\')">Ripulisci 5.000€</button></div>';
   } else {
     html += '<p class="small muted">Il direttore non ti conosce ancora. Fatti notare prima dal Sindacato.</p>';
   }
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 const RICICLAGGIO_LUOGHI = {banca:'la banca', ristorante:'il ristorante', autolavaggio:"l'autolavaggio"};
@@ -1677,9 +1893,9 @@ function openCasino(poi){
   markVisited('casino');
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Fumo, carte, e la casa che vince quasi sempre.</p>';
   html += '<div class="row">';
-  [50,200,500].forEach(b=>{ html += '<button class="btn tiny" onclick="window.__malavita.giocaAzzardo('+b+')">Scommetti '+fmtMoney(b)+'</button>'; });
+  [50,200,500].forEach(b=>{ html += '<button class="btn tiny" onclick="window.__omerta.giocaAzzardo('+b+')">Scommetti '+fmtMoney(b)+'</button>'; });
   html += '</div>';
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function giocaAzzardo(bet){
@@ -1716,13 +1932,13 @@ function openRistorante(poi){
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Un\'insegna qualunque in vetrina. Il retro, però, lo conosce solo chi deve conoscerlo.</p>';
   if((S.player.rep.famiglia||0) >= 15){
     html += '<p class="small muted">Il proprietario tiene due contabilità, una vera e una di cortesia per la Famiglia Conti.</p>';
-    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000,\'famiglia\',\'ristorante\')">Ripulisci 1.000€</button>';
-    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000,\'famiglia\',\'ristorante\')">Ripulisci 5.000€</button></div>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.riciclaggio(1000,\'famiglia\',\'ristorante\')">Ripulisci 1.000€</button>';
+    html += '<button class="btn tiny primary" onclick="window.__omerta.riciclaggio(5000,\'famiglia\',\'ristorante\')">Ripulisci 5.000€</button></div>';
   } else {
     html += '<p class="small muted">Non sei ancora un cliente "di fiducia" per la Famiglia, qui.</p>';
   }
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn tiny" onclick="window.__malavita.healUp(60)">Cena e riposa (60€, cura piena)</button></div>';
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn tiny" onclick="window.__omerta.healUp(60)">Cena e riposa (60€, cura piena)</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 
@@ -1730,16 +1946,16 @@ function openAutolavaggio(poi){
   markVisited('autolavaggio');
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Lavaggio auto standard, ma con un servizio speciale per chi paga bene.</p>';
   if(S.player.wanted>0){
-    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.cambioTarga()">Cambia targhe e rifinisci l\'auto (250€)</button></div>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.cambioTarga()">Cambia targhe e rifinisci l\'auto (250€)</button></div>';
   }
   if((S.player.rep.cartello||0) >= 15){
     html += '<div style="margin-top:0.6em"><p class="small muted">Il proprietario fa girare anche altro, oltre alle auto, per conto del Cartello Nero.</p>';
-    html += '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.riciclaggio(1000,\'cartello\',\'autolavaggio\')">Ripulisci 1.000€</button>';
-    html += '<button class="btn tiny primary" onclick="window.__malavita.riciclaggio(5000,\'cartello\',\'autolavaggio\')">Ripulisci 5.000€</button></div></div>';
+    html += '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.riciclaggio(1000,\'cartello\',\'autolavaggio\')">Ripulisci 1.000€</button>';
+    html += '<button class="btn tiny primary" onclick="window.__omerta.riciclaggio(5000,\'cartello\',\'autolavaggio\')">Ripulisci 5.000€</button></div></div>';
   } else {
     html += '<p class="small muted" style="margin-top:0.6em">Non ti conoscono ancora bene abbastanza, qui.</p>';
   }
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function cambioTarga(){
@@ -1759,12 +1975,12 @@ function openSindacatoLavoro(poi){
   const cdKey = 'sindacato_racket', cdMs = 5*60*1000;
   if((S.player.rep.sindacato||0) >= 10){
     html += cooldownReady(cdKey, cdMs)
-      ? '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.raccogliQuote()">Raccogli le quote degli iscritti</button></div>'
+      ? '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.raccogliQuote()">Raccogli le quote degli iscritti</button></div>'
       : '<p class="small muted">Le quote sono già state raccolte di recente (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
   } else {
     html += '<p class="small muted">Il Sindacato non ti ha ancora messo al lavoro qui.</p>';
   }
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function raccogliQuote(){
@@ -1781,9 +1997,9 @@ function openPosta(poi){
   const cdKey = 'posta_intercetta', cdMs = 4*60*1000;
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Elvira, dietro lo sportello, alza un sopracciglio. "Cerchi qualcosa che non dovrebbe arrivarti?"</p>';
   html += cooldownReady(cdKey, cdMs)
-    ? '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.intercettaPosta()">Fatti "perdere" un pacco sospetto (150€)</button></div>'
+    ? '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.intercettaPosta()">Fatti "perdere" un pacco sospetto (150€)</button></div>'
     : '<p class="small muted">Elvira non può rischiare così spesso (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function intercettaPosta(){
@@ -1815,11 +2031,11 @@ function openGioielleria(poi){
   } else {
     S.player.inventario.veicoli.forEach((v,i)=>{
       const prezzo = Math.round(v.valore*1.35);
-      html += '<div class="shop-item">'+esc(v.nome)+' — offerta speciale '+fmtMoney(prezzo)+' <button class="btn tiny" onclick="window.__malavita.sellVehicleGioielleria('+i+')">Vendi</button></div>';
+      html += '<div class="shop-item">'+esc(v.nome)+' — offerta speciale '+fmtMoney(prezzo)+' <button class="btn tiny" onclick="window.__omerta.sellVehicleGioielleria('+i+')">Vendi</button></div>';
     });
   }
   html += '<p class="small muted" style="margin-top:0.4em">Paga il 35% in più del solito ricettatore, ma solo per pezzi di qualità.</p>';
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function sellVehicleGioielleria(i){
@@ -1839,12 +2055,12 @@ function openTribunale(poi){
   let html = '<h3>'+esc(poi.name)+'</h3><p class="muted">Nei corridoi si dice che il giudice Ferretti abbia un prezzo, come tutti.</p>';
   if((S.player.rep.sindacato||0) >= 25){
     html += cooldownReady(cdKey, cdMs)
-      ? '<div class="row"><button class="btn tiny primary" onclick="window.__malavita.aggiustaProcesso()">"Aggiusta" la tua fedina (2.000€)</button></div>'
+      ? '<div class="row"><button class="btn tiny primary" onclick="window.__omerta.aggiustaProcesso()">"Aggiusta" la tua fedina (2.000€)</button></div>'
       : '<p class="small muted">Il giudice non può rischiare così spesso (~'+cooldownRemainingMin(cdKey,cdMs)+' min).</p>';
   } else {
     html += '<p class="small muted">Un giudice non parla con chiunque. Serve la leva giusta con il Sindacato (reputazione 25+).</p>';
   }
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__malavita.closeModal()">Esci</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn ghost" onclick="window.__omerta.closeModal()">Esci</button></div>';
   showModal(html);
 }
 function aggiustaProcesso(){
@@ -1907,17 +2123,19 @@ function renderMissionsPanel(){
   const board = (S.missions.board||[]).map(id=>getMissionById(id)).filter(Boolean);
   const grouped = {};
   board.forEach(m=>{ (grouped[m.category]=grouped[m.category]||[]).push(m); });
-  let html = '<p class="muted small">'+board.length+' contratti attivi in città (su '+S.missions.pool.length+' generati totali per la tua zona). Clicca un pin sulla mappa o "Avvia" qui sotto.</p>';
+  let html = '<p class="muted small">'+board.length+' contratti attivi in città (su '+S.missions.pool.length+' generati totali per la tua zona). Clicca un pin sulla mappa o "Vai lì" qui sotto.</p>';
   Object.keys(grouped).forEach(cat=>{
     html += '<h4 style="color:var(--text-dim); font-size:0.8em; margin-top:0.8em;">'+CATEGORY_LABEL[cat]+'</h4>';
     grouped[cat].forEach(m=>{
       const isActive = S.missions.activeId===m.id;
+      const showDesc = (m.twoPhase && m.phase===2 && m.desc2) ? m.desc2 : m.desc;
+      const faseTag = m.twoPhase ? '<span class="tag">'+(m.phase===2?'Fase 2/2':'Fase 1/2')+'</span>' : '';
       html += '<div class="mission-item'+(isActive?' active':'')+'">'+
-        '<h4>'+esc(m.title)+'</h4><p>'+esc(m.desc)+'</p>'+
-        '<span class="tag">Ricompensa '+fmtMoney(m.reward)+'</span>'+
+        '<h4>'+esc(m.title)+'</h4><p>'+esc(showDesc)+'</p>'+
+        faseTag+'<span class="tag">Ricompensa '+fmtMoney(m.reward)+'</span>'+
         (m.wantedRisk?'<span class="tag">Rischio ★'+m.wantedRisk+'</span>':'')+
         '<div class="row" style="margin-top:0.4em">'+
-        (isActive ? '<button class="btn tiny primary" onclick="window.__malavita.attemptActiveMission()">Agisci qui</button>' : '<button class="btn tiny" onclick="window.__malavita.setActiveMission(\''+m.id+'\')">Vai lì</button>')+
+        (isActive ? '<button class="btn tiny primary" onclick="window.__omerta.attemptActiveMission()">Agisci qui</button>' : '<button class="btn tiny" onclick="window.__omerta.setActiveMission(\''+m.id+'\')">Vai lì</button>')+
         '</div></div>';
     });
   });
@@ -1940,7 +2158,7 @@ function renderCharactersPanel(){
     html += '<div class="char-item"><h4>'+c.emoji+' '+esc(c.nome)+(c.primario?' <span class="tag">Boss</span>':'')+'</h4>'+
       '<p>'+esc(c.bio)+'</p>'+ extra +
       '<div class="relbar-wrap"><div class="relbar" style="width:'+Math.max(0,(rel+100)/2)+'%"></div></div>'+
-      '<div class="row"><button class="btn tiny" onclick="window.__malavita.talkTo(\''+c.id+'\')">Parla</button></div></div>';
+      '<div class="row"><button class="btn tiny" onclick="window.__omerta.talkTo(\''+c.id+'\')">Parla</button></div></div>';
   });
   el.innerHTML = html;
 }
@@ -1982,7 +2200,7 @@ function renderStoryPanel(){
       '<div class="repbar"><div style="width:'+Math.max(0,Math.min(100,(rep+100)/3))+'%"></div></div>'+
       '<p class="small muted">Reputazione: '+rep+'</p></div>';
   });
-  html += '<div class="row" style="margin-top:0.6em"><button class="btn primary" onclick="window.__malavita.tryFinale()">Tenta la Resa dei Conti</button></div>';
+  html += '<div class="row" style="margin-top:0.6em"><button class="btn primary" onclick="window.__omerta.tryFinale()">Tenta la Resa dei Conti</button></div>';
   if(S.missions.ending) html += '<p class="small muted" style="margin-top:0.5em">Finale raggiunto: '+esc(S.missions.ending)+'</p>';
   el.innerHTML = html;
 }
@@ -2034,14 +2252,14 @@ function exportSave(){
   const blob = new Blob([JSON.stringify(copy, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'malavita-salvataggio.json';
+  a.href = url; a.download = 'omerta-salvataggio.json';
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
 
 /* ================= AVVIO ================= */
 
-window.__malavita = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale, confessati, donazione, buySpaccioBoost, buyBribeInsurance, riciclaggio, giocaAzzardo, cambioTarga, raccogliQuote, intercettaPosta, sellVehicleGioielleria, aggiustaProcesso, getState: ()=>S };
+window.__omerta = { closeModal, pickStoryChoice, acceptSecondaryGig, talkTo, setActiveMission, attemptActiveMission, buyWeapon, sellVehicle, healUp, tryFinale, confessati, donazione, buySpaccioBoost, buyBribeInsurance, riciclaggio, giocaAzzardo, cambioTarga, raccogliQuote, intercettaPosta, sellVehicleGioielleria, aggiustaProcesso, finalizeTwoPhase, getState: ()=>S };
 
 renderBoot();
 
