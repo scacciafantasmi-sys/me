@@ -70,6 +70,10 @@
   .crt-glitch-strong h1,.crt-glitch-strong h2{text-shadow:1px 0 var(--danger),-1px 0 #4de1ff;}
   #screen-start{max-width:520px;margin:40px auto;text-align:center;}
   footer{margin-top:24px;text-align:center;color:var(--muted);font-size:11px;}
+  .qte-track{position:relative;height:28px;background:#0a120d;border:1px solid var(--panel-b);border-radius:4px;margin:12px 0;overflow:hidden;}
+  .qte-zone{position:absolute;top:0;bottom:0;background:rgba(93,255,176,.35);border-left:2px solid var(--accent);border-right:2px solid var(--accent);}
+  .qte-marker{position:absolute;top:-2px;bottom:-2px;width:3px;background:#fff;box-shadow:0 0 6px #fff;}
+  #modal-box.qte{border-color:var(--amber);}
 </style>
 </head>
 <body>
@@ -160,6 +164,43 @@ function fmtTime(clock){
 }
 function isNightNow(){ const m=((G.clock%1440)+1440)%1440; const h=Math.floor(m/60); return h>=21 || h<6; }
 
+/* ============================== AUDIO (sintesi Web Audio, nessun file esterno) ============================== */
+let AUDIO_CTX = null;
+function getAudioCtx(){
+  if(!AUDIO_CTX){
+    try{ AUDIO_CTX = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ AUDIO_CTX = null; }
+  }
+  return AUDIO_CTX;
+}
+function playTone(freq,dur,type,vol,delay){
+  if(UI.muted) return;
+  const ctx = getAudioCtx(); if(!ctx) return;
+  if(ctx.state==='suspended'){ ctx.resume(); }
+  const t0 = ctx.currentTime + (delay||0);
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type||'sine';
+  osc.frequency.setValueAtTime(freq,t0);
+  gain.gain.setValueAtTime(0,t0);
+  gain.gain.linearRampToValueAtTime(vol||0.1,t0+0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(t0); osc.stop(t0+dur+0.03);
+}
+function sfxClick(){ playTone(520,0.05,'square',0.05); }
+function sfxSuccess(){ playTone(660,0.09,'sine',0.09); playTone(880,0.12,'sine',0.08,0.08); }
+function sfxFail(){ playTone(180,0.25,'sawtooth',0.11); playTone(120,0.3,'sawtooth',0.09,0.06); }
+function sfxDanger(){ playTone(90,0.4,'sawtooth',0.13); playTone(70,0.5,'square',0.07,0.15); }
+function sfxDiscovery(){ playTone(740,0.06,'triangle',0.08); playTone(990,0.1,'triangle',0.07,0.07); playTone(1320,0.14,'triangle',0.06,0.14); }
+function sfxStep(){ playTone(200,0.05,'square',0.045); }
+function sfxRadio(){ playTone(1200,0.03,'square',0.04); playTone(400,0.05,'square',0.03,0.03); }
+function sfxAlarm(){ playTone(880,0.15,'square',0.09); playTone(660,0.15,'square',0.09,0.18); playTone(880,0.15,'square',0.09,0.36); }
+function toggleMute(){
+  UI.muted = !UI.muted;
+  try{ localStorage.setItem('sdv_muted', UI.muted?'1':'0'); }catch(e){}
+  render();
+}
+
 /* ============================== DATA TABLES ============================== */
 const ADJ = ["Silenzioso","Freddo","Pulsante","Frammentato","Speculare","Cavo","Vitreo","Sfasato","Immobile","Ricorsivo","Umido","Metallico","Assente","Doppio","Radioso","Ottuso","Incrinato"];
 const NOUN = ["Cilindro","Sfera","Nastro","Chiave","Specchio","Scatola","Antenna","Bussola","Lente","Frammento","Custodia","Diapason","Involucro","Terminale","Sigillo","Disco","Cristallo"];
@@ -245,14 +286,79 @@ const SUCCESS_TEXT = {
  nascondersi:['Resti immobile finché la sensazione svanisce.','Ti confondi con l\'ombra e il momento passa.'],
  fuggire:['Ti allontani a passo svelto senza voltarti.','Guadagni distanza e il disagio si allenta.'],
  affrontare:['Tieni duro e, dopo un istante interminabile, non succede altro.','Fai un passo avanti e qualunque cosa fosse, si ritira.'],
- usare_torcia:['Il fascio della torcia spazza l\'area: non c\'è più nulla.','Alla luce, quello che sembrava minaccioso si rivela innocuo — forse.']
+ usare_torcia:['Il fascio della torcia spazza l\'area: non c\'è più nulla.','Alla luce, quello che sembrava minaccioso si rivela innocuo — forse.'],
+ restare_fermi:['Non ti muovi di un millimetro. Dopo un tempo che sembra infinito, qualsiasi cosa fosse se ne va.','Trattieni il respiro finché i polmoni bruciano. Funziona.']
 };
 const FAIL_TEXT = {
  nascondersi:['Il nascondiglio non basta: qualcosa ti sfiora prima che tu possa reagire.','Ti scoprono comunque, e il contatto ti scuote a fondo.'],
  fuggire:['Inciampi nel buio e il tempo perso si fa sentire.','La fuga non è pulita: qualcosa ti raggiunge per un istante.'],
  affrontare:['Non era una buona idea: ne esci peggio di quanto pensassi.','La reazione ti coglie impreparato.'],
- usare_torcia:['La batteria della torcia cede nel momento peggiore.','La luce non basta a scacciare quello che hai visto.']
+ usare_torcia:['La batteria della torcia cede nel momento peggiore.','La luce non basta a scacciare quello che hai visto.'],
+ restare_fermi:['L\'immobilità non basta: qualcosa si accorge comunque di te.','Un brivido ti tradisce nel momento peggiore.']
 };
+const QTE_CONFIG = {
+ nascondersi:{title:'Nasconditi',text:'Individua il momento giusto per sparire nell\'ombra. Premi FERMA quando il cursore è nella zona verde.',zoneWidth:34,speed:1.1},
+ fuggire:{title:'Fuggi',text:'Scatta ora. Premi FERMA nell\'istante perfetto per guadagnare terreno.',zoneWidth:24,speed:1.6},
+ affrontare:{title:'Affronta',text:'Tieni la posizione e reagisci al momento giusto.',zoneWidth:22,speed:1.3},
+ restare_fermi:{title:'Resta Immobile',text:'Trattieni il respiro. Premi FERMA solo quando senti che il momento è quello giusto.',zoneWidth:16,speed:0.8},
+ usare_torcia:{title:'Usa la Torcia',text:'Punta il fascio nell\'istante giusto.',zoneWidth:40,speed:1.2}
+};
+const WEATHER_TYPES = [
+ {id:'sereno',label:'Sereno',rdfMod:0,dangerMod:0,weight:5},
+ {id:'nebbia',label:'Nebbia',rdfMod:-6,dangerMod:0.04,weight:3},
+ {id:'pioggia',label:'Pioggia',rdfMod:-3,dangerMod:0.02,weight:3},
+ {id:'temporale',label:'Temporale',rdfMod:-10,dangerMod:0.09,weight:1}
+];
+const INTERIOR_POINTS = {
+ torre:['Piattaforma di osservazione','Vano scale','Vecchia sala radio'],
+ casale:['Ingresso e cucina','Camere da letto','Cantina'],
+ antenna:['Base del traliccio','Cabina di controllo'],
+ accampamento:['Area del fuoco','Tende','Deposito attrezzi'],
+ deposito:['Ingresso e casse','Corsia centrale','Ufficio del magazziniere'],
+ relitto:['Carlinga esterna','Vano di carico','Cabina di comando'],
+ bunker:['Botola d\'ingresso','Corridoio blindato','Sala controllo','Camera sigillata'],
+ grotta:['Imboccatura','Galleria stretta','Camera profonda'],
+ radura:['Bordo della radura','Centro esatto del cerchio']
+};
+const SITE_BIAS = {
+ torre:{obj:0.15,doc:0.35,cash:0.15,item:0.15,nothing:0.20,danger:0.7},
+ casale:{obj:0.2,doc:0.15,cash:0.15,item:0.35,nothing:0.15,danger:0.8},
+ antenna:{obj:0.2,doc:0.4,cash:0.1,item:0.15,nothing:0.15,danger:0.8},
+ accampamento:{obj:0.2,doc:0.15,cash:0.3,item:0.2,nothing:0.15,danger:0.9},
+ deposito:{obj:0.25,doc:0.15,cash:0.35,item:0.15,nothing:0.10,danger:1.1},
+ relitto:{obj:0.4,doc:0.15,cash:0.15,item:0.1,nothing:0.20,danger:1.1},
+ bunker:{obj:0.4,doc:0.2,cash:0.25,item:0.1,nothing:0.05,danger:1.3},
+ grotta:{obj:0.35,doc:0.1,cash:0.1,item:0.1,nothing:0.35,danger:1.4},
+ radura:{obj:0.5,doc:0.1,cash:0.05,item:0.05,nothing:0.30,danger:1.2}
+};
+const TRAVEL_FLAVOR = [
+ "Il bosco scricchiola sotto i tuoi passi, nient'altro.",
+ "Una folata di vento smuove le foglie sopra di te.",
+ "Il sentiero è più lungo di quanto ricordassi.",
+ "In lontananza senti il verso di un uccello notturno, o qualcosa che gli somiglia.",
+ "Ti fermi un attimo a controllare la bussola: la direzione è giusta.",
+ "L'unico rumore è quello della tua stessa respirazione."
+];
+const QUOTIDIAN_EVENTS = [
+ {text:"Il sentiero si biforca. Un ramo sembra più breve ma più fitto di rovi.",a:"Taglia per i rovi",b:"Segui il sentiero lungo",
+  effA:{sanity:-2},noteA:"Arrivi prima, con qualche graffio in più.",
+  effB:{sanity:1},noteB:"Fai più strada, ma con calma."},
+ {text:"Trovi un tronco caduto comodo per sedersi un momento.",a:"Fermati a riposare",b:"Non perdere tempo",
+  effA:{health:2,sanity:2},noteA:"Ti riprendi un po'.",
+  effB:{},noteB:"Prosegui senza sosta."},
+ {text:"Il tuo walkie-talkie gracchia: qualcuno alla base vorrebbe un rapporto veloce.",a:"Rispondi alla radio",b:"Ignora, non è il momento",
+  effA:{sanity:2},noteA:"Sentire una voce umana aiuta, anche solo per un minuto.",
+  effB:{sanity:-1},noteB:"Il silenzio dopo la chiamata ignorata pesa un po'."},
+ {text:"Un frutto di bosco dall'aspetto commestibile pende da un ramo.",a:"Assaggialo",b:"Meglio lasciar perdere",
+  effA:{healthRandom:[-6,4],sanity:-1},noteA:"Non era una grande idea, o forse sì.",
+  effB:{},noteB:"Meglio non rischiare inutilmente."},
+ {text:"Senti la tentazione di fumare una sigaretta per calmare i nervi.",a:"Fumane una",b:"Resisti",
+  effA:{sanity:4,health:-2},noteA:"I nervi si calmano, il corpo un po' meno.",
+  effB:{sanity:-1},noteB:"La tentazione resta, ma tieni duro."},
+ {text:"Un vecchio cartello arrugginito indica una direzione che non corrisponde alla tua mappa.",a:"Fermati a osservarlo",b:"Tira dritto",
+  effA:{sanity:-1},noteA:"Non riesci a spiegartelo, e questo ti resta in testa.",
+  effB:{},noteB:"Meglio non pensarci."}
+];
 const STORY_DOCS = {
  d1:{title:"Promemoria di Accoglienza — Direttorato Anomalie di Segnale",text:"Benvenuto/a in servizio presso la Stazione di Ascolto 9. Il tuo incarico è semplice: mantenere operativo l'impianto, monitorare lo spettro radio assegnato e catalogare ogni anomalia rinvenuta nel perimetro boschivo, secondo protocollo. Il generatore va tenuto acceso durante le ore notturne. Il Direttorato copre vitto, attrezzatura e uno stipendio settimanale, accreditato automaticamente. In caso di malfunzionamento delle comunicazioni non è previsto supporto immediato: la stazione è, per policy, isolata. Buon servizio."},
  d2:{title:"Manuale dell'Operatore — Procedura di Radiogoniometria",text:"Per localizzare l'origine di un segnale non identificato, orienta l'antenna verso il punto di massima intensità e blocca la lettura. Un solo rilevamento indica solo una direzione, non una posizione: servono due rilevamenti da postazioni sufficientemente distanti tra loro. L'incrocio delle due direzioni indica, con buona approssimazione, l'origine del segnale. Ogni sito già raggiunto può fungere da seconda postazione. Si raccomanda cautela: alcuni segnali non hanno origine strumentale."},
@@ -285,7 +391,12 @@ const SHOP_ITEMS = [
 /* ============================== STATE ============================== */
 const SAVE_KEY='sdv_save_v1', BEST_KEY='sdv_best_v1';
 let G = null;
-let UI = {tab:'stazione', freq:null, observer:'stazione', dial:0, modal:null};
+function freshUI(){
+  let muted=false;
+  try{ muted = localStorage.getItem('sdv_muted')==='1'; }catch(e){}
+  return {tab:'stazione', freq:null, observer:'stazione', dial:0, modal:null, journey:null, interior:null, muted, _qteRaf:null, _qteOnResult:null};
+}
+let UI = freshUI();
 
 function hasSave(){ return !!localStorage.getItem(SAVE_KEY); }
 function loadGame(){ return safeParse(localStorage.getItem(SAVE_KEY)); }
@@ -398,7 +509,7 @@ function tickHour(context){
       G.sanity=clamp(G.sanity-0.5*iso,0,100);
       G.health=clamp(G.health-0.1*iso,0,100);
     }
-    let chance = 0.02 + (night?0.05:0) + (!G.power?0.05:0) - (G.equip.illuminazionePerimetrale?0.02:0);
+    let chance = 0.02 + (night?0.05:0) + (!G.power?0.05:0) - (G.equip.illuminazionePerimetrale?0.02:0) + weatherDangerMod();
     chance = Math.max(0,chance);
     if(rngNext(G.rng) < chance){ startFieldDanger('stazione', night?2:1); }
   }
@@ -425,6 +536,8 @@ function checkNewDay(){
   const newDay = Math.floor(G.clock/1440)+1;
   if(newDay!==G.day){
     G.day=newDay;
+    G.weather = pickWeather();
+    addLog(`Meteo di oggi: ${currentWeather().label}.`);
     if((G.day-1)%7===0){
       if(!G.flags.sitoZeroFound){
         G.money += 150;
@@ -435,6 +548,17 @@ function checkNewDay(){
       }
     }
   }
+}
+function pickWeather(){
+  const total = WEATHER_TYPES.reduce((s,w)=>s+w.weight,0);
+  let r = rngNext(G.rng)*total;
+  for(const w of WEATHER_TYPES){ if((r-=w.weight)<0) return w.id; }
+  return WEATHER_TYPES[0].id;
+}
+function currentWeather(){ return WEATHER_TYPES.find(w=>w.id===G.weather) || WEATHER_TYPES[0]; }
+function weatherDangerMod(){ return currentWeather().dangerMod; }
+function rdfTolerance(){
+  return clamp(9 + (G.equip.antennaDirettiva?4:0) + (G.flags.rdfBonusCharge?6:0) + currentWeather().rdfMod, 4, 30);
 }
 function grantDoc(id){
   if(G.archive.includes(id)) return;
@@ -466,6 +590,7 @@ function endRun(reason,title,text){
   if(G.gameOver) return;
   G.gameOver={reason,title,text,day:G.day};
   addLog(`— ${title} — ${text}`);
+  sfxAlarm();
   updateBest(reason);
   saveGame();
   render();
@@ -483,7 +608,7 @@ function useConsumable(itemUid){
   if(G.gameOver) return;
   const it = G.inventory.find(i=>i.uid===itemUid);
   if(!it || it.kind!=='consumabile') return;
-  if(it.type==='medico'){ G.health=clamp(G.health+40,0,100); addLog('Usi un Kit Medico.'); }
+  if(it.type==='medico'){ G.health=clamp(G.health+40,0,100); if(G.flags.injured){ G.flags.injured=false; addLog('La ferita si rimargina.'); } addLog('Usi un Kit Medico.'); }
   else if(it.type==='sedativo'){ G.sanity=clamp(G.sanity+35,0,100); addLog('Prendi dei Sedativi.'); }
   else if(it.type==='batteria'){ G.flags.rdfBonusCharge=true; addLog('Installi una Batteria RDF: il prossimo rilevamento sarà più preciso.'); }
   it.qty--; if(it.qty<=0) G.inventory=G.inventory.filter(i=>i.uid!==itemUid);
@@ -499,32 +624,79 @@ function sellItem(itemUid){
   saveGame(); render();
 }
 
-/* ============================== DANGER / ENCOUNTERS ============================== */
+/* ============================== DANGER / ENCOUNTERS / QTE ============================== */
 function startFieldDanger(context,severity){
   severity = clamp(severity,1,3);
   const sc = pick(G.rng, DANGER_SCENARIOS);
-  const actions = ['nascondersi','fuggire','affrontare'];
+  const actions = ['nascondersi','fuggire','affrontare','restare_fermi'];
   if(G.equip.torciaPotenziata) actions.push('usare_torcia');
+  sfxDanger();
   UI.modal = {kind:'danger', sc, severity, context, actions};
   render();
 }
-function resolveDanger(action){
+function randomZoneStart(zoneWidth){ return rngInt(G.rng,4,Math.max(4,96-zoneWidth)); }
+function startQTE(config,onResult){
+  if(UI._qteRaf){ cancelAnimationFrame(UI._qteRaf); UI._qteRaf=null; }
+  UI.modal = {kind:'qte', title:config.title, text:config.text, zoneStart:config.zoneStart, zoneWidth:config.zoneWidth, speed:config.speed||1.3, pos:0, dir:1, resolved:false};
+  UI._qteOnResult = onResult;
+  render();
+  runQTELoop();
+}
+function runQTELoop(){
+  if(!UI.modal || UI.modal.kind!=='qte' || UI.modal.resolved) return;
+  const m = UI.modal;
+  m.pos += m.dir*m.speed;
+  if(m.pos>=100){ m.pos=100; m.dir=-1; }
+  if(m.pos<=0){ m.pos=0; m.dir=1; }
+  const marker = el('qte-marker');
+  if(marker) marker.style.left = m.pos+'%';
+  UI._qteRaf = requestAnimationFrame(runQTELoop);
+}
+function stopQTE(){
+  const m = UI.modal;
+  if(!m || m.kind!=='qte' || m.resolved) return;
+  m.resolved = true;
+  if(UI._qteRaf){ cancelAnimationFrame(UI._qteRaf); UI._qteRaf=null; }
+  const center = m.zoneStart + m.zoneWidth/2;
+  const dist = Math.abs(m.pos-center);
+  let tier;
+  if(dist <= m.zoneWidth*0.25) tier='perfetto';
+  else if(dist <= m.zoneWidth/2) tier='buono';
+  else tier='mancato';
+  const cb = UI._qteOnResult;
+  UI.modal = null; UI._qteOnResult = null;
+  if(tier==='mancato') sfxFail(); else sfxSuccess();
+  if(cb) cb(tier); else render();
+}
+function chooseDangerAction(action){
   const m = UI.modal; if(!m || m.kind!=='danger') return;
-  const {sc,severity} = m;
-  let base = {nascondersi:0.6,fuggire:0.5,affrontare:0.35,usare_torcia:0.75}[action];
+  const cfg = QTE_CONFIG[action];
+  const dangerCtx = {sc:m.sc, severity:m.severity, context:m.context, action};
+  startQTE({title:cfg.title, text:cfg.text, zoneStart:randomZoneStart(cfg.zoneWidth), zoneWidth:cfg.zoneWidth, speed:cfg.speed}, (tier)=>{
+    resolveDangerOutcome(dangerCtx, tier);
+  });
+}
+function resolveDangerOutcome(ctx,tier){
+  const {sc,severity,action} = ctx;
+  let base = {nascondersi:0.6,fuggire:0.5,affrontare:0.35,usare_torcia:0.75,restare_fermi:0.55}[action];
   base -= (severity-1)*0.1;
-  if((action==='nascondersi'||action==='fuggire') && G.equip.kitSopravvivenza) base+=0.1;
+  if((action==='nascondersi'||action==='fuggire'||action==='restare_fermi') && G.equip.kitSopravvivenza) base+=0.1;
   if(action==='affrontare' && G.equip.torciaPotenziata) base+=0.15;
   base = clamp(base,0.05,0.95);
-  const success = rngNext(G.rng) < base;
+  let success;
+  let tierNote = '';
+  if(tier==='perfetto'){ success=true; tierNote=' Il tempismo è perfetto.'; }
+  else if(tier==='mancato'){ success = rngNext(G.rng) < base*0.3; tierNote=' Il tempismo non aiuta.'; }
+  else { success = rngNext(G.rng) < base; }
   let text='';
   if(success){
     G.sanity=clamp(G.sanity-rngInt(G.rng,2,6),0,100);
-    text = pick(G.rng, SUCCESS_TEXT[action]);
+    text = pick(G.rng, SUCCESS_TEXT[action]) + tierNote;
     if(action==='affrontare' && rngNext(G.rng)<0.3){
       const obj = genAnomaly(G.rng,G.day,null);
       addToInventory(obj);
       text += ` Tra i rovi trovi qualcosa che prima non c'era: ${obj.name}.`;
+      sfxDiscovery();
     } else if(rngNext(G.rng)<0.15){
       const mo = rngInt(G.rng,15,40); G.money+=mo;
       text += ` Trovi anche ${mo} cr. dimenticati.`;
@@ -536,12 +708,15 @@ function resolveDanger(action){
     const sanityD = Math.round((6+severity*6)*mult*0.9);
     G.health=clamp(G.health-healthD,0,100);
     G.sanity=clamp(G.sanity-sanityD,0,100);
-    text = pick(G.rng, FAIL_TEXT[action]);
+    text = pick(G.rng, FAIL_TEXT[action]) + tierNote;
+    if(severity>=2 && !G.flags.injured && rngNext(G.rng)<0.25){
+      G.flags.injured = true;
+      text += ' Ti sei fatto male: senti una fitta che non passa facilmente.';
+    }
   }
   if(G.sanity<40) G.flags.lowSanityEver40=true;
   if(G.sanity<20) G.flags.lowSanityEver20=true;
   addLog(`${sc.title} — ${text}`);
-  UI.modal=null;
   checkGameOverConditions();
   checkStoryUnlocks();
   saveGame();
@@ -550,7 +725,7 @@ function resolveDanger(action){
   } else { render(); }
 }
 
-/* ============================== SITE SEARCH / TRAVEL ============================== */
+/* ============================== SITE SEARCH / TRAVEL / INTERIOR EXPLORATION ============================== */
 function addAmbientTranscript(){
   const line = pick(G.rng, FRAG_LINES);
   const hh = String(rngInt(G.rng,0,23)).padStart(2,'0');
@@ -577,72 +752,235 @@ function resolveSitoZero(site){
   checkStoryUnlocks();
   saveGame(); render();
 }
-function resolveSiteSearch(site){
+function resolveSiteRevisit(site){
+  if(rngNext(G.rng) < 0.06){
+    startFieldDanger('sito', site.dangerLevel);
+    checkStoryUnlocks(); saveGame(); render();
+    return;
+  }
+  if(rngNext(G.rng) < 0.2){ const mo=rngInt(G.rng,5,15); G.money+=mo; addLog(`Torni a ${site.name}: recuperi ${mo} cr. dimenticati.`); }
+  else addLog(`Torni a ${site.name}: nulla di nuovo.`);
+  checkStoryUnlocks();
+  saveGame(); render();
+}
+function finishArrival(site){
+  if(site.id==='sitozero'){ resolveSitoZero(site); return; }
   const firstTimeEver = !site.visited;
-  site.visited=true;
+  site.visited = true;
   if(firstTimeEver){
     G.stats.sitesVisited++;
     if(site.known) G.flags.knownVisitedCount=(G.flags.knownVisitedCount||0)+1;
   }
-  const night = isNightNow();
   addLog(`Arrivi a ${site.name}. ${pick(G.rng, SITE_TYPES[site.type].descs)}`);
   if(!site.searched){
-    site.searched=true;
-    const dangerChance = clamp(0.16 + site.dangerLevel*0.06 + (night?0.1:0),0,0.6);
-    if(rngNext(G.rng) < dangerChance){
-      startFieldDanger('sito', site.dangerLevel + (night?1:0));
-      checkStoryUnlocks(); saveGame(); render();
-      return;
-    }
-    const roll2 = rngNext(G.rng);
-    if(roll2 < 0.45){
-      const obj = genAnomaly(G.rng,G.day,site.id);
-      addToInventory(obj);
-      addLog(`Trovi un oggetto anomalo: ${obj.name}.`);
-    } else if(roll2 < 0.68){
-      addAmbientTranscript();
-    } else if(roll2 < 0.85){
-      if(rngNext(G.rng)<0.35){
-        const item = pick(G.rng,['medico','sedativo','batteria']);
-        addConsumable(item,1);
-        addLog('Trovi rifornimenti utili lasciati da chi è passato prima di te.');
-      } else {
-        const mo = rngInt(G.rng,10,35); G.money+=mo;
-        addLog(`Trovi ${mo} cr. dimenticati.`);
-      }
+    beginInteriorExploration(site);
+  } else {
+    resolveSiteRevisit(site);
+  }
+}
+
+/* --- Viaggio interattivo a tappe --- */
+function beginJourney(siteId,purpose,extra){
+  if(G.gameOver) return;
+  const site = G.sites.find(s=>s.id===siteId);
+  if(!site || !site.discovered) return;
+  const totalLegs = clamp(Math.ceil(site.dist/280),2,5);
+  UI.journey = {siteId, leg:0, totalLegs, purpose:purpose||'esplora', arrived:false, extra:extra||null};
+  UI.tab='mappa';
+  sfxStep();
+  render();
+}
+function legMinutesFor(site){
+  const base = Math.round((12 + site.dist/35) / UI.journey.totalLegs);
+  return Math.max(4, base + (G.flags.injured?3:0));
+}
+function advanceLeg(){
+  if(!UI.journey) return;
+  const site = G.sites.find(s=>s.id===UI.journey.siteId);
+  if(!site){ UI.journey=null; render(); return; }
+  advanceTime(legMinutesFor(site),'travel');
+  sfxStep();
+  if(G.gameOver){ UI.journey=null; saveGame(); render(); return; }
+  UI.journey.leg++;
+  const night = isNightNow();
+  const dangerChance = clamp(0.03 + (night?0.08:0) + site.dangerLevel*0.025 + weatherDangerMod(),0,0.3);
+  const roll = rngNext(G.rng);
+  if(roll < dangerChance){
+    G._pendingContinuation = ()=>continueJourneyCheck(site);
+    startFieldDanger('viaggio', site.dangerLevel + (night?1:0));
+    saveGame(); render();
+  } else if(roll < dangerChance+0.16){
+    triggerTravelFind(site);
+  } else if(roll < dangerChance+0.16+0.08){
+    triggerQuotidianEvent(()=>continueJourneyCheck(site));
+  } else {
+    continueJourneyCheck(site);
+  }
+}
+function triggerTravelFind(site){
+  const roll = rngNext(G.rng);
+  if(roll<0.4){
+    const mo = rngInt(G.rng,5,20); G.money+=mo;
+    addLog(`Lungo il sentiero verso ${site.name} trovi ${mo} cr. dimenticati.`);
+    sfxDiscovery();
+  } else if(roll<0.7){
+    const item = pick(G.rng,['medico','sedativo','batteria']);
+    addConsumable(item,1);
+    addLog('Lungo il sentiero raccogli rifornimenti utili.');
+    sfxDiscovery();
+  } else {
+    addLog(pick(G.rng, TRAVEL_FLAVOR));
+  }
+  continueJourneyCheck(site);
+}
+function triggerQuotidianEvent(onDone){
+  const ev = pick(G.rng, QUOTIDIAN_EVENTS);
+  UI.modal = {kind:'quotidian', ev, onDone};
+  render();
+}
+function applyQuotidianEffect(eff){
+  if(!eff) return;
+  if(eff.health) G.health=clamp(G.health+eff.health,0,100);
+  if(eff.sanity) G.sanity=clamp(G.sanity+eff.sanity,0,100);
+  if(eff.healthRandom){ const v=rngInt(G.rng,eff.healthRandom[0],eff.healthRandom[1]); G.health=clamp(G.health+v,0,100); }
+}
+function chooseQuotidian(which){
+  const m = UI.modal; if(!m || m.kind!=='quotidian') return;
+  const eff = which==='a'?m.ev.effA:m.ev.effB;
+  const note = which==='a'?m.ev.noteA:m.ev.noteB;
+  applyQuotidianEffect(eff);
+  addLog(`${m.ev.text} ${note}`);
+  const onDone = m.onDone;
+  UI.modal = null;
+  checkGameOverConditions();
+  saveGame();
+  if(!G.gameOver && onDone) onDone(); else render();
+}
+function continueJourneyCheck(site){
+  if(!UI.journey){ render(); return; }
+  if(UI.journey.leg >= UI.journey.totalLegs){
+    if(UI.journey.purpose==='rilevamento'){
+      UI.journey.arrived = true;
+      site.visited = true;
+      addLog(`Raggiungi ${site.name} per effettuare il rilevamento.`);
+      UI.tab = 'radio';
+      saveGame(); render();
     } else {
-      addLog('Non trovi nulla di rilevante.');
+      UI.journey = null;
+      finishArrival(site);
     }
   } else {
-    if(rngNext(G.rng) < 0.06){
-      startFieldDanger('sito', site.dangerLevel);
-      checkStoryUnlocks(); saveGame(); render();
-      return;
+    saveGame(); render();
+  }
+}
+function abandonJourney(){
+  if(!UI.journey) return;
+  const site = G.sites.find(s=>s.id===UI.journey.siteId);
+  addLog(`Decidi di tornare indietro prima di raggiungere ${site?site.name:'la destinazione'}.`);
+  if(site && UI.journey.leg>0){ advanceTime(legMinutesFor(site)*UI.journey.leg,'travel'); }
+  UI.journey = null;
+  saveGame(); render();
+}
+function isAtObserver(observerId){
+  if(observerId==='stazione') return true;
+  return !!(UI.journey && UI.journey.siteId===observerId && UI.journey.purpose==='rilevamento' && UI.journey.arrived);
+}
+
+/* --- Esplorazione interattiva degli interni --- */
+function beginInteriorExploration(site){
+  const points = INTERIOR_POINTS[site.type] || ['Area principale'];
+  UI.interior = {siteId:site.id, pointIndex:0, points, breached: site.type!=='bunker'};
+  checkStoryUnlocks();
+  saveGame();
+  render();
+}
+function interiorPointName(){
+  const it = UI.interior; if(!it) return '';
+  return it.points[it.pointIndex] || 'Area sconosciuta';
+}
+function exploreCurrentPoint(){
+  const it = UI.interior; if(!it) return;
+  const site = G.sites.find(s=>s.id===it.siteId); if(!site){ UI.interior=null; render(); return; }
+  if(site.type==='bunker' && !it.breached){
+    startQTE({title:'Forza la Botola',text:"La botola è arrugginita ma non bloccata: serve fare leva nel momento giusto.",zoneStart:randomZoneStart(24),zoneWidth:24,speed:1.3},(tier)=>{
+      if(tier==='mancato'){
+        addLog('Non riesci a forzare la botola: perdi tempo prezioso.');
+        advanceTime(15,'travel');
+      } else {
+        it.breached = true;
+        addLog(tier==='perfetto' ? 'Forzi la botola al primo tentativo.' : 'Dopo qualche tentativo, la botola cede.');
+      }
+      checkGameOverConditions(); saveGame(); render();
+    });
+    return;
+  }
+  advanceTime(10,'travel');
+  if(G.gameOver){ UI.interior=null; saveGame(); render(); return; }
+  const night = isNightNow();
+  const bias = SITE_BIAS[site.type] || SITE_BIAS.accampamento;
+  const dangerChance = clamp(0.10 + site.dangerLevel*0.05*bias.danger + (night?0.08:0) + it.pointIndex*0.03 + weatherDangerMod(),0,0.55);
+  if(rngNext(G.rng) < dangerChance){
+    G._pendingContinuation = ()=>advancePointAfterDanger();
+    startFieldDanger('sito', site.dangerLevel + (night?1:0));
+    saveGame(); render();
+    return;
+  }
+  resolvePointLoot(site,bias);
+  advancePointAfterDanger();
+}
+function resolvePointLoot(site,bias){
+  const total = bias.obj+bias.doc+bias.cash+bias.item+bias.nothing;
+  let r = rngNext(G.rng)*total;
+  if((r-=bias.obj) < 0){
+    const obj = genAnomaly(G.rng,G.day,site.id);
+    addToInventory(obj);
+    let extra = '';
+    if(rngNext(G.rng)<0.4){
+      const bonus = rngInt(G.rng,10,25); G.money+=bonus;
+      extra = ` Il Direttorato accredita un piccolo bonus di documentazione: +${bonus} cr.`;
     }
-    if(rngNext(G.rng) < 0.2){ const mo=rngInt(G.rng,5,15); G.money+=mo; addLog(`Torni a ${site.name}: recuperi ${mo} cr. dimenticati.`); }
-    else addLog(`Torni a ${site.name}: nulla di nuovo.`);
+    addLog(`In ${interiorPointName()} trovi un oggetto anomalo: ${obj.name}.${extra}`);
+    sfxDiscovery();
+  } else if((r-=bias.doc) < 0){
+    addAmbientTranscript();
+    sfxDiscovery();
+  } else if((r-=bias.cash) < 0){
+    const mo = rngInt(G.rng,10,40); G.money+=mo;
+    addLog(`In ${interiorPointName()} trovi ${mo} cr.`);
+    sfxDiscovery();
+  } else if((r-=bias.item) < 0){
+    const item = pick(G.rng,['medico','sedativo','batteria']);
+    addConsumable(item,1);
+    addLog(`In ${interiorPointName()} trovi rifornimenti utili.`);
+    sfxDiscovery();
+  } else {
+    addLog(`${interiorPointName()}: non trovi nulla di rilevante.`);
+  }
+}
+function advancePointAfterDanger(){
+  const it = UI.interior; if(!it){ render(); return; }
+  it.pointIndex++;
+  const site = G.sites.find(s=>s.id===it.siteId);
+  if(!site || it.pointIndex >= it.points.length){
+    finishInteriorExploration(site);
+    return;
+  }
+  saveGame(); render();
+}
+function finishInteriorExploration(site){
+  UI.interior = null;
+  if(site && !site.searched){
+    site.searched = true;
+    addLog(`Hai esplorato a fondo ${site.name}.`);
   }
   checkStoryUnlocks();
   saveGame(); render();
 }
-function finishArrival(site){ if(site.id==='sitozero') resolveSitoZero(site); else resolveSiteSearch(site); }
-function travelToSite(siteId){
-  if(G.gameOver) return;
-  const site = G.sites.find(s=>s.id===siteId);
-  if(!site || !site.discovered) return;
-  const oneWay = 12 + site.dist/35;
-  const roundTrip = Math.round(oneWay*2);
-  const night = isNightNow();
-  advanceTime(roundTrip,'travel');
-  if(G.gameOver){ saveGame(); render(); return; }
-  const dangerChance = clamp(0.05 + (night?0.18:0) + site.dangerLevel*0.04, 0, 0.55);
-  if(rngNext(G.rng) < dangerChance){
-    G._pendingContinuation = ()=>finishArrival(site);
-    startFieldDanger('viaggio', site.dangerLevel + (night?1:0));
-    saveGame(); render();
-    return;
-  }
-  finishArrival(site);
+function leaveInteriorEarly(){
+  const it = UI.interior; if(!it) return;
+  const site = G.sites.find(s=>s.id===it.siteId);
+  addLog(`Decidi di non proseguire oltre a ${site?site.name:'questo posto'} e torni alla base.`);
+  finishInteriorExploration(site);
 }
 
 /* ============================== RDF / RADIO ============================== */
@@ -653,6 +991,7 @@ function trueBearing(obs,site){
 }
 function posOf(siteId){ const s=G.sites.find(x=>x.id===siteId); return s?{x:s.x,y:s.y}:null; }
 function finalizeLockAttempt(freq,site,observerId,diff,tol){
+  sfxRadio();
   if(diff<=tol){
     if(!freq.locks.includes(observerId)) freq.locks.push(observerId);
     addLog(`Rilevamento agganciato su ${freq.label} MHz da ${observerId==='stazione'?'Stazione':site.name}.`);
@@ -667,6 +1006,7 @@ function finalizeLockAttempt(freq,site,observerId,diff,tol){
     if(triangulated && !freq.resolved){
       freq.resolved=true; site.discovered=true;
       addLog(`Triangolazione riuscita: nuova posizione sulla mappa — ${site.name}.`);
+      sfxSuccess();
     } else if(!freq.resolved){
       addLog('Serve un secondo rilevamento da una postazione più distante per triangolare la fonte.');
     }
@@ -680,23 +1020,22 @@ function attemptLock(freqId,observerId,dialAngle){
   const freq = G.freqs.find(f=>f.id===freqId);
   if(!freq || freq.kind!=='site' || freq.resolved) return;
   const site = G.sites.find(s=>s.id===freq.siteId);
-  const obs = observerId==='stazione'?{x:0,y:0}:posOf(observerId);
-  if(!obs || !site) return;
-  const trueB = trueBearing(obs,site);
-  const diff = angDiff(dialAngle,trueB);
-  const tol = 9 + (G.equip.antennaDirettiva?4:0) + (G.flags.rdfBonusCharge?6:0);
+  if(!site) return;
   const isRemote = observerId!=='stazione';
-  const cost = isRemote?60:25;
-  const context = isRemote?'travel':'station';
-  advanceTime(cost,context);
-  if(G.flags.rdfBonusCharge) G.flags.rdfBonusCharge=false;
-  if(G.gameOver){ saveGame(); render(); return; }
-  if(isRemote && rngNext(G.rng) < (isNightNow()?0.10:0.04)){
-    G._pendingContinuation = ()=>finalizeLockAttempt(freq,site,observerId,diff,tol);
-    startFieldDanger('rilevamento', site.dangerLevel);
-    saveGame(); render();
+  if(isRemote && !isAtObserver(observerId)){
+    beginJourney(observerId,'rilevamento',{freqId,observerId});
     return;
   }
+  const obs = observerId==='stazione'?{x:0,y:0}:posOf(observerId);
+  if(!obs) return;
+  const trueB = trueBearing(obs,site);
+  const diff = angDiff(dialAngle,trueB);
+  const tol = rdfTolerance();
+  const cost = isRemote?15:25;
+  advanceTime(cost,'station');
+  if(G.flags.rdfBonusCharge) G.flags.rdfBonusCharge=false;
+  if(G.gameOver){ saveGame(); render(); return; }
+  if(isRemote){ UI.journey = null; }
   finalizeLockAttempt(freq,site,observerId,diff,tol);
 }
 function listenChatter(freqId){
@@ -768,16 +1107,18 @@ function newGame(name,callsign,seedStr){
     inventory:[], catalog:[], catalogCounter:0,
     sites:[], freqs:[], archive:[], archiveAmbient:[],
     pendingOrders:[], log:[],
-    flags:{knownVisitedCount:0,lowSanityEver40:false,lowSanityEver20:false,stipendStopped:false,sitoZeroUnlocked:false,sitoZeroFound:false,d14Timer:0,rdfBonusCharge:false},
+    flags:{knownVisitedCount:0,lowSanityEver40:false,lowSanityEver20:false,stipendStopped:false,sitoZeroUnlocked:false,sitoZeroFound:false,d14Timer:0,rdfBonusCharge:false,injured:false},
     stats:{objectsFound:0,sitesVisited:0,dangerEventsSurvived:0},
-    mapDecor:[], gameOver:null, _pendingContinuation:null
+    mapDecor:[], weather:'sereno', gameOver:null, _pendingContinuation:null
   };
   G.mapDecor = genDecor(G.rng);
   const wg = genWorld(G.rng);
   G.sites = wg.sites; G.freqs = wg.freqs;
+  G.weather = pickWeather();
   grantDoc('d1'); grantDoc('d2');
   addLog(`Giorno 1 — Arrivo alla ${G.stationName}.`);
-  UI = {tab:'stazione', freq:null, observer:'stazione', dial:0, modal:null};
+  addLog(`Meteo di oggi: ${currentWeather().label}.`);
+  UI = freshUI();
   saveGame();
 }
 
@@ -819,14 +1160,18 @@ function renderStazione(){
     return `<div class="site-item"><span>${o.label}</span><span class="small muted">arrivo Giorno ${t.day} ${t.hh}:${t.mm}</span></div>`;
   }).join('') || '<p class="small muted">Nessun ordine in consegna.</p>';
   const equipList = Object.entries(G.equip).filter(([k,v])=>v).map(([k])=>`<span class="pill on">${equipLabel(k)}</span>`).join(' ') || '<span class="small muted">Nessun potenziamento attivo.</span>';
+  const w = currentWeather();
+  const injuredPill = G.flags.injured ? '<span class="pill off">Ferito</span>' : '';
   c.innerHTML = `
     <div class="card">
       <h2>Stazione</h2>
       <p class="small muted">Operatore: ${G.operatorName} "${G.callsign}" — Seed: ${G.seedLabel}</p>
+      <p class="small">Meteo: <b>${w.label}</b> ${injuredPill}</p>
       <div class="row">
         <button class="btn" onclick="restShort()">Riposa 2 ore</button>
         <button class="btn" onclick="restMorning()">Riposa fino al mattino</button>
         <button class="btn ${G.power?'':'primary'}" onclick="toggleGenerator()">${G.power?'Spegni generatore':'Accendi generatore'}</button>
+        <button class="btn" onclick="toggleMute()">${UI.muted?'Audio: off':'Audio: on'}</button>
         ${G.archive.includes('d14') ? '<button class="btn primary" onclick="requestExtraction()">Richiedi Estrazione</button>' : ''}
       </div>
     </div>
@@ -885,10 +1230,11 @@ function renderRadio(){
         <div class="bar" style="margin:6px 0;"><div class="bar-fill" id="rdf-intensity-fill" style="width:0%"></div></div>
         <p class="small">Intensità segnale: <span id="rdf-intensity-txt">0%</span></p>
         <div class="row">
-          <button class="btn primary" id="rdf-lock-btn" onclick="onLockClick()">Blocca rilevamento</button>
+          <button class="btn primary" id="rdf-lock-btn" onclick="onLockClick()">${isAtObserver(UI.observer)?'Blocca rilevamento':'Raggiungi il sito per il rilevamento'}</button>
           ${batteria ? `<button class="btn" onclick="useConsumable('${batteria.uid}')">Usa Batteria RDF (+precisione)</button>` : ''}
         </div>
-        <p class="small muted">Rilevamenti registrati: ${freq.locks.length} (${freq.locks.map(l=>l==='stazione'?'Stazione':(G.sites.find(s=>s.id===l)||{name:'?'}).name).join(', ')||'nessuno'})</p>`;
+        <p class="small muted">Rilevamenti registrati: ${freq.locks.length} (${freq.locks.map(l=>l==='stazione'?'Stazione':(G.sites.find(s=>s.id===l)||{name:'?'}).name).join(', ')||'nessuno'})</p>
+        <p class="small muted">Meteo: ${currentWeather().label} (tolleranza rilevamento: ±${rdfTolerance()}°)</p>`;
     }
   }
   c.innerHTML = `<div class="card"><h2>Radio</h2><div class="row" style="align-items:flex-start;">
@@ -909,10 +1255,10 @@ function updateDialUI(){
   const trueB = trueBearing(obs,site);
   const diff = angDiff(UI.dial,trueB);
   const intensity = clamp(100 - diff*(100/45),0,100);
-  const tol = 9 + (G.equip.antennaDirettiva?4:0) + (G.flags.rdfBonusCharge?6:0);
+  const tol = rdfTolerance();
   const fill = el('rdf-intensity-fill'); if(fill) fill.style.width=intensity+'%';
   const txt = el('rdf-intensity-txt'); if(txt) txt.textContent = Math.round(intensity)+'%';
-  const btn = el('rdf-lock-btn'); if(btn) btn.disabled = diff>tol;
+  const btn = el('rdf-lock-btn'); if(btn) btn.disabled = isAtObserver(UI.observer) && diff>tol;
   drawCompass(UI.dial, intensity);
 }
 function onLockClick(){
@@ -937,15 +1283,56 @@ function drawCompass(angle,intensity){
   ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+Math.sin(rad)*r, cy-Math.cos(rad)*r); ctx.stroke();
   ctx.lineWidth=1;
 }
+const SITE_SPECIALTY_LABEL = {
+ torre:'ricognizione sicura, buone probabilità di documenti',
+ casale:'buone probabilità di rifornimenti',
+ antenna:'buone probabilità di documenti',
+ accampamento:'buone probabilità di denaro',
+ deposito:'ottimo per denaro, rischio medio-alto',
+ relitto:'buone probabilità di oggetti anomali',
+ bunker:'il migliore per oggetti anomali, ma va forzato ed è pericoloso',
+ grotta:'oggetti rari, rischio molto alto',
+ radura:'quasi solo oggetti anomali, nessun bottino comune'
+};
 function renderMappa(){
   const c = el('tab-mappa');
+  if(UI.interior){
+    const it = UI.interior;
+    const site = G.sites.find(s=>s.id===it.siteId);
+    const name = interiorPointName();
+    const isBunkerLocked = site && site.type==='bunker' && !it.breached;
+    c.innerHTML = `<div class="card">
+      <h2>${site?site.name:''}</h2>
+      <p class="small muted">Punto ${it.pointIndex+1}/${it.points.length}: <b>${name}</b></p>
+      <p class="small muted">${site?SITE_SPECIALTY_LABEL[site.type]||'':''}</p>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn primary" onclick="exploreCurrentPoint()">${isBunkerLocked?"Forza l'ingresso":'Fruga qui'}</button>
+        <button class="btn" onclick="leaveInteriorEarly()">Torna alla base</button>
+      </div>
+    </div>`;
+    return;
+  }
+  if(UI.journey){
+    const site = G.sites.find(s=>s.id===UI.journey.siteId);
+    c.innerHTML = `<div class="card">
+      <h2>${UI.journey.purpose==='rilevamento'?'In viaggio per un rilevamento':'In viaggio'}</h2>
+      <p class="small muted">Verso ${site?site.name:''} — tratta ${UI.journey.leg}/${UI.journey.totalLegs} (${Math.round(site?site.dist:0)} m totali)</p>
+      <div class="bar"><div class="bar-fill" style="width:${Math.round(UI.journey.leg/UI.journey.totalLegs*100)}%"></div></div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn primary" onclick="advanceLeg()">Avanza</button>
+        <button class="btn" onclick="abandonJourney()">Torna indietro</button>
+      </div>
+    </div>`;
+    return;
+  }
   const discovered = G.sites.filter(s=>s.discovered);
   const list = discovered.map(s=>{
     const status = !s.visited?'sconosciuto':(!s.searched?'visitato':'esplorato');
-    return `<div class="site-item"><span>${s.name} <span class="badge risk${s.dangerLevel}">rischio ${s.dangerLevel}</span> <span class="small muted">(${Math.round(s.dist)} m, ${status})</span></span>
-      <button class="btn" onclick="travelToSite('${s.id}')">Parti per il sito</button></div>`;
+    return `<div class="site-item"><span>${s.name} <span class="badge risk${s.dangerLevel}">rischio ${s.dangerLevel}</span> <span class="small muted">(${Math.round(s.dist)} m, ${status})</span><br><span class="small muted">${SITE_SPECIALTY_LABEL[s.type]||''}</span></span>
+      <button class="btn" onclick="beginJourney('${s.id}','esplora')">Parti per il sito</button></div>`;
   }).join('') || '<p class="small muted">Nessun sito ancora scoperto oltre a quelli noti.</p>';
   c.innerHTML = `<div class="card"><h2>Mappa</h2>
+    <p class="small muted">Meteo: ${currentWeather().label}${G.flags.injured?' — sei ferito, gli spostamenti richiedono più tempo':''}</p>
     <canvas id="map-canvas" width="380" height="380"></canvas>
     <div style="margin-top:10px;">${list}</div>
   </div>`;
@@ -1014,9 +1401,21 @@ function renderModal(){
   const box = el('modal-box');
   if(UI.modal.kind==='danger'){
     box.className='';
-    const labels={nascondersi:'Nasconditi',fuggire:'Fuggi',affrontare:'Affronta',usare_torcia:'Usa la torcia'};
+    const labels={nascondersi:'Nasconditi',fuggire:'Fuggi',affrontare:'Affronta',usare_torcia:'Usa la torcia',restare_fermi:'Resta Immobile'};
     box.innerHTML = `<h2>${UI.modal.sc.title}</h2><p class="small">${UI.modal.sc.text}</p>
-      <div class="row" style="margin-top:12px;">${UI.modal.actions.map(a=>`<button class="btn danger" onclick="resolveDanger('${a}')">${labels[a]}</button>`).join('')}</div>`;
+      <div class="row" style="margin-top:12px;">${UI.modal.actions.map(a=>`<button class="btn danger" onclick="chooseDangerAction('${a}')">${labels[a]}</button>`).join('')}</div>`;
+  } else if(UI.modal.kind==='qte'){
+    box.className='qte';
+    box.innerHTML = `<h2>${UI.modal.title}</h2><p class="small">${UI.modal.text}</p>
+      <div class="qte-track"><div class="qte-zone" style="left:${UI.modal.zoneStart}%;width:${UI.modal.zoneWidth}%;"></div><div class="qte-marker" id="qte-marker" style="left:${UI.modal.pos}%;"></div></div>
+      <div class="row" style="justify-content:center;"><button class="btn danger" onclick="stopQTE()">FERMA!</button></div>`;
+  } else if(UI.modal.kind==='quotidian'){
+    box.className='info';
+    box.innerHTML = `<h2>Un momento</h2><p class="small">${UI.modal.ev.text}</p>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" onclick="chooseQuotidian('a')">${UI.modal.ev.a}</button>
+        <button class="btn" onclick="chooseQuotidian('b')">${UI.modal.ev.b}</button>
+      </div>`;
   } else if(UI.modal.kind==='info'){
     box.className='info';
     box.innerHTML = `<h2>${UI.modal.title}</h2><p class="small">${UI.modal.text}</p>
@@ -1072,7 +1471,7 @@ function importSaveFile(file){
     const data = safeParse(reader.result);
     if(!data || data.v!==1 || !Array.isArray(data.sites)){ alert('File di salvataggio non valido.'); return; }
     G = data;
-    UI = {tab:'stazione',freq:null,observer:'stazione',dial:0,modal:null};
+    UI = freshUI();
     saveGame();
     showGameScreen();
     render();
@@ -1090,7 +1489,7 @@ function boot(){
   if(hasSave()) btnContinue.classList.remove('hidden'); else btnContinue.classList.add('hidden');
   btnContinue.onclick = ()=>{
     const data = loadGame();
-    if(data){ G=data; UI={tab:'stazione',freq:null,observer:'stazione',dial:0,modal:null}; showGameScreen(); render(); }
+    if(data){ G=data; UI=freshUI(); showGameScreen(); render(); }
   };
   el('btn-newgame').onclick = ()=>{
     if(hasSave() && !confirm('Una partita esistente verrà sovrascritta. Continuare?')) return;
@@ -1099,7 +1498,7 @@ function boot(){
     const seed = el('inp-seed').value.trim();
     newGame(name,call,seed);
     showGameScreen();
-    UI.modal = {kind:'info', title:'Briefing Operativo', text:'Sei l\'operatore della Stazione di Ascolto 9. Usa la scheda Radio per intercettare segnali e triangolarli con almeno due rilevamenti da postazioni diverse (Stazione + un sito già visitato). La Mappa mostra i siti scoperti da raggiungere ed esplorare. La Stazione gestisce generatore, riposo ed eventuale estrazione finale. Il Terminale vende rifornimenti e potenziamenti. L\'Archivio raccoglie documenti e catalogo. Sopravvivi, cataloga, scopri la verità.'};
+    UI.modal = {kind:'info', title:'Briefing Operativo', text:'Sei l\'operatore della Stazione di Ascolto 9. Usa la scheda Radio per intercettare segnali: dalla Stazione prendi un primo rilevamento, poi raggiungi fisicamente un altro sito già visitato per il secondo — il viaggio è a tappe reali, con imprevisti lungo il percorso. Dalla Mappa parti per i siti scoperti; una volta arrivato dovrai esplorarli punto per punto (alcuni luoghi, come i bunker, vanno prima forzati). Negli incontri pericolosi, ogni scelta — nasconditi, fuggi, affronta o resta immobile — si gioca con un rapido test di tempismo. Meteo e ferite influenzano rilevamenti e spostamenti. La Stazione gestisce generatore, riposo ed eventuale estrazione finale. Il Terminale vende rifornimenti e potenziamenti. L\'Archivio raccoglie documenti e catalogo. Sopravvivi, cataloga, scopri la verità.'};
     render();
   };
   el('btn-import-trigger').onclick = ()=> el('inp-import').click();
@@ -1108,6 +1507,10 @@ function boot(){
     b.onclick = ()=>{ UI.tab=b.dataset.tab; render(); };
   });
 }
+document.addEventListener('click', (e)=>{
+  const b = e.target.closest('.btn');
+  if(b) sfxClick();
+}, true);
 window.addEventListener('DOMContentLoaded', boot);
 </script>
 </body>
