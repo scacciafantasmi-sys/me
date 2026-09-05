@@ -168,38 +168,48 @@ function isNightNow(){ const m=((G.clock%1440)+1440)%1440; const h=Math.floor(m/
 
 /* ============================== AUDIO (sintesi Web Audio, nessun file esterno) ============================== */
 let AUDIO_CTX = null;
+let AUDIO_MASTER = null;
 function getAudioCtx(){
   if(!AUDIO_CTX){
-    try{ AUDIO_CTX = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ AUDIO_CTX = null; }
+    try{
+      AUDIO_CTX = new (window.AudioContext||window.webkitAudioContext)();
+      AUDIO_MASTER = AUDIO_CTX.createGain();
+      AUDIO_MASTER.gain.value = 0.9;
+      const comp = AUDIO_CTX.createDynamicsCompressor();
+      AUDIO_MASTER.connect(comp);
+      comp.connect(AUDIO_CTX.destination);
+      AUDIO_CTX._master = comp ? AUDIO_MASTER : AUDIO_CTX.destination;
+    }catch(e){ AUDIO_CTX = null; }
   }
+  if(AUDIO_CTX && AUDIO_CTX.state==='suspended'){ AUDIO_CTX.resume(); }
   return AUDIO_CTX;
 }
 function playTone(freq,dur,type,vol,delay){
   if(UI.muted) return;
   const ctx = getAudioCtx(); if(!ctx) return;
-  if(ctx.state==='suspended'){ ctx.resume(); }
   const t0 = ctx.currentTime + (delay||0);
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = type||'sine';
   osc.frequency.setValueAtTime(freq,t0);
   gain.gain.setValueAtTime(0,t0);
-  gain.gain.linearRampToValueAtTime(vol||0.1,t0+0.015);
+  gain.gain.linearRampToValueAtTime(vol||0.25,t0+0.012);
   gain.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
-  osc.connect(gain); gain.connect(ctx.destination);
+  osc.connect(gain); gain.connect(ctx._master||ctx.destination);
   osc.start(t0); osc.stop(t0+dur+0.03);
 }
-function sfxClick(){ playTone(520,0.05,'square',0.05); }
-function sfxSuccess(){ playTone(660,0.09,'sine',0.09); playTone(880,0.12,'sine',0.08,0.08); }
-function sfxFail(){ playTone(180,0.25,'sawtooth',0.11); playTone(120,0.3,'sawtooth',0.09,0.06); }
-function sfxDanger(){ playTone(90,0.4,'sawtooth',0.13); playTone(70,0.5,'square',0.07,0.15); }
-function sfxDiscovery(){ playTone(740,0.06,'triangle',0.08); playTone(990,0.1,'triangle',0.07,0.07); playTone(1320,0.14,'triangle',0.06,0.14); }
-function sfxStep(){ playTone(200,0.05,'square',0.045); }
-function sfxRadio(){ playTone(1200,0.03,'square',0.04); playTone(400,0.05,'square',0.03,0.03); }
-function sfxAlarm(){ playTone(880,0.15,'square',0.09); playTone(660,0.15,'square',0.09,0.18); playTone(880,0.15,'square',0.09,0.36); }
+function sfxClick(){ playTone(560,0.09,'square',0.16); }
+function sfxSuccess(){ playTone(660,0.14,'sine',0.24); playTone(880,0.18,'sine',0.22,0.09); }
+function sfxFail(){ playTone(180,0.32,'sawtooth',0.26); playTone(120,0.38,'sawtooth',0.22,0.07); }
+function sfxDanger(){ playTone(90,0.45,'sawtooth',0.3); playTone(70,0.55,'square',0.2,0.16); }
+function sfxDiscovery(){ playTone(740,0.1,'triangle',0.2); playTone(990,0.14,'triangle',0.19,0.08); playTone(1320,0.2,'triangle',0.18,0.16); }
+function sfxStep(){ playTone(200,0.08,'square',0.14); }
+function sfxRadio(){ playTone(1200,0.05,'square',0.14); playTone(400,0.08,'square',0.12,0.04); }
+function sfxAlarm(){ playTone(880,0.2,'square',0.22); playTone(660,0.2,'square',0.22,0.2); playTone(880,0.2,'square',0.22,0.4); }
 function toggleMute(){
   UI.muted = !UI.muted;
   try{ localStorage.setItem('sdv_muted', UI.muted?'1':'0'); }catch(e){}
+  if(!UI.muted) playTone(660,0.12,'sine',0.22);
   render();
 }
 
@@ -1335,6 +1345,7 @@ function renderStazione(){
         <button class="btn" onclick="restMorning()">Riposa fino al mattino</button>
         <button class="btn ${G.power?'':'primary'}" onclick="toggleGenerator()">${G.power?'Spegni generatore':'Accendi generatore'}</button>
         <button class="btn" onclick="toggleMute()">${UI.muted?'Audio: off':'Audio: on'}</button>
+        <button class="btn" onclick="sfxDiscovery()">Prova suono</button>
         ${G.archive.includes('d14') ? '<button class="btn primary" onclick="requestExtraction()">Richiedi Estrazione</button>' : ''}
       </div>
     </div>
