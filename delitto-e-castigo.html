@@ -275,7 +275,8 @@ button{font-family:var(--font-body); cursor:pointer;}
         <button class="btn ghost" id="btn-endings">I finali raggiunti</button>
         <button class="btn ghost" id="btn-howto">Come si gioca</button>
       </div>
-      <div class="boot-foot">Gioco interamente client-side: nessun server, nessuna intelligenza artificiale, nessuna connessione richiesta. Il progresso si salva da solo nel browser.</div>
+      <button class="icon-btn" id="btn-mute-boot" title="Attiva/disattiva audio" style="margin-top:1.4em;">🔊</button>
+      <div class="boot-foot">Gioco interamente client-side: nessun server, nessuna intelligenza artificiale, nessuna connessione richiesta. Il progresso si salva da solo nel browser. Include suoni ambientali sintetizzati (nessun file audio esterno); si possono disattivare in ogni momento.</div>
     </div>
   </div>
 
@@ -286,6 +287,7 @@ button{font-family:var(--font-body); cursor:pointer;}
       <div class="hud-stats" id="hud-stats"></div>
       <div class="hud-money" id="hud-money">🪙 0</div>
       <div class="hud-actions">
+        <button class="icon-btn" id="btn-mute" title="Attiva/disattiva audio">🔊</button>
         <button class="icon-btn" id="btn-inventory" title="Inventario">🎒<span class="badge" id="inv-badge" hidden>0</span></button>
         <button class="icon-btn" id="btn-journal" title="Diario">📓</button>
         <button class="icon-btn" id="btn-menu" title="Menù">☰</button>
@@ -379,6 +381,7 @@ button{font-family:var(--font-body); cursor:pointer;}
         <p>Vestirai i panni di Rodion Romanovič Raskol'nikov, ex studente squattrinato in una San Pietroburgo torrida e soffocante. Ogni scena propone scelte multiple: alcune fanno avanzare la trama, altre aprono strade laterali facoltative — un incontro, un luogo, un ricordo — che puoi esplorare o ignorare.</p>
         <p>In alto trovi il tuo <strong>HUD</strong>: cinque indicatori — <em>Colpa, Lucidità, Sospetto, Legame con Sonya, Legame famigliare</em> — più il denaro in tasca. Le tue scelte li muovono, e questi valori determinano quale dei nove finali raggiungerai. Se il Sospetto della polizia satura o la Lucidità crolla del tutto, la storia può precipitare — anche verso la morte.</p>
         <p>Nei quartieri liberi si apre una <strong>mappa</strong> di Pietroburgo: pin cliccabili verso i luoghi che puoi visitare prima di proseguire. L'inventario 🎒 raccoglie gli oggetti che raccogli lungo la strada, il diario 📓 tiene traccia di ciò che hai fatto e scelto. La partita si salva da sola; puoi anche esportarla su file dal menù ☰.</p>
+        <p>Il gioco ha una colonna sonora d'ambiente e piccoli effetti sonori, tutti generati al volo dal browser (nessun file audio da scaricare): l'atmosfera si fa più tesa quando il Sospetto sale o la Lucidità crolla. Il pulsante 🔊 disattiva tutto in qualsiasi momento.</p>
         <p style="color:var(--text-faint); font-size:.85rem;">Opera originale liberamente ispirata alla trama del romanzo di Fëdor Dostoevskij (1866), oggi di pubblico dominio. Testi, dialoghi e struttura di gioco sono una riscrittura originale, non una traduzione.</p>
       </div>
     </div>
@@ -396,6 +399,139 @@ button{font-family:var(--font-body); cursor:pointer;}
 
 const SAVE_KEY = "dc_save_v1";
 const META_KEY = "dc_meta_v1";
+const AUDIO_KEY = "dc_audio_v1";
+
+/* =========================================================================
+   AUDIO — tutto sintetizzato via Web Audio API, nessun file esterno.
+   Click distinti per tipo di scelta, accordo di capitolo, sting dei finali,
+   campanellino oggetti, e un letto d'ambiente che si fa più teso/dissonante
+   quando Sospetto sale e Lucidità scende.
+   ========================================================================= */
+let audioPrefs = loadAudioPrefs();
+let audioCtx = null, masterGain = null, sfxGain = null, ambientGain = null, ambientNodes = null;
+
+function loadAudioPrefs(){
+  try{ const raw = localStorage.getItem(AUDIO_KEY); if(raw) return JSON.parse(raw); }catch(e){}
+  return { muted:false };
+}
+function saveAudioPrefs(){ try{ localStorage.setItem(AUDIO_KEY, JSON.stringify(audioPrefs)); }catch(e){} }
+
+function ensureAudio(){
+  if(audioCtx) return audioCtx;
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!Ctx) return null;
+    audioCtx = new Ctx();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = audioPrefs.muted ? 0 : 1;
+    masterGain.connect(audioCtx.destination);
+    sfxGain = audioCtx.createGain(); sfxGain.gain.value = 0.5; sfxGain.connect(masterGain);
+    ambientGain = audioCtx.createGain(); ambientGain.gain.value = 0.13; ambientGain.connect(masterGain);
+    startAmbient();
+  }catch(e){ audioCtx = null; }
+  return audioCtx;
+}
+function resumeAudio(){ if(audioCtx && audioCtx.state==="suspended") audioCtx.resume().catch(()=>{}); }
+
+function toggleMute(){
+  ensureAudio();
+  audioPrefs.muted = !audioPrefs.muted;
+  saveAudioPrefs();
+  if(masterGain && audioCtx) masterGain.gain.setTargetAtTime(audioPrefs.muted ? 0 : 1, audioCtx.currentTime, 0.05);
+  updateMuteButtons();
+}
+function updateMuteButtons(){
+  const icon = audioPrefs.muted ? "🔇" : "🔊";
+  const b1 = document.getElementById("btn-mute"); if(b1) b1.textContent = icon;
+  const b2 = document.getElementById("btn-mute-boot"); if(b2) b2.textContent = icon;
+}
+
+function playTone(freq, opts){
+  opts = opts || {};
+  if(!audioCtx || audioPrefs.muted) return;
+  const t0 = audioCtx.currentTime;
+  const dur = opts.dur || 0.18;
+  const osc = audioCtx.createOscillator();
+  osc.type = opts.type || "sine";
+  osc.frequency.setValueAtTime(freq, t0);
+  if(opts.slideTo) osc.frequency.exponentialRampToValueAtTime(opts.slideTo, t0+dur);
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(opts.peak||0.5, t0+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+  osc.connect(g); g.connect(sfxGain);
+  osc.start(t0); osc.stop(t0+dur+0.03);
+}
+
+function playClick(kind){
+  ensureAudio(); resumeAudio();
+  if(!audioCtx) return;
+  if(kind==="risky"){ playTone(190,{type:"triangle",dur:0.24,slideTo:110,peak:0.4}); }
+  else if(kind==="warm"){ playTone(660,{type:"sine",dur:0.24,slideTo:840,peak:0.32}); }
+  else if(kind==="map"){ playTone(150,{type:"triangle",dur:0.16,slideTo:100,peak:0.28}); }
+  else { playTone(430,{type:"sine",dur:0.14,slideTo:540,peak:0.3}); }
+}
+function playUiClick(){
+  ensureAudio(); resumeAudio();
+  if(!audioCtx) return;
+  playTone(300,{type:"sine",dur:0.1,slideTo:360,peak:0.22});
+}
+function playItemChime(){
+  ensureAudio(); resumeAudio();
+  if(!audioCtx) return;
+  [523,659,784].forEach((f,i)=> setTimeout(()=> playTone(f,{dur:0.28,peak:0.22}), i*70));
+}
+function playChapterChime(){
+  ensureAudio(); resumeAudio();
+  if(!audioCtx) return;
+  [196,294,392].forEach(f=> playTone(f,{type:"sine",dur:1.8,peak:0.2}));
+}
+function playEndingSting(badge){
+  ensureAudio(); resumeAudio();
+  if(!audioCtx) return;
+  if(badge==="good"){ [392,494,587,784].forEach((f,i)=> setTimeout(()=>playTone(f,{dur:1.5,peak:0.22}), i*90)); }
+  else if(badge==="bad"){ [220,207,196].forEach((f,i)=> setTimeout(()=>playTone(f,{type:"sawtooth",dur:1.7,peak:0.16}), i*140)); }
+  else { [349,415,466].forEach((f,i)=> setTimeout(()=>playTone(f,{dur:1.4,peak:0.2}), i*110)); }
+}
+
+function startAmbient(){
+  if(!audioCtx || ambientNodes) return;
+  const now = audioCtx.currentTime;
+
+  const drone1 = audioCtx.createOscillator(); drone1.type = "sine"; drone1.frequency.value = 65.4;
+  const drone2 = audioCtx.createOscillator(); drone2.type = "sine"; drone2.frequency.value = 98.0;
+  const droneGain = audioCtx.createGain(); droneGain.gain.value = 0.5;
+  drone1.connect(droneGain); drone2.connect(droneGain);
+
+  const bufferSize = audioCtx.sampleRate * 4;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for(let i=0;i<bufferSize;i++) data[i] = (Math.random()*2-1) * 0.6;
+  const noise = audioCtx.createBufferSource(); noise.buffer = buffer; noise.loop = true;
+  const noiseFilter = audioCtx.createBiquadFilter(); noiseFilter.type = "bandpass"; noiseFilter.frequency.value = 500; noiseFilter.Q.value = 0.6;
+  const noiseGain = audioCtx.createGain(); noiseGain.gain.value = 0.055;
+  noise.connect(noiseFilter); noiseFilter.connect(noiseGain);
+
+  const lfo = audioCtx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.05;
+  const lfoGain = audioCtx.createGain(); lfoGain.gain.value = 220;
+  lfo.connect(lfoGain); lfoGain.connect(noiseFilter.frequency);
+
+  droneGain.connect(ambientGain);
+  noiseGain.connect(ambientGain);
+
+  drone1.start(now); drone2.start(now); noise.start(now); lfo.start(now);
+  ambientNodes = { drone1, drone2, droneGain, noise, noiseFilter, noiseGain, lfo, lfoGain };
+}
+
+function updateAmbientMood(){
+  if(!ambientNodes || !audioCtx) return;
+  const tension = clamp((state.stats.sospetto + (100 - state.stats.sanita)) / 200, 0, 1);
+  const now = audioCtx.currentTime;
+  const detuneCents = 4 + tension * 26;
+  ambientNodes.drone2.frequency.setTargetAtTime(98.0 * Math.pow(2, detuneCents/1200), now, 2);
+  ambientNodes.noiseGain.gain.setTargetAtTime(0.045 + tension*0.05, now, 2);
+  ambientNodes.lfo.frequency.setTargetAtTime(0.04 + tension*0.12, now, 2);
+}
 
 const STAT_DEFS = [
   {key:"colpa",    label:"Colpa",       icon:"⚖️", varc:"--c-colpa"},
@@ -479,7 +615,7 @@ function addStat(key, delta){
   state.stats[key] = clamp(Math.round(state.stats[key] + delta), 0, 100);
 }
 function addMoney(delta){ state.money = Math.max(0, state.money + delta); }
-function giveItem(id){ if(!state.inventory.includes(id)) state.inventory.push(id); }
+function giveItem(id){ if(!state.inventory.includes(id)){ state.inventory.push(id); playItemChime(); } }
 function takeItem(id){ state.inventory = state.inventory.filter(i=>i!==id); }
 function hasItem(id){ return state.inventory.includes(id); }
 function setFlag(key, val){ state.flags[key] = (val===undefined)?true:val; }
@@ -1369,6 +1505,7 @@ function presentChapterCard(num, cb){
   $("cc-sub").textContent = info.sub;
   const card = $("chapter-card");
   card.classList.add("show");
+  playChapterChime();
   const onClick = ()=>{ card.classList.remove("show"); card.removeEventListener("click", onClick); cb(); };
   card.addEventListener("click", onClick);
 }
@@ -1438,7 +1575,7 @@ function renderScene(scene){
       const name = document.createElement("span"); name.className="pin-name"; name.textContent = pin.name || "";
       const desc = document.createElement("span"); desc.className="pin-desc"; desc.textContent = pin.desc || "";
       btn.appendChild(icon); btn.appendChild(name); btn.appendChild(desc);
-      if(!pin.disabled) btn.addEventListener("click", ()=> onChoiceClick(pin));
+      if(!pin.disabled) btn.addEventListener("click", ()=>{ playClick("map"); onChoiceClick(pin); });
       choicesEl.appendChild(btn);
     });
   } else {
@@ -1456,7 +1593,7 @@ function renderScene(scene){
         body.appendChild(tagEl);
       }
       btn.appendChild(mark); btn.appendChild(body);
-      btn.addEventListener("click", ()=> onChoiceClick(c));
+      btn.addEventListener("click", ()=>{ playClick(c.risky?"risky":(c.warm?"warm":"normal")); onChoiceClick(c); });
       choicesEl.appendChild(btn);
     });
   }
@@ -1485,6 +1622,7 @@ function updateHUD(){
   $("hud-chapter").textContent = chInfo.eyebrow;
   const badge = $("inv-badge");
   if(state.inventory.length>0){ badge.hidden=false; badge.textContent = state.inventory.length; } else { badge.hidden = true; }
+  updateAmbientMood();
 }
 
 function showEnding(id){
@@ -1509,6 +1647,7 @@ function showEnding(id){
   const moneyChip = document.createElement("span"); moneyChip.className="es"; moneyChip.textContent = "🪙 Denaro: "+state.money;
   statsEl.appendChild(moneyChip);
 
+  playEndingSting(e.badge);
   showScreen("ending");
 }
 
@@ -1631,40 +1770,46 @@ function importSaveFile(ev){
 
 /* ------------------------------- wiring --------------------------------- */
 
+$("btn-mute").addEventListener("click", toggleMute);
+$("btn-mute-boot").addEventListener("click", toggleMute);
+
 $("btn-new-game").addEventListener("click", ()=>{
+  playUiClick();
   if(hasSave()){
     if(!confirm("Hai già una partita salvata. Vuoi iniziare una nuova storia? Il salvataggio attuale andrà perso.")) return;
   }
   startNewGame();
 });
-$("btn-continue").addEventListener("click", ()=>{ if(loadGame()) resumeRender(); });
-$("btn-endings").addEventListener("click", ()=>{ renderEndingsGallery(); openModal("ov-endings"); });
-$("btn-howto").addEventListener("click", ()=> openModal("ov-howto"));
+$("btn-continue").addEventListener("click", ()=>{ playUiClick(); if(loadGame()) resumeRender(); });
+$("btn-endings").addEventListener("click", ()=>{ playUiClick(); renderEndingsGallery(); openModal("ov-endings"); });
+$("btn-howto").addEventListener("click", ()=>{ playUiClick(); openModal("ov-howto"); });
 
-$("btn-inventory").addEventListener("click", ()=>{ renderInventory(); openModal("ov-inventory"); });
-$("btn-journal").addEventListener("click", ()=>{ renderJournal(); openModal("ov-journal"); });
-$("btn-menu").addEventListener("click", ()=>{ renderMenuStats(); openModal("ov-menu"); });
+$("btn-inventory").addEventListener("click", ()=>{ playUiClick(); renderInventory(); openModal("ov-inventory"); });
+$("btn-journal").addEventListener("click", ()=>{ playUiClick(); renderJournal(); openModal("ov-journal"); });
+$("btn-menu").addEventListener("click", ()=>{ playUiClick(); renderMenuStats(); openModal("ov-menu"); });
 
-$("btn-menu-endings").addEventListener("click", ()=>{ renderEndingsGallery(); openModal("ov-endings"); });
-$("btn-menu-export").addEventListener("click", exportSave);
-$("btn-menu-import").addEventListener("click", ()=> $("file-import").click());
+$("btn-menu-endings").addEventListener("click", ()=>{ playUiClick(); renderEndingsGallery(); openModal("ov-endings"); });
+$("btn-menu-export").addEventListener("click", ()=>{ playUiClick(); exportSave(); });
+$("btn-menu-import").addEventListener("click", ()=>{ playUiClick(); $("file-import").click(); });
 $("file-import").addEventListener("change", importSaveFile);
 $("btn-menu-restart").addEventListener("click", ()=>{
+  playUiClick();
   if(confirm("Ricominciare da zero? Il progresso attuale andrà perso.")){ closeModal("ov-menu"); startNewGame(); }
 });
-$("btn-menu-quit").addEventListener("click", ()=>{ closeModal("ov-menu"); showScreen("boot"); refreshContinueVisibility(); });
+$("btn-menu-quit").addEventListener("click", ()=>{ playUiClick(); closeModal("ov-menu"); showScreen("boot"); refreshContinueVisibility(); });
 
-$("btn-end-restart").addEventListener("click", startNewGame);
-$("btn-end-endings").addEventListener("click", ()=>{ renderEndingsGallery(); openModal("ov-endings"); });
-$("btn-end-menu").addEventListener("click", ()=>{ showScreen("boot"); refreshContinueVisibility(); });
+$("btn-end-restart").addEventListener("click", ()=>{ playUiClick(); startNewGame(); });
+$("btn-end-endings").addEventListener("click", ()=>{ playUiClick(); renderEndingsGallery(); openModal("ov-endings"); });
+$("btn-end-menu").addEventListener("click", ()=>{ playUiClick(); showScreen("boot"); refreshContinueVisibility(); });
 
 document.querySelectorAll("[data-close]").forEach(b=>{
-  b.addEventListener("click", (e)=>{ e.target.closest(".modal-overlay").classList.remove("active"); });
+  b.addEventListener("click", (e)=>{ playUiClick(); e.target.closest(".modal-overlay").classList.remove("active"); });
 });
 document.querySelectorAll(".modal-overlay").forEach(ov=>{
   ov.addEventListener("click", (e)=>{ if(e.target===ov) ov.classList.remove("active"); });
 });
 
+updateMuteButtons();
 refreshContinueVisibility();
 </script>
 </body>
