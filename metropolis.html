@@ -136,6 +136,9 @@
   .row { display: flex; gap: 0.6em; flex-wrap: wrap; }
   textarea.savebox { width: 100%; min-height: 90px; background: #0e0d10; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0.6em; font-size: 0.75em; }
   .ending-badge { display: inline-block; margin-top: 1em; padding: 0.4em 0.9em; border: 1px solid var(--gold); border-radius: 999px; color: var(--gold); font-size: 0.8em; letter-spacing: 0.08em; text-transform: uppercase; }
+  .minigame-box { text-align: center; padding: 2rem 1rem; border: 1px solid var(--border); border-radius: 6px; background: #0e0d10; margin-top: 1.2em; }
+  .minigame-box .btn.primary { animation: pulse 0.6s ease infinite alternate; }
+  @keyframes pulse { from { box-shadow: 0 0 0 rgba(201,162,39,0.5);} to { box-shadow: 0 0 16px rgba(201,162,39,0.6);} }
 </style>
 </head>
 <body>
@@ -193,7 +196,11 @@ var ACHIEVEMENTS = {
   finale_ombra: { name: "Il Figlio del Padrone", icon: "🏙️", desc: "Hai lasciato che Metropolis restasse la città che era sempre stata." },
   finale_sacrificio: { name: "Il Sacrificio", icon: "🕊️", desc: "Hai pagato con la vita il prezzo della riconciliazione altrui." },
   finale_agrodolce: { name: "Cenere e Promesse", icon: "🌫️", desc: "Hai raggiunto una riconciliazione segnata dal lutto." },
-  cinque_finali: { name: "Tutti i Volti della Città", icon: "🎭", desc: "Hai visto tutti e cinque i finali di questa storia." }
+  cinque_finali: { name: "Tutti i Volti della Città", icon: "🎭", desc: "Hai visto tutti e cinque i finali di questa storia." },
+  presagio: { name: "Il Presagio", icon: "📖", desc: "Nei Giardini Eterni, hai trovato qualcosa che non avresti dovuto leggere." },
+  ballo_ricchi: { name: "Il Ballo dei Ricchi", icon: "🍸", desc: "Sei entrato a Yoshiwara a vedere con i tuoi occhi." },
+  ritmo_macchina: { name: "Il Ritmo della Macchina", icon: "⏱️", desc: "Hai retto il ritmo della macchina degli orologi senza sbagliare un colpo." },
+  rete_allarme: { name: "La Rete d'Allarme", icon: "📯", desc: "Hai avvertito sia Grot che Josaphat prima che fosse troppo tardi." }
 };
 
 var CHAPTERS = [
@@ -275,6 +282,7 @@ function grantAchievement(id){
   if (meta.achievements.indexOf(id) === -1) {
     meta.achievements.push(id);
     toastQueue.push(id);
+    chimeSound();
     saveMeta();
   }
 }
@@ -292,6 +300,10 @@ function checkAchievements(){
   if (f.tutti_salvi) grantAchievement("bambini_salvi");
   if (f.molti_persi) grantAchievement("prezzo_ignoranza");
   if (f.duel_clean || f.duel_wounded) grantAchievement("duello_cattedrale");
+  if (f.read_garden_book) grantAchievement("presagio");
+  if (f.visited_yoshiwara) grantAchievement("ballo_ricchi");
+  if (f.shift_precise) grantAchievement("ritmo_macchina");
+  if (f.pre_warned_grot && f.pre_alerted) grantAchievement("rete_allarme");
   var allItems = Object.keys(ITEMS);
   var hasAll = allItems.every(function(id){ return inv.indexOf(id) !== -1; });
   if (hasAll) grantAchievement("collezionista");
@@ -318,8 +330,18 @@ function ensureAudio(){
     if (!AC) return null;
     audioCtx = new AC();
   }
+  // Molti browser creano/lasciano il contesto in stato "suspended" finché non
+  // viene esplicitamente ripreso dentro un gesto dell'utente: senza questa
+  // riga i suoni vengono schedulati ma non si sentono mai.
+  if (audioCtx.state === "suspended"){
+    audioCtx.resume().catch(function(){});
+  }
   return audioCtx;
 }
+
+// Sblocca l'audio al primo tocco/click ovunque sulla pagina, così anche il
+// primo suono di scelta (non solo il drone ambientale) risulta udibile.
+document.addEventListener("pointerdown", function(){ ensureAudio(); }, { passive: true });
 
 function toggleAmbient(){
   var ctx = ensureAudio();
@@ -362,15 +384,70 @@ function toggleAmbient(){
 function clickSound(){
   var ctx = ensureAudio();
   if (!ctx) return;
+  var t = ctx.currentTime;
+  // Scatto metallico (clic della leva)
   var osc = ctx.createOscillator();
   var g = ctx.createGain();
   osc.type = "square";
-  osc.frequency.setValueAtTime(220, ctx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(90, ctx.currentTime + 0.12);
-  g.gain.setValueAtTime(0.06, ctx.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
+  osc.frequency.setValueAtTime(280, t);
+  osc.frequency.exponentialRampToValueAtTime(85, t + 0.13);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.16, t + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
   osc.connect(g); g.connect(ctx.destination);
-  osc.start(); osc.stop(ctx.currentTime + 0.15);
+  osc.start(t); osc.stop(t + 0.17);
+  // Colpo grave sotto (il peso della macchina)
+  var thunk = ctx.createOscillator();
+  var tg = ctx.createGain();
+  thunk.type = "sine";
+  thunk.frequency.setValueAtTime(75, t);
+  thunk.frequency.exponentialRampToValueAtTime(40, t + 0.2);
+  tg.gain.setValueAtTime(0.0001, t);
+  tg.gain.exponentialRampToValueAtTime(0.2, t + 0.01);
+  tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+  thunk.connect(tg); tg.connect(ctx.destination);
+  thunk.start(t); thunk.stop(t + 0.23);
+}
+
+function chimeSound(){
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var t = ctx.currentTime;
+  [523.25, 659.25, 783.99].forEach(function(freq, i){
+    var start = t + i * 0.1;
+    var osc = ctx.createOscillator();
+    var g = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(0.15, start + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + 0.5);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(start); osc.stop(start + 0.55);
+  });
+}
+
+function endingSting(mood){
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var t = ctx.currentTime;
+  var chords = {
+    good: [261.63, 329.63, 392.00, 523.25],
+    bad: [207.65, 246.94, 293.66],
+    mixed: [246.94, 293.66, 349.23, 415.30]
+  };
+  var freqs = chords[mood] || chords.mixed;
+  freqs.forEach(function(freq){
+    var osc = ctx.createOscillator();
+    var g = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.09, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.4);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t); osc.stop(t + 2.5);
+  });
 }
 
 /* ------------------------------- Scene ---------------------------------
@@ -394,6 +471,45 @@ var SCENES = {
   s_garden: {
     text: [
       "Nei Giardini Eterni il tempo non passa: pavoni bianchi, fontane, ragazze in vesti leggere che ridono con te tra le aiuole. È il tuo mondo da sempre, e non ne hai mai desiderato un altro.",
+      "Hai ancora un momento prima che la giornata prenda una piega che non avresti previsto."
+    ],
+    choices: [
+      { requires: function(s){ return !s.flags.visited_garden_friends; }, label: "Raggiungi gli amici che ridono vicino alla fontana grande", next: "s_garden_friends" },
+      { requires: function(s){ return !s.flags.visited_garden_fountain; }, label: "Osserva da vicino la fontana automatica al centro del giardino", next: "s_garden_fountain" },
+      { requires: function(s){ return !s.flags.visited_garden_book; }, label: "Raccogli un libriccino abbandonato su una panchina", next: "s_garden_book" },
+      { label: "Lascia perdere: qualcosa richiama la tua attenzione", next: "s_garden_interruption" }
+    ]
+  },
+
+  s_garden_friends: {
+    text: [
+      "I tuoi amici ridono senza motivo apparente, come sempre, sdraiati sull'erba tagliata a perfezione. Uno di loro ti chiede se hai sentito dell'ultima festa organizzata per stanotte, la terza di questa settimana.",
+      "Rispondi con una battuta, ma qualcosa in te fatica a trovarla divertente quanto un tempo. Nessuno, qui, sembra essersi mai chiesto da dove venga l'elettricità che accende le mille luci del giardino la sera."
+    ],
+    onEnter: function(s){ s.flags.visited_garden_friends = true; },
+    choices: [ { label: "Torna a passeggiare per i giardini", next: "s_garden" } ]
+  },
+
+  s_garden_fountain: {
+    text: [
+      "La fontana centrale non usa solo acqua: automi di bronzo levigato versano l'acqua a turno, con movimenti fluidi e ripetuti, quasi umani. Ti fermi più del dovuto a guardarli, senza sapere perché ti disturbino tanto.",
+      "Un giardiniere, notando il tuo sguardo, ti dice sorridendo che è \"un capriccio del signor Rotwang\", l'inventore di fiducia di tuo padre. Il nome non ti dice ancora nulla."
+    ],
+    onEnter: function(s){ s.flags.visited_garden_fountain = true; },
+    choices: [ { label: "Torna a passeggiare per i giardini", next: "s_garden" } ]
+  },
+
+  s_garden_book: {
+    text: [
+      "Il libriccino ha una copertina consumata, di certo non appartiene a nessuno dei tuoi amici. Lo apri per curiosità: incisioni antiche mostrano una donna coperta di gioielli in sella a una bestia dalle molte teste, mentre folle intere si prostrano ai suoi piedi.",
+      "Una didascalia, scritta a mano in un angolo, dice solo: «Verrà quando meno te lo aspetti.» Richiudi il libro con un brivido che non sai spiegarti, e te lo metti in tasca."
+    ],
+    onEnter: function(s){ s.flags.visited_garden_book = true; s.flags.read_garden_book = true; },
+    choices: [ { label: "Torna a passeggiare per i giardini, un po' turbato", next: "s_garden" } ]
+  },
+
+  s_garden_interruption: {
+    text: [
       "Poi una porta si apre dove non dovrebbe aprirsi nessuna porta. Una donna in abiti grigi entra, circondata da bambini pallidi e silenziosi. Ti guarda negli occhi.",
       "«Guarda» dice, indicandoti ai bambini. «Questi sono i vostri fratelli.» Un custode la trascina via prima che tu possa rispondere. Il suo viso resta impresso più di ogni giardino."
     ],
@@ -462,9 +578,24 @@ var SCENES = {
   s_shift: {
     chapterNum: 4,
     text: [
-      "La macchina davanti a te è un enorme quadrante con due lancette di ottone incandescente: devi spostarle, in continuazione, a comando di spie luminose che non si fermano mai. Non è lavoro: è un metronomo che ti usa come pendolo.",
-      "Le braccia bruciano, la vista si annebbia, i minuti si allungano in modo osceno. A un certo punto, mentre ti pieghi in due dallo sforzo, un foglietto piegato scivola dalla tasca della tuta che indossi: una mappa disegnata a mano, con un simbolo che non riconosci."
+      "La macchina davanti a te è un enorme quadrante con due lancette di ottone incandescente: quando la spia si accende di verde, devi colpire la leva nell'istante esatto, sincronizzato al ritmo della macchina. Troppo presto o troppo tardi, e sono i tuoi muscoli a pagarne il prezzo.",
+      "Non è lavoro: è un metronomo che ti usa come pendolo, per dieci ore di fila. A te, cinque colpi bastano e avanzano per capirlo."
     ],
+    minigame: "shift",
+    onRendered: function(){ if (!shiftGame) initShiftGame(); }
+  },
+
+  s_shift_paper: {
+    text: function(s){
+      var intro;
+      if (s.flags.shift_precise) intro = "Prendi il ritmo della macchina quasi subito: ogni colpo cade dove deve, come se il tuo corpo avesse sempre saputo farlo. Gli altri operai intorno a te se ne accorgono, e qualcuno annuisce appena.";
+      else if (s.flags.shift_clumsy) intro = "Sbagli il tempo più di una volta: le braccia bruciano, i colpi arrivano storti, e un sorvegliante ti osserva a lungo senza dire nulla. Alla fine del turno, ti fanno male muscoli che non sapevi nemmeno di avere.";
+      else intro = "Il ritmo della macchina è brutale ma, colpo dopo colpo, riesci a reggerlo quanto basta per non farti notare.";
+      return [
+        intro,
+        "A un certo punto, mentre ti pieghi in due dallo sforzo, un foglietto piegato scivola dalla tasca della tuta che indossi: una mappa disegnata a mano, con un simbolo che non riconosci."
+      ];
+    },
     choices: [
       { label: "Nascondi il foglio e resisti fino alla fine del turno", effect: function(s){ grantItem("mappa_catacombe"); }, next: "s_collapse" },
       { label: "Fermati subito a leggerlo, rischiando una punizione", effect: function(s){ grantItem("mappa_catacombe"); s.stats.salute = clamp(s.stats.salute - 10); }, next: "s_collapse" }
@@ -477,7 +608,46 @@ var SCENES = {
       "Una mano ti solleva. È Josaphat, che ti ha seguito di nascosto fin qui, come promesso. «Ora capisci» ti dice piano «perché quella donna parla ai bambini di fratelli.»",
       "Un altro operaio, passandoti accanto, ti sussurra un'ora e un luogo: stanotte, nelle vecchie catacombe sotto la città."
     ],
-    choices: [ { label: "Aspetta il calare della notte", next: "s_catacombs" } ]
+    choices: [ { label: "Hai ancora qualche ora prima del buio: guardati intorno", next: "s_worker_district_hub" } ]
+  },
+
+  s_worker_district_hub: {
+    text: [
+      "Il quartiere degli operai si stende sotto la città vera e propria: file di case basse e identiche, corridoi di lamiera, un cielo che qui non si è mai visto."
+    ],
+    choices: [
+      { requires: function(s){ return !s.flags.visited_district_kitchen; }, label: "Entra nella cucina comune, da cui viene odore di minestra", next: "s_district_kitchen" },
+      { requires: function(s){ return !s.flags.visited_district_graffiti; }, label: "Osserva una scritta tracciata col gesso su un muro", next: "s_district_graffiti" },
+      { requires: function(s){ return !s.flags.visited_district_rumor; }, label: "Ascolta due operai che parlano sottovoce vicino a un fornello", next: "s_district_rumor" },
+      { label: "È ora: scendi verso le catacombe", next: "s_catacombs" }
+    ]
+  },
+
+  s_district_kitchen: {
+    text: [
+      "Una famiglia condivide un'unica scodella di minestra tra cinque persone, senza lamentarsi, come se fosse la cosa più normale del mondo. Quando si accorgono che li guardi, ti offrono comunque un cucchiaio.",
+      "Rifiuti, imbarazzato, ma accetti di sederti un momento con loro. Nessuno ti chiede chi sei davvero: qui, vestito così, sei solo un altro numero stanco."
+    ],
+    onEnter: function(s){ s.flags.visited_district_kitchen = true; s.stats.operai = clamp(s.stats.operai + 6); },
+    choices: [ { label: "Ringrazia e continua a guardarti intorno", next: "s_worker_district_hub" } ]
+  },
+
+  s_district_graffiti: {
+    text: [
+      "Sul muro scrostato, qualcuno ha tracciato col gesso la parola «MOLOCH» e sotto, in una colonna fitta, decine e decine di piccoli segni verticali — un conteggio che nessuno ha mai reso ufficiale.",
+      "Non serve chiedere cosa contino. Lo sai già."
+    ],
+    onEnter: function(s){ s.flags.visited_district_graffiti = true; s.stats.sospetto = clamp(s.stats.sospetto + 5); },
+    choices: [ { label: "Allontanati in silenzio", next: "s_worker_district_hub" } ]
+  },
+
+  s_district_rumor: {
+    text: [
+      "«...luci accese tutta la notte, dietro casa sua» sta dicendo un operaio anziano a un altro, più giovane. «E rumori che non sono di nessuna macchina che io conosca.»",
+      "«La casa di chi?» chiede il giovane. «Dell'inventore. Quello con la stella sopra la porta» risponde l'anziano, abbassando ulteriormente la voce quando si accorge che sei lì vicino."
+    ],
+    onEnter: function(s){ s.flags.visited_district_rumor = true; s.stats.sospetto = clamp(s.stats.sospetto + 5); },
+    choices: [ { label: "Fingi di non aver sentito nulla", next: "s_worker_district_hub" } ]
   },
 
   s_catacombs: {
@@ -553,8 +723,20 @@ var SCENES = {
     choices: [
       { requires: function(s){ return s.inventory.indexOf("medaglione_maria") !== -1; },
         label: "Mostrale il medaglione e osserva la sua reazione", effect: function(s){ s.stats.sospetto = clamp(s.stats.sospetto + 30); s.flags.tested_medallion = true; }, next: "s_confront_early" },
+      { requires: function(s){ return !s.flags.visited_yoshiwara; },
+        label: "Entra di persona a Yoshiwara, per vedere con i tuoi occhi", next: "s_yoshiwara_visit" },
       { label: "Allontanati confuso, convincendoti che sia solo lo stress", next: "s_workers_incited" }
     ]
+  },
+
+  s_yoshiwara_visit: {
+    text: [
+      "Yoshiwara è tutto ciò che i Giardini Eterni non ammettono di essere: musica frenetica, fumo dolciastro, uomini in redingote che si contendono a spintoni un solo sorriso di \"Maria\", danzante su un tavolo come se il mondo sotto i suoi piedi non fosse mai esistito.",
+      "Due di loro finiscono per sfidarsi a duello proprio davanti a te, per un fazzoletto che lei ha lasciato cadere apposta. Nessuno, in quella sala, sembra ricordare che esista una Città delle Mani.",
+      "Vedi, per un istante, un uomo magro e silenzioso osservare la scena da un angolo buio — lo stesso che, senza saperlo, ha già riferito ogni tuo movimento a tuo padre."
+    ],
+    onEnter: function(s){ s.flags.visited_yoshiwara = true; s.stats.sospetto = clamp(s.stats.sospetto + 10); },
+    choices: [ { label: "Esci, sconvolto da quello che hai visto", next: "s_workers_incited" } ]
   },
 
   s_confront_early: {
@@ -571,7 +753,36 @@ var SCENES = {
       "Nelle catacombe, la falsa Maria non parla più di pazienza e Mediatori. Incita alla furia: «Basta aspettare un cuore che non arriverà mai. Distruggete le macchine, stanotte, con le vostre mani!»",
       "Grot, il caposquadra che ha sempre difeso gli operai senza mai tradire il proprio ruolo, cerca di fermarli: «Le macchine sono ciò che tiene in vita le vostre case, i vostri figli!» Nessuno lo ascolta più. La folla si muove come un'unica bestia verso il Cuore-Macchina."
     ],
-    choices: [ { label: "Segui la folla, temendo il peggio", next: "s_riot" } ]
+    choices: [ { label: "C'è ancora un attimo prima che tutto precipiti: agisci", next: "s_last_chance_hub" } ]
+  },
+
+  s_last_chance_hub: {
+    text: [
+      "Il tempo si sta esaurendo, ma non è ancora scaduto del tutto. Ogni istante speso ora potrebbe salvare qualcuno, più tardi."
+    ],
+    choices: [
+      { requires: function(s){ return !s.flags.pre_warned_grot; },
+        label: "Raggiungi Grot e avvertilo di tenere i bambini lontani dalle case basse stanotte", effect: function(s){ s.flags.pre_warned_grot = true; }, next: "s_last_chance_grot" },
+      { requires: function(s){ return !s.flags.pre_alerted && s.inventory.indexOf("fischietto_josaphat") !== -1; },
+        label: "Usa il fischietto di Josaphat per far suonare l'allarme generale", effect: function(s){ s.flags.pre_alerted = true; }, next: "s_last_chance_whistle" },
+      { label: "Non c'è più tempo: segui la folla", next: "s_riot" }
+    ]
+  },
+
+  s_last_chance_grot: {
+    text: [
+      "Trovi Grot mentre cerca ancora, inutilmente, di farsi ascoltare dalla folla. Lo tiri per un braccio: «Se distruggono il Cuore-Macchina, l'acqua salirà nelle case basse. I bambini sono ancora lì dentro.»",
+      "Il suo sguardo cambia. «Vai» dice. «Io faccio quel che posso qui, tu portali fuori appena puoi.» Non è una soluzione, ma è un inizio."
+    ],
+    choices: [ { label: "Torna a decidere cosa fare", next: "s_last_chance_hub" } ]
+  },
+
+  s_last_chance_whistle: {
+    text: [
+      "Tre colpi brevi, come promesso tanto tempo fa. Per un istante temi che nessuno li abbia sentiti nel caos — poi vedi Josaphat farsi largo tra la folla, seguito da un paio di sorveglianti fidati, già diretti verso le case basse per iniziare a svegliare chi può ancora essere svegliato.",
+      "Non è tutto il quartiere, ma è più di quanto la sola urgenza del momento ti avrebbe permesso di fare da solo."
+    ],
+    choices: [ { label: "Torna a decidere cosa fare", next: "s_last_chance_hub" } ]
   },
 
   s_riot: {
@@ -613,6 +824,8 @@ var SCENES = {
       if (s.flags.warned_workers) total += 15;
       if (s.inventory.indexOf("mappa_catacombe") !== -1) total += 10;
       if (s.stats.maria >= 40) total += 8;
+      if (s.flags.pre_warned_grot) total += 12;
+      if (s.flags.pre_alerted) total += 12;
       if (total >= 45) { s.flags.tutti_salvi = true; }
       else if (total >= 25) { s.flags.alcuni_persi = true; }
       else { s.flags.molti_persi = true; }
@@ -763,9 +976,14 @@ var SCENES = {
 };
 
 var SCENE_ORDER = [
-  "s_intro","s_garden","s_lift","s_moloch","s_office","s_josaphat_home","s_swap",
-  "s_shift","s_collapse","s_catacombs","s_meeting_maria","s_spy_report","s_rotwang_house",
-  "s_night_search","s_fever","s_false_maria_intro","s_confront_early","s_workers_incited",
+  "s_intro",
+  "s_garden","s_garden_friends","s_garden_fountain","s_garden_book","s_garden_interruption",
+  "s_lift","s_moloch","s_office","s_josaphat_home","s_swap",
+  "s_shift","s_shift_paper","s_collapse",
+  "s_worker_district_hub","s_district_kitchen","s_district_graffiti","s_district_rumor",
+  "s_catacombs","s_meeting_maria","s_spy_report","s_rotwang_house",
+  "s_night_search","s_fever","s_false_maria_intro","s_yoshiwara_visit","s_confront_early","s_workers_incited",
+  "s_last_chance_hub","s_last_chance_grot","s_last_chance_whistle",
   "s_riot","s_flood_alarm","s_flood_panic","s_flood_climax","s_flood_result","s_return_to_city",
   "s_witch_burning","s_rotwang_madness","s_cathedral_choice","s_duel_survive","s_reconciliation",
   "s_end_true","s_end_best","s_end_dark","s_end_bittersweet","s_end_sacrifice"
@@ -785,6 +1003,100 @@ function chooseEnding(s){
   if (s.flags.alcuni_persi) return "s_end_bittersweet";
   if (score >= 90) return "s_end_true";
   return "s_end_bittersweet";
+}
+
+/* ------------------------- Minigioco: il turno -------------------------
+   Un piccolo gioco di tempismo che sostituisce la scena "s_shift": cinque
+   round, ognuno dei quali chiede di colpire la leva nell'istante in cui la
+   spia diventa verde. Aggiorna il DOM direttamente (senza richiamare
+   render()) per non interrompere i timer in corso.
+------------------------------------------------------------------------- */
+
+var shiftGame = null;
+
+function resetShiftGame(){
+  if (shiftGame && shiftGame.timer) clearTimeout(shiftGame.timer);
+  shiftGame = null;
+}
+
+function initShiftGame(){
+  shiftGame = { round: 0, hits: 0, phase: "idle", feedback: "", timer: null };
+  scheduleShiftRound();
+}
+
+function scheduleShiftRound(){
+  shiftGame.phase = "idle";
+  shiftGame.feedback = "";
+  updateShiftDOM();
+  var delay = 700 + Math.random() * 900;
+  shiftGame.timer = setTimeout(function(){
+    if (!shiftGame) return;
+    shiftGame.phase = "ready";
+    updateShiftDOM();
+    shiftGame.timer = setTimeout(function(){
+      if (shiftGame && shiftGame.phase === "ready"){
+        shiftGame.feedback = "Troppo lento — la lancetta ti è sfuggita.";
+        finishShiftRound(false);
+      }
+    }, 650);
+  }, delay);
+}
+
+function finishShiftRound(hit){
+  if (!shiftGame) return;
+  clearTimeout(shiftGame.timer);
+  if (hit){
+    shiftGame.hits++;
+    shiftGame.feedback = "Colpito al momento giusto.";
+    clickSound();
+  }
+  shiftGame.round++;
+  shiftGame.phase = "idle";
+  updateShiftDOM();
+  if (shiftGame.round >= 5){
+    shiftGame.phase = "done";
+    updateShiftDOM();
+    setTimeout(concludeShiftMinigame, 700);
+  } else {
+    setTimeout(scheduleShiftRound, 550);
+  }
+}
+
+function updateShiftDOM(){
+  if (!shiftGame) return;
+  var label = document.getElementById("shiftRoundLabel");
+  var btn = document.getElementById("shiftBtn");
+  var fb = document.getElementById("shiftFeedback");
+  if (!btn) return;
+  if (label) label.textContent = "Turno " + Math.min(shiftGame.round + 1, 5) + " di 5 — colpi riusciti: " + shiftGame.hits;
+  if (shiftGame.phase === "ready"){ btn.textContent = "COLPISCI!"; btn.disabled = false; btn.className = "btn primary"; }
+  else if (shiftGame.phase === "done"){ btn.textContent = "Turno completato"; btn.disabled = true; btn.className = "btn"; }
+  else { btn.textContent = "ATTENDI…"; btn.disabled = true; btn.className = "btn ghost"; }
+  if (fb) fb.textContent = shiftGame.feedback || "";
+}
+
+function concludeShiftMinigame(){
+  if (!shiftGame) return;
+  var hits = shiftGame.hits;
+  shiftGame = null;
+  if (hits >= 4){ state.flags.shift_precise = true; }
+  else if (hits <= 1){ state.stats.salute = clamp(state.stats.salute - 15); state.flags.shift_clumsy = true; }
+  state.currentScene = "s_shift_paper";
+  applyOnEnter("s_shift_paper");
+  render();
+}
+
+function renderShiftMinigameBody(){
+  // Nota: qui NON si deve assegnare a shiftGame (nemmeno un placeholder) — il
+  // successivo hook onRendered() decide se avviare initShiftGame() proprio
+  // controllando se shiftGame è ancora nullo dopo il render.
+  var g = shiftGame || { round: 0, hits: 0, phase: "idle", feedback: "" };
+  var html = '<div class="minigame-box">';
+  html += '<div id="shiftRoundLabel" class="muted small" style="margin-bottom:0.9em;">Turno ' + (g.round + 1) + ' di 5 — colpi riusciti: ' + g.hits + '</div>';
+  html += '<button id="shiftBtn" class="btn ghost" style="font-size:1.2em;padding:0.9em 2.2em;" onclick="MetropolisGame.shiftClick()" disabled>ATTENDI…</button>';
+  html += '<div id="shiftFeedback" class="muted small" style="margin-top:0.9em;min-height:1.2em;"></div>';
+  html += '</div>';
+  return html;
 }
 
 /* ------------------------------ Rendering ------------------------------ */
@@ -808,7 +1120,12 @@ function applyOnEnter(id){
     state.history.push(id);
   }
   if (scene && scene.ending){
+    var alreadySeenEnding = meta.endingsSeen.indexOf(id) !== -1;
     state.ending = id;
+    if (!alreadySeenEnding){
+      var moods = { s_end_true: "good", s_end_best: "good", s_end_dark: "bad", s_end_sacrifice: "bad", s_end_bittersweet: "mixed" };
+      endingSting(moods[id] || "mixed");
+    }
   }
   checkAchievements();
   saveState();
@@ -898,12 +1215,16 @@ function renderStoria(){
     html += '<div class="ending-badge">Finale raggiunto</div>';
   }
 
-  var visible = visibleChoices(scene);
-  html += '<div class="choices">';
-  visible.forEach(function(c, i){
-    html += '<button class="btn" onclick="MetropolisGame.choose('+i+')">'+c.label+'</button>';
-  });
-  html += '</div>';
+  if (scene.minigame === "shift"){
+    html += renderShiftMinigameBody();
+  } else {
+    var visible = visibleChoices(scene);
+    html += '<div class="choices">';
+    visible.forEach(function(c, i){
+      html += '<button class="btn" onclick="MetropolisGame.choose('+i+')">'+c.label+'</button>';
+    });
+    html += '</div>';
+  }
   html += '</div>';
   return html;
 }
@@ -1002,6 +1323,9 @@ function render(){
 
   app.innerHTML = html;
   flushToasts();
+
+  var currentScene = getScene(state.currentScene);
+  if (currentScene && currentScene.onRendered) currentScene.onRendered();
 }
 
 function renderToasts(){
@@ -1043,17 +1367,22 @@ var showingAchFromMenu = false;
 
 window.MetropolisGame = {
   newGame: function(){
+    resetShiftGame();
     state = freshState();
     applyOnEnter(state.currentScene);
     activeTab = "storia";
     render();
   },
   continueGame: function(){
+    resetShiftGame();
     state = loadState() || freshState();
     activeTab = "storia";
     render();
   },
   choose: choose,
+  shiftClick: function(){
+    if (shiftGame && shiftGame.phase === "ready") finishShiftRound(true);
+  },
   setTab: function(t){ activeTab = t; render(); },
   toggleAudio: toggleAmbient,
   exportSave: function(){
@@ -1082,6 +1411,7 @@ window.MetropolisGame = {
   },
   resetGame: function(){
     if (window.confirm("Ricominciare da capo? La partita in corso andrà persa (gli achievement restano salvati).")){
+      resetShiftGame();
       state = freshState();
       saveState();
       activeTab = "storia";
