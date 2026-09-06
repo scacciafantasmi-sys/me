@@ -153,6 +153,10 @@
   .carousel .cs-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--border); margin: 0 3px; }
   .carousel .cs-dot.active { background: var(--gold); }
 
+  @keyframes sceneFade { from { opacity: 0; transform: translateY(6px);} to { opacity: 1; transform: translateY(0);} }
+  .scene-panel { animation: sceneFade 0.4s ease; }
+  .intertitle { animation: sceneFade 0.5s ease; }
+
   .map-wrap { margin-top: 0.8em; }
   .map-svg { width: 100%; height: auto; display: block; border: 1px solid var(--border); border-radius: 6px; background: #0a0908; }
   .map-svg text { font-family: Georgia, serif; }
@@ -242,7 +246,9 @@ var ACHIEVEMENTS = {
   ballo_ricchi: { name: "Il Ballo dei Ricchi", icon: "🍸", desc: "Sei entrato a Yoshiwara a vedere con i tuoi occhi." },
   ritmo_macchina: { name: "Il Ritmo della Macchina", icon: "⏱️", desc: "Hai retto il ritmo della macchina degli orologi senza sbagliare un colpo." },
   rete_allarme: { name: "La Rete d'Allarme", icon: "📯", desc: "Hai avvertito sia Grot che Josaphat prima che fosse troppo tardi." },
-  studioso: { name: "Lo Studioso", icon: "🔍", desc: "Hai capito, prima ancora di vederla bruciare, cosa fosse davvero la falsa Maria." }
+  studioso: { name: "Lo Studioso", icon: "🔍", desc: "Hai capito, prima ancora di vederla bruciare, cosa fosse davvero la falsa Maria." },
+  sfidante: { name: "Lo Sfidante", icon: "⚡", desc: "Hai alzato la voce con tuo padre, di fronte a un altro uomo, per la prima volta in vita tua." },
+  fuga_impossibile: { name: "La Fuga Impossibile", icon: "🌙", desc: "Hai chiesto a Maria di fuggire con te — e hai scoperto perché lei non potrebbe mai farlo." }
 };
 
 var CHAPTERS = [
@@ -343,11 +349,18 @@ function saveMeta(){
 function grantItem(id){
   if (state.inventory.indexOf(id) === -1) state.inventory.push(id);
 }
+var chimeQueueIndex = 0;
+
 function grantAchievement(id){
   if (meta.achievements.indexOf(id) === -1) {
     meta.achievements.push(id);
     toastQueue.push({ type: "achievement", id: id });
-    chimeSound();
+    // Se più achievement scattano nello stesso istante (capita spesso
+    // arrivando a un finale), suonarli tutti insieme produce un grappolo
+    // dissonante che suona "rotto". Li scaglioniamo di poco.
+    var delay = chimeQueueIndex * 280;
+    chimeQueueIndex++;
+    setTimeout(chimeSound, delay);
     saveMeta();
   }
 }
@@ -372,6 +385,7 @@ function useItem(id){
 }
 
 function checkAchievements(){
+  chimeQueueIndex = 0;
   var s = state.stats, f = state.flags, inv = state.inventory;
   if (f.risveglio_seen) grantAchievement("risveglio");
   if (f.swapped) grantAchievement("numero_11811");
@@ -385,6 +399,8 @@ function checkAchievements(){
   if (f.molti_persi) grantAchievement("prezzo_ignoranza");
   if (f.duel_clean || f.duel_wounded) grantAchievement("duello_cattedrale");
   if (f.read_garden_book) grantAchievement("presagio");
+  if (f.defied_father) grantAchievement("sfidante");
+  if (f.tried_to_flee) grantAchievement("fuga_impossibile");
   if (f.visited_yoshiwara) grantAchievement("ballo_ricchi");
   if (f.shift_precise) grantAchievement("ritmo_macchina");
   if (f.pre_warned_grot && f.pre_alerted) grantAchievement("rete_allarme");
@@ -408,11 +424,26 @@ function checkAchievements(){
 
 /* ------------------------------- Audio --------------------------------- */
 
+var masterBus = null;
+
 function ensureAudio(){
   if (!audioCtx){
     var AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
     audioCtx = new AC();
+    // Tutti i suoni passano da qui invece che direttamente su destination:
+    // senza un limitatore condiviso, due o più suoni che partono nello
+    // stesso istante (es. più achievement sbloccati insieme, o il click di
+    // una scelta che coincide con lo sting di un finale) si sommano e
+    // possono superare 0dB, producendo clipping/distorsione udibile —
+    // il "sfx buggato" che si sente quando capitano più eventi vicini.
+    masterBus = audioCtx.createDynamicsCompressor();
+    masterBus.threshold.value = -20;
+    masterBus.knee.value = 14;
+    masterBus.ratio.value = 8;
+    masterBus.attack.value = 0.002;
+    masterBus.release.value = 0.18;
+    masterBus.connect(audioCtx.destination);
   }
   // Molti browser creano/lasciano il contesto in stato "suspended" finché non
   // viene esplicitamente ripreso dentro un gesto dell'utente: senza questa
@@ -432,16 +463,16 @@ function toggleAmbient(){
   if (!ctx) return;
   if (audioOn){
     if (ambientNodes){
-      ambientNodes.forEach(function(n){ try{ n.stop(); }catch(e){} });
+      ambientNodes.oscillators.forEach(function(n){ try{ n.stop(); }catch(e){} });
+      try { ambientNodes.master.disconnect(); } catch(e){}
       ambientNodes = null;
     }
     audioOn = false;
   } else {
-    if (ctx.state === "suspended") ctx.resume();
     var master = ctx.createGain();
     master.gain.value = 0.05;
-    master.connect(ctx.destination);
-    var nodes = [master];
+    master.connect(masterBus);
+    var oscillators = [];
     [55, 82.5, 110].forEach(function(freq, i){
       var osc = ctx.createOscillator();
       osc.type = i === 1 ? "sawtooth" : "sine";
@@ -450,7 +481,7 @@ function toggleAmbient(){
       g.gain.value = i === 0 ? 1 : 0.35;
       osc.connect(g); g.connect(master);
       osc.start();
-      nodes.push(osc);
+      oscillators.push(osc);
     });
     var lfo = ctx.createOscillator();
     lfo.frequency.value = 0.07;
@@ -458,8 +489,8 @@ function toggleAmbient(){
     lfoGain.gain.value = 0.02;
     lfo.connect(lfoGain); lfoGain.connect(master.gain);
     lfo.start();
-    nodes.push(lfo);
-    ambientNodes = nodes;
+    oscillators.push(lfo);
+    ambientNodes = { master: master, oscillators: oscillators };
     audioOn = true;
   }
   render();
@@ -478,7 +509,7 @@ function clickSound(){
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(0.16, t + 0.006);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-  osc.connect(g); g.connect(ctx.destination);
+  osc.connect(g); g.connect(masterBus);
   osc.start(t); osc.stop(t + 0.17);
   // Colpo grave sotto (il peso della macchina)
   var thunk = ctx.createOscillator();
@@ -489,7 +520,7 @@ function clickSound(){
   tg.gain.setValueAtTime(0.0001, t);
   tg.gain.exponentialRampToValueAtTime(0.2, t + 0.01);
   tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-  thunk.connect(tg); tg.connect(ctx.destination);
+  thunk.connect(tg); tg.connect(masterBus);
   thunk.start(t); thunk.stop(t + 0.23);
 }
 
@@ -506,7 +537,7 @@ function chimeSound(){
     g.gain.setValueAtTime(0.0001, start);
     g.gain.exponentialRampToValueAtTime(0.15, start + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, start + 0.5);
-    osc.connect(g); g.connect(ctx.destination);
+    osc.connect(g); g.connect(masterBus);
     osc.start(start); osc.stop(start + 0.55);
   });
 }
@@ -529,9 +560,25 @@ function endingSting(mood){
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(0.09, t + 0.5);
     g.gain.exponentialRampToValueAtTime(0.0001, t + 2.4);
-    osc.connect(g); g.connect(ctx.destination);
+    osc.connect(g); g.connect(masterBus);
     osc.start(t); osc.stop(t + 2.5);
   });
+}
+
+function qteFeedbackSound(hit){
+  var ctx = ensureAudio();
+  if (!ctx) return;
+  var t = ctx.currentTime;
+  var osc = ctx.createOscillator();
+  var g = ctx.createGain();
+  osc.type = hit ? "triangle" : "sawtooth";
+  osc.frequency.setValueAtTime(hit ? 440 : 160, t);
+  osc.frequency.exponentialRampToValueAtTime(hit ? 660 : 90, t + 0.12);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(hit ? 0.12 : 0.14, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+  osc.connect(g); g.connect(masterBus);
+  osc.start(t); osc.stop(t + 0.19);
 }
 
 /* ------------------------------- Scene ---------------------------------
@@ -628,23 +675,45 @@ var SCENES = {
 
   s_office: {
     chapterNum: 3,
-    text: [
-      "Sali fino all'ufficio di tuo padre, in cima alla Nuova Torre di Babele. Joh Fredersen riceve la notizia dell'esplosione con la stessa calma con cui riceverebbe un rapporto sulle scorte di carbone.",
-      "Josaphat, il suo primo assistente, viene chiamato: il rapporto sull'incidente è arrivato con qualche minuto di ritardo. Per tuo padre, questo basta. «Sei licenziato» dice, senza alzare la voce, senza alzare gli occhi dalla scrivania.",
-      "Josaphat impallidisce. Sai che, per un uomo di Metropolis senza lavoro, la caduta può essere rapida e definitiva."
-    ],
+    text: function(s){
+      var open = s.flags.helped_wounded
+        ? "Sali fino all'ufficio di tuo padre, in cima alla Nuova Torre di Babele, con ancora le mani sporche del sangue di sconosciuti. Joh Fredersen riceve la notizia dell'esplosione con la stessa calma con cui riceverebbe un rapporto sulle scorte di carbone — e nota le tue mani, ma non chiede nulla."
+        : "Sali fino all'ufficio di tuo padre, in cima alla Nuova Torre di Babele, ancora scosso da ciò che hai visto ma incapace di dirlo a parole. Joh Fredersen riceve la notizia dell'esplosione con la stessa calma con cui riceverebbe un rapporto sulle scorte di carbone.";
+      return [
+        open,
+        "Josaphat, il suo primo assistente, viene chiamato: il rapporto sull'incidente è arrivato con qualche minuto di ritardo. Per tuo padre, questo basta. «Sei licenziato» dice, senza alzare la voce, senza alzare gli occhi dalla scrivania.",
+        "Josaphat impallidisce. Sai che, per un uomo di Metropolis senza lavoro, la caduta può essere rapida e definitiva."
+      ];
+    },
     choices: [
       { label: "Prendi le difese di Josaphat davanti a tuo padre", effect: function(s){ s.stats.padre = clamp(s.stats.padre - 10); s.flags.defended_josaphat = true; }, next: "s_josaphat_home" },
-      { label: "Resta in silenzio: non è affar tuo, per ora", effect: function(s){ s.stats.padre = clamp(s.stats.padre + 5); }, next: "s_josaphat_home" }
+      { label: "Resta in silenzio: non è affar tuo, per ora", effect: function(s){ s.stats.padre = clamp(s.stats.padre + 5); }, next: "s_josaphat_home" },
+      { label: "Sfida apertamente tuo padre: «Sei ingiusto, e lo sai»", effect: function(s){ s.stats.padre = clamp(s.stats.padre - 20); s.flags.defied_father = true; }, next: "s_office_defiance" }
     ]
   },
 
-  s_josaphat_home: {
+  s_office_defiance: {
     text: [
-      "Trovi Josaphat mentre sta già preparando i bagagli, pronto a lasciare il suo appartamento nella città alta. Gli chiedi di restare, in segreto, come tuo unico contatto fidato: qualcuno a cui rivolgerti se le cose, in basso, si mettessero male.",
-      "Ti dà un piccolo fischietto d'ottone. «Tre colpi brevi» dice. «Vorranno dire che ho visto, e che sto arrivando.»",
-      "Poi, guardandoti dritto negli occhi, ti chiede cosa intendi fare adesso. Gli rispondi che vuoi vedere con i tuoi occhi la vita di chi lavora laggiù, non solo il fumo delle sue macchine."
+      "Per la prima volta in vita tua, alzi la voce con tuo padre davanti a un altro uomo. Il silenzio che segue è peggiore di qualunque urlo: Joh Fredersen posa la penna, ti guarda come se ti vedesse per la prima volta, e non è un bel modo di essere guardati.",
+      "«Va' pure a difendere chi vuoi» dice, con una calma che fa più paura della rabbia. «Vedremo quanto dura la tua indignazione fuori da questa torre, senza il mio nome a proteggerti.» Non è una minaccia: è, semplicemente, un fatto — e in quel momento capisci che tuo padre ha appena smesso di considerarti un ragazzo."
     ],
+    choices: [ { label: "Esci senza rispondere, con Josaphat che ti aspetta fuori", next: "s_josaphat_home" } ]
+  },
+
+  s_josaphat_home: {
+    text: function(s){
+      var open = s.flags.defied_father
+        ? "Trovi Josaphat mentre sta già preparando i bagagli, pronto a lasciare il suo appartamento nella città alta. Ha sentito, dai piani più bassi della torre, come hai alzato la voce con tuo padre per lui — e per la prima volta ti guarda non come il figlio del padrone, ma come qualcuno di cui potersi fidare."
+        : s.flags.defended_josaphat
+          ? "Trovi Josaphat mentre sta già preparando i bagagli, pronto a lasciare il suo appartamento nella città alta. Ti ringrazia per averlo difeso, ma nella sua voce senti anche paura: sa che un simile gesto ha un prezzo, e teme che a pagarlo sarai tu."
+          : "Trovi Josaphat mentre sta già preparando i bagagli, pronto a lasciare il suo appartamento nella città alta. Non ti biasima per essere rimasto in silenzio davanti a tuo padre — ma qualcosa, tra voi, resta più freddo di quanto potrebbe essere.";
+      return [
+        open,
+        "Gli chiedi di restare, in segreto, come tuo unico contatto fidato: qualcuno a cui rivolgerti se le cose, in basso, si mettessero male.",
+        "Ti dà un piccolo fischietto d'ottone. «Tre colpi brevi» dice. «Vorranno dire che ho visto, e che sto arrivando.»",
+        "Poi, guardandoti dritto negli occhi, ti chiede cosa intendi fare adesso. Gli rispondi che vuoi vedere con i tuoi occhi la vita di chi lavora laggiù, non solo il fumo delle sue macchine."
+      ];
+    },
     onEnter: function(s){ grantItem("fischietto_josaphat"); },
     choices: [
       { label: "Accetta anche la sua fiaschetta \"per le emergenze\" — ma perdi tempo prezioso", effect: function(s){ grantItem("fiaschetta_josaphat"); s.stats.operai = clamp(s.stats.operai - 5); }, next: "s_swap" },
@@ -751,12 +820,36 @@ var SCENES = {
   },
 
   s_meeting_maria: {
+    text: function(s){
+      var open = s.flags.declared_mediator
+        ? "Quando restate soli tra le candele che si spengono, Maria ti osserva a lungo, come se stesse ancora decidendo se le parole che hai gridato davanti a tutti fossero coraggio o solo entusiasmo passeggero. «Sei davvero il figlio di Fredersen» dice, non come un'accusa, ma come una constatazione carica di conseguenze."
+        : "Quando restate soli tra le candele che si spengono, Maria si avvicina a te con una curiosità silenziosa, come se cercasse di capire perché sei rimasto in silenzio mentre tutti gli altri gridavano. «Sei davvero il figlio di Fredersen» dice, non come un'accusa, ma come una constatazione carica di conseguenze.";
+      return [
+        open,
+        "Si toglie dal collo un piccolo medaglione con inciso una spiga di grano e te lo mette in mano. «Se qualcuno dovesse mai dubitare che sono io» dice «chiedigli di questo.»"
+      ];
+    },
+    onEnter: function(s){ grantItem("medaglione_maria"); },
+    choices: [
+      { label: "Chiedile di fuggire via con te, stanotte stessa, lontano da tutto questo", next: "s_meeting_maria_flee" },
+      { label: "Prometti di tornare, e di continuare a cercare la verità insieme a lei", effect: function(s){ s.stats.maria = clamp(s.stats.maria + 5); s.flags.stayed_loyal = true; }, next: "s_meeting_maria_promise" }
+    ]
+  },
+
+  s_meeting_maria_promise: {
     text: [
-      "Quando restate soli tra le candele che si spengono, Maria ti osserva a lungo, come se stesse decidendo se crederti. «Sei davvero il figlio di Fredersen» dice, non come un'accusa, ma come una constatazione carica di conseguenze.",
-      "Si toglie dal collo un piccolo medaglione con inciso una spiga di grano e te lo mette in mano. «Se qualcuno dovesse mai dubitare che sono io» dice «chiedigli di questo.»",
       "Vi promettete di rivedervi. Mentre risali verso la superficie, non sai ancora che qualcuno vi ha seguiti nell'ombra per tutta la notte."
     ],
-    onEnter: function(s){ grantItem("medaglione_maria"); },
+    choices: [ { label: "Torna a casa, con la mente piena di lei", next: "s_spy_report" } ]
+  },
+
+  s_meeting_maria_flee: {
+    text: [
+      "Per un istante, mentre lo dici, ci credi davvero: potreste sparire insieme, lasciare Metropolis, i suoi ingranaggi e le sue promesse a qualcun altro. Maria ti guarda con una tenerezza che non ti aspettavi, e per un attimo sembra tentata.",
+      "Poi scuote la testa, piano. «Non posso abbandonarli, nemmeno per te» dice, indicando con un gesto le candele che si spengono, i bambini addormentati contro le pareti di roccia. «E se sei davvero chi dici di essere, nemmeno tu potresti.»",
+      "Ha ragione, e lo sai. Vi promettete comunque di rivedervi. Mentre risali verso la superficie, non sai ancora che qualcuno vi ha seguiti nell'ombra per tutta la notte."
+    ],
+    onEnter: function(s){ s.flags.tried_to_flee = true; },
     choices: [ { label: "Torna a casa, con la mente piena di lei", next: "s_spy_report" } ]
   },
 
@@ -1084,10 +1177,10 @@ var SCENES = {
 var SCENE_ORDER = [
   "s_intro",
   "s_garden","s_garden_friends","s_garden_fountain","s_garden_book","s_garden_interruption",
-  "s_lift","s_moloch","s_office","s_josaphat_home","s_swap",
+  "s_lift","s_moloch","s_office","s_office_defiance","s_josaphat_home","s_swap",
   "s_shift","s_shift_paper","s_collapse",
   "s_worker_district_hub","s_district_kitchen","s_district_graffiti","s_district_rumor",
-  "s_catacombs","s_meeting_maria","s_spy_report","s_rotwang_house",
+  "s_catacombs","s_meeting_maria","s_meeting_maria_flee","s_meeting_maria_promise","s_spy_report","s_rotwang_house",
   "s_night_search","s_fever","s_false_maria_intro","s_yoshiwara_visit","s_confront_early","s_workers_incited",
   "s_last_chance_hub","s_last_chance_grot","s_last_chance_whistle",
   "s_riot","s_flood_alarm","s_flood_panic","s_flood_qte","s_flood_climax","s_flood_result","s_return_to_city",
@@ -1151,10 +1244,10 @@ function scheduleShiftRound(){
 function finishShiftRound(hit){
   if (!shiftGame) return;
   clearTimeout(shiftGame.timer);
+  qteFeedbackSound(hit);
   if (hit){
     shiftGame.hits++;
     shiftGame.feedback = "Colpito al momento giusto.";
-    clickSound();
   }
   shiftGame.round++;
   shiftGame.phase = "idle";
@@ -1228,7 +1321,7 @@ function shuffleArr(a){
 }
 
 function initQTE(config){
-  qte = { round: 0, hits: 0, phase: "idle", target: null, options: [], timer: null, config: config };
+  qte = { round: 0, hits: 0, phase: "idle", target: null, options: [], timer: null, feedback: "", config: config };
   scheduleQteRound();
 }
 
@@ -1256,7 +1349,9 @@ function scheduleQteRound(){
 function finishQteRound(hit){
   if (!qte) return;
   clearTimeout(qte.timer);
-  if (hit){ qte.hits++; clickSound(); }
+  qteFeedbackSound(hit);
+  if (hit){ qte.hits++; qte.feedback = "Reazione giusta."; }
+  else { qte.feedback = "Sbagliato — un attimo perso che potrebbe pesare."; }
   qte.round++;
   qte.phase = "idle";
   updateQteDOM();
@@ -1286,6 +1381,8 @@ function updateQteDOM(){
   } else {
     box.innerHTML = '<div class="qte-target dim">?</div>';
   }
+  var fb = document.getElementById("qteFeedback");
+  if (fb) fb.textContent = qte.feedback || "";
 }
 
 function concludeFloodQte(hits){
@@ -1300,6 +1397,7 @@ function renderQteBody(promptLabel){
   var html = '<div class="minigame-box">';
   html += '<div id="qteLabel" class="muted small" style="margin-bottom:0.9em;">' + (promptLabel || "Preparati…") + '</div>';
   html += '<div id="qteOptions" class="qte-options"><div class="qte-target dim">?</div></div>';
+  html += '<div id="qteFeedback" class="muted small" style="margin-top:0.9em;min-height:1.2em;"></div>';
   html += '</div>';
   return html;
 }
@@ -1408,7 +1506,7 @@ function renderStoria(){
     var ch = CHAPTERS.filter(function(c){ return c.n === scene.chapterNum; })[0];
     html += '<div class="intertitle"><div class="num">Capitolo '+(ch?ch.n:"")+'</div><h2>'+(ch?ch.title:"")+'</h2></div>';
   }
-  html += '<div class="panel">';
+  html += '<div class="panel scene-panel">';
   if (!scene.intertitle){
     var chap = chapterFor(state.currentScene);
     html += '<div class="scene-tag">Capitolo '+chap.n+' — '+chap.title+'</div>';
