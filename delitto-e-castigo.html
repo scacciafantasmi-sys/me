@@ -228,6 +228,11 @@ button{font-family:var(--font-body); cursor:pointer;}
 .qte-hint{ font-size:.85rem; color:var(--text-dim); margin-bottom:1em; line-height:1.5; }
 .qte-timerbar{ height:9px; border-radius:99px; background:rgba(255,255,255,0.08); overflow:hidden; margin-bottom:1.1em; }
 .qte-timerbar > i{ display:block; height:100%; width:100%; background:var(--gold-2); border-radius:99px; }
+.qte-timerbar.qte-timerbar-waiting > i{ background:var(--text-faint); opacity:.5; animation:qteWaitPulse 1.8s ease-in-out infinite; }
+.qte-prep-label{ font-size:.78rem; color:var(--text-faint); font-style:italic; margin-bottom:.5em; animation:qteWaitPulse 1.8s ease-in-out infinite; }
+.qte-track-waiting{ opacity:.4; }
+.qte-track-waiting .qte-precision-marker{ display:none; }
+@keyframes qteWaitPulse{ 0%,100%{ opacity:.35;} 50%{ opacity:.7;} }
 .qte-precision-rounds{ display:flex; gap:.5em; margin-bottom:.7em; }
 .qte-round-dot{ width:11px; height:11px; border-radius:50%; background:rgba(255,255,255,0.14); transition:background .2s; }
 .qte-round-dot.hit{ background:var(--good); }
@@ -505,7 +510,7 @@ button{font-family:var(--font-body); cursor:pointer;}
         <p>Vestirai i panni di Rodion Romanovič Raskol'nikov, ex studente squattrinato in una San Pietroburgo torrida e soffocante. Ogni scena propone scelte multiple: alcune fanno avanzare la trama, altre aprono strade laterali facoltative — un incontro, un luogo, un ricordo — che puoi esplorare o ignorare.</p>
         <p>In alto trovi il tuo <strong>HUD</strong>: cinque indicatori — <em>Colpa, Lucidità, Sospetto, Legame con Sonya, Legame famigliare</em> — più il denaro in tasca. Le tue scelte li muovono, e questi valori determinano quale dei nove finali raggiungerai. Se il Sospetto della polizia satura o la Lucidità crolla del tutto, la storia può precipitare — anche verso la morte.</p>
         <p>Nei quartieri liberi si apre una vera <strong>mappa</strong> di Pietroburgo, con un fiume, isolati e pin luminosi che pulsano dove c'è ancora qualcosa da scoprire: toccali per raggiungere quel luogo. L'inventario 🎒 raccoglie gli oggetti che trovi lungo la strada — alcuni si possono <strong>usare direttamente</strong> nel momento giusto della storia (un pulsante "Usa qui" compare accanto all'oggetto quando conta), e il badge dorato sull'inventario ti avvisa quando è il caso di controllare. Il diario 📓 tiene traccia di ciò che hai fatto e scelto.</p>
-        <p>In alcuni momenti dovrai reagire, non solo leggere: un <strong>colpo di scena a tempo</strong> in cui decidere prima che scada un breve conto alla rovescia, un piccolo gioco di riflessi per <strong>cercare in fretta</strong> qualcosa sotto pressione, o mantenere il controllo cliccando al momento giusto mentre un investigatore ti osserva. Le scelte più importanti non si limitano a cambiare i numeri dell'HUD: aprono <strong>scene esclusive</strong> che vedrai solo scegliendo in quel modo — sfidare un nemico, accettare denaro sporco, confessarti in un modo piuttosto che in un altro cambia davvero cosa vivi dopo, non solo cosa provi. La partita si salva da sola; puoi anche esportarla su file dal menù ☰.</p>
+        <p>In alcuni momenti dovrai reagire, non solo leggere: un <strong>colpo di scena a tempo</strong> in cui decidere prima che scada un breve conto alla rovescia, un piccolo gioco di riflessi per <strong>cercare in fretta</strong> qualcosa sotto pressione, o mantenere il controllo cliccando al momento giusto mentre un investigatore ti osserva. Ogni volta hai comunque <strong>10 secondi buoni</strong> per leggere la scena con calma prima che il vero conto alla rovescia cominci a scorrere davvero. Le scelte più importanti non si limitano a cambiare i numeri dell'HUD: aprono <strong>scene esclusive</strong> che vedrai solo scegliendo in quel modo — sfidare un nemico, accettare denaro sporco, confessarti in un modo piuttosto che in un altro cambia davvero cosa vivi dopo, non solo cosa provi. La partita si salva da sola; puoi anche esportarla su file dal menù ☰.</p>
         <p>Il gioco ha una colonna sonora d'ambiente e piccoli effetti sonori, tutti generati al volo dal browser (nessun file audio da scaricare): l'atmosfera si fa più tesa quando il Sospetto sale o la Lucidità crolla. Il pulsante 🔊 disattiva tutto in qualsiasi momento.</p>
         <p>Esplorando strade diverse sbloccherai anche i <strong>trofei</strong> della Bacheca (bronzo, argento, oro), persistenti fra una partita e l'altra: raccoglierli tutti — nove finali compresi — sblocca il <strong>Platino</strong>.</p>
         <p style="color:var(--text-faint); font-size:.85rem;">Opera originale liberamente ispirata alla trama del romanzo di Fëdor Dostoevskij (1866), oggi di pubblico dominio. Testi, dialoghi e struttura di gioco sono una riscrittura originale, non una traduzione.</p>
@@ -1114,7 +1119,7 @@ s_murder:{
     "Il sangue è più di quanto tu abbia mai immaginato — sul pavimento, sulle tue mani, sulle maniche. Rovisti freneticamente le tasche del suo vestito in cerca delle chiavi, quando dietro di te, dalla porta rimasta socchiusa, senti un passo leggero: Lizaveta è tornata prima del previsto, con un fagotto tra le braccia, e ti sta fissando in silenzio, la bocca aperta su un grido che non riesce ancora a uscire."
   ],
   checkpoint:true,
-  note:"Decidi in fretta: non c'è tempo di pensare.",
+  note:"Leggi con calma. Ma quando il conto alla rovescia partirà, dovrai decidere in fretta: non ci sarà più tempo di pensare.",
   warn:true,
   qte:{type:"timed", duration:2600, timeoutIndex:1},
   choices:[
@@ -2227,30 +2232,49 @@ function renderCityMap(scene, choicesEl){
 
 /* ------------------------------- quick time event ----------------------- */
 
+const QTE_READ_TIME = 10000; // tempo di lettura garantito prima che qualunque QTE si attivi davvero
+
 let qteTimerHandle = null;
-function clearQteTimer(){ if(qteTimerHandle){ clearTimeout(qteTimerHandle); qteTimerHandle = null; } }
+let qtePrestartHandle = null;
+function clearQteTimer(){
+  if(qteTimerHandle){ clearTimeout(qteTimerHandle); qteTimerHandle = null; }
+  if(qtePrestartHandle){ clearTimeout(qtePrestartHandle); qtePrestartHandle = null; }
+}
 
 function startTimedQte(scene, choicesEl){
   const cfg = scene.qte;
   const duration = cfg.duration || 3000;
+  const readTime = cfg.readTime!=null ? cfg.readTime : QTE_READ_TIME;
+
+  const label = document.createElement("div");
+  label.className = "qte-prep-label";
+  label.textContent = "Leggi con calma: il tempo non è ancora iniziato a scorrere...";
   const bar = document.createElement("div");
-  bar.className = "qte-timerbar";
+  bar.className = "qte-timerbar qte-timerbar-waiting";
   const fill = document.createElement("i");
+  fill.style.width = "100%";
   bar.appendChild(fill);
   choicesEl.insertBefore(bar, choicesEl.firstChild);
-  requestAnimationFrame(()=>{
+  choicesEl.insertBefore(label, bar);
+
+  qtePrestartHandle = setTimeout(()=>{
+    qtePrestartHandle = null;
+    label.remove();
+    bar.classList.remove("qte-timerbar-waiting");
     requestAnimationFrame(()=>{
-      fill.style.transition = "width " + duration + "ms linear";
-      fill.style.width = "0%";
+      requestAnimationFrame(()=>{
+        fill.style.transition = "width " + duration + "ms linear";
+        fill.style.width = "0%";
+      });
     });
-  });
-  qteTimerHandle = setTimeout(()=>{
-    qteTimerHandle = null;
-    setFlag("_qteDone_"+state.scene, true);
-    const idx = cfg.timeoutIndex!=null ? cfg.timeoutIndex : (scene.choices.length-1);
-    const fallback = scene.choices[idx];
-    if(fallback) onChoiceClick(fallback);
-  }, duration);
+    qteTimerHandle = setTimeout(()=>{
+      qteTimerHandle = null;
+      setFlag("_qteDone_"+state.scene, true);
+      const idx = cfg.timeoutIndex!=null ? cfg.timeoutIndex : (scene.choices.length-1);
+      const fallback = scene.choices[idx];
+      if(fallback) onChoiceClick(fallback);
+    }, duration);
+  }, readTime);
 }
 
 function qteFinishAndContinue(scene, choicesEl, tier, effectsMap, feedbackMap, hintEl){
@@ -2275,19 +2299,21 @@ function renderPrecisionQte(scene, choicesEl){
   const rounds = cfg.rounds || 3;
   const zonePct = cfg.zonePct || 26;
   const sweepMs = cfg.sweepMs || 1100;
-  let hits = 0, round = 0, resolved = false, currentZoneStart = 0, startTime = null, animId = null;
+  const readTime = cfg.readTime!=null ? cfg.readTime : QTE_READ_TIME;
+  let hits = 0, round = 0, resolved = false, started = false, currentZoneStart = 0, startTime = null, animId = null;
 
   const box = document.createElement("div"); box.className = "qte-box";
   const title = document.createElement("div"); title.className = "qte-title"; title.textContent = cfg.title || "Mantieni il controllo";
-  const hint = document.createElement("div"); hint.className = "qte-hint"; hint.textContent = cfg.hint || ("Clicca \"Fermalo\" quando l'indicatore attraversa la zona chiara. "+rounds+" tentativi.");
+  const hint = document.createElement("div"); hint.className = "qte-hint"; hint.textContent = "Leggi con calma: fra poco dovrai reagire.";
   const roundsWrap = document.createElement("div"); roundsWrap.className = "qte-precision-rounds";
   const dots = [];
   for(let i=0;i<rounds;i++){ const d=document.createElement("div"); d.className="qte-round-dot"; roundsWrap.appendChild(d); dots.push(d); }
-  const track = document.createElement("div"); track.className = "qte-precision-track";
+  const track = document.createElement("div"); track.className = "qte-precision-track qte-track-waiting";
   const zone = document.createElement("div"); zone.className = "qte-precision-zone";
   const marker = document.createElement("div"); marker.className = "qte-precision-marker";
   track.appendChild(zone); track.appendChild(marker);
-  const btn = document.createElement("button"); btn.className = "btn primary qte-action-btn"; btn.textContent = cfg.buttonLabel || "Fermalo";
+  const btn = document.createElement("button"); btn.className = "btn primary qte-action-btn"; btn.textContent = "Attendi...";
+  btn.disabled = true;
   const feedback = document.createElement("div"); feedback.className = "qte-feedback";
 
   box.appendChild(title); box.appendChild(hint); box.appendChild(roundsWrap); box.appendChild(track); box.appendChild(btn); box.appendChild(feedback);
@@ -2300,13 +2326,22 @@ function renderPrecisionQte(scene, choicesEl){
     const t = elapsed/sweepMs;
     const pos = t<0.5 ? t*2*100 : (1-t)*2*100;
     marker.style.left = pos + "%";
-    animId = requestAnimationFrame(tick);
+    if(started && !resolved) animId = requestAnimationFrame(tick);
   }
-  newRoundZone();
-  animId = requestAnimationFrame(tick);
+
+  qtePrestartHandle = setTimeout(()=>{
+    qtePrestartHandle = null;
+    started = true;
+    hint.textContent = cfg.hint || ("Clicca \"Fermalo\" quando l'indicatore attraversa la zona chiara. "+rounds+" tentativi.");
+    track.classList.remove("qte-track-waiting");
+    btn.disabled = false;
+    btn.textContent = cfg.buttonLabel || "Fermalo";
+    newRoundZone();
+    animId = requestAnimationFrame(tick);
+  }, readTime);
 
   btn.addEventListener("click", ()=>{
-    if(resolved) return;
+    if(!started || resolved) return;
     playClick("normal");
     const markerPos = parseFloat(marker.style.left) || 0;
     const hit = markerPos >= currentZoneStart && markerPos <= (currentZoneStart+zonePct);
@@ -2329,16 +2364,17 @@ function renderReflexQte(scene, choicesEl){
   choicesEl.className = "choices";
   const cfg = scene.qte;
   const duration = cfg.duration || 2600;
+  const readTime = cfg.readTime!=null ? cfg.readTime : QTE_READ_TIME;
   const icons = cfg.icons || ["🗄️","👗","📦","🛏️","🕯️","🚪"];
   const correctIdx = cfg.correctIndex!=null ? cfg.correctIndex : Math.floor(Math.random()*icons.length);
-  let resolved = false, wrongCount = 0, rafId = null;
-  const startTs = performance.now();
+  let resolved = false, started = false, wrongCount = 0, rafId = null, startTs = null;
 
   const box = document.createElement("div"); box.className = "qte-box";
   const title = document.createElement("div"); title.className = "qte-title"; title.textContent = cfg.title || "Cerca in fretta";
-  const hint = document.createElement("div"); hint.className = "qte-hint"; hint.textContent = cfg.hint || "Trova il nascondiglio giusto prima che sia troppo tardi.";
-  const timerbar = document.createElement("div"); timerbar.className = "qte-timerbar";
+  const hint = document.createElement("div"); hint.className = "qte-hint"; hint.textContent = "Leggi con calma: fra poco dovrai muoverti in fretta.";
+  const timerbar = document.createElement("div"); timerbar.className = "qte-timerbar qte-timerbar-waiting";
   const timerFill = document.createElement("i");
+  timerFill.style.width = "100%";
   timerbar.appendChild(timerFill);
   const grid = document.createElement("div"); grid.className = "qte-reflex-grid";
   const feedback = document.createElement("div"); feedback.className = "qte-feedback";
@@ -2348,6 +2384,7 @@ function renderReflexQte(scene, choicesEl){
 
   const cells = icons.map((ic,i)=>{
     const cell = document.createElement("button"); cell.className = "qte-hotspot"; cell.textContent = ic;
+    cell.disabled = true;
     cell.addEventListener("click", ()=> onPick(i, cell));
     grid.appendChild(cell);
     return cell;
@@ -2358,12 +2395,21 @@ function renderReflexQte(scene, choicesEl){
     const remain = Math.max(0, 1-elapsed/duration);
     timerFill.style.width = (remain*100)+"%";
     if(remain<=0 && !resolved){ resolved = true; finish("fail"); return; }
-    if(!resolved) rafId = requestAnimationFrame(tick);
+    if(started && !resolved) rafId = requestAnimationFrame(tick);
   }
-  rafId = requestAnimationFrame(tick);
+
+  qtePrestartHandle = setTimeout(()=>{
+    qtePrestartHandle = null;
+    started = true;
+    hint.textContent = cfg.hint || "Trova il nascondiglio giusto prima che sia troppo tardi.";
+    timerbar.classList.remove("qte-timerbar-waiting");
+    cells.forEach(c=> c.disabled = false);
+    startTs = performance.now();
+    rafId = requestAnimationFrame(tick);
+  }, readTime);
 
   function onPick(i, cell){
-    if(resolved || cell.disabled) return;
+    if(!started || resolved || cell.disabled) return;
     if(i===correctIdx){
       resolved = true;
       playClick("warm");
