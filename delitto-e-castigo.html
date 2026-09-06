@@ -424,7 +424,29 @@ function ensureAudio(){
     audioCtx = new Ctx();
     masterGain = audioCtx.createGain();
     masterGain.gain.value = audioPrefs.muted ? 0 : 1;
-    masterGain.connect(audioCtx.destination);
+
+    /* Su iPhone/iPad, l'audio generato da AudioContext viene silenziato dal
+       tasto fisico "silenzioso" a meno che non venga fatto passare per un
+       vero elemento <audio> (categoria "playback", che ignora l'interruttore).
+       Instradiamo quindi l'uscita anche attraverso un <audio> nascosto. */
+    let routedThroughMediaElement = false;
+    try{
+      if(typeof audioCtx.createMediaStreamDestination === "function"){
+        const streamDest = audioCtx.createMediaStreamDestination();
+        masterGain.connect(streamDest);
+        const audioEl = document.createElement("audio");
+        audioEl.setAttribute("playsinline","");
+        audioEl.setAttribute("autoplay","");
+        audioEl.srcObject = streamDest.stream;
+        audioEl.style.display = "none";
+        document.body.appendChild(audioEl);
+        const p = audioEl.play();
+        if(p && typeof p.catch==="function") p.catch(()=>{});
+        routedThroughMediaElement = true;
+      }
+    }catch(e){ routedThroughMediaElement = false; }
+    if(!routedThroughMediaElement) masterGain.connect(audioCtx.destination);
+
     sfxGain = audioCtx.createGain(); sfxGain.gain.value = 0.9; sfxGain.connect(masterGain);
     ambientGain = audioCtx.createGain(); ambientGain.gain.value = 0.22; ambientGain.connect(masterGain);
     startAmbient();
@@ -432,17 +454,15 @@ function ensureAudio(){
   return audioCtx;
 }
 
-/* Esegue fn non appena l'AudioContext è garantito attivo: crea/riprende il
-   contesto e, se serve attendere la resume() (promessa asincrona), rimanda
-   la riproduzione a dopo — così il primo suono non viene mai perso. */
+/* Esegue fn SINCRONAMENTE, nello stesso istante del gesto dell'utente:
+   su Safari/iOS l'AudioContext si sblocca solo se resume()/start() restano
+   nella stessa catena di chiamate sincrona del click, senza attendere una
+   Promise — per questo qui NON si aspetta resume(), solo la si innesca. */
 function withAudio(fn){
   const ctx = ensureAudio();
   if(!ctx) return;
-  if(ctx.state === "suspended"){
-    ctx.resume().then(fn).catch(()=>{ try{ fn(); }catch(e){} });
-  } else {
-    fn();
-  }
+  if(ctx.state === "suspended"){ try{ ctx.resume(); }catch(e){} }
+  fn();
 }
 
 function toggleMute(){
