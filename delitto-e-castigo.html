@@ -425,13 +425,25 @@ function ensureAudio(){
     masterGain = audioCtx.createGain();
     masterGain.gain.value = audioPrefs.muted ? 0 : 1;
     masterGain.connect(audioCtx.destination);
-    sfxGain = audioCtx.createGain(); sfxGain.gain.value = 0.5; sfxGain.connect(masterGain);
-    ambientGain = audioCtx.createGain(); ambientGain.gain.value = 0.13; ambientGain.connect(masterGain);
+    sfxGain = audioCtx.createGain(); sfxGain.gain.value = 0.9; sfxGain.connect(masterGain);
+    ambientGain = audioCtx.createGain(); ambientGain.gain.value = 0.22; ambientGain.connect(masterGain);
     startAmbient();
   }catch(e){ audioCtx = null; }
   return audioCtx;
 }
-function resumeAudio(){ if(audioCtx && audioCtx.state==="suspended") audioCtx.resume().catch(()=>{}); }
+
+/* Esegue fn non appena l'AudioContext è garantito attivo: crea/riprende il
+   contesto e, se serve attendere la resume() (promessa asincrona), rimanda
+   la riproduzione a dopo — così il primo suono non viene mai perso. */
+function withAudio(fn){
+  const ctx = ensureAudio();
+  if(!ctx) return;
+  if(ctx.state === "suspended"){
+    ctx.resume().then(fn).catch(()=>{ try{ fn(); }catch(e){} });
+  } else {
+    fn();
+  }
+}
 
 function toggleMute(){
   ensureAudio();
@@ -439,6 +451,7 @@ function toggleMute(){
   saveAudioPrefs();
   if(masterGain && audioCtx) masterGain.gain.setTargetAtTime(audioPrefs.muted ? 0 : 1, audioCtx.currentTime, 0.05);
   updateMuteButtons();
+  if(!audioPrefs.muted) withAudio(()=> playTone(520,{type:"sine",dur:0.14,slideTo:660,peak:0.5}));
 }
 function updateMuteButtons(){
   const icon = audioPrefs.muted ? "🔇" : "🔊";
@@ -457,41 +470,57 @@ function playTone(freq, opts){
   if(opts.slideTo) osc.frequency.exponentialRampToValueAtTime(opts.slideTo, t0+dur);
   const g = audioCtx.createGain();
   g.gain.setValueAtTime(0.0001, t0);
-  g.gain.exponentialRampToValueAtTime(opts.peak||0.5, t0+0.012);
+  g.gain.exponentialRampToValueAtTime(opts.peak||0.6, t0+0.012);
   g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
   osc.connect(g); g.connect(sfxGain);
   osc.start(t0); osc.stop(t0+dur+0.03);
 }
 
+/* Un piccolo transiente di rumore filtrato sopra al tono: rende il "click"
+   percepibile anche su altoparlanti piccoli, dove un tono puro e grave si perde. */
+function playNoiseBurst(opts){
+  opts = opts || {};
+  if(!audioCtx || audioPrefs.muted) return;
+  const t0 = audioCtx.currentTime;
+  const dur = opts.dur || 0.045;
+  const size = Math.max(1, Math.floor(audioCtx.sampleRate * dur));
+  const buffer = audioCtx.createBuffer(1, size, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for(let i=0;i<size;i++) data[i] = (Math.random()*2-1);
+  const src = audioCtx.createBufferSource(); src.buffer = buffer;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = opts.filterType || "highpass";
+  filter.frequency.value = opts.filterFreq || 1400;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(opts.peak||0.35, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+  src.connect(filter); filter.connect(g); g.connect(sfxGain);
+  src.start(t0); src.stop(t0+dur+0.01);
+}
+
 function playClick(kind){
-  ensureAudio(); resumeAudio();
-  if(!audioCtx) return;
-  if(kind==="risky"){ playTone(190,{type:"triangle",dur:0.24,slideTo:110,peak:0.4}); }
-  else if(kind==="warm"){ playTone(660,{type:"sine",dur:0.24,slideTo:840,peak:0.32}); }
-  else if(kind==="map"){ playTone(150,{type:"triangle",dur:0.16,slideTo:100,peak:0.28}); }
-  else { playTone(430,{type:"sine",dur:0.14,slideTo:540,peak:0.3}); }
+  withAudio(()=>{
+    if(kind==="risky"){ playTone(190,{type:"triangle",dur:0.26,slideTo:110,peak:0.6}); playNoiseBurst({dur:0.05,peak:0.3,filterFreq:600}); }
+    else if(kind==="warm"){ playTone(660,{type:"sine",dur:0.26,slideTo:840,peak:0.55}); playNoiseBurst({dur:0.035,peak:0.22,filterFreq:2200}); }
+    else if(kind==="map"){ playTone(150,{type:"triangle",dur:0.18,slideTo:100,peak:0.5}); playNoiseBurst({dur:0.04,peak:0.25,filterFreq:900}); }
+    else { playTone(430,{type:"sine",dur:0.16,slideTo:540,peak:0.55}); playNoiseBurst({dur:0.035,peak:0.28,filterFreq:1600}); }
+  });
 }
 function playUiClick(){
-  ensureAudio(); resumeAudio();
-  if(!audioCtx) return;
-  playTone(300,{type:"sine",dur:0.1,slideTo:360,peak:0.22});
+  withAudio(()=>{ playTone(300,{type:"sine",dur:0.12,slideTo:360,peak:0.45}); playNoiseBurst({dur:0.03,peak:0.24,filterFreq:1800}); });
 }
 function playItemChime(){
-  ensureAudio(); resumeAudio();
-  if(!audioCtx) return;
-  [523,659,784].forEach((f,i)=> setTimeout(()=> playTone(f,{dur:0.28,peak:0.22}), i*70));
+  withAudio(()=>{ [523,659,784].forEach((f,i)=> setTimeout(()=> playTone(f,{dur:0.3,peak:0.4}), i*70)); });
 }
 function playChapterChime(){
-  ensureAudio(); resumeAudio();
-  if(!audioCtx) return;
-  [196,294,392].forEach(f=> playTone(f,{type:"sine",dur:1.8,peak:0.2}));
+  withAudio(()=>{ [196,294,392].forEach(f=> playTone(f,{type:"sine",dur:1.8,peak:0.35})); });
 }
 function playEndingSting(badge){
-  ensureAudio(); resumeAudio();
-  if(!audioCtx) return;
-  if(badge==="good"){ [392,494,587,784].forEach((f,i)=> setTimeout(()=>playTone(f,{dur:1.5,peak:0.22}), i*90)); }
-  else if(badge==="bad"){ [220,207,196].forEach((f,i)=> setTimeout(()=>playTone(f,{type:"sawtooth",dur:1.7,peak:0.16}), i*140)); }
-  else { [349,415,466].forEach((f,i)=> setTimeout(()=>playTone(f,{dur:1.4,peak:0.2}), i*110)); }
+  withAudio(()=>{
+    if(badge==="good"){ [392,494,587,784].forEach((f,i)=> setTimeout(()=>playTone(f,{dur:1.5,peak:0.35}), i*90)); }
+    else if(badge==="bad"){ [220,207,196].forEach((f,i)=> setTimeout(()=>playTone(f,{type:"sawtooth",dur:1.7,peak:0.28}), i*140)); }
+    else { [349,415,466].forEach((f,i)=> setTimeout(()=>playTone(f,{dur:1.4,peak:0.32}), i*110)); }
+  });
 }
 
 function startAmbient(){
