@@ -12218,7 +12218,58 @@
       });
     }
 
+    triggerRivalCountermove(rivalId, rivalBaseline, typeof momentumAvgDelta !== "undefined" ? momentumAvgDelta : 0);
     recomputeRating();
+  }
+  // ---------- Contromossa del rivale: adesso reagisce davvero al giocatore ----------
+  // Fino ad ora nessun partito CPU prendeva mai l'iniziativa contro il giocatore: il rivale ideologico
+  // fisso (familyById(family).rival) subiva passivamente gli attacchi del giocatore (eff.rivalExtra) e
+  // veniva prosciugato dalla sua crescita (vedi rivalShare qui sopra), ma non aveva mai una reazione
+  // propria — segnalato come la lacuna più grossa del gioco ("dai intelligenza ai partiti"). Ora, quando
+  // il giocatore sta chiaramente vincendo la contesa per lo stesso elettorato — cresce con slancio reale
+  // (lo stesso momentumAvgDelta già usato per il trend dei sondaggi del giocatore) mentre il proprio
+  // rivale scivola sotto il proprio equilibrio più del normale — il rivale ha una probabilità concreta di
+  // reagire con una contromossa vera, non solo subire. Un rivale che tiene bene le proprie posizioni non
+  // reagisce quasi mai: l'aggressività è proporzionale a quanto il giocatore lo sta davvero mettendo in
+  // difficoltà, non un tiro di dado fisso.
+  var RIVAL_COUNTERMOVE_COOLDOWN_TURNS = 10;
+  var RIVAL_COUNTERMOVES = [
+    { title: "Campagna mediatica negativa", build: function (rivalName, p) { return rivalName + " lancia una campagna mediatica mirata contro " + p.name + ", mettendo in dubbio la sua credibilità davanti all'opinione pubblica."; }, effects: { reputazione: -1, visibilita: 1 }, mult: { reputazione: [2, 5], visibilita: [1, 3] } },
+    { title: "Attacco frontale in Aula", build: function (rivalName, p) { return rivalName + " attacca frontalmente " + p.name + " in Aula, accusandolo di incoerenza sui temi che dice di avere più a cuore."; }, effects: {}, mult: { reputazione: [1.5, 4], visibilita: [2, 5] }, neg: ["reputazione"] },
+    { title: "Manovra per isolarti", build: function (rivalName, p) { return rivalName + " lavora dietro le quinte per isolare " + p.name + " dagli altri partiti, rendendo più difficili le alleanze future."; }, effects: {}, mult: { reputazione: [1, 3] }, neg: ["reputazione"], relationHit: true },
+    { title: "Contro-narrazione sui social", build: function (rivalName, p) { return rivalName + " lancia una contro-narrazione sui social contro le ultime posizioni di " + p.name + ", che guadagna terreno tra gli indecisi."; }, effects: {}, mult: { sondaggi: [0.2, 0.5], visibilita: [1, 3] }, neg: ["sondaggi"] },
+    { title: "Sondaggio commissionato ad hoc", build: function (rivalName, p) { return rivalName + " commissiona e diffonde un sondaggio che ridimensiona i risultati reali di " + p.name + ", alimentando dubbi sulla sua forza effettiva."; }, effects: {}, mult: { reputazione: [1, 3], iscritti: [5, 15] }, neg: ["reputazione", "iscritti"] }
+  ];
+  function triggerRivalCountermove(rivalId, rivalBaseline, playerMomentum) {
+    var p = state.player;
+    if (!p || !rivalId || state.parties[rivalId] === undefined) return;
+    if (state.turn < (p.rivalCountermoveCooldownTurn || 0)) return;
+    var rivalDeficit = Math.max(0, (rivalBaseline || state.parties[rivalId]) - state.parties[rivalId]);
+    var pressure = Math.max(0, playerMomentum) * 1.4 + rivalDeficit * 0.4;
+    var chance = clamp(pressure * 0.05, 0, 0.22);
+    if (Math.random() >= chance) return;
+    p.rivalCountermoveCooldownTurn = state.turn + RIVAL_COUNTERMOVE_COOLDOWN_TURNS;
+    var move = RIVAL_COUNTERMOVES[Math.floor(Math.random() * RIVAL_COUNTERMOVES.length)];
+    var rivalParty = partyById(rivalId);
+    var rivalName = rivalParty ? rivalParty.name : rivalId;
+    Object.keys(move.mult).forEach(function (key) {
+      var range = move.mult[key];
+      var magnitude = rand(range[0], range[1]);
+      if (move.neg && move.neg.indexOf(key) !== -1) magnitude = -magnitude;
+      if (key === "reputazione") p.reputazione = clamp(p.reputazione + magnitude, 0, 100);
+      else if (key === "visibilita") p.visibilita = clamp(p.visibilita + magnitude, 0, 100);
+      else if (key === "iscritti") p.iscritti = Math.max(0, p.iscritti + magnitude);
+      else if (key === "sondaggi") p.sondaggi = clamp(p.sondaggi + magnitude, 0, 40);
+    });
+    // Il rivale non si limita a colpire: una contromossa riuscita gli porta anche un piccolo beneficio
+    // diretto, coerente con l'idea che sta davvero contendendo lo stesso elettorato, non solo reagendo a vuoto.
+    state.parties[rivalId] = Math.max(0.3, state.parties[rivalId] + rand(0.1, 0.4));
+    if (move.relationHit && state.partyRelations) {
+      state.partyRelations[rivalId] = clamp((state.partyRelations[rivalId] === undefined ? 50 : state.partyRelations[rivalId]) - rand(3, 8), 0, 100);
+    }
+    var text = move.build(rivalName, p);
+    state.log.unshift({ week: state.turn, title: "Contromossa di " + rivalName, choiceLabel: move.title, result: text, headlines: [], type: "cronaca", cat: "Rivalità Politica" });
+    state.worldNews.unshift({ cat: "Politica", text: text });
   }
 
   function pickNextDossier() {
