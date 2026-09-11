@@ -2309,10 +2309,18 @@
     if (!p.institutionalRelations) return;
     var lean = institutionalLean(p);
     var style = effectiveLeaderStyle(p);
+    var localLeanBonus = (p.family === "regionalista" || p.family === "meridionalista") ? 16 : 0;
     var targets = {
       confindustria: 50 + lean.business * 28, cgil: 50 + lean.unions * 28, cisl: 50 + lean.unions * 18,
       usb: 50 + lean.unions * 34, chiesa: 50 + lean.chiesa * 28, bce: 50 + lean.bce * 24, ue: 50 + lean.ue * 30,
-      magistratura: 50 - lean.judicial * 22
+      magistratura: 50 - lean.judicial * 22,
+      // Quattro nuovi attori, agganciati alle stesse leve ideologiche già tarate per famiglia invece di
+      // richiedere una nuova tabella di 17 righe a parte: Bankitalia segue la stessa sensibilità verso la
+      // banca centrale della BCE, CRUI (università/ricerca) quella verso l'apertura internazionale/UE,
+      // Coldiretti quella (inversa) verso il libero scambio, ANCI (Comuni) premia le famiglie più
+      // territoriali di natura.
+      bankitalia: 50 + lean.bce * 22, crui: 50 + lean.ue * 18, coldiretti: 50 - lean.ue * 12,
+      anci: 50 + lean.unions * 8 + localLeanBonus
     };
     Object.keys(p.institutionalRelations).forEach(function (key) {
       var v = p.institutionalRelations[key];
@@ -2321,6 +2329,50 @@
     });
     var riskTarget = clamp((8 + lean.judicial * 16 + (p.lobby && !p.lobby.exposed ? 12 : 0)) * style.judicialRiskMult, 2, 90);
     p.judicialRisk = clamp((p.judicialRisk || 8) + (riskTarget - (p.judicialRisk || 8)) * 0.03, 1, 95);
+  }
+  // ---------- Effetti reali delle relazioni istituzionali ----------
+  // Segnalato da un giocatore: di 8 attori istituzionali monitorati, solo la magistratura incideva
+  // davvero sul gioco (probabilità di scoperta della Loggia Riservata, probabilità di condanna in un
+  // processo — vedi resolveLobbyAction/resolveTrialIfDue). Tutti gli altri (Confindustria, CGIL, CISL,
+  // USB, Chiesa, BCE, UE) erano numeri decorativi: mostrati, spiegati, ma senza alcuna conseguenza
+  // meccanica reale al di fuori del momento in cui si sceglie il dossier dedicato. Ora ogni relazione,
+  // sopra o sotto due soglie (alleato: 65+, ostile: 35-), produce settimanalmente un piccolo effetto
+  // reale e persistente — non un evento raro isolato, ma la sensazione costante di avere, o non avere,
+  // quell'attore dalla propria parte.
+  var INSTITUTIONAL_FRIEND_THRESHOLD = 65, INSTITUTIONAL_HOSTILE_THRESHOLD = 35;
+  var INSTITUTIONAL_ACTOR_EFFECTS = {
+    confindustria: { friend: { fondi: 55 }, hostile: { fondi: -45 } },
+    cgil: { friend: { iscritti: 3 }, hostile: { iscritti: -2 } },
+    cisl: { friend: { iscritti: 2 }, hostile: { iscritti: -1 } },
+    usb: { friend: { iscritti: 2 }, hostile: {} },
+    chiesa: { friend: { reputazione: 0.15 }, hostile: { reputazione: -0.12 } },
+    crui: { friend: { national: { ricercaSviluppo: 0.012 } }, hostile: { national: { ricercaSviluppo: -0.008 } } },
+    coldiretti: { friend: { national: { autosufficienzaStrategica: 0.01 } }, hostile: {} },
+    anci: { friend: { national: { coesioneNordSud: 0.01 } }, hostile: { national: { coesioneNordSud: -0.008 } } }
+  };
+  function applyInstitutionalRelationEffects() {
+    var p = state.player;
+    if (!p || !p.institutionalRelations) return;
+    var ir = p.institutionalRelations;
+    Object.keys(INSTITUTIONAL_ACTOR_EFFECTS).forEach(function (key) {
+      var v = ir[key];
+      if (v === undefined) return;
+      var spec = INSTITUTIONAL_ACTOR_EFFECTS[key];
+      var bucket = v >= INSTITUTIONAL_FRIEND_THRESHOLD ? spec.friend : v <= INSTITUTIONAL_HOSTILE_THRESHOLD ? spec.hostile : null;
+      if (!bucket) return;
+      if (bucket.fondi) p.fondi = Math.max(0, p.fondi + bucket.fondi);
+      if (bucket.iscritti) p.iscritti = Math.max(0, p.iscritti + bucket.iscritti);
+      if (bucket.reputazione) p.reputazione = clamp(p.reputazione + bucket.reputazione, 0, 100);
+      if (bucket.national) applyNationalEffects(bucket.national, institutionalPowerMultiplier(p));
+    });
+    // BCE e Banca d'Italia: una relazione debole con le banche centrali ora pesa davvero e stabilmente
+    // sullo spread, non solo nell'istante in cui si sceglie il dossier dedicato — coerente con quanto i
+    // mercati guardino all'indipendenza percepita della banca centrale dal potere politico.
+    var bceAvg = ((ir.bce !== undefined ? ir.bce : 50) + (ir.bankitalia !== undefined ? ir.bankitalia : 50)) / 2;
+    state.spreadBps = clamp(state.spreadBps + (50 - bceAvg) * 0.018, 40, 500);
+    // Unione Europea: una cattiva relazione riduce lentamente l'accesso reale a fondi e mercato unico
+    // (piccola pressione sull'economia nazionale), una buona relazione lo migliora.
+    if (ir.ue !== undefined) applyNationalEffects({ economia: (ir.ue - 50) * 0.0007 }, 1);
   }
   var STORAGE_KEY = "politisit_founder_save_v2";
   // ---------- Slot di salvataggio multipli ----------
@@ -6655,10 +6707,12 @@
       desc: "Un confronto diretto tra il partito, Confindustria e i grandi sindacati (CGIL, CISL, USB)." },
     { id: "chiesa", label: "Udienza con la Chiesa Cattolica", cooldown: 12,
       desc: "Un incontro istituzionale con i vertici della Chiesa Cattolica italiana." },
-    { id: "bce_ue", label: "Colloquio con BCE e Commissione UE", cooldown: 10,
-      desc: "Un confronto tecnico con la Banca Centrale e la Commissione Europea sui conti pubblici." },
+    { id: "bce_ue", label: "Colloquio con BCE, Bankitalia e Commissione UE", cooldown: 10,
+      desc: "Un confronto tecnico con la Banca Centrale Europea, Banca d'Italia e la Commissione Europea sui conti pubblici." },
     { id: "magistratura", label: "Rapporti con la Magistratura", cooldown: 11,
-      desc: "Una presa di posizione pubblica sul rapporto tra il partito e il potere giudiziario." }
+      desc: "Una presa di posizione pubblica sul rapporto tra il partito e il potere giudiziario." },
+    { id: "territorio_ricerca", label: "Incontro con Comuni, Università e Coldiretti", cooldown: 10,
+      desc: "Un confronto con i sindaci dell'ANCI, i rettori della CRUI e il mondo agricolo di Coldiretti." }
   ];
   function generateIstituzionaleDossier(domainId) {
     if (domainId === "imprese_sindacati") {
@@ -6691,15 +6745,29 @@
     }
     if (domainId === "bce_ue") {
       return {
-        id: "ist_bce_ue", kind: "istituzionale", cat: "Attori Istituzionali", title: "Colloquio con BCE e Commissione UE",
-        brief: "Un colloquio tecnico sui conti pubblici italiani, tra Francoforte e Bruxelles. Come imposti il messaggio?",
+        id: "ist_bce_ue", kind: "istituzionale", cat: "Attori Istituzionali", title: "Colloquio con BCE, Bankitalia e Commissione UE",
+        brief: "Un colloquio tecnico sui conti pubblici italiani, tra Francoforte, via Nazionale e Bruxelles. Come imposti il messaggio?",
         choices: [
-          { label: "Rassicura i mercati e Bruxelles", hint: "Fiducia dei mercati in crescita, ma meno margine sovranista", instRelDeltas: { bce: 13, ue: 12 }, effects: { reputazione: 2 }, spreadDelta: -6,
+          { label: "Rassicura i mercati e Bruxelles", hint: "Fiducia dei mercati in crescita, ma meno margine sovranista", instRelDeltas: { bce: 13, ue: 12, bankitalia: 10 }, effects: { reputazione: 2 }, spreadDelta: -6,
             result: "Il messaggio rassicurante viene accolto bene: lo spread si stringe leggermente, ma qualcuno in patria parla di sudditanza." },
-          { label: "Rivendica la sovranità economica", hint: "La base sovranista apprezza, i mercati si irrigidiscono", instRelDeltas: { bce: -13, ue: -12 }, effects: { iscritti: rand(15, 40) }, spreadDelta: 8,
-            result: "La rivendicazione di sovranità scalda la base, ma raffredda i rapporti con Francoforte e Bruxelles: lo spread ne risente." },
-          { label: "Dialogo tecnico e neutro", hint: "Piccolo passo avanti, nessuno scossone", instRelDeltas: { bce: 4, ue: 4 }, effects: {},
+          { label: "Rivendica la sovranità economica", hint: "La base sovranista apprezza, i mercati si irrigidiscono", instRelDeltas: { bce: -13, ue: -12, bankitalia: -10 }, effects: { iscritti: rand(15, 40) }, spreadDelta: 8,
+            result: "La rivendicazione di sovranità scalda la base, ma raffredda i rapporti con Francoforte, via Nazionale e Bruxelles: lo spread ne risente." },
+          { label: "Dialogo tecnico e neutro", hint: "Piccolo passo avanti, nessuno scossone", instRelDeltas: { bce: 4, ue: 4, bankitalia: 4 }, effects: {},
             result: "Il colloquio resta su un binario tecnico, senza grandi annunci né grandi tensioni." }
+        ]
+      };
+    }
+    if (domainId === "territorio_ricerca") {
+      return {
+        id: "ist_territorio_ricerca", kind: "istituzionale", cat: "Attori Istituzionali", title: "Incontro con Comuni, Università e Coldiretti",
+        brief: "I sindaci dell'ANCI, i rettori della CRUI e i vertici di Coldiretti chiedono un confronto sulle priorità del partito. Come ti presenti?",
+        choices: [
+          { label: "Più autonomia e fondi diretti ai territori", hint: "Comuni e agricoltori soddisfatti, meno margine per la ricerca centralizzata", instRelDeltas: { anci: 15, coldiretti: 12, crui: -4 }, effects: { iscritti: rand(15, 35) },
+            result: "L'apertura ai territori conquista sindaci e mondo agricolo, ma i rettori restano freddi su un piano che non li riguarda." },
+          { label: "Grande piano nazionale per la ricerca pubblica", hint: "L'accademia si avvicina, i territori si sentono meno centrali", instRelDeltas: { crui: 16, anci: -5, coldiretti: -3 }, effects: { reputazione: 2, national: { ricercaSviluppo: 0.15 } },
+            result: "Il piano per la ricerca entusiasma il mondo accademico, ma sindaci e agricoltori lo trovano lontano dai problemi di tutti i giorni." },
+          { label: "Mediazione equilibrata su tutti i fronti", hint: "Piccolo passo avanti con tutti, nessuno scontento", instRelDeltas: { anci: 5, crui: 5, coldiretti: 5 }, effects: { reputazione: 1 },
+            result: "Una mediazione paziente lascia sindaci, rettori e agricoltori moderatamente soddisfatti, senza vincitori né vinti netti." }
         ]
       };
     }
@@ -6724,11 +6792,11 @@
   }
   function renderIstituzionaliPanel() {
     var p = state.player;
-    if (!p.institutionalRelations) p.institutionalRelations = { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 };
+    if (!p.institutionalRelations) p.institutionalRelations = { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50, bankitalia: 50, crui: 50, coldiretti: 50, anci: 50 };
     if (p.judicialRisk === undefined) p.judicialRisk = 8;
     if (!p.institutionalActionCooldowns) p.institutionalActionCooldowns = {};
     var expanded = state.inlineExpandedTopic && state.inlineExpandedTopic.kind === "istituzionale" ? state.inlineExpandedTopic : null;
-    var labels = { confindustria: "Confindustria", cgil: "CGIL", cisl: "CISL", usb: "USB", chiesa: "Chiesa Cattolica", bce: "BCE", ue: "Unione Europea", magistratura: "Magistratura" };
+    var labels = { confindustria: "Confindustria", cgil: "CGIL", cisl: "CISL", usb: "USB", chiesa: "Chiesa Cattolica", bce: "BCE", ue: "Unione Europea", magistratura: "Magistratura", bankitalia: "Banca d'Italia", crui: "Università e Ricerca (CRUI)", coldiretti: "Coldiretti", anci: "Comuni (ANCI)" };
     var html = '<section aria-label="Attori Sociali e Istituzionali"><details class="log"><summary>Attori Sociali e Istituzionali<span>▾</span></summary>' +
       '<p class="ci-hint">Il rapporto del partito con i grandi corpi intermedi del paese: si muove lentamente da solo, in base alla linea ideologica, ma puoi intervenire di persona con un incontro dedicato.</p>' +
       '<div class="correnti-row">' + Object.keys(labels).map(function (k) {
@@ -6748,6 +6816,23 @@
       if (isOpen) html += renderInlineTopicChoices(expanded);
     });
     html += "</div></details></section>";
+    return html;
+  }
+  // Movimenti e organizzazioni civili: solo lettura (nessuna azione da avviare, a differenza degli attori
+  // istituzionali sopra) — reagiscono da soli in base a come va davvero il paese sul loro tema, non a
+  // un'azione diretta del giocatore. Il pannello serve a rendere visibile chi sono e quanto ti seguono.
+  function externalMovementTrustLabel(v) {
+    return v >= 75 ? "Molto favorevole" : v >= 58 ? "Favorevole" : v >= 42 ? "Neutro" : v >= 25 ? "Critico" : "Ostile";
+  }
+  function renderExternalMovementsPanel() {
+    var movements = ensureExternalMovements();
+    var html = '<section aria-label="Movimenti e Organizzazioni"><details class="log"><summary>Movimenti e Organizzazioni<span>▾</span></summary>' +
+      '<p class="ci-hint">Associazioni, comitati e movimenti civili che non si presentano alle elezioni ma seguono da vicino un tema: reagiscono da soli a come cambia davvero il paese su quel fronte, non alle tue dichiarazioni.</p>' +
+      '<div class="correnti-row">' + movements.map(function (mv) {
+        var themeObj = SITUATION_THEME_BY_ID[mv.themeId];
+        return "<span>" + mv.name + " — " + (themeObj ? themeObj.label.replace("Politica — ", "") : mv.themeId) + ": " + Math.round(mv.trust) + "% (" + externalMovementTrustLabel(mv.trust) + ")</span>";
+      }).join("") + '</div>' +
+      "</details></section>";
     return html;
   }
 
@@ -8074,6 +8159,72 @@
     else { arc.negativeStreak++; arc.positiveStreak = 0; }
     arc.lastEventText = text;
     state.partyArcs[party.id] = arc;
+  }
+
+  // ---------- Movimenti e organizzazioni esterne ----------
+  // Nessun attore, prima d'ora, entrava mai in contatto con il partito senza essere o un partito
+  // elettorale rivale o un ente istituzionale (Confindustria, sindacati, Chiesa...). Mancava una fascia
+  // intermedia di vita civile reale: associazioni, comitati e movimenti che non si presentano alle
+  // elezioni ma seguono da vicino un singolo tema e reagiscono a come il paese si muove davvero su
+  // quel tema — non alle scelte esplicite del giocatore (quelle restano nei dossier), ma al RISULTATO
+  // reale (l'indicatore della Scheda Paese collegato al loro tema, lo stesso già usato da
+  // THEME_TO_NATIONAL_METRIC per le situazioni settimanali): se il paese migliora su ciò che gli sta a
+  // cuore, il movimento se ne accorge e sostiene il partito; se peggiora, protesta.
+  var EXTERNAL_MOVEMENT_TEMPLATES = [
+    { id: "legambiente_cittadina", name: "Legambiente Cittadina", themeId: "ambiente" },
+    { id: "rete_no_precariato", name: "Rete No Precariato", themeId: "lavoro" },
+    { id: "comitato_diritto_casa", name: "Comitato per il Diritto alla Casa", themeId: "casa" },
+    { id: "osservatorio_trasparenza", name: "Osservatorio Trasparenza", themeId: "giustizia" },
+    { id: "rete_studenti_movimento", name: "Rete Studenti in Movimento", themeId: "giovani" },
+    { id: "comitato_pendolari", name: "Comitato Pendolari", themeId: "trasporti" },
+    { id: "coordinamento_sanita_pubblica", name: "Coordinamento Sanità Pubblica", themeId: "sanita" },
+    { id: "associazione_famiglie_numerose", name: "Associazione Famiglie Numerose", themeId: "famiglia" },
+    { id: "fronte_agricoltori_uniti", name: "Fronte Agricoltori Uniti", themeId: "agricoltura" },
+    { id: "cittadini_per_digitale", name: "Cittadini per il Digitale", themeId: "digitale" }
+  ];
+  function ensureExternalMovements() {
+    if (state.externalMovements && state.externalMovements.length) return state.externalMovements;
+    state.externalMovements = EXTERNAL_MOVEMENT_TEMPLATES.map(function (tpl) {
+      var metric = THEME_TO_NATIONAL_METRIC[tpl.themeId];
+      return { id: tpl.id, name: tpl.name, themeId: tpl.themeId, trust: 50,
+        lastMetricValue: metric && state.countryProfile[metric] !== undefined ? state.countryProfile[metric] : 5 };
+    });
+    return state.externalMovements;
+  }
+  var EXTERNAL_MOVEMENT_METRIC_DELTA_THRESHOLD = 0.12;
+  function triggerExternalMovementEvent() {
+    var p = state.player;
+    if (!p) return;
+    if (Math.random() > 0.18) return;
+    var movements = ensureExternalMovements();
+    if (!movements.length) return;
+    var mv = movements[Math.floor(Math.random() * movements.length)];
+    var themeObj = SITUATION_THEME_BY_ID[mv.themeId];
+    var metric = THEME_TO_NATIONAL_METRIC[mv.themeId];
+    var current = metric && state.countryProfile[metric] !== undefined ? state.countryProfile[metric] : mv.lastMetricValue;
+    var delta = current - mv.lastMetricValue;
+    mv.lastMetricValue = current;
+    var text, big;
+    if (delta >= EXTERNAL_MOVEMENT_METRIC_DELTA_THRESHOLD) {
+      big = mv.trust >= 75 && Math.random() < 0.3;
+      mv.trust = clamp(mv.trust + rand(3, 8), 0, 100);
+      p.reputazione = clamp(p.reputazione + (big ? rand(3, 6) : rand(1, 3)), 0, 100);
+      p.iscritti = p.iscritti + (big ? rand(15, 35) : rand(5, 15));
+      p.visibilita = clamp(p.visibilita + rand(1, 3), 0, 100);
+      text = mv.name + (big ? " scende pubblicamente in campo a sostegno del partito" : " loda i passi avanti fatti sul tema") +
+        " (" + (themeObj ? themeObj.label.replace("Politica — ", "") : mv.themeId) + "): " + (big ? "un endorsement pieno, con tanto di conferenza stampa comune." : "un piccolo ma reale segnale di apprezzamento.");
+    } else if (delta <= -EXTERNAL_MOVEMENT_METRIC_DELTA_THRESHOLD) {
+      big = mv.trust <= 25 && Math.random() < 0.3;
+      mv.trust = clamp(mv.trust - rand(3, 8), 0, 100);
+      p.reputazione = clamp(p.reputazione - (big ? rand(3, 6) : rand(1, 3)), 0, 100);
+      p.visibilita = clamp(p.visibilita + (big ? rand(3, 7) : rand(1, 3)), 0, 100);
+      text = mv.name + (big ? " organizza una manifestazione pubblica di protesta contro il partito" : " critica pubblicamente l'immobilismo del partito") +
+        " (" + (themeObj ? themeObj.label.replace("Politica — ", "") : mv.themeId) + "): " + (big ? "cortei e striscioni finiscono su tutti i notiziari della sera." : "un malumore che si fa sentire, senza ancora esplodere.");
+    } else {
+      return; // nessun cambiamento reale sul tema, il movimento non ha motivo di farsi sentire questa settimana
+    }
+    state.log.unshift({ week: state.turn, title: "Movimenti e Organizzazioni", choiceLabel: mv.name, result: text, headlines: [], type: "cronaca", cat: "Società Civile" });
+    state.worldNews.unshift({ cat: "Società Civile", text: text });
   }
 
   // ---------- Cronaca casuale sul partito del giocatore ----------
@@ -11395,7 +11546,7 @@
     questionTimeCooldownTurn: 0, pendingQuestionTime: null,
     leggeCooldownTurn: 0, pendingLegge: null, leggeCandidates: null, acceptedLeggi: [],
     amendmentCooldownTurn: 0, pendingAmendment: null, amendmentCandidates: null, acceptedAmendments: [],
-    institutionalRelations: { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 },
+    institutionalRelations: { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50, bankitalia: 50, crui: 50, coldiretti: 50, anci: 50 },
     judicialRisk: 8, institutionalActionCooldowns: {}, talkShowCooldownTurn: 0, intervistaCooldownTurn: 0,
     pendingTrial: null, trialCooldownTurn: 0,
     lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
@@ -11946,6 +12097,7 @@
     checkLongTermTrackMilestones();
     driftPartyRelations();
     driftInstitutionalRelations();
+    applyInstitutionalRelationEffects();
     sampleCurrentEpochMood();
     if (!p.lobby && !p.lobbyOfferSeen && checkLobbyEligible(p) && Math.random() < 0.03) p.lobbyOfferSeen = true;
     driftBilancioStato();
@@ -17179,7 +17331,7 @@
   // pagina lunghissima.
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", render: function () {
-        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
+        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
@@ -19120,7 +19272,7 @@
           p.euInitiativeCooldownTurn = state.turn + 11;
         }
         if (topic.kind === "istituzionale" && choice.instRelDeltas) {
-          if (!p.institutionalRelations) p.institutionalRelations = { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50 };
+          if (!p.institutionalRelations) p.institutionalRelations = { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50, bankitalia: 50, crui: 50, coldiretti: 50, anci: 50 };
           Object.keys(choice.instRelDeltas).forEach(function (k) {
             p.institutionalRelations[k] = clamp(p.institutionalRelations[k] + choice.instRelDeltas[k], 0, 100);
           });
@@ -19554,6 +19706,7 @@
     updateLeaderTrust();
     triggerRivalPartyEvent();
     triggerPlayerNewsEvent();
+    triggerExternalMovementEvent();
     triggerGovernmentCrisisContagion();
     triggerPartyLifecycleFollowup();
     triggerSpontaneousPartyFormation();
@@ -20208,7 +20361,7 @@
     { title: "Benvenuto in Politis-IT", body: "Guidi un partito politico italiano, settimana dopo settimana: dalle prime tessere fino, magari, al governo del Paese. Ogni scelta che fai — dichiarazioni, leggi, alleanze — lascia un segno reale sul Paese e sui tuoi sondaggi.<br><br>Questa guida è lunga perché il gioco è grande: passa in rassegna ogni sezione, una alla volta. Puoi saltarla in qualunque momento con \"Salta il tutorial\" qui sotto, o riaprirla più avanti dal menu ☰ alla voce \"Guida rapida\"." },
     { title: "Il turno settimanale", body: "Il gioco avanza una settimana alla volta. Quasi ogni settimana ti viene proposto un <strong>dossier</strong> con più scelte: leggi la situazione, scegli una risposta, poi tocca <strong>\"Avanza\"</strong> per passare alla settimana successiva.<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Alcune settimane portano <strong>scene speciali</strong> a schermo intero invece del solito dossier: interviste, il salotto TV, il Question Time in Aula, i congressi internazionali, il consiglio comunale, le riunioni di programma.</li><li>Il menu ☰ resta sempre raggiungibile, anche dentro queste scene, così puoi consultare le altre sezioni senza perdere il filo.</li></ul>" },
     { title: "Pagina: Il Partito (1/2)", body: "La prima voce del menu ☰. Qui vivono l'organizzazione e le risorse del tuo partito:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Eventi di Partito</strong> — iniziative a costo/beneficio che puoi lanciare quando vuoi.</li><li><strong>Correnti interne</strong> — le anime del partito: se si allontanano troppo tra loro rischi una scissione.</li><li><strong>Sezione Giovanile</strong> — un movimento giovanile da coltivare a parte.</li><li><strong>Campagna Elettorale</strong> e <strong>Liste Elettorali</strong> — attivi nelle settimane prima del voto, per depositare i candidati e fare promesse mirate.</li><li><strong>Raccolta Fondi</strong> — azioni dedicate a rimpinguare le casse del partito.</li></ul>" },
-    { title: "Pagina: Il Partito (2/2)", body: "Continua da qui il resto della sezione \"Il Partito\":<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Vita Pubblica</strong> — apparizioni mediatiche del leader, ciascuna con formati e tempi di recupero propri.</li><li><strong>Attori Sociali e Istituzionali</strong> — i rapporti con Confindustria, sindacati, Chiesa, BCE, UE, magistratura.</li><li><strong>Loggia Riservata</strong> — una via più oscura e rischiosa, che si sblocca solo a partito già radicato.</li><li><strong>Direzione Nazionale</strong> — lo staff assumibile per ruolo.</li><li><strong>Programma Elettorale</strong>, <strong>Diario del Leader</strong> e <strong>Profilo Ideologico</strong> — la linea e la voce del partito nel tempo.</li></ul>" },
+    { title: "Pagina: Il Partito (2/2)", body: "Continua da qui il resto della sezione \"Il Partito\":<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Vita Pubblica</strong> — apparizioni mediatiche del leader, ciascuna con formati e tempi di recupero propri.</li><li><strong>Attori Sociali e Istituzionali</strong> — i rapporti con Confindustria, sindacati, Chiesa, BCE, Bankitalia, UE, magistratura, Comuni (ANCI), Università (CRUI) e Coldiretti: non solo numeri, un buon rapporto porta vantaggi concreti e ricorrenti, uno pessimo pesa davvero.</li><li><strong>Movimenti e Organizzazioni</strong> — associazioni e comitati civili che non si presentano alle elezioni ma seguono un tema preciso, e reagiscono da soli a come va davvero il paese su quel fronte.</li><li><strong>Loggia Riservata</strong> — una via più oscura e rischiosa, che si sblocca solo a partito già radicato.</li><li><strong>Direzione Nazionale</strong> — lo staff assumibile per ruolo.</li><li><strong>Programma Elettorale</strong>, <strong>Diario del Leader</strong> e <strong>Profilo Ideologico</strong> — la linea e la voce del partito nel tempo.</li></ul>" },
     { title: "Pagina: Territorio", body: "Il radicamento del partito sul territorio italiano:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Sezioni Locali</strong> — apri una sede di partito in una città per iniziare a radicarti lì.</li><li><strong>Mappa d'Italia</strong> — un colpo d'occhio simbolico su dove sei presente.</li><li><strong>Aggiornamenti dai Nuclei</strong> — la cronaca di quello che succede nelle tue sezioni.</li><li><strong>Sguardo sul Mondo</strong> — le notizie di cronaca e attualità che scandiscono il Paese, scelte tue o no.</li></ul>" },
     { title: "Pagina: Parlamento e Governo (1/2)", body: "Il cuore dell'attività istituzionale:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Gli <strong>emicicli</strong> di Camera e Senato mostrano chi ha i seggi in questo momento.</li><li>Il tuo <strong>gruppo parlamentare</strong>, se sei in Parlamento.</li><li><strong>Mozioni</strong>, <strong>Leggi</strong> ed <strong>Emendamenti</strong> — le tue iniziative legislative vere e proprie, su temi che scegli tu.</li><li><strong>Question Time</strong> — le interrogazioni in Aula, se hai i numeri per farle.</li></ul>" },
     { title: "Pagina: Parlamento e Governo (2/2)", body: "Il resto della sezione, più legato al governo del Paese:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Riforme di Governo</strong> — centinaia di riforme possibili, disponibili solo se sei al governo.</li><li><strong>Grandi Scelte di Politica Estera</strong> e <strong>Programma Spaziale</strong> — decisioni di lungo periodo su scala nazionale.</li><li><strong>Proposta di Referendum</strong> — uno per legislatura, se il partito è abbastanza forte nei sondaggi.</li><li><strong>Opposizione al Regime</strong> — compare solo se il Paese vive sotto un regime e sei all'opposizione: puoi tentare di rovesciarlo.</li></ul>" },
