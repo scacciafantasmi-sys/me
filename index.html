@@ -7500,6 +7500,25 @@
       render();
     });
   }
+  // Il rapporto reale e persistente con ciascuna testata (vedi ensureOutletRelation/driftOutletRelations
+  // più sopra): non più solo un orientamento ideologico fisso e invisibile, ma un numero che il giocatore
+  // può controllare qui, testata per testata, e vedere muoversi nel tempo in base a come la tratta.
+  function renderPressRelationsPanel() {
+    var p = state.player;
+    var rows = OUTLETS.map(function (o) {
+      return { name: o.name, v: ensureOutletRelation(o, p) };
+    }).sort(function (a, b) { return b.v - a.v; });
+    var items = rows.map(function (r) {
+      var lbl = outletRelationLabel(r.v);
+      return '<div class="party-row"><span class="sw" style="background:var(--border-strong)"></span>' +
+        '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + '</strong>' +
+        '<span class="chip ' + lbl.cls + '">' + lbl.text + "</span></div></div></div>";
+    }).join("");
+    return '<section aria-label="Rapporti con la stampa"><details class="log">' +
+      '<summary>Rapporti con la Stampa<span>▾</span></summary>' +
+      '<p class="ci-hint">Ogni testata ricorda come l\'hai trattata: le tue dichiarazioni e le tue scelte più polarizzanti logorano il rapporto (di più con chi non ti è già vicino), quelle che pagano in reputazione lo rafforzano, e ogni tanto una testata specifica si fa viva di persona — un\'intervista esclusiva da chi ti è amica, una richiesta di replica da chi non lo è. Senza eventi, il rapporto torna lentamente al proprio orientamento di partenza.</p>' +
+      '<div class="party-directory">' + items + "</div></details></section>";
+  }
   function renderDichiarazioniPage() {
     // Disponibile sia in modalità partito (state.player) sia in Carriera Politica (state.career): in
     // entrambe l'unico campo che serve qui è il tetto/contatore settimanale delle dichiarazioni, presente
@@ -7521,6 +7540,7 @@
       html += '<p class="ci-hint"><strong>Dichiarazioni esaurite per questa settimana.</strong> Potrai scriverne altre dalla prossima settimana.</p>';
     }
     html += "</section>";
+    if (state.player) html += renderPressRelationsPanel();
 
     var feedItems = (state.statements || []).slice(0, 40).map(function (st) {
       var replyOpen = replyOpenId === st.id;
@@ -8060,18 +8080,18 @@
   // al giocatore: lo si intuisce solo leggendo settimana dopo settimana come ciascuna copre le stesse
   // notizie (vedi outletRelationToPlayer/HEADLINE_TEMPLATES più sotto) — esattamente come nella realtà.
   var OUTLETS = [
-    { name: "Corriere della Sera", lean: "centro" },
-    { name: "la Repubblica", lean: "centrosinistra" },
-    { name: "La Stampa", lean: "centrosinistra" },
-    { name: "Il Sole 24 Ore", lean: "liberale" },
-    { name: "il Fatto Quotidiano", lean: "movimentista" },
-    { name: "il Manifesto", lean: "sinistra" },
-    { name: "il Giornale", lean: "destra" },
-    { name: "Libero", lean: "destra" },
-    { name: "La Verità", lean: "destra" },
-    { name: "Avvenire", lean: "cattolico" },
-    { name: "Il Foglio", lean: "liberale" },
-    { name: "Il Messaggero", lean: "centro" }
+    { id: "corriere", name: "Corriere della Sera", lean: "centro" },
+    { id: "repubblica", name: "la Repubblica", lean: "centrosinistra" },
+    { id: "stampa", name: "La Stampa", lean: "centrosinistra" },
+    { id: "sole24ore", name: "Il Sole 24 Ore", lean: "liberale" },
+    { id: "fattoquotidiano", name: "il Fatto Quotidiano", lean: "movimentista" },
+    { id: "manifesto", name: "il Manifesto", lean: "sinistra" },
+    { id: "giornale", name: "il Giornale", lean: "destra" },
+    { id: "libero", name: "Libero", lean: "destra" },
+    { id: "verita", name: "La Verità", lean: "destra" },
+    { id: "avvenire", name: "Avvenire", lean: "cattolico" },
+    { id: "foglio", name: "Il Foglio", lean: "liberale" },
+    { id: "messaggero", name: "Il Messaggero", lean: "centro" }
   ];
   // Posizione sull'asse sinistra-destra (da -2 a +2) di ogni "lean" di testata e di ogni famiglia
   // ideologica di partito: la distanza tra le due determina se una testata copre il partito da amica,
@@ -8096,6 +8116,97 @@
     if (d <= 0.6) return "amico";
     if (d <= 1.6) return "neutro";
     return "avversario";
+  }
+  // Prima ogni testata copriva il partito SOLO in base al proprio orientamento ideologico fisso
+  // (outletRelationToPlayer sopra): un giornale amico restava amico per sempre, uno ostile per sempre,
+  // qualunque cosa il partito facesse — nessuna testata "ricordava" mai come era stata trattata. Ora
+  // ogni testata ha un rapporto reale e persistente col partito (p.outletRelations, 0-100), che PARTE
+  // dalla stessa base ideologica ma si sposta nel tempo con gli eventi veri: la copertura di ogni
+  // scelta del partito la fa scivolare piano in base a quanto quella scelta guadagna o perde in
+  // reputazione e a quanto è polarizzante (vedi il punto in applyChoice dove si generano le prime
+  // pagine), e occasionalmente una testata specifica chiede qualcosa di preciso — un'intervista
+  // esclusiva, una replica prima di un'inchiesta — la cui risposta sposta il rapporto con QUELLA
+  // testata in modo diretto e molto più marcato (vedi buildPressOutletDossier più sotto). Senza eventi,
+  // il rapporto torna lentamente verso il proprio orientamento ideologico di partenza (driftOutletRelations),
+  // esattamente come le relazioni con gli altri partiti (driftPartyRelations) o gli attori istituzionali.
+  function outletRelationBaseline(outlet, playerFamily) {
+    var lean = outletRelationToPlayer(outlet.lean, playerFamily);
+    return lean === "amico" ? 66 : lean === "avversario" ? 34 : 50;
+  }
+  function ensureOutletRelation(outlet, p) {
+    if (!p.outletRelations) p.outletRelations = {};
+    if (p.outletRelations[outlet.id] === undefined) p.outletRelations[outlet.id] = outletRelationBaseline(outlet, p.family);
+    return p.outletRelations[outlet.id];
+  }
+  function outletRelationTier(outlet, p) {
+    var score = ensureOutletRelation(outlet, p);
+    if (score >= 60) return "amico";
+    if (score <= 40) return "avversario";
+    return "neutro";
+  }
+  function outletRelationLabel(v) {
+    if (v >= 78) return { text: "Molto amica", cls: "good" };
+    if (v >= 60) return { text: "Amica", cls: "good" };
+    if (v >= 40) return { text: "Neutrale", cls: "neutral" };
+    if (v >= 22) return { text: "Ostile", cls: "accent" };
+    return { text: "Molto ostile", cls: "accent" };
+  }
+  function driftOutletRelations() {
+    var p = state.player;
+    if (!p) return;
+    OUTLETS.forEach(function (o) {
+      var cur = ensureOutletRelation(o, p);
+      var target = outletRelationBaseline(o, p.family);
+      p.outletRelations[o.id] = clamp(cur + (target - cur) * 0.05 + rand(-1, 1), 5, 95);
+    });
+  }
+  var PRESS_OUTLET_COOLDOWN_TURNS = 8;
+  function checkPressOutletTrigger() {
+    var p = state.player;
+    if (!p) return false;
+    if (state.turn < (p.pressOutletCooldownTurn || 0)) return false;
+    return Math.random() < 0.16;
+  }
+  // Preferisce le testate col rapporto più marcato (molto amica o molto ostile): è lì che la memoria
+  // accumulata nel tempo produce davvero qualcosa da raccontare, non su una testata rimasta neutra.
+  function pickPressOutletForEvent(p) {
+    var withScores = OUTLETS.map(function (o) { return { outlet: o, score: ensureOutletRelation(o, p) }; });
+    withScores.sort(function (a, b) { return Math.abs(b.score - 50) - Math.abs(a.score - 50); });
+    var top = withScores.slice(0, 5);
+    return top[Math.floor(Math.random() * top.length)];
+  }
+  function buildPressOutletDossier() {
+    var p = state.player;
+    p.pressOutletCooldownTurn = state.turn + PRESS_OUTLET_COOLDOWN_TURNS;
+    var picked = pickPressOutletForEvent(p);
+    var outlet = picked.outlet, score = picked.score;
+    var title, brief, choices;
+    if (score >= 60) {
+      title = outlet.name + " ti offre un'intervista esclusiva";
+      brief = "Dopo un periodo di copertura positiva, " + outlet.name + " ti chiede un'intervista esclusiva in prima pagina, per parlare a modo tuo dell'ultimo periodo.";
+      choices = [
+        { label: "Accetta e sfruttala a pieno", hint: "Rafforza il legame con la testata, buona visibilità", effects: { visibilita: rand(4, 8), reputazione: rand(1, 2), outletRelationDelta: { id: outlet.id, delta: rand(6, 12) } }, result: "L'intervista esclusiva rafforza il legame con " + outlet.name + " e ti regala una buona vetrina." },
+        { label: "Accetta ma resta sul generico", hint: "Meno rischio, meno guadagno", effects: { visibilita: rand(1, 3), outletRelationDelta: { id: outlet.id, delta: rand(2, 5) } }, result: "Un'intervista prudente: nulla di clamoroso, ma il rapporto con " + outlet.name + " resta solido." },
+        { label: "Declina, non hai tempo ora", hint: "Nessun rischio, ma un'occasione persa", effects: { outletRelationDelta: { id: outlet.id, delta: -rand(3, 7) } }, result: outlet.name + " incassa il rifiuto con un certo disappunto: l'occasione sfumata si sente." }
+      ];
+    } else if (score <= 40) {
+      title = outlet.name + " prepara un'inchiesta su di te";
+      brief = outlet.name + ", da tempo su posizioni distanti dalle tue, sta per pubblicare un'inchiesta poco lusinghiera sul tuo operato: un suo giornalista ti chiede una replica prima della pubblicazione.";
+      choices = [
+        { label: "Rispondi con calma e dati precisi", hint: "Prova a disinnescare l'inchiesta con i fatti", effects: { reputazione: rand(1, 3), outletRelationDelta: { id: outlet.id, delta: rand(4, 9) } }, result: "La replica puntuale smorza i toni dell'inchiesta e apre uno spiraglio con " + outlet.name + "." },
+        { label: "Rifiuta di commentare", hint: "Nessuna concessione, ma l'inchiesta uscirà comunque dura", effects: { reputazione: -rand(1, 3), outletRelationDelta: { id: outlet.id, delta: -rand(2, 5) } }, result: outlet.name + " pubblica l'inchiesta senza contraddittorio: il colpo è più duro del previsto." },
+        { label: "Attacca pubblicamente la testata", hint: "Scontro aperto, galvanizza la tua base ma chiude ogni dialogo", effects: { visibilita: rand(3, 6), reputazione: -rand(1, 2), outletRelationDelta: { id: outlet.id, delta: -rand(10, 18) } }, result: "L'attacco frontale a " + outlet.name + " scalda la tua base, ma il rapporto con la testata precipita." }
+      ];
+    } else {
+      title = outlet.name + " chiede una dichiarazione a caldo";
+      brief = outlet.name + " ti cerca per un commento veloce su un tema di attualità, prima che vada in stampa.";
+      choices = [
+        { label: "Rispondi subito e volentieri", hint: "Costruisce un rapporto ancora tutto da scrivere", effects: { visibilita: rand(2, 4), outletRelationDelta: { id: outlet.id, delta: rand(4, 8) } }, result: "La disponibilità viene notata: " + outlet.name + " comincia a guardarti con più attenzione." },
+        { label: "Rispondi con un comunicato standard", hint: "Il minimo indispensabile", effects: { outletRelationDelta: { id: outlet.id, delta: rand(0, 2) } }, result: "Un comunicato di rito, senza infamia e senza lode." },
+        { label: "Non rispondere", hint: "Rischia di apparire sfuggente", effects: { outletRelationDelta: { id: outlet.id, delta: -rand(3, 6) } }, result: outlet.name + " nota il silenzio, e non lo dimentica." }
+      ];
+    }
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Rapporti con la Stampa", cat: "Stampa", title: title, brief: brief, choices: choices };
   }
 
   // ---------- Vita autonoma dei partiti rivali ----------
@@ -11449,7 +11560,7 @@
     }
   };
   function generateHeadlineText(outlet, dossier, choice, p) {
-    var relation = outletRelationToPlayer(outlet.lean, p.family);
+    var relation = outletRelationTier(outlet, p);
     var tone = choiceIsCombative(choice) ? "combattivo" : "moderato";
     var pool = HEADLINE_TEMPLATES[relation][tone];
     var tpl = pool[Math.floor(Math.random() * pool.length)];
@@ -11534,6 +11645,7 @@
     leggeCooldownTurn: 0, pendingLegge: null, leggeCandidates: null, acceptedLeggi: [],
     amendmentCooldownTurn: 0, pendingAmendment: null, amendmentCandidates: null, acceptedAmendments: [],
     institutionalRelations: { confindustria: 50, cgil: 50, cisl: 50, usb: 50, chiesa: 50, bce: 50, ue: 50, magistratura: 50, bankitalia: 50, crui: 50, coldiretti: 50, anci: 50 },
+    outletRelations: {}, pressOutletCooldownTurn: 0,
     judicialRisk: 8, institutionalActionCooldowns: {}, talkShowCooldownTurn: 0, intervistaCooldownTurn: 0,
     pendingTrial: null, trialCooldownTurn: 0,
     lobby: null, lobbyActionCooldownTurn: 0, lobbyOfferSeen: false,
@@ -11946,9 +12058,30 @@
       if (curRel === undefined) curRel = 50;
       state.partyRelations[eff.relationDelta.id] = clamp(curRel + eff.relationDelta.delta, 0, 100);
     }
+    // Leva diretta e deliberata sul rapporto con UNA testata precisa (usata da buildPressOutletDossier):
+    // a differenza del lento assestamento passivo qui sotto, questa sposta il rapporto in modo marcato,
+    // perché nasce da un'interazione esplicita con quella specifica testata, non da una copertura generica.
+    if (eff.outletRelationDelta && eff.outletRelationDelta.id) {
+      var targetOutlet = OUTLETS.filter(function (o) { return o.id === eff.outletRelationDelta.id; })[0];
+      if (targetOutlet) {
+        var curOutletRel = ensureOutletRelation(targetOutlet, p);
+        p.outletRelations[targetOutlet.id] = clamp(curOutletRel + eff.outletRelationDelta.delta, 5, 95);
+      }
+    }
 
     var outlets = pickN(OUTLETS, 3);
     var headlines = outlets.map(function (o) { return { outlet: o.name, text: generateHeadlineText(o, dossier, choice, p) }; });
+    // Ogni testata che copre la settimana si porta via anche un pezzetto di rapporto reale col partito,
+    // non solo un titolo passeggero: una scelta che guadagna reputazione lo fa scivolare piano verso
+    // l'amicizia, una polarizzante (vedi choiceIsCombative) lo erode — di più su chi non è già amico,
+    // perché una testata già vicina tollera meglio i toni accesi di una neutrale o ostile.
+    var combativeTone = choiceIsCombative(choice);
+    outlets.forEach(function (o) {
+      var curCoverageRel = ensureOutletRelation(o, p);
+      var shift = (p.reputazione - before.reputazione) * 0.6;
+      if (combativeTone) shift -= outletRelationTier(o, p) === "amico" ? 1 : 2.5;
+      p.outletRelations[o.id] = clamp(curCoverageRel + shift, 5, 95);
+    });
 
     // Impatto numerico reale della scelta (dopo tutti i moltiplicatori di stile/staff sopra), catturato
     // per dare un riscontro visivo immediato e per restare visibile nel registro nel tempo — vedi
@@ -12085,6 +12218,7 @@
     driftPartyRelations();
     driftInstitutionalRelations();
     applyInstitutionalRelationEffects();
+    driftOutletRelations();
     sampleCurrentEpochMood();
     if (!p.lobby && !p.lobbyOfferSeen && checkLobbyEligible(p) && Math.random() < 0.03) p.lobbyOfferSeen = true;
     driftBilancioStato();
@@ -20195,6 +20329,13 @@
       return;
     }
 
+    if (checkPressOutletTrigger()) {
+      state.aiDynamicDossier = buildPressOutletDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
     var pool = DOSSIERS.slice();
     var correntiTensionAdded = false;
     // Serve almeno 2 correnti attive per avere davvero "due anime" da mettere in tensione: dopo una
@@ -20431,7 +20572,7 @@
     { title: "Pagina: Scheda Paese e Bilancio (1/2)", body: "Lo stato di salute reale dell'Italia, indicatore per indicatore, da 1 a 10:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Tocca un <strong>indicatore della Scheda Paese</strong> per aprire il suo andamento nel tempo e i temi concreti che lo riguardano.</li><li><strong>Economia Settoriale</strong> — lo stesso, ma spezzato per settore: agricoltura, turismo, industria, tecnologia, servizi.</li><li><strong>Iniziativa Libera</strong> — un'azione settimanale flessibile, non legata a un dossier specifico.</li></ul>" },
     { title: "Pagina: Scheda Paese e Bilancio (2/2)", body: "Il resto della pagina è la memoria e i conti del Paese:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Storico dei Provvedimenti</strong> — ogni legge, mozione, riforma e referendum varato dal tuo partito, dalla prima volta.</li><li><strong>Storia del Paese</strong> — le grandi epoche di governo che si sono succedute.</li><li><strong>Bilancio dello Stato</strong>, <strong>Politica Fiscale</strong> e <strong>Allocazione del Budget</strong> — entrate, uscite, tasse e come lo Stato spende, se sei al governo.</li></ul>" },
     { title: "Pagina: Partiti Politici e Relazioni", body: "Chi sono gli altri, e come ti vedono:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Elenco Partiti</strong> — tutti i partiti attivi, con i loro sondaggi.</li><li><strong>Relazioni tra Partiti</strong> — quanto ciascuno è vicino o lontano dal tuo.</li><li><strong>Dossier di Partito</strong> — un approfondimento sui rivali, uno alla volta.</li></ul>" },
-    { title: "Dichiarazioni, Diario e Storia del Partito", body: "Le ultime tre voci del menu:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Dichiarazioni</strong> — l'unico posto dove scrivi davvero di tuo pugno, in testo libero: il gioco riconosce da solo il tema e il tono di quello che scrivi.</li><li><strong>Diario di Partito</strong> — il registro cronologico completo di tutto quello che è successo.</li><li><strong>Storia del Partito</strong> — un riepilogo di carriera con un punteggio finale, da 0 a 100: quanto ha lasciato il segno il tuo partito.</li></ul>" },
+    { title: "Dichiarazioni, Diario e Storia del Partito", body: "Gli ultimi tre pulsanti della barra:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Dichiarazioni</strong> — l'unico posto dove scrivi davvero di tuo pugno, in testo libero: il gioco riconosce da solo il tema e il tono di quello che scrivi. Qui trovi anche i <strong>Rapporti con la Stampa</strong>: ogni testata ricorda nel tempo come l'hai trattata, non solo il suo orientamento ideologico fisso — le scelte polarizzanti logorano il rapporto, quelle che pagano in reputazione lo rafforzano, e ogni tanto una testata specifica si fa viva di persona, in bene o in male.</li><li><strong>Diario di Partito</strong> — il registro cronologico completo di tutto quello che è successo.</li><li><strong>Storia del Partito</strong> — un riepilogo di carriera con un punteggio finale, da 0 a 100: quanto ha lasciato il segno il tuo partito.</li></ul>" },
     { title: "Gli imprevisti", body: "Non tutto dipende dalle tue scelte. Di tanto in tanto, indipendentemente da cosa fai:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Possono capitare <strong>shock esterni</strong> — crisi finanziarie, disastri naturali, emergenze sanitarie — che toccano la Scheda Paese.</li><li>Se sei al governo, una rara <strong>crisi militare internazionale</strong> può chiederti di prendere posizione sul serio.</li><li>Una legge appena approvata può essere annullata dalla <strong>Corte Costituzionale</strong>, di rado ma può succedere.</li></ul>" },
     { title: "Il salvataggio", body: "Il gioco si salva da solo nel browser a ogni azione. Nella barra in alto trovi anche:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Esporta/Importa partita</strong> — per portarla su un altro dispositivo o metterla al sicuro.</li><li><strong>Slot di salvataggio</strong> — fino a 5 partite in parallelo nello stesso browser, per provare strade diverse senza perdere quella attuale.</li></ul>" },
     { title: "Si comincia", body: "Questo è tutto quello che c'è da sapere per iniziare — il resto lo scoprirai giocando. Puoi riaprire questa guida in ogni momento dal pulsante 💡 \"Guida\" in cima alla pagina. Buona partita!" }
