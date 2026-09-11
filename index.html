@@ -16103,6 +16103,79 @@
     state.coalitionTrust[p.allianceId] = trust;
     if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(p.allianceId);
   }
+  // Un singolo alleato lascia la coalizione (non l'intera alleanza, a differenza di dissolveCoalition):
+  // stessa logica di soglia-membri-minimi già usata da removePartyFromCoalitions per i partiti che si
+  // sciolgono, qui applicata a un alleato che se ne va di sua iniziativa. Aggiorna anche state.govEntity
+  // se l'alleato in uscita faceva parte del governo in carica, un aggiornamento che removePartyFromCoalitions
+  // stesso non fa (i due casi non si erano mai incrociati prima).
+  function allyLeavesCoalition(coalId, allyId, reasonText) {
+    var coal = coalitionById(coalId);
+    if (!coal) return;
+    var idx = coal.members.indexOf(allyId);
+    if (idx !== -1) coal.members.splice(idx, 1);
+    var effectiveCount = coal.members.length + (state.player && state.player.allianceId === coalId ? 1 : 0);
+    if (effectiveCount < 2) { dissolveCoalition(coalId, reasonText); return; }
+    if (state.govEntity && state.govEntity.memberIds) {
+      var gidx = state.govEntity.memberIds.indexOf(allyId);
+      if (gidx !== -1) state.govEntity.memberIds.splice(gidx, 1);
+    }
+    var allyParty = partyById(allyId);
+    state.log.unshift({
+      week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : allyId,
+      result: reasonText, headlines: [], type: "cronaca", cat: "Strategia Elettorale"
+    });
+  }
+  // ---------- Alleati di coalizione: reagiscono davvero, non solo in blocco ----------
+  // Fino ad ora la fiducia di coalizione (state.coalitionTrust, subito sopra) era un solo numero
+  // aggregato per l'intera alleanza: o teneva tutti insieme, o si scioglieva tutta in blocco sotto una
+  // soglia comune — nessun singolo alleato aveva mai un comportamento proprio, indipendente dagli altri.
+  // Il contraltare naturale della Contromossa del Rivale (vedi triggerRivalCountermove): lì un avversario
+  // ti colpisce quando lo stai battendo, qui un alleato ti abbandona se lo trascuri a lungo (relazione
+  // molto bassa) o ti copre pubblicamente le spalle se lo hai coltivato davvero (relazione molto alta) —
+  // in entrambi i casi guardando il singolo alleato peggio/meglio trattato, non una media indistinta.
+  var ALLY_REACTION_COOLDOWN_TURNS = 12;
+  function triggerCoalitionAllyReaction() {
+    var p = state.player;
+    if (!p || !p.allianceId) return;
+    if (state.turn < (p.allyReactionCooldownTurn || 0)) return;
+    var coal = coalitionById(p.allianceId);
+    if (!coal || !coal.members.length) return;
+    if (!state.partyRelations) state.partyRelations = {};
+    var relations = state.partyRelations;
+    var worstId = null, worstRel = 101, bestId = null, bestRel = -1;
+    coal.members.forEach(function (mid) {
+      var rel = relations[mid] !== undefined ? relations[mid] : 50;
+      if (rel < worstRel) { worstRel = rel; worstId = mid; }
+      if (rel > bestRel) { bestRel = rel; bestId = mid; }
+    });
+    if (worstId !== null && worstRel <= 22) {
+      var leaveChance = clamp((22 - worstRel) * 0.02, 0.03, 0.22);
+      if (Math.random() < leaveChance) {
+        p.allyReactionCooldownTurn = state.turn + ALLY_REACTION_COOLDOWN_TURNS;
+        var allyBad = partyById(worstId);
+        var reasonText = (allyBad ? allyBad.name : worstId) + " lascia la coalizione, denunciando pubblicamente una distanza ormai incolmabile con la linea del partito: settimane di rapporti trascurati, alla fine, si pagano.";
+        allyLeavesCoalition(p.allianceId, worstId, reasonText);
+        if (state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined) {
+          state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] - rand(8, 15), 0, 100);
+        }
+        p.reputazione = clamp(p.reputazione - rand(2, 5), 0, 100);
+        return;
+      }
+    }
+    if (bestId !== null && bestRel >= 78) {
+      var supportChance = clamp((bestRel - 78) * 0.015, 0.02, 0.16);
+      if (Math.random() < supportChance) {
+        p.allyReactionCooldownTurn = state.turn + ALLY_REACTION_COOLDOWN_TURNS;
+        var allyGood = partyById(bestId);
+        var name = allyGood ? allyGood.name : bestId;
+        p.reputazione = clamp(p.reputazione + rand(2, 4), 0, 100);
+        p.visibilita = clamp(p.visibilita + rand(2, 5), 0, 100);
+        relations[bestId] = clamp((relations[bestId] !== undefined ? relations[bestId] : 50) + rand(2, 5), 0, 100);
+        var text = name + " interviene pubblicamente a sostegno del partito, rivendicando con orgoglio la solidità di un'alleanza coltivata sul serio.";
+        state.log.unshift({ week: state.turn, title: "Un alleato ti copre le spalle", choiceLabel: name, result: text, headlines: [], type: "cronaca", cat: "Strategia Elettorale" });
+      }
+    }
+  }
   function coalitionLabelForPartyId(id) {
     if (COALITIONS.centrodestra.members.indexOf(id) !== -1) return COALITIONS.centrodestra.label;
     if (COALITIONS.campolargo.members.indexOf(id) !== -1) return COALITIONS.campolargo.label;
@@ -16500,8 +16573,21 @@
       html += '<p class="ci-hint">Sei alleato con <strong>' + (coal ? coal.label : p.allianceId) +
         '</strong>: correrete insieme alle prossime elezioni politiche, con soglia di sbarramento comune al 10%.</p>' +
         '<p class="ci-hint">Fiducia della coalizione: <strong>' + trust + '/100</strong> (sotto il 30% si scioglie da sola).' + trustNote + '</p>' +
-        '<div class="gauge"><span style="width:' + trust + '%;background:' + trustColor + '"></span></div>' +
-        '<button type="button" class="staff-btn fire" data-break-alliance="1">Rompi l\'alleanza</button>';
+        '<div class="gauge"><span style="width:' + trust + '%;background:' + trustColor + '"></span></div>';
+      // La fiducia sopra è un aggregato: dietro ci sono singoli alleati che possono lasciare la coalizione
+      // per conto proprio se trascurati a lungo, o coprirti le spalle se coltivati davvero (vedi
+      // triggerCoalitionAllyReaction) — questa riga rende visibile chi rischia di più e chi è più fedele,
+      // invece di lasciare il giocatore a scoprirlo solo quando un alleato se n'è già andato.
+      if (coal && coal.members.length) {
+        html += '<p class="ci-hint">Rapporto con i singoli alleati:</p><div class="correnti-row">' +
+          coal.members.map(function (mid) {
+            var mp = partyById(mid);
+            var rel = Math.round(state.partyRelations && state.partyRelations[mid] !== undefined ? state.partyRelations[mid] : 50);
+            var relNote = rel <= 22 ? " (a rischio abbandono)" : rel >= 78 ? " (alleato fedele)" : "";
+            return "<span>" + (mp ? mp.short || mp.name : mid) + ": " + rel + "%" + relNote + "</span>";
+          }).join("") + "</div>";
+      }
+      html += '<button type="button" class="staff-btn fire" data-break-alliance="1">Rompi l\'alleanza</button>';
       if (isOwnDynamic) {
         html += '<div class="rename-row"><input type="text" id="coalition-rename-input" placeholder="Nuovo nome della coalizione" maxlength="60" value="' + (coal ? coal.label : "") + '">' +
           '<button type="button" class="staff-btn hire" data-rename-coalition="1">Rinomina</button></div>';
@@ -19703,6 +19789,7 @@
     recomputePeriodic();
     updateCoalitionTrust();
     updateCpuOnlyCoalitionTrust();
+    triggerCoalitionAllyReaction();
     updateLeaderTrust();
     triggerRivalPartyEvent();
     triggerPlayerNewsEvent();
@@ -20366,7 +20453,7 @@
     { title: "Pagina: Parlamento e Governo (1/2)", body: "Il cuore dell'attività istituzionale:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Gli <strong>emicicli</strong> di Camera e Senato mostrano chi ha i seggi in questo momento.</li><li>Il tuo <strong>gruppo parlamentare</strong>, se sei in Parlamento.</li><li><strong>Mozioni</strong>, <strong>Leggi</strong> ed <strong>Emendamenti</strong> — le tue iniziative legislative vere e proprie, su temi che scegli tu.</li><li><strong>Question Time</strong> — le interrogazioni in Aula, se hai i numeri per farle.</li></ul>" },
     { title: "Pagina: Parlamento e Governo (2/2)", body: "Il resto della sezione, più legato al governo del Paese:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Riforme di Governo</strong> — centinaia di riforme possibili, disponibili solo se sei al governo.</li><li><strong>Grandi Scelte di Politica Estera</strong> e <strong>Programma Spaziale</strong> — decisioni di lungo periodo su scala nazionale.</li><li><strong>Proposta di Referendum</strong> — uno per legislatura, se il partito è abbastanza forte nei sondaggi.</li><li><strong>Opposizione al Regime</strong> — compare solo se il Paese vive sotto un regime e sei all'opposizione: puoi tentare di rovesciarlo.</li></ul>" },
     { title: "Pagina: Europa e Mondo — Geopolitica", body: "Tutto quello che riguarda l'estero:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Tensione Geopolitica</strong> e <strong>Iniziative UE</strong> — prese di posizione su temi internazionali ed europei.</li><li><strong>Emiciclo Europeo</strong> ed <strong>Europarlamento</strong> — se hai seggi a Bruxelles, anche la scelta del gruppo politico europeo a cui aderire.</li><li><strong>Rapporti con l'Estero</strong> — se sei al governo, tocca una nazione per aprire azioni dirette su di lei: accordo commerciale, visita di Stato, o alzare la tensione diplomatica.</li><li><strong>Organizzazioni Internazionali</strong> — puoi fondarne una tua, invitando altre nazioni.</li></ul>" },
-    { title: "Pagina: Coalizioni e Alleanze", body: "Nessun partito vince sempre da solo:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Qui vedi la tua <strong>coalizione</strong> attuale (se ne hai una), puoi invitare altri partiti, rinominarla, e la fiducia reciproca tra alleati che la tiene in piedi.</li><li><strong>Riunificazione</strong> — se hai subito una scissione interna, qui puoi provare a ricucire con la corrente che se n'è andata.</li></ul>" },
+    { title: "Pagina: Coalizioni e Alleanze", body: "Nessun partito vince sempre da solo:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Qui vedi la tua <strong>coalizione</strong> attuale (se ne hai una), puoi invitare altri partiti, rinominarla, e la fiducia reciproca tra alleati che la tiene in piedi — più il rapporto con ciascun singolo alleato.</li><li>Un alleato trascurato a lungo può <strong>lasciare la coalizione da solo</strong>, senza aspettare che si sciolga tutta; uno coltivato davvero può <strong>coprirti pubblicamente le spalle</strong> in un momento difficile.</li><li><strong>Riunificazione</strong> — se hai subito una scissione interna, qui puoi provare a ricucire con la corrente che se n'è andata.</li></ul>" },
     { title: "Pagina: Scheda Paese e Bilancio (1/2)", body: "Lo stato di salute reale dell'Italia, indicatore per indicatore, da 1 a 10:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Tocca un <strong>indicatore della Scheda Paese</strong> per aprire il suo andamento nel tempo e i temi concreti che lo riguardano.</li><li><strong>Economia Settoriale</strong> — lo stesso, ma spezzato per settore: agricoltura, turismo, industria, tecnologia, servizi.</li><li><strong>Iniziativa Libera</strong> — un'azione settimanale flessibile, non legata a un dossier specifico.</li></ul>" },
     { title: "Pagina: Scheda Paese e Bilancio (2/2)", body: "Il resto della pagina è la memoria e i conti del Paese:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Storico dei Provvedimenti</strong> — ogni legge, mozione, riforma e referendum varato dal tuo partito, dalla prima volta.</li><li><strong>Storia del Paese</strong> — le grandi epoche di governo che si sono succedute.</li><li><strong>Bilancio dello Stato</strong>, <strong>Politica Fiscale</strong> e <strong>Allocazione del Budget</strong> — entrate, uscite, tasse e come lo Stato spende, se sei al governo.</li></ul>" },
     { title: "Pagina: Partiti Politici e Relazioni", body: "Chi sono gli altri, e come ti vedono:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Elenco Partiti</strong> — tutti i partiti attivi, con i loro sondaggi.</li><li><strong>Relazioni tra Partiti</strong> — quanto ciascuno è vicino o lontano dal tuo.</li><li><strong>Dossier di Partito</strong> — un approfondimento sui rivali, uno alla volta.</li></ul>" },
