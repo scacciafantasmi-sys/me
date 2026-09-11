@@ -3602,17 +3602,22 @@
       id: "basso_profilo",
       make: function (ctx) {
         var cl = responseCluster(ctx);
+        // Prima costava al massimo -1 di reputazione (spesso nulla): la scelta "sicura" per eccellenza, di
+        // fatto senza alcun prezzo reale da pagare — segnalato come uno dei motivi per cui il gioco sembra
+        // "troppo facile". Restare in silenzio su una situazione reale ha ora un costo vero: chi guarda si
+        // accorge dell'assenza, e il tema resta scoperto (piccolo effetto negativo sull'indicatore reale
+        // collegato, quando ce n'è uno).
         var v = {
-          statalista: { label: "Lascia che se ne occupino i movimenti sul territorio, per ora", result: "Il partito resta defilato su questo: nessun contraccolpo, ma nemmeno un guadagno." },
-          identitario: { label: "Non è il momento di scoprirsi: rimanda a settimana prossima", result: "Il silenzio tattico non costa nulla, ma nemmeno guadagna terreno." },
-          liberista: { label: "Lascia che sia il mercato a regolarsi da solo, per ora", result: "Il partito resta defilato su questo: nessun contraccolpo, ma nemmeno un guadagno." },
-          valoriale: { label: "Preferisci il silenzio alla polemica, per ora", result: "Il basso profilo non scalda nessuno, ma nemmeno raffredda i rapporti con la tua base." },
-          territoriale: { label: "Lascia correre: non è la battaglia di questa settimana", result: "Il partito resta defilato su questo: nessun contraccolpo, ma nemmeno un guadagno." },
-          riformista: { label: "Lascia correre, non è la priorità di questa settimana", result: "Il partito resta defilato su questo: nessun contraccolpo, ma nemmeno un guadagno." }
+          statalista: { label: "Lascia che se ne occupino i movimenti sul territorio, per ora", result: "L'assenza del partito viene notata: chi si aspettava una parola chiara resta deluso, e il tema scivola ad altri." },
+          identitario: { label: "Non è il momento di scoprirsi: rimanda a settimana prossima", result: "Il rinvio tattico viene letto come esitazione: qualcuno nella tua base se lo aspettava, e non lo apprezza." },
+          liberista: { label: "Lascia che sia il mercato a regolarsi da solo, per ora", result: "L'assenza del partito viene notata: chi si aspettava una parola chiara resta deluso, e il tema scivola ad altri." },
+          valoriale: { label: "Preferisci il silenzio alla polemica, per ora", result: "Il silenzio non scalda nessuno, ma raffredda un po' i rapporti con chi si aspettava una presa di posizione." },
+          territoriale: { label: "Lascia correre: non è la battaglia di questa settimana", result: "L'assenza del partito viene notata: chi si aspettava una parola chiara resta deluso, e il tema scivola ad altri." },
+          riformista: { label: "Lascia correre, non è la priorità di questa settimana", result: "L'assenza del partito viene notata: chi si aspettava una parola chiara resta deluso, e il tema scivola ad altri." }
         }[cl];
         return {
-          label: v.label, hint: "Nessun rischio, nessun guadagno",
-          effects: { reputazione: rand(-1, 0.5) },
+          label: v.label, hint: "Evita l'esposizione immediata, ma il problema resta scoperto e si paga",
+          effects: { reputazione: -rand(1, 3.5), iscritti: -rand(0, 12), national: natEffect(ctx, -rand(0.05, 0.15)) },
           result: v.result
         };
       }
@@ -3875,22 +3880,21 @@
     // partito che ha davvero dei parlamentari da mandare in audizione: senza seggi restano fuori dal
     // ventaglio di scelte disponibili.
     var themePool = themePoolFull && themePoolFull.filter(function (arch) { return !arch.requiresParliament || ctx.inParliament; });
+    // Questo è il generatore di scelte più usato in assoluto nel gioco (praticamente ogni settimana fuori
+    // dal Parlamento), ma era l'UNICO tra i generatori di scelte a non passare mai da applyOutcomeVariance:
+    // zero rischio di contraccolpo, sempre e comunque, a differenza di Parlamento/interviste/comizi/
+    // congressi. Segnalato da un giocatore come una delle ragioni per cui il gioco sembra "troppo facile" —
+    // ora anche le situazioni settimanali normali possono andare storte, esattamente come il resto.
     if (themePool && themePool.length) {
       var specificCount = Math.min(themePool.length, n - 1, 4);
       var specific = shuffleN(themePool, specificCount);
       var genericCount = n - specificCount;
       var generic = shuffleN(RESPONSE_ARCHETYPES, genericCount);
       var picked = shuffleN(specific.concat(generic), n);
-      return picked.map(function (arch) {
-        var c = arch.make(ctx);
-        return { label: c.label, hint: c.hint, effects: c.effects, result: c.result };
-      });
+      return picked.map(function (arch) { return applyOutcomeVariance(arch.make(ctx)); });
     }
     var pickedGeneric = shuffleN(RESPONSE_ARCHETYPES, n);
-    return pickedGeneric.map(function (arch) {
-      var c = arch.make(ctx);
-      return { label: c.label, hint: c.hint, effects: c.effects, result: c.result };
-    });
+    return pickedGeneric.map(function (arch) { return applyOutcomeVariance(arch.make(ctx)); });
   }
   // Banca di situazioni scritte apposta per ciascuna delle 13 famiglie politiche: non sono il tema
   // generico ripesato verso l'identità del partito (quello lo fa già generateCombinatorialSituation),
@@ -4509,11 +4513,16 @@
     // I 4 scelte scritte a mano bastano per il taglio specifico della situazione, ma per restare a 5
     // risposte come nel resto del gioco aggiungiamo una quinta opzione "jolly", pescata da un archetipo
     // che non dipende dal tema specifico (nessun riferimento a noun/città/rivale) e quindi va sempre bene.
-    var extraId = Math.random() < 0.5 ? "dichiarazione_istituzionale" : "basso_profilo";
-    var extraArch = RESPONSE_ARCHETYPES.filter(function (a) { return a.id === extraId; })[0];
+    // Prima erano solo 2 archetipi possibili sempre uguali (una versione in piccolo dello stesso problema
+    // di ripetitività già risolto altrove): ora si pesca da tutti gli otto, rispettando comunque il
+    // cluster ideologico del giocatore.
+    var extraArch = RESPONSE_ARCHETYPES[Math.floor(Math.random() * RESPONSE_ARCHETYPES.length)];
     var chosenThemeObj = SITUATION_THEME_BY_LABEL[chosen.cat];
-    var extra = extraArch.make({ nationalMetric: chosenThemeObj ? THEME_TO_NATIONAL_METRIC[chosenThemeObj.id] : undefined, family: p.family, leadership: p.leadership });
-    var choices = chosen.choices.concat([{ label: extra.label, hint: extra.hint, effects: extra.effects, result: extra.result }]);
+    var extra = applyOutcomeVariance(extraArch.make({ nationalMetric: chosenThemeObj ? THEME_TO_NATIONAL_METRIC[chosenThemeObj.id] : undefined, family: p.family, leadership: p.leadership }));
+    // Anche le 4 scelte scritte a mano ora passano da applyOutcomeVariance, come ogni altro generatore di
+    // scelte nel gioco: prima erano le uniche a non avere mai alcun rischio di contraccolpo, un'altra
+    // ragione concreta per cui il gioco risultava troppo facile.
+    var choices = chosen.choices.map(function (c) { return applyOutcomeVariance(c); }).concat([extra]);
     return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: chosen.cat, title: chosen.title, brief: chosen.brief, choices: choices };
   }
   // Pesca da un pool evitando, quando possibile, gli elementi usati più di recente (memoria a finestra
@@ -4767,8 +4776,14 @@
   // a mano uno per uno): un affondo mediatico resta un azzardo vero, una linea prudente resta più sicura
   // ma mai blindata al 100%, esattamente come già corretto per le Dichiarazioni.
   function applyOutcomeVariance(c) {
-    var visMag = Math.abs((c.effects && c.effects.visibilita) || 0);
-    var backfireChance = clamp(0.08 + visMag * 0.012, 0.08, 0.4);
+    // Il rischio di contraccolpo pesava SOLO la visibilità: una mossa che prometteva +30 iscritti o +5
+    // reputazione senza toccare la visibilità aveva un rischio minimo (8%, il pavimento), pur essendo di
+    // fatto la scelta più forte sul tavolo — segnalato da un giocatore come uno dei motivi per cui il
+    // gioco sembra "troppo facile" (le opzioni migliori non comportavano un rischio proporzionale). Ora il
+    // rischio è proporzionale al guadagno complessivo promesso, non solo a quanto fa notizia.
+    var eff0 = c.effects || {};
+    var riskMag = Math.abs(eff0.visibilita || 0) + Math.abs(eff0.iscritti || 0) / 8 + Math.abs(eff0.reputazione || 0) * 1.5;
+    var backfireChance = clamp(0.08 + riskMag * 0.012, 0.08, 0.45);
     if (Math.random() >= backfireChance) return c;
     var eff = {};
     Object.keys(c.effects || {}).forEach(function (k) {
@@ -4820,29 +4835,55 @@
   // PARLIAMENT_ARCHETYPES/buildParliamentChoices, adattata a un contesto "rispondi a una domanda pubblica"
   // invece che "Aula" — nessun riferimento a Parlamento o consensoGoverno, solo reputazione/visibilità/
   // iscritti (più, quando la scena lo prevede, un indicatore reale della Scheda Paese via ctx.nationalMetric).
+  // Come RESPONSE_ARCHETYPES/PARLIAMENT_ARCHETYPES: stesse 6 posture generiche riproposte identiche per
+  // tutte le famiglie politiche, segnalato di nuovo dal giocatore. Stesso trattamento a cluster retorico.
   var PUBLIC_APPEARANCE_ARCHETYPES = [
     { id: "pacato", make: function (ctx) {
         var mag = ctx.magnitude || 1;
-        return { label: "Rispondi con toni pacati e istituzionali", hint: "Meno scintille, più credibilità",
+        var v = {
+          statalista: { label: "Rispondi con calma, senza arretrare sulle tue rivendicazioni", result: "La calma senza arretramenti " + suLabel(ctx.topicLabel) + ": " + (ctx.pol || "il tuo partito") + " esce " + (ctx.fromCtx || "dal confronto") + " con un'immagine solida, anche se poco memorabile." },
+          identitario: { label: "Rispondi con fermezza calma, senza cedere terreno", result: "La fermezza pacata " + suLabel(ctx.topicLabel) + ": " + (ctx.pol || "il tuo partito") + " esce " + (ctx.fromCtx || "dal confronto") + " con un'immagine solida, anche se poco memorabile." },
+          liberista: { label: "Rispondi con pacatezza, sui dati di fondo", result: "La pacatezza argomentata " + suLabel(ctx.topicLabel) + ": " + (ctx.pol || "il tuo partito") + " esce " + (ctx.fromCtx || "dal confronto") + " con un'immagine solida, anche se poco memorabile." },
+          valoriale: { label: "Rispondi con toni pacati e rispettosi", result: "Il tono pacato e rispettoso " + suLabel(ctx.topicLabel) + ": " + (ctx.pol || "il tuo partito") + " esce " + (ctx.fromCtx || "dal confronto") + " con un'immagine solida, anche se poco memorabile." },
+          territoriale: { label: "Rispondi con calma, parlando a nome del territorio", result: "La calma istituzionale " + suLabel(ctx.topicLabel) + ": " + (ctx.pol || "il tuo partito") + " esce " + (ctx.fromCtx || "dal confronto") + " con un'immagine solida, anche se poco memorabile." },
+          riformista: { label: "Rispondi con toni pacati e istituzionali", result: "Rispondi con toni misurati " + suLabel(ctx.topicLabel) + ": " + (ctx.pol || "il tuo partito") + " esce " + (ctx.fromCtx || "dal confronto") + " con un'immagine solida, anche se poco memorabile." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "Meno scintille, più credibilità",
           effects: { reputazione: rand(1, 3) * mag, visibilita: rand(1, 2) * mag, national: natEffect(ctx, rand(0.1, 0.25)) },
-          result: "Rispondi con toni misurati " + suLabel(ctx.topicLabel) + ": " + (ctx.pol || "il tuo partito") + " esce " + (ctx.fromCtx || "dal confronto") + " con un'immagine solida, anche se poco memorabile." };
+          result: v.result };
       } },
     { id: "combattivo", make: function (ctx) {
         var mag = ctx.magnitude || 1;
-        return { label: "Rispondi con toni combattivi, all'attacco", hint: "Più visibilità, rischio di polarizzare",
+        var v = {
+          statalista: { label: "Rispondi all'attacco, dalla parte di chi lavora", result: "L'affondo dalla parte dei lavoratori " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
+          identitario: { label: "Rispondi senza sconti, a muso duro", result: "L'affondo a muso duro " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
+          liberista: { label: "Rispondi con decisione, in difesa della libertà d'impresa", result: "L'affondo in difesa della libertà d'impresa " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
+          valoriale: { label: "Rispondi con fermezza, in difesa dei tuoi principi", result: "L'affondo in difesa dei principi " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
+          territoriale: { label: "Rispondi con forza, in difesa del territorio", result: "L'affondo in difesa del territorio " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
+          riformista: { label: "Rispondi con toni combattivi, all'attacco", result: "Rispondi con un affondo deciso " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "Più visibilità, rischio di polarizzare",
           effects: { visibilita: rand(4, 8) * mag, reputazione: -rand(0, 2), iscritti: rand(5, 15) * mag },
-          result: "Rispondi con un affondo deciso " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." };
+          result: v.result };
       } },
     { id: "glissa", make: function (ctx) {
         return { label: "Glissa, sposta il discorso altrove", hint: "Nessun rischio immediato, ma sembra evasivo",
-          effects: { reputazione: -rand(0, 2) },
-          result: "Eviti di entrare nel merito " + suLabel(ctx.topicLabel) + ": " + (ctx.subj || "chi ti ha fatto la domanda") + " insiste, ma il confronto prosegue su altri temi." };
+          effects: { reputazione: -rand(1, 3), visibilita: -rand(0, 2) },
+          result: "Eviti di entrare nel merito " + suLabel(ctx.topicLabel) + ": " + (ctx.subj || "chi ti ha fatto la domanda") + " insiste, e l'impressione di non avere una posizione ti resta addosso." };
       } },
     { id: "positivo", make: function (ctx) {
         var mag = ctx.magnitude || 1;
-        return { label: "Rispondi con un tono positivo e propositivo", hint: "L'ottimismo convince una parte del pubblico",
+        var v = {
+          statalista: { label: "Rispondi mettendo in mostra le conquiste sociali ottenute", result: "L'ottimismo sulle conquiste sociali " + suLabel(ctx.topicLabel) + " convince una parte del pubblico." },
+          identitario: { label: "Rispondi con orgoglio per i risultati raggiunti", result: "L'orgoglio per i risultati " + suLabel(ctx.topicLabel) + " convince una parte del pubblico." },
+          liberista: { label: "Rispondi con ottimismo sui risultati economici", result: "L'ottimismo sui risultati economici " + suLabel(ctx.topicLabel) + " convince una parte del pubblico." },
+          valoriale: { label: "Rispondi con speranza e positività", result: "Il tono di speranza " + suLabel(ctx.topicLabel) + " convince una parte del pubblico." },
+          territoriale: { label: "Rispondi valorizzando i risultati sul territorio", result: "Il tono positivo sul territorio " + suLabel(ctx.topicLabel) + " convince una parte del pubblico." },
+          riformista: { label: "Rispondi con un tono positivo e propositivo", result: "Rispondi con ottimismo " + suLabel(ctx.topicLabel) + ": il tono propositivo convince una parte del pubblico." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "L'ottimismo convince una parte del pubblico",
           effects: { reputazione: rand(1, 2.5) * mag, visibilita: rand(2, 5) * mag, national: natEffect(ctx, rand(0.1, 0.2)) },
-          result: "Rispondi con ottimismo " + suLabel(ctx.topicLabel) + ": il tono propositivo convince una parte del pubblico." };
+          result: v.result };
       } },
     { id: "autoironico", make: function (ctx) {
         var mag = ctx.magnitude || 1;
@@ -4852,12 +4893,21 @@
       } },
     { id: "tecnico", make: function (ctx) {
         var mag = ctx.magnitude || 1;
-        return { label: "Rispondi con dati e numeri alla mano", hint: "Credibilità tecnica, meno presa emotiva",
+        var v = {
+          statalista: { label: "Rispondi con i dati sulle condizioni materiali reali", result: "La risposta con dati sulle condizioni materiali " + suLabel(ctx.topicLabel) + " convince chi cerca competenza, meno chi cerca emozione." },
+          identitario: { label: "Rispondi con dati e numeri a sostegno della tua linea", result: "La risposta tecnica a sostegno della linea " + suLabel(ctx.topicLabel) + " convince chi cerca competenza, meno chi cerca emozione." },
+          liberista: { label: "Rispondi con dati e numeri alla mano", result: "La risposta tecnica e argomentata " + suLabel(ctx.topicLabel) + " convince chi cerca competenza, meno chi cerca emozione." },
+          valoriale: { label: "Rispondi con argomenti solidi e articolati", result: "La risposta articolata " + suLabel(ctx.topicLabel) + " convince chi cerca competenza, meno chi cerca emozione." },
+          territoriale: { label: "Rispondi con dati concreti sul territorio", result: "La risposta con dati sul territorio " + suLabel(ctx.topicLabel) + " convince chi cerca competenza, meno chi cerca emozione." },
+          riformista: { label: "Rispondi con dati e numeri alla mano", result: "La risposta tecnica e argomentata " + suLabel(ctx.topicLabel) + " convince chi cerca competenza, meno chi cerca emozione." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "Credibilità tecnica, meno presa emotiva",
           effects: { reputazione: rand(2, 4) * mag, visibilita: rand(0, 2), national: natEffect(ctx, rand(0.1, 0.2)) },
-          result: "La risposta tecnica e argomentata " + suLabel(ctx.topicLabel) + " convince chi cerca competenza, meno chi cerca emozione." };
+          result: v.result };
       } }
   ];
   function buildPublicAppearanceChoices(ctx, n) {
+    if (ctx.family === undefined) ctx.family = state.player && state.player.family;
     return shuffleN(PUBLIC_APPEARANCE_ARCHETYPES, n || 4).map(function (arch) { return applyOutcomeVariance(arch.make(ctx)); });
   }
   // ---------- Discorsi preparati: comizio/congresso/cena di partito e Congresso Internazionale ----------
@@ -4867,15 +4917,31 @@
   var RALLY_SPEECH_ARCHETYPES = [
     { id: "istituzionale", make: function (ctx) {
         var mag = ctx.magnitude || 1;
-        return { label: "Un discorso istituzionale e programmatico", hint: "Meno scintille, più credibilità",
+        var v = {
+          statalista: { label: "Un discorso programmatico, tutto rivendicazioni concrete", result: "Il discorso di rivendicazioni concrete su " + ctx.noun + " convince la platea più moderata, senza infiammare la sala." },
+          identitario: { label: "Un discorso istituzionale, ma senza ambiguità", result: "Il discorso istituzionale e netto su " + ctx.noun + " convince la platea più moderata, senza infiammare la sala." },
+          liberista: { label: "Un discorso istituzionale e tecnico", result: "Il discorso tecnico su " + ctx.noun + " convince la platea più moderata, senza infiammare la sala." },
+          valoriale: { label: "Un discorso istituzionale e riflessivo", result: "Il discorso riflessivo su " + ctx.noun + " convince la platea più moderata, senza infiammare la sala." },
+          territoriale: { label: "Un discorso istituzionale, a nome del territorio", result: "Il discorso a nome del territorio su " + ctx.noun + " convince la platea più moderata, senza infiammare la sala." },
+          riformista: { label: "Un discorso istituzionale e programmatico", result: "Il discorso misurato e programmatico su " + ctx.noun + " convince la platea più moderata, senza infiammare la sala." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "Meno scintille, più credibilità",
           effects: { reputazione: rand(2, 4) * mag, iscritti: rand(10, 20) * mag, national: natEffect(ctx, rand(0.1, 0.25)) },
-          result: "Il discorso misurato e programmatico su " + ctx.noun + " convince la platea più moderata, senza infiammare la sala." };
+          result: v.result };
       } },
     { id: "appassionato", make: function (ctx) {
         var mag = ctx.magnitude || 1;
-        return { label: "Un discorso appassionato e identitario", hint: "Più entusiasmo, un po' più divisivo",
+        var v = {
+          statalista: { label: "Un discorso appassionato, di lotta", result: "Il discorso di lotta su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
+          identitario: { label: "Un discorso appassionato e identitario", result: "Il discorso appassionato su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
+          liberista: { label: "Un discorso appassionato, contro i vincoli al mercato", result: "Il discorso contro i vincoli al mercato su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
+          valoriale: { label: "Un discorso appassionato, radicato nei tuoi valori", result: "Il discorso radicato nei valori su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
+          territoriale: { label: "Un discorso appassionato, in difesa del territorio", result: "Il discorso in difesa del territorio su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
+          riformista: { label: "Un discorso appassionato e identitario", result: "Il discorso appassionato su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "Più entusiasmo, un po' più divisivo",
           effects: { visibilita: rand(4, 8) * mag, iscritti: rand(20, 40) * mag, reputazione: -rand(0, 1) },
-          result: "Il discorso appassionato su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." };
+          result: v.result };
       } },
     { id: "unificante", make: function (ctx) {
         var mag = ctx.magnitude || 1;
@@ -4891,12 +4957,21 @@
       } },
     { id: "visionario", make: function (ctx) {
         var mag = ctx.magnitude || 1;
-        return { label: "Un discorso visionario, proiettato sul futuro", hint: "Ispira, ma rischia di sembrare astratto",
+        var v = {
+          statalista: { label: "Un discorso visionario, sul mondo del lavoro di domani", result: "Il discorso sul lavoro di domani ispira la platea più giovane su " + ctx.noun + ", lasciando più scettici i pragmatici." },
+          identitario: { label: "Un discorso visionario, sulla nazione di domani", result: "Il discorso sulla nazione di domani ispira la platea più giovane su " + ctx.noun + ", lasciando più scettici i pragmatici." },
+          liberista: { label: "Un discorso visionario, sull'innovazione senza freni", result: "Il discorso sull'innovazione ispira la platea più giovane su " + ctx.noun + ", lasciando più scettici i pragmatici." },
+          valoriale: { label: "Un discorso visionario, radicato nella speranza", result: "Il discorso radicato nella speranza ispira la platea più giovane su " + ctx.noun + ", lasciando più scettici i pragmatici." },
+          territoriale: { label: "Un discorso visionario sul futuro del territorio", result: "Il discorso sul futuro del territorio ispira la platea più giovane su " + ctx.noun + ", lasciando più scettici i pragmatici." },
+          riformista: { label: "Un discorso visionario, proiettato sul futuro", result: "Il discorso visionario su " + ctx.noun + " ispira la platea più giovane, lasciando più scettici i pragmatici." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "Ispira, ma rischia di sembrare astratto",
           effects: { visibilita: rand(3, 6) * mag, iscritti: rand(15, 30) * mag, reputazione: rand(-1, 1) },
-          result: "Il discorso visionario su " + ctx.noun + " ispira la platea più giovane, lasciando più scettici i pragmatici." };
+          result: v.result };
       } }
   ];
   function buildRallySpeechChoices(ctx, n) {
+    if (ctx.family === undefined) ctx.family = state.player && state.player.family;
     return shuffleN(RALLY_SPEECH_ARCHETYPES, n || 4).map(function (arch) { return applyOutcomeVariance(arch.make(ctx)); });
   }
   // Discorso al Congresso Internazionale: stessa logica dei discorsi preparati sopra, ma con effetti
@@ -4904,9 +4979,17 @@
   // relazioniDiplomatiche invece che sull'indicatore tematico del giorno.
   var CONGRESS_SPEECH_ARCHETYPES = [
     { id: "appassionato", make: function (ctx) {
-        return { label: "Un intervento appassionato e identitario", hint: "Scalda la sala, più clamore internazionale",
+        var v = {
+          statalista: { label: "Un intervento appassionato, di lotta internazionalista", result: "Il tuo intervento di lotta internazionalista al " + ctx.congressLabel + " scalda la sala: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." },
+          identitario: { label: "Un intervento appassionato e identitario", result: "Il tuo intervento appassionato al " + ctx.congressLabel + " scalda la sala internazionale: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." },
+          liberista: { label: "Un intervento appassionato, contro ogni vincolo statale", result: "Il tuo intervento contro i vincoli statali al " + ctx.congressLabel + " scalda la sala: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." },
+          valoriale: { label: "Un intervento appassionato, radicato nei tuoi valori", result: "Il tuo intervento radicato nei valori al " + ctx.congressLabel + " scalda la sala: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." },
+          territoriale: { label: "Un intervento appassionato, in difesa del territorio", result: "Il tuo intervento in difesa del territorio al " + ctx.congressLabel + " scalda la sala: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." },
+          riformista: { label: "Un intervento appassionato e identitario", result: "Il tuo intervento appassionato al " + ctx.congressLabel + " scalda la sala internazionale: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." }
+        }[responseCluster(ctx)];
+        return { label: v.label, hint: "Scalda la sala, più clamore internazionale",
           effects: { visibilita: rand(8, 16), iscritti: rand(20, 40), reputazione: -rand(0, 2), national: { relazioniDiplomatiche: rand(0.05, 0.15) } },
-          result: "Il tuo intervento appassionato al " + ctx.congressLabel + " scalda la sala internazionale: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." };
+          result: v.result };
       } },
     { id: "istituzionale", make: function (ctx) {
         return { label: "Un intervento misurato e istituzionale", hint: "Meno clamore, più credibilità internazionale",
@@ -4925,6 +5008,7 @@
       } }
   ];
   function buildCongressSpeechChoices(ctx) {
+    if (ctx.family === undefined) ctx.family = state.player && state.player.family;
     return shuffleN(CONGRESS_SPEECH_ARCHETYPES, CONGRESS_SPEECH_ARCHETYPES.length).map(function (arch) { return applyOutcomeVariance(arch.make(ctx)); });
   }
   // Il partito più forte tra quelli che compongono il governo in carica (state.govEntity): il bersaglio
