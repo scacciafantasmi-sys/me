@@ -4557,7 +4557,14 @@
     // cluster ideologico del giocatore.
     var extraArch = RESPONSE_ARCHETYPES[Math.floor(Math.random() * RESPONSE_ARCHETYPES.length)];
     var chosenThemeObj = SITUATION_THEME_BY_LABEL[chosen.cat];
-    var extra = applyOutcomeVariance(extraArch.make({ nationalMetric: chosenThemeObj ? THEME_TO_NATIONAL_METRIC[chosenThemeObj.id] : undefined, family: p.family, leadership: p.leadership }));
+    // Da quando il jolly pesca da tutti e 8 gli archetipi (non più solo i 2 che non citano mai un tema),
+    // alcuni — come "campagna_social" — usano ctx.noun per comporre l'etichetta della scelta: senza
+    // fornirlo, suLabel(undefined) va in crash. chosenThemeObj.nouns è lo stesso elenco di frasi già usato
+    // altrove per lo stesso tema (vedi SITUATION_THEMES), quindi il jolly resta comunque coerente col resto
+    // della situazione anche quando cita un argomento specifico.
+    var extraNoun = chosenThemeObj && chosenThemeObj.nouns && chosenThemeObj.nouns.length
+      ? chosenThemeObj.nouns[Math.floor(Math.random() * chosenThemeObj.nouns.length)] : "la situazione";
+    var extra = applyOutcomeVariance(extraArch.make({ noun: extraNoun, nationalMetric: chosenThemeObj ? THEME_TO_NATIONAL_METRIC[chosenThemeObj.id] : undefined, family: p.family, leadership: p.leadership }));
     // Anche le 4 scelte scritte a mano ora passano da applyOutcomeVariance, come ogni altro generatore di
     // scelte nel gioco: prima erano le uniche a non avere mai alcun rischio di contraccolpo, un'altra
     // ragione concreta per cui il gioco risultava troppo facile.
@@ -6857,6 +6864,222 @@
       ];
     }
     return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Endorsement Pubblico", cat: "Endorsement", title: title, brief: brief, choices: choices.map(applyOutcomeVariance) };
+  }
+
+  // ---------- Archi Narrativi: storie che durano più settimane ----------
+  // Ogni evento del gioco, dal più piccolo dossier al Confronto TV, si esaurisce nella stessa settimana in
+  // cui inizia: anche i meccanismi "a ritardo" (l'inchiesta giudiziaria di pendingTrial, i referendum, le
+  // missioni spaziali) sono in realtà "scegli una volta, aspetta in silenzio, scopri l'esito" — nessuna
+  // interazione nel mezzo. Il risultato, segnalato da un giocatore di lunga data, è che ogni settimana ha
+  // sempre la STESSA forma, qualunque sia il contenuto: la monotonia non è nel cosa, è nel ritmo sempre
+  // identico. Un Arco Narrativo è invece una storia che occupa il dossier della settimana per più turni
+  // di fila (3-4), con una NUOVA puntata ogni volta che dipende da come è andata la precedente: ogni
+  // scelta aggiorna arc.pressure (quanto la situazione si sta aggravando o sgonfiando), e l'ultima puntata
+  // usa la pressione ACCUMULATA lungo tutto l'arco — non solo l'ultima scelta — per decidere un epilogo
+  // vero, con effetti proporzionalmente più marcati di un dossier qualunque, proprio perché è il punto
+  // d'arrivo di più settimane di scelte concatenate.
+  var STORY_ARC_COOLDOWN_TURNS = 30;
+  function checkStoryArcTrigger() {
+    var p = state.player;
+    if (!p) return false;
+    // Un arco già in corso ha sempre la priorità: non può restare a metà, altrimenti la sua premessa
+    // (il seguito dipende da cosa hai scelto la settimana prima) smetterebbe di valere.
+    if (state.activeArc) return true;
+    if (state.turn < (p.storyArcCooldownTurn || 0)) return false;
+    return Math.random() < 0.05;
+  }
+  var STORY_ARC_TEMPLATES = [
+    {
+      id: "scandalo_interno", label: "Scandalo interno", totalStages: 4,
+      eligible: function () { return true; },
+      stage: function (arc, idx) {
+        var p = state.player;
+        var name = arc.data.name;
+        if (idx === 0) {
+          return { title: "Voci su irregolarità finanziarie interne", eyebrow: "Arco Narrativo — Scandalo interno (1/4)",
+            brief: "Cominciano a circolare voci su presunte irregolarità nella gestione dei fondi del partito, legate a " + name + ", una figura di primo piano dell'organizzazione. Nulla di pubblico ancora, ma qualcuno dentro il partito ne è già al corrente.",
+            choices: [
+              { label: "Apri subito un'indagine interna trasparente", hint: "Rischi di far emergere il caso da solo, ma resti in controllo", effects: { reputazione: rand(0, 1) }, pressureDelta: -1,
+                result: "Apri un'indagine interna: se c'è qualcosa, meglio scoprirlo tu per primo." },
+              { label: "Gestisci la cosa in silenzio, per ora", hint: "Guadagni tempo, ma se emerge sarà peggio", effects: {}, pressureDelta: 1,
+                result: "Scegli di muoverti con discrezione, sperando che le voci si spengano da sole." },
+              { label: "Ignora le voci, sono solo chiacchiere", hint: "Nessun costo immediato, massimo rischio se sono vere", effects: {}, pressureDelta: 2,
+                result: "Decidi di non dare peso alle voci: per ora nessuno se ne accorge." }
+            ] };
+        }
+        if (idx === 1) {
+          var esc1 = arc.pressure >= 2;
+          return { title: esc1 ? "Un cronista comincia a fare domande" : "Le voci restano contenute", eyebrow: "Arco Narrativo — Scandalo interno (2/4)",
+            brief: esc1
+              ? "Un cronista d'inchiesta ha sentito parlare del caso " + name + " e comincia a fare domande in giro, anche a esponenti del partito."
+              : "Il caso " + name + " resta per ora confinato dentro il partito, ma qualche mormorio comincia a circolare anche fuori.",
+            choices: [
+              { label: "Rispondi alle domande con piena trasparenza", hint: "Costa reputazione subito, ma toglie benzina al fuoco", effects: { reputazione: -rand(1, 3) }, pressureDelta: -2,
+                result: "Scegli la linea della trasparenza totale: costa qualcosa subito, ma toglie ossigeno alle voci più estreme." },
+              { label: "Nega tutto pubblicamente", hint: "Nessun costo immediato, ma se emergono prove sarà peggio", effects: {}, pressureDelta: 2,
+                result: "Neghi ogni addebito con sicurezza: per ora la linea tiene." },
+              { label: "Allontana con discrezione " + name + " da ogni incarico visibile", hint: "Riduce l'esposizione, ma può sembrare un'ammissione", effects: { iscritti: -rand(2, 8) }, pressureDelta: -1,
+                result: name + " viene allontanato/a con discrezione da ogni ruolo visibile, in attesa che la vicenda si chiarisca." }
+            ] };
+        }
+        if (idx === 2) {
+          var esc2 = arc.pressure >= 3;
+          return { title: esc2 ? "Un documento riservato finisce alla stampa" : "Il caso resta sotto controllo", eyebrow: "Arco Narrativo — Scandalo interno (3/4)",
+            brief: esc2
+              ? "Un documento riservato legato al caso " + name + " finisce nelle mani di una testata, che si prepara a pubblicarlo."
+              : "Il caso " + name + " non è ancora esploso, ma la pressione interna per una risposta definitiva cresce.",
+            choices: [
+              { label: "Anticipa la notizia con una tua versione dei fatti", hint: "Prendi l'iniziativa prima che lo facciano altri", effects: { visibilita: rand(3, 6), reputazione: -rand(0, 2) }, pressureDelta: -2,
+                result: "Anticipi la notizia con la tua versione: il colpo si sente comunque, ma lo controlli tu." },
+              { label: "Prepara una difesa legale aggressiva", hint: "Nessuna concessione, esito finale più incerto", effects: { fondi: -rand(200, 500) }, pressureDelta: 1,
+                result: "Prepari una difesa legale aggressiva: costosa, ma pronta a tutto." },
+              { label: "Cerca un accordo riservato con " + name, hint: "Prova a chiudere la vicenda da dentro, con discrezione", effects: { fondi: -rand(300, 700) }, pressureDelta: -1,
+                result: "Trovi un accordo riservato con " + name + " per chiudere la vicenda con il minor danno possibile." }
+            ] };
+        }
+        // idx === 3: puntata finale, l'epilogo si basa sulla pressione accumulata in TUTTO l'arco.
+        return { title: "Il momento della verità", eyebrow: "Arco Narrativo — Scandalo interno (4/4, epilogo)",
+          brief: "Dopo settimane di tensione crescente, il caso " + name + " arriva a un punto di svolta: qualunque cosa succeda ora, la vicenda si chiude questa settimana.",
+          choices: [
+            { label: "Affronta la vicenda a viso aperto, in conferenza stampa", hint: "L'esito dipende da come hai gestito tutto l'arco finora", effects: {}, pressureDelta: 0, resolveArc: true,
+              result: "Affronti la vicenda a viso aperto davanti a stampa e opinione pubblica." }
+          ] };
+      },
+      startData: function () { return { name: generateStaffName() }; },
+      resolve: function (arc) {
+        var p = state.player;
+        var name = arc.data.name;
+        if (arc.pressure <= -1) {
+          p.reputazione = clamp(p.reputazione + rand(2, 5), 0, 100);
+          return { title: "Il caso " + name + " si sgonfia quasi del tutto", result: "La gestione attenta, settimana dopo settimana, paga: il caso " + name + " si sgonfia quasi del tutto, e il partito ne esce con la reputazione persino rafforzata da come l'ha affrontato." };
+        }
+        if (arc.pressure >= 4) {
+          p.reputazione = clamp(p.reputazione - rand(15, 28), 0, 100);
+          p.iscritti = Math.max(0, Math.round(p.iscritti * (1 - rand(0.1, 0.2))));
+          p.fondi = Math.max(0, p.fondi - rand(1000, 3000));
+          p.judicialRisk = clamp((p.judicialRisk || 8) + rand(15, 25), 1, 95);
+          return { title: "Lo scandalo " + name + " esplode", result: "Lo scandalo " + name + " esplode in tutta la sua gravità: settimane di indecisione ed esitazioni si pagano tutte insieme, con un colpo pesante a reputazione, iscritti e casse del partito." };
+        }
+        p.reputazione = clamp(p.reputazione - rand(3, 8), 0, 100);
+        return { title: "Il caso " + name + " si chiude con un compromesso", result: "Il caso " + name + " si chiude con un compromesso: né un'assoluzione piena né un disastro, solo un colpo d'immagine che il partito dovrà smaltire nelle prossime settimane." };
+      }
+    },
+    {
+      id: "guerra_di_fazioni", label: "Guerra di fazioni", totalStages: 4,
+      eligible: function (p) { return p.currents && p.currents.length >= 2; },
+      // p.currents porta con sé solo {id, share} (vedi correntiActive più sopra): l'etichetta va sempre
+      // letta da correnteLabel/correntiActive tramite l'id, mai da un campo .label che sulle voci grezze
+      // non esiste. Si tengono sia l'id (per la rimozione a fine arco) sia l'etichetta già risolta (per
+      // il testo, che non deve rileggerla ogni volta).
+      startData: function () {
+        var p = state.player;
+        var sorted = correntiActive(p).sort(function (a, b) { return b.share - a.share; });
+        return { factionAId: sorted[0].id, factionA: sorted[0].label, factionBId: sorted[1].id, factionB: sorted[1].label };
+      },
+      stage: function (arc, idx) {
+        var a = arc.data.factionA, b = arc.data.factionB;
+        if (idx === 0) {
+          return { title: "Tensione aperta tra " + a + " e " + b, eyebrow: "Arco Narrativo — Guerra di fazioni (1/4)",
+            brief: "Un disaccordo di linea politica tra le correnti \"" + a + "\" e \"" + b + "\" esce dalle riunioni riservate e comincia a farsi sentire pubblicamente.",
+            choices: [
+              { label: "Convoca subito un vertice di mediazione", hint: "Investe tempo e credibilità personale per ricomporre subito", effects: {}, pressureDelta: -1,
+                result: "Convochi un vertice riservato per provare a ricomporre la frattura prima che si allarghi." },
+              { label: "Lascia che si confrontino da sole", hint: "Non ti esponi, ma perdi il controllo dei tempi", effects: {}, pressureDelta: 1,
+                result: "Lasci che le due correnti si confrontino da sole, senza intervenire direttamente." },
+              { label: "Prendi platealmente le parti di \"" + a + "\"", hint: "Rafforza un'anima del partito, allontana l'altra", effects: {}, pressureDelta: 2,
+                result: "Prendi posizione apertamente a favore di \"" + a + "\": la scelta non passa inosservata." }
+            ] };
+        }
+        if (idx === 1) {
+          var esc1 = arc.pressure >= 2;
+          return { title: esc1 ? "Lo scontro arriva alla direzione nazionale" : "Il clima resta teso ma gestibile", eyebrow: "Arco Narrativo — Guerra di fazioni (2/4)",
+            brief: esc1
+              ? "Lo scontro tra \"" + a + "\" e \"" + b + "\" arriva formalmente in direzione nazionale, con toni sempre più duri."
+              : "Il clima resta teso, ma per ora le due correnti evitano un vero e proprio strappo pubblico.",
+            choices: [
+              { label: "Media personalmente in direzione", hint: "Rischia il tuo prestigio, ma può ricompattare il partito", effects: { reputazione: rand(0, 1) }, pressureDelta: -2,
+                result: "Ti metti personalmente in mezzo, in direzione nazionale, per provare a ricompattare le due anime." },
+              { label: "Lascia decidere la direzione a maggioranza", hint: "Procedura pulita, ma qualcuno resterà scontento", effects: {}, pressureDelta: 1,
+                result: "Lasci che sia la direzione, a maggioranza, a sciogliere il nodo." },
+              { label: "Minaccia provvedimenti contro chi alza troppo i toni", hint: "Linea dura, rischia di essere letta come una resa dei conti", effects: { iscritti: -rand(2, 6) }, pressureDelta: 1,
+                result: "Minacci provvedimenti disciplinari contro chi continua ad alzare i toni: il messaggio arriva forte e chiaro, ma non a tutti piace." }
+            ] };
+        }
+        if (idx === 2) {
+          var esc2 = arc.pressure >= 3;
+          return { title: esc2 ? "Si parla apertamente di scissione" : "Si cerca ancora una via d'uscita", eyebrow: "Arco Narrativo — Guerra di fazioni (3/4)",
+            brief: esc2
+              ? "Dentro \"" + b + "\" si comincia a parlare apertamente di un possibile strappo definitivo dal partito."
+              : "Le due correnti continuano a cercare, faticosamente, un punto di equilibrio comune.",
+            choices: [
+              { label: "Offri garanzie concrete a \"" + b + "\"", hint: "Un passo indietro tattico per tenere tutti dentro", effects: { fondi: -rand(150, 400) }, pressureDelta: -2,
+                result: "Offri garanzie concrete a \"" + b + "\" — spazi, risorse, riconoscimento — per tenerla dentro il partito." },
+              { label: "Non fare concessioni, il tempo sistemerà tutto", hint: "Nessun costo ora, il rischio resta aperto", effects: {}, pressureDelta: 2,
+                result: "Scegli di non fare concessioni: confidi che il tempo, da solo, plachi gli animi." },
+              { label: "Fai trapelare che una scissione ora danneggerebbe tutti", hint: "Pressione psicologica, funziona solo se credibile", effects: {}, pressureDelta: -1,
+                result: "Fai circolare, con discrezione, l'idea che una scissione ora danneggerebbe entrambe le correnti." }
+            ] };
+        }
+        return { title: "Il redde rationem", eyebrow: "Arco Narrativo — Guerra di fazioni (4/4, epilogo)",
+          brief: "Dopo settimane di tensione, \"" + a + "\" e \"" + b + "\" arrivano a un punto di non ritorno: questa settimana si decide se il partito resta unito o si spacca davvero.",
+          choices: [
+            { label: "Convoca un congresso straordinario per chiudere la partita", hint: "L'esito dipende da come hai gestito tutto l'arco finora", effects: {}, pressureDelta: 0, resolveArc: true,
+              result: "Convochi un congresso straordinario per chiudere, una volta per tutte, la partita tra le due correnti." }
+          ] };
+      },
+      resolve: function (arc) {
+        var p = state.player;
+        var a = arc.data.factionA, b = arc.data.factionB;
+        if (arc.pressure <= -2) {
+          p.leaderTrust = clamp((p.leaderTrust || 65) + rand(5, 10), 0, 100);
+          p.reputazione = clamp(p.reputazione + rand(1, 3), 0, 100);
+          return { title: "Il partito resta unito, più solido di prima", result: "La mediazione paziente, settimana dopo settimana, funziona: \"" + a + "\" e \"" + b + "\" trovano un equilibrio duraturo, e la tua autorità sul partito ne esce rafforzata." };
+        }
+        if (arc.pressure >= 4) {
+          p.iscritti = Math.max(0, Math.round(p.iscritti * (1 - rand(0.12, 0.22))));
+          p.reputazione = clamp(p.reputazione - rand(5, 12), 0, 100);
+          if (p.currents) p.currents = p.currents.filter(function (c) { return c.id !== arc.data.factionBId; });
+          return { title: "\"" + b + "\" lascia il partito", result: "La frattura è troppo profonda: \"" + b + "\" lascia il partito per fondarne uno proprio, portando con sé una parte non trascurabile di iscritti e credibilità." };
+        }
+        p.iscritti = Math.max(0, Math.round(p.iscritti * (1 - rand(0.03, 0.08))));
+        return { title: "Una tregua fragile tra " + a + " e " + b, result: "Il congresso straordinario produce solo una tregua fragile tra \"" + a + "\" e \"" + b + "\": il partito resta unito sulla carta, ma la ferita resta aperta sotto la superficie." };
+      }
+    }
+  ];
+  function buildStoryArcDossier() {
+    var p = state.player;
+    if (!state.activeArc) {
+      var eligibleTemplates = STORY_ARC_TEMPLATES.filter(function (t) { return t.eligible(p); });
+      var tpl = eligibleTemplates[Math.floor(Math.random() * eligibleTemplates.length)];
+      state.activeArc = { templateId: tpl.id, stageIndex: 0, pressure: 0, data: tpl.startData ? tpl.startData() : {} };
+    }
+    var arc = state.activeArc;
+    var template = STORY_ARC_TEMPLATES.filter(function (t) { return t.id === arc.templateId; })[0];
+    var stageDef = template.stage(arc, arc.stageIndex);
+    var choices = stageDef.choices.map(function (c) {
+      var wrapped = Object.assign({}, c);
+      wrapped._pressureDelta = c.pressureDelta || 0;
+      wrapped._resolveArc = !!c.resolveArc;
+      wrapped._template = template;
+      return wrapped;
+    });
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: stageDef.eyebrow, cat: "Arco Narrativo", title: stageDef.title, brief: stageDef.brief, choices: choices, isArcStage: true };
+  }
+  // Chiamata dal punto in cui il dossier viene risolto (vedi il ramo state.phase === "building" più sotto):
+  // avanza l'arco di una puntata, o lo chiude e ne applica l'epilogo se questa era l'ultima.
+  function advanceStoryArc(choice) {
+    var arc = state.activeArc;
+    if (!arc) return null;
+    arc.pressure += choice._pressureDelta || 0;
+    if (choice._resolveArc) {
+      var epilogue = choice._template.resolve(arc);
+      state.activeArc = null;
+      state.player.storyArcCooldownTurn = state.turn + STORY_ARC_COOLDOWN_TURNS;
+      state.log.unshift({ week: state.turn, title: epilogue.title, choiceLabel: "Epilogo", result: epilogue.result, headlines: [], type: "cronaca", cat: "Arco Narrativo" });
+      return epilogue.result;
+    }
+    arc.stageIndex++;
+    return null;
   }
 
   // ---------- Attori sociali e istituzionali ----------
@@ -11885,7 +12108,7 @@
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0,
     usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
-    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null,
+    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null, activeArc: null,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
     passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {},
     govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() },
@@ -11935,7 +12158,7 @@
     leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
     electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0,
-    internationalCongressCooldownTurn: 0, debateLastElectionTurn: 0, endorsementCooldownTurn: 0, foreignLeaderEventCooldownTurn: 0,
+    internationalCongressCooldownTurn: 0, debateLastElectionTurn: 0, endorsementCooldownTurn: 0, foreignLeaderEventCooldownTurn: 0, storyArcCooldownTurn: 0,
     dichiarazioniWeek: 0, dichiarazioniCount: 0, iniziativaLiberaCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
@@ -19246,6 +19469,15 @@
         if (choice.judicialRiskDelta && state.player.judicialRisk !== undefined) {
           state.player.judicialRisk = clamp(state.player.judicialRisk + choice.judicialRiskDelta, 1, 95);
         }
+        // Un Arco Narrativo non finisce mai qui: ogni puntata intermedia si limita ad accumulare
+        // pressione (vedi advanceStoryArc) e a passare alla prossima settimana come qualunque altro
+        // dossier; solo l'ULTIMA puntata (choice._resolveArc) chiude l'arco e sostituisce il testo
+        // dell'esito con l'epilogo vero, che dipende da tutta la pressione accumulata nell'arco, non
+        // solo da questa scelta finale.
+        if (dossier.isArcStage) {
+          var arcEpilogueText = advanceStoryArc(choice);
+          if (arcEpilogueText) res.resultText = arcEpilogueText;
+        }
         state.resultData = res;
       }
   }
@@ -20308,6 +20540,17 @@
       return;
     }
 
+    // Priorità molto alta, subito dopo elezioni/primarie: un Arco Narrativo già in corso (vedi
+    // checkStoryArcTrigger) deve occupare il dossier della settimana finché non si conclude, altrimenti
+    // la sua premessa — ogni puntata dipende da come è andata la precedente, settimana dopo settimana
+    // consecutiva — smetterebbe di valere se restasse bloccato dietro altre scene per turni di fila.
+    if (checkStoryArcTrigger()) {
+      state.aiDynamicDossier = buildStoryArcDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
     if (localElectionSpotlight) {
       state.aiDynamicDossier = localElectionSpotlight;
       state.currentDossierId = "ai_dynamic";
@@ -20938,7 +21181,7 @@
   // ("Guida rapida"), per chi vuole rivederla più avanti.
   var TUTORIAL_STEPS = [
     { title: "Benvenuto in Politis-IT", body: "Guidi un partito politico italiano, settimana dopo settimana: dalle prime tessere fino, magari, al governo del Paese. Ogni scelta che fai — dichiarazioni, leggi, alleanze — lascia un segno reale sul Paese e sui tuoi sondaggi.<br><br>Questa guida è lunga perché il gioco è grande: passa in rassegna ogni sezione, una alla volta. Puoi saltarla in qualunque momento con \"Salta il tutorial\" qui sotto, o riaprirla più avanti dal pulsante 💡 \"Guida\" in cima alla pagina." },
-    { title: "Il turno settimanale", body: "Il gioco avanza una settimana alla volta. Quasi ogni settimana ti viene proposto un <strong>dossier</strong> con più scelte: leggi la situazione, scegli una risposta, poi tocca <strong>\"Avanza\"</strong> per passare alla settimana successiva.<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Alcune settimane portano <strong>scene speciali</strong> a schermo intero invece del solito dossier: interviste, il salotto TV, un <strong>Confronto TV in diretta</strong> col tuo rivale designato (raro, solo nelle settimane prima del voto, e a differenza del salotto dichiara un vero vincitore), il Question Time in Aula, i congressi internazionali, il consiglio comunale, le riunioni di programma.</li><li>Di tanto in tanto un personaggio pubblico noto — non un politico — si schiera a favore o contro di te con un <strong>Endorsement</strong> pubblico.</li><li>La barra dei pulsanti in cima resta sempre raggiungibile, anche dentro queste scene, così puoi consultare le altre sezioni senza perdere il filo.</li></ul>" },
+    { title: "Il turno settimanale", body: "Il gioco avanza una settimana alla volta. Quasi ogni settimana ti viene proposto un <strong>dossier</strong> con più scelte: leggi la situazione, scegli una risposta, poi tocca <strong>\"Avanza\"</strong> per passare alla settimana successiva.<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Alcune settimane portano <strong>scene speciali</strong> a schermo intero invece del solito dossier: interviste, il salotto TV, un <strong>Confronto TV in diretta</strong> col tuo rivale designato (raro, solo nelle settimane prima del voto, e a differenza del salotto dichiara un vero vincitore), il Question Time in Aula, i congressi internazionali, il consiglio comunale, le riunioni di programma.</li><li>Di tanto in tanto un personaggio pubblico noto — non un politico — si schiera a favore o contro di te con un <strong>Endorsement</strong> pubblico.</li><li>Raramente parte un <strong>Arco Narrativo</strong>: una storia che occupa il dossier per 3-4 settimane di fila (uno scandalo interno, una guerra tra correnti...), dove ogni puntata dipende da come hai gestito la precedente — l'epilogo finale tiene conto di tutto il percorso, non solo dell'ultima scelta.</li><li>La barra dei pulsanti in cima resta sempre raggiungibile, anche dentro queste scene, così puoi consultare le altre sezioni senza perdere il filo.</li></ul>" },
     { title: "Pagina: Il Partito (1/2)", body: "Il primo pulsante della barra in cima, 🏛️ \"Partito\". Qui vivono l'organizzazione e le risorse del tuo partito:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Eventi di Partito</strong> — iniziative a costo/beneficio che puoi lanciare quando vuoi.</li><li><strong>Correnti interne</strong> — le anime del partito: se si allontanano troppo tra loro rischi una scissione.</li><li><strong>Sezione Giovanile</strong> — un movimento giovanile da coltivare a parte.</li><li><strong>Campagna Elettorale</strong> e <strong>Liste Elettorali</strong> — attivi nelle settimane prima del voto, per depositare i candidati e fare promesse mirate.</li><li><strong>Raccolta Fondi</strong> — azioni dedicate a rimpinguare le casse del partito.</li></ul>" },
     { title: "Pagina: Il Partito (2/2)", body: "Continua da qui il resto della sezione \"Il Partito\":<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Vita Pubblica</strong> — apparizioni mediatiche del leader, ciascuna con formati e tempi di recupero propri.</li><li><strong>Attori Sociali e Istituzionali</strong> — i rapporti con Confindustria, sindacati, Chiesa, BCE, Bankitalia, UE, magistratura, Comuni (ANCI), Università (CRUI) e Coldiretti: non solo numeri, un buon rapporto porta vantaggi concreti e ricorrenti, uno pessimo pesa davvero.</li><li><strong>Movimenti e Organizzazioni</strong> — associazioni e comitati civili che non si presentano alle elezioni ma seguono un tema preciso, e reagiscono da soli a come va davvero il paese su quel fronte.</li><li><strong>Loggia Riservata</strong> — una via più oscura e rischiosa, che si sblocca solo a partito già radicato.</li><li><strong>Direzione Nazionale</strong> — lo staff assumibile per ruolo.</li><li><strong>Programma Elettorale</strong>, <strong>Diario del Leader</strong> e <strong>Profilo Ideologico</strong> — la linea e la voce del partito nel tempo.</li></ul>" },
     { title: "Pagina: Territorio", body: "Il radicamento del partito sul territorio italiano:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Sezioni Locali</strong> — apri una sede di partito in una città per iniziare a radicarti lì.</li><li><strong>Mappa d'Italia</strong> — un colpo d'occhio simbolico su dove sei presente.</li><li><strong>Aggiornamenti dai Nuclei</strong> — la cronaca di quello che succede nelle tue sezioni.</li><li><strong>Sguardo sul Mondo</strong> — le notizie di cronaca e attualità che scandiscono il Paese, scelte tue o no.</li></ul>" },
