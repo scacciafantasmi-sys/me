@@ -5516,6 +5516,120 @@
     };
     state.phase = "salotto_scene";
   }
+  // ---------- Confronto TV in diretta contro il rivale designato ----------
+  // Il Salotto TV sopra è un dibattito ricorrente contro un avversario ideologicamente distante ma
+  // variabile di volta in volta: il rivale designato del partito (familyById(p.family).rival, lo stesso
+  // già usato da triggerRivalCountermove) non aveva mai un vero faccia a faccia col giocatore, solo
+  // contromosse indirette che il giocatore subisce senza poter reagire nello stesso momento. Il Confronto
+  // TV è un evento raro, specifico della campagna elettorale (una sola volta per elezione, nelle settimane
+  // immediatamente precedenti al voto), sempre contro quello stesso rivale — e a differenza del Salotto
+  // dichiara un vero vincitore alla fine: il punteggio di ogni round nasce dal delta REALE di
+  // reputazione/visibilità (già passato per stile di leadership, staff e rischio di contraccolpo, non
+  // dall'effetto "sulla carta" prima dei moltiplicatori — vedi il campo deltas restituito da applyChoice)
+  // messo a confronto con una prestazione del rivale in parte casuale, in parte legata al suo momentum
+  // reale nei sondaggi. Il totale dei round decide un bonus o una penalità finale su sondaggi e sul
+  // rivale stesso, oltre a incidere sulla rivalità di lungo periodo (state.partyRelations).
+  var DEBATE_ROUNDS_COUNT = 3;
+  var DEBATE_WINDOW_MIN_WEEKS = 2, DEBATE_WINDOW_MAX_WEEKS = 16;
+  function checkDebateTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader) return false;
+    var fam = familyById(p.family);
+    var rivalId = fam && fam.rival;
+    // Non basta che il rivale abbia ancora un valore in state.parties: dopo molte legislature può essersi
+    // sciolto (state.dissolvedPartyIds) pur restando presente lì, e activeParties() è la fonte di verità
+    // usata da buildDebateScene per trovarne il leader — un rivale sciolto avrebbe altrimenti fatto
+    // fallire la costruzione della scena a partita già ben avviata (visto su un salvataggio di 35 anni).
+    if (!rivalId || state.parties[rivalId] === undefined) return false;
+    if (!activeParties().some(function (rp) { return rp.id === rivalId; })) return false;
+    var weeksToElection = state.nextElectionTurn - state.turn;
+    if (weeksToElection < DEBATE_WINDOW_MIN_WEEKS || weeksToElection > DEBATE_WINDOW_MAX_WEEKS) return false;
+    if (p.debateLastElectionTurn === state.nextElectionTurn) return false;
+    return Math.random() < 0.14;
+  }
+  var DEBATE_OPENERS = [
+    function (rivalName, noun, detail) { return rivalName + " apre il confronto " + suLabel(noun) + " puntando il dito su " + detail + "."; },
+    function (rivalName, noun, detail) { return "Il conduttore lancia il tema " + suLabel(noun) + " e " + rivalName + " attacca subito, citando " + detail + "."; },
+    function (rivalName, noun, detail) { return rivalName + " non aspetta la domanda: rilancia da solo " + suLabel(noun) + ", insistendo su " + detail + "."; },
+    function (rivalName, noun, detail) { return "Con tono sicuro, " + rivalName + " porta il confronto " + suLabel(noun) + ", partendo da " + detail + "."; }
+  ];
+  function buildDebateScene() {
+    var p = state.player;
+    p.debateLastElectionTurn = state.nextElectionTurn;
+    var fam = familyById(p.family);
+    var rivalId = fam.rival;
+    var rivalParty = activeParties().filter(function (rp) { return rp.id === rivalId; })[0];
+    var allMetricKeys = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && !isExpectedWeakMetricFor(p.family, k); });
+    var metricKeys = allMetricKeys.filter(function (k) { return state.countryProfile[k] < 7.5; });
+    if (metricKeys.length < DEBATE_ROUNDS_COUNT) {
+      var rest = allMetricKeys.filter(function (k) { return metricKeys.indexOf(k) === -1; })
+        .sort(function (a, b) { return state.countryProfile[a] - state.countryProfile[b]; });
+      metricKeys = metricKeys.concat(rest.slice(0, DEBATE_ROUNDS_COUNT - metricKeys.length));
+    }
+    var pickedMetrics = shuffleN(metricKeys, Math.min(DEBATE_ROUNDS_COUNT, metricKeys.length));
+    var rounds = pickedMetrics.map(function (metric, i) {
+      var noun = METRIC_LABELS[metric];
+      var detailPhrase = pickAmbientDetailPhrase(metric, noun, rivalParty.familyId);
+      var opener = DEBATE_OPENERS[(state.turn + i) % DEBATE_OPENERS.length];
+      return {
+        metric: metric, noun: noun,
+        rivalPositionText: opener(rivalParty.leader, noun, detailPhrase),
+        answeredLabel: null, resultText: null,
+        choices: buildPublicAppearanceChoices({ topicLabel: noun, fromCtx: "dal confronto televisivo", pol: "il tuo partito", subj: rivalParty.leader, nationalMetric: metric, family: p.family }, 4)
+      };
+    });
+    state.debateScene = {
+      step: 0, rivalId: rivalId,
+      rival: { name: rivalParty.leader, partyName: rivalParty.name, color: rivalParty.color },
+      rounds: rounds, playerScore: 0, rivalScore: 0
+    };
+    state.phase = "debate_scene";
+  }
+  var DEBATE_AUDIENCE_WIN_LINES = [
+    "Il pubblico in studio applaude apertamente la tua risposta.",
+    "Sui social il tuo passaggio diventa subito la clip più condivisa della serata.",
+    "Anche il conduttore annuisce: il punto lo hai segnato tu."
+  ];
+  var DEBATE_AUDIENCE_LOSE_LINES = [
+    "Il pubblico sembra più convinto dalla replica del rivale.",
+    "Sui social è la battuta del rivale a fare il giro, non la tua.",
+    "Il rivale ribatte con sicurezza, e lo scambio resta suo."
+  ];
+  function debateAudienceLine(playerRoundScore, rivalRoundScore) {
+    if (playerRoundScore > rivalRoundScore + 0.5) return DEBATE_AUDIENCE_WIN_LINES[Math.floor(Math.random() * DEBATE_AUDIENCE_WIN_LINES.length)];
+    if (rivalRoundScore > playerRoundScore + 0.5) return DEBATE_AUDIENCE_LOSE_LINES[Math.floor(Math.random() * DEBATE_AUDIENCE_LOSE_LINES.length)];
+    return "Lo scambio finisce in sostanziale parità, tra applausi divisi.";
+  }
+  // Chiude il confronto: il margine tra i due punteggi decide un bonus/penalità diretto su sondaggi e
+  // sul rivale, oltre a una spinta sulla rivalità di lungo periodo — vinta o persa, una campagna che passa
+  // da un confronto TV in diretta lascia comunque un segno più netto di un episodio di cronaca qualunque.
+  function resolveDebateOutcome(sc) {
+    var p = state.player;
+    var margin = sc.playerScore - sc.rivalScore;
+    var rivalName = sc.rival.partyName;
+    var outcomeTitle, outcomeText;
+    if (margin > 2) {
+      p.sondaggi = clamp(p.sondaggi + rand(0.4, 1), 0, 40);
+      p.reputazione = clamp(p.reputazione + rand(2, 4), 0, 100);
+      state.parties[sc.rivalId] = Math.max(0.3, state.parties[sc.rivalId] - rand(0.3, 0.8));
+      if (!state.partyRelations) state.partyRelations = {};
+      state.partyRelations[sc.rivalId] = clamp((state.partyRelations[sc.rivalId] === undefined ? 50 : state.partyRelations[sc.rivalId]) - rand(3, 6), 0, 100);
+      outcomeTitle = "Vinci il confronto TV con " + rivalName;
+      outcomeText = "Il confronto in diretta si chiude a tuo favore: la serata paga in sondaggi e reputazione, mentre " + rivalName + " incassa il colpo.";
+    } else if (margin < -2) {
+      p.sondaggi = clamp(p.sondaggi - rand(0.3, 0.8), 0, 40);
+      p.reputazione = clamp(p.reputazione - rand(2, 4), 0, 100);
+      state.parties[sc.rivalId] = Math.max(0.3, state.parties[sc.rivalId] + rand(0.3, 0.8));
+      outcomeTitle = "Esci sconfitto dal confronto TV con " + rivalName;
+      outcomeText = "Il confronto in diretta finisce a favore di " + rivalName + ": la serata pesa sui tuoi sondaggi e sulla tua reputazione.";
+    } else {
+      p.visibilita = clamp(p.visibilita + rand(1, 3), 0, 100);
+      outcomeTitle = "Il confronto TV con " + rivalName + " finisce in sostanziale parità";
+      outcomeText = "Nessuno dei due sfonda davvero: la serata resta un pareggio, con un po' di visibilità in più per entrambi.";
+    }
+    state.log.unshift({ week: state.turn, title: outcomeTitle, choiceLabel: "Confronto TV", result: outcomeText, headlines: [], type: "cronaca", cat: "Rivalità Politica" });
+    return { resultText: outcomeText };
+  }
   // ---------- Ufficio del Leader: la giovanile o un consigliere portano una richiesta vera ----------
   // La sezione giovanile aveva già un grado di accordo con la linea del partito (p.giovanile.agreement,
   // vedi driftYouthWing) che oscillava però SOLO in automatico, senza mai un vero momento in cui il
@@ -6681,6 +6795,68 @@
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Vita Privata del Leader",
       cat: "Vita Privata", title: tpl.title, brief: tpl.brief, choices: tpl.choices
     };
+  }
+
+  // ---------- Endorsement pubblici ----------
+  // Nessun personaggio pubblico esterno al mondo dei partiti aveva mai un momento proprio, in bene o in
+  // male: solo la stampa (Rapporti con la Stampa) e gli attori istituzionali reagivano al partito. Qui un
+  // volto noto — non un politico, non una testata — si schiera spontaneamente per un episodio, in un modo
+  // o nell'altro: uno sportivo, un cantante, un imprenditore, un influencer, un intellettuale o un ex
+  // magistrato. Nomi generici (vedi generateStaffName), non persone reali: quello che conta è il
+  // meccanismo, non l'identità specifica. Un evento raro e a scoppio breve — una sola scelta, non una
+  // scena a più round — ma con effetti proporzionalmente più marcati di un dossier qualunque, proprio
+  // perché così raro.
+  var ENDORSER_CATEGORIES = [
+    { id: "sportivo", label: "un noto sportivo", verb: "si schiera" },
+    { id: "cantante", label: "una cantante molto seguita", verb: "si schiera" },
+    { id: "imprenditore", label: "un imprenditore di primo piano", verb: "prende posizione" },
+    { id: "influencer", label: "un influencer con milioni di follower", verb: "prende posizione" },
+    { id: "intellettuale", label: "un intellettuale molto citato", verb: "interviene" },
+    { id: "exmagistrato", label: "un ex magistrato diventato opinionista", verb: "interviene" }
+  ];
+  var ENDORSEMENT_COOLDOWN_TURNS = 22;
+  function checkEndorsementTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader) return false;
+    return state.turn >= (p.endorsementCooldownTurn || 0) && Math.random() < 0.09;
+  }
+  function buildEndorsementDossier() {
+    var p = state.player;
+    p.endorsementCooldownTurn = state.turn + ENDORSEMENT_COOLDOWN_TURNS;
+    var category = ENDORSER_CATEGORIES[Math.floor(Math.random() * ENDORSER_CATEGORIES.length)];
+    var name = generateStaffName();
+    // Chi gode già di buona reputazione attira più sostegno spontaneo che critiche; chi è già in difficoltà
+    // di reputazione diventa un bersaglio più comodo — coerente con come funziona davvero la visibilità.
+    var positiveChance = clamp(0.3 + (p.reputazione - 50) * 0.006, 0.15, 0.75);
+    var positive = Math.random() < positiveChance;
+    var title, brief, choices;
+    if (positive) {
+      title = name + " " + category.verb + " pubblicamente con te";
+      brief = name + ", " + category.label + ", elogia pubblicamente il tuo operato durante un'intervista, senza che nessuno glielo avesse chiesto.";
+      choices = [
+        { label: "Ringrazia pubblicamente e amplifica l'endorsement", hint: "Ne sfrutti a pieno la visibilità, con qualche rischio di sembrare opportunista",
+          effects: { visibilita: rand(5, 10), iscritti: rand(10, 25), reputazione: rand(0, 1) },
+          result: "Rilanci l'endorsement di " + name + " su ogni canale: la vetrina è ottima, anche se qualcuno storce il naso per l'insistenza." },
+        { label: "Ringrazia con misura, senza esagerare", hint: "Effetto più contenuto, ma nessun rischio",
+          effects: { visibilita: rand(2, 4), reputazione: rand(1, 2) },
+          result: "Un ringraziamento sobrio a " + name + ": l'endorsement resta comunque una buona notizia per la settimana." },
+        { label: "Non commentare", hint: "Prudente, ma un'occasione resta sul tavolo",
+          effects: { visibilita: rand(0, 1) },
+          result: "Scegli di non commentare: l'endorsement di " + name + " circola comunque, ma senza il tuo contributo si spegne in fretta." }
+      ];
+    } else {
+      title = name + " " + category.verb + " pubblicamente contro di te";
+      brief = name + ", " + category.label + ", critica duramente il tuo operato in un'intervista molto ripresa, senza che tu abbia modo di replicare in diretta.";
+      choices = [
+        { label: "Rispondi con durezza, punto su punto", hint: "Molta visibilità, ma lo scontro può ritorcersi contro", effects: { visibilita: rand(6, 11), reputazione: -rand(1, 3) },
+          result: "La replica durissima a " + name + " domina il dibattito del giorno, nel bene e nel male." },
+        { label: "Rispondi con misura, senza rincarare la dose", hint: "Meno rumore, immagine più solida", effects: { reputazione: rand(1, 3), visibilita: rand(1, 2) },
+          result: "Una risposta pacata a " + name + " non fa titoloni, ma non lascia nemmeno che la critica resti l'ultima parola." },
+        { label: "Ignora, non ne vale la pena", hint: "Nessuna esposizione, ma il colpo resta incassato senza replica", effects: { reputazione: -rand(1, 2) },
+          result: "Scegli di non rispondere a " + name + ": la critica resta senza contraddittorio, e qualcosa comunque se ne va." }
+      ];
+    }
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Endorsement Pubblico", cat: "Endorsement", title: title, brief: brief, choices: choices.map(applyOutcomeVariance) };
   }
 
   // ---------- Attori sociali e istituzionali ----------
@@ -11279,6 +11455,102 @@
       state.foreignRelations[nation.id] = clamp(state.foreignRelations[nation.id] + (target - state.foreignRelations[nation.id]) * 0.04 + (Math.random() - 0.5) * 0.6, 0, 100);
     });
     updateOrganizationEffects();
+    driftForeignLeaderRapport();
+  }
+  // ---------- Capi di Stato/Governo esteri: un rapporto personale, non solo la nazione in astratto ----------
+  // "Rapporti con l'estero" agiva finora solo sulla nazione come entità astratta (state.foreignRelations):
+  // nessun vero capo di Stato o di governo con cui costruire un legame personale nel tempo. Ora ogni
+  // nazione ha un leader generato una sola volta (state.foreignLeaders, nome generico — non una persona
+  // reale) e un rapporto personale persistente e distinto (state.foreignLeaderRapport, 0-100), che insegue
+  // lentamente la relazione bilaterale nazionale (il bersaglio in movimento verso cui deriva, invece di un
+  // orientamento ideologico fisso come per la stampa) ma può discostarsene per un tratto grazie a eventi
+  // personali diretti — un vertice riuscito, una telefonata cordiale, un incidente diplomatico — proprio
+  // come un rapporto vero tra due persone non coincide mai esattamente con la temperatura politica generale
+  // tra i due paesi.
+  var LEADER_TITLE_BY_NATION = {
+    statiuniti: "Presidente", francia: "Presidente", germania: "Cancelliere/a", regnounito: "Primo Ministro",
+    russia: "Presidente", cina: "Presidente", india: "Primo Ministro", giappone: "Primo Ministro",
+    arabiasaudita: "Principe Ereditario", emiratiarabi: "Presidente", israele: "Primo Ministro",
+    brasile: "Presidente", canada: "Primo Ministro", australia: "Primo Ministro", turchia: "Presidente",
+    egitto: "Presidente", sudafrica: "Presidente", messico: "Presidente/a", argentina: "Presidente",
+    norvegia: "Primo Ministro", svizzera: "Presidente/a", coreadelsud: "Presidente"
+  };
+  function leaderTitleForNation(nation) { return LEADER_TITLE_BY_NATION[nation.id] || "Capo di Stato"; }
+  function ensureForeignLeaderName(nation) {
+    if (!state.foreignLeaders) state.foreignLeaders = {};
+    if (!state.foreignLeaders[nation.id]) state.foreignLeaders[nation.id] = generateForeignDelegateName();
+    return state.foreignLeaders[nation.id];
+  }
+  function ensureForeignLeaderRapport(nation) {
+    if (!state.foreignLeaderRapport) state.foreignLeaderRapport = {};
+    if (state.foreignLeaderRapport[nation.id] === undefined) {
+      state.foreignLeaderRapport[nation.id] = state.foreignRelations && state.foreignRelations[nation.id] !== undefined ? state.foreignRelations[nation.id] : 50;
+    }
+    return state.foreignLeaderRapport[nation.id];
+  }
+  function foreignLeaderRapportLabel(v) {
+    if (v >= 78) return { text: "Legame personale forte", cls: "good" };
+    if (v >= 60) return { text: "Rapporto cordiale", cls: "good" };
+    if (v >= 40) return { text: "Rapporto formale", cls: "neutral" };
+    if (v >= 22) return { text: "Rapporto freddo", cls: "accent" };
+    return { text: "Rapporto compromesso", cls: "accent" };
+  }
+  function driftForeignLeaderRapport() {
+    WORLD_NATIONS.forEach(function (nation) {
+      var cur = ensureForeignLeaderRapport(nation);
+      var target = state.foreignRelations[nation.id] !== undefined ? state.foreignRelations[nation.id] : 50;
+      state.foreignLeaderRapport[nation.id] = clamp(cur + (target - cur) * 0.05 + rand(-1, 1), 5, 95);
+    });
+  }
+  var FOREIGN_LEADER_EVENT_COOLDOWN_TURNS = 10;
+  function checkForeignLeaderEventTrigger() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return false;
+    if (state.turn < (p.foreignLeaderEventCooldownTurn || 0)) return false;
+    return Math.random() < 0.15;
+  }
+  // Preferisce le nazioni col rapporto personale più marcato, esattamente come pickPressOutletForEvent
+  // sceglie le testate: è lì che la memoria di come li hai trattati ha davvero qualcosa da raccontare.
+  function pickForeignLeaderForEvent() {
+    var withScores = WORLD_NATIONS.map(function (n) { return { nation: n, score: ensureForeignLeaderRapport(n) }; });
+    withScores.sort(function (a, b) { return Math.abs(b.score - 50) - Math.abs(a.score - 50); });
+    var top = withScores.slice(0, 6);
+    return top[Math.floor(Math.random() * top.length)];
+  }
+  function buildForeignLeaderEventDossier() {
+    var p = state.player;
+    p.foreignLeaderEventCooldownTurn = state.turn + FOREIGN_LEADER_EVENT_COOLDOWN_TURNS;
+    var picked = pickForeignLeaderForEvent();
+    var nation = picked.nation, score = picked.score;
+    var name = ensureForeignLeaderName(nation);
+    var title = leaderTitleForNation(nation);
+    var dTitle, brief, choices;
+    if (score >= 60) {
+      dTitle = title + " " + name + " ti invita a un vertice bilaterale riservato";
+      brief = title + " " + name + " di " + nation.name + ", con cui il rapporto personale è ormai solido, ti invita a un vertice bilaterale informale, lontano dai riflettori.";
+      choices = [
+        { label: "Accetta e coltiva il rapporto personale", hint: "Rafforza il legame, costa qualche giorno di agenda", effects: { reputazione: rand(1, 3), leaderRapportDelta: { id: nation.id, delta: rand(6, 12) } }, result: "Il vertice riservato con " + name + " rafforza un legame personale che va oltre la diplomazia di facciata." },
+        { label: "Manda un rappresentante di alto livello", hint: "Meno impegno personale, meno guadagno", effects: { fondi: -rand(50, 120), leaderRapportDelta: { id: nation.id, delta: rand(1, 4) } }, result: name + " apprezza comunque il gesto, anche senza la tua presenza diretta." },
+        { label: "Declina, l'agenda non lo permette", hint: "Nessun costo, ma il gesto non passa inosservato", effects: { leaderRapportDelta: { id: nation.id, delta: -rand(3, 7) } }, result: name + " nota il rifiuto: nulla di grave, ma il rapporto personale ne risente." }
+      ];
+    } else if (score <= 40) {
+      dTitle = "Un incidente diplomatico con " + title.toLowerCase() + " " + name;
+      brief = "Una tua dichiarazione recente viene ripresa a " + nation.name + " come un affronto personale: " + title + " " + name + " si aspetta un chiarimento, non solo un comunicato della Farnesina.";
+      choices = [
+        { label: "Chiama personalmente per chiarire", hint: "Investe capitale personale per disinnescare la tensione", effects: { reputazione: rand(1, 2), leaderRapportDelta: { id: nation.id, delta: rand(5, 10) } }, result: "La telefonata diretta a " + name + " smorza l'incidente prima che degeneri." },
+        { label: "Lascia gestire la vicenda alla diplomazia ordinaria", hint: "Nessun costo personale, ma il gelo resta", effects: { leaderRapportDelta: { id: nation.id, delta: -rand(2, 5) } }, result: "I canali ordinari contengono il danno, ma il rapporto personale con " + name + " resta gelido." },
+        { label: "Non arretrare di un passo", hint: "Coerente con la tua linea, ma il rapporto peggiora", effects: { visibilita: rand(2, 5), leaderRapportDelta: { id: nation.id, delta: -rand(8, 15) } }, result: "Confermi ogni parola: la tua base apprezza la fermezza, ma con " + name + " il rapporto personale precipita." }
+      ];
+    } else {
+      dTitle = title + " " + name + " cerca un contatto diretto";
+      brief = title + " " + name + " di " + nation.name + " chiede una breve telefonata di cortesia su un tema di attualità comune.";
+      choices = [
+        { label: "Rispondi subito, di persona", hint: "Costruisce un rapporto ancora tutto da scrivere", effects: { leaderRapportDelta: { id: nation.id, delta: rand(4, 8) } }, result: "La disponibilità immediata viene notata da " + name + ": un buon punto di partenza." },
+        { label: "Rimanda a un canale diplomatico ordinario", hint: "Nessun rischio, ma nessun guadagno personale", effects: { leaderRapportDelta: { id: nation.id, delta: rand(0, 2) } }, result: "La telefonata passa ai canali ordinari: cortese, ma impersonale." },
+        { label: "Non richiamare", hint: "Rischia di apparire scortese", effects: { leaderRapportDelta: { id: nation.id, delta: -rand(3, 6) } }, result: name + " nota la mancata risposta, e il rapporto personale ne risente." }
+      ];
+    }
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Diplomazia Personale", cat: "Geopolitica", title: dTitle, brief: brief, choices: choices };
   }
   // Evento rarissimo: una nazione europea entra o esce dall'UE. Non tocca mai le grandi potenze
   // extraeuropee né le nazioni senza un percorso di adesione plausibile (euEligible). Anche questo
@@ -11382,16 +11654,20 @@
     }).sort(function (a, b) { return b.val - a.val; });
     if (!p.nationActionCooldowns) p.nationActionCooldowns = {};
     var html = '<section aria-label="Rapporti con l\'estero"><details class="log" open><summary>Rapporti con l\'estero (' + rows.length + ' nazioni)<span>▾</span></summary>' +
-      '<p class="ci-hint">Le relazioni con le principali potenze mondiali, sbloccate perché sei al governo: si avvicinano lentamente a quanto il tuo orientamento politico è affine al loro, ma puoi anche agire direttamente su una singola nazione — tocca la riga per aprire le azioni disponibili.</p>' +
+      '<p class="ci-hint">Le relazioni con le principali potenze mondiali, sbloccate perché sei al governo: si avvicinano lentamente a quanto il tuo orientamento politico è affine al loro, ma puoi anche agire direttamente su una singola nazione — tocca la riga per aprire le azioni disponibili. Ogni nazione ha anche un capo di Stato/governo con cui costruisci un rapporto personale distinto dalla relazione bilaterale: insegue quella nazionale nel tempo, ma un vertice riuscito o un incidente diplomatico possono spostarlo molto più in fretta.</p>' +
       '<div class="party-directory">';
     html += rows.map(function (r) {
       var chipClass = r.val >= 66 ? "good" : r.val <= 33 ? "critical" : "neutral";
       var fam = familyById(r.n.family);
       var isOpen = expandedNationId === r.n.id;
+      var leaderName = ensureForeignLeaderName(r.n);
+      var leaderRapport = ensureForeignLeaderRapport(r.n);
+      var leaderLbl = foreignLeaderRapportLabel(leaderRapport);
       var row = '<button type="button" class="party-row' + (isOpen ? " open" : "") + '" data-nation-tile="' + r.n.id + '">' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.n.name +
         (r.eu ? ' <span class="chip">UE</span>' : "") + '</strong><span class="chip ' + chipClass + '">' + fmt1(r.val) + "%</span></div>" +
-        '<div class="party-row-sub">' + r.n.area + " — orientamento " + (fam ? fam.label : r.n.family) + "</div></div></button>";
+        '<div class="party-row-sub">' + r.n.area + " — orientamento " + (fam ? fam.label : r.n.family) + '</div>' +
+        '<div class="party-row-sub">' + leaderTitleForNation(r.n) + " " + leaderName + ' <span class="chip ' + leaderLbl.cls + '">' + leaderLbl.text + "</span></div></div></button>";
       if (isOpen) {
         row += '<div class="option-grid" style="margin:0.5rem 0 0.9rem">' + Object.keys(NATION_ACTIONS).map(function (id) {
           var act = NATION_ACTIONS[id];
@@ -11614,6 +11890,7 @@
     passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {},
     govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() },
     foreignRelations: {}, euMembershipOverrides: {}, euFederalized: false,
+    foreignLeaders: {}, foreignLeaderRapport: {},
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
     cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, cpuQuestionTimeCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
     electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null,
@@ -11624,7 +11901,7 @@
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
     qtScene: null, qtManualScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
-    salottoScene: null, ufficioScene: null, internationalCongress: null, statements: [],
+    salottoScene: null, ufficioScene: null, internationalCongress: null, debateScene: null, statements: [],
     mode: "party", career: null
   };
   var PLAYER_FIELD_DEFAULTS = {
@@ -11658,7 +11935,7 @@
     leaderPhotoDataUrl: null, mpEventCooldownTurn: 0, rivalMpNewsCooldownTurn: 0, qtSceneCooldownTurn: 0,
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
     electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0,
-    internationalCongressCooldownTurn: 0,
+    internationalCongressCooldownTurn: 0, debateLastElectionTurn: 0, endorsementCooldownTurn: 0, foreignLeaderEventCooldownTurn: 0,
     dichiarazioniWeek: 0, dichiarazioniCount: 0, iniziativaLiberaCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
@@ -12066,6 +12343,17 @@
       if (targetOutlet) {
         var curOutletRel = ensureOutletRelation(targetOutlet, p);
         p.outletRelations[targetOutlet.id] = clamp(curOutletRel + eff.outletRelationDelta.delta, 5, 95);
+      }
+    }
+    // Stessa leva diretta e deliberata di outletRelationDelta sopra, ma sul rapporto PERSONALE con un
+    // capo di Stato/governo estero (usata da buildForeignLeaderEventDossier), distinto dalla relazione
+    // bilaterale nazionale (state.foreignRelations).
+    if (eff.leaderRapportDelta && eff.leaderRapportDelta.id) {
+      var targetNationForLeader = WORLD_NATIONS.filter(function (n) { return n.id === eff.leaderRapportDelta.id; })[0];
+      if (targetNationForLeader) {
+        var curLeaderRapport = ensureForeignLeaderRapport(targetNationForLeader);
+        if (!state.foreignLeaderRapport) state.foreignLeaderRapport = {};
+        state.foreignLeaderRapport[targetNationForLeader.id] = clamp(curLeaderRapport + eff.leaderRapportDelta.delta, 5, 95);
       }
     }
 
@@ -17467,6 +17755,26 @@
     html += "</div>";
     return html;
   }
+  function renderDebateScene() {
+    var sc = state.debateScene;
+    var p = state.player;
+    var html = '<div class="qt-scene"><p class="qt-eyebrow">Confronto TV in diretta — Campagna Elettorale</p>' +
+      "<h2>" + p.name + " contro " + sc.rival.name + " (" + sc.rival.partyName + ")</h2>" +
+      '<p class="ci-hint">Un confronto diretto in prima serata, a poche settimane dal voto: ' + sc.rounds.length + " round su altrettanti temi, il pubblico giudica ogni scambio.</p>";
+    sc.rounds.forEach(function (r, idx) {
+      if (idx > sc.step) return;
+      html += '<div class="qt-exchange"><div class="qt-speaker">' + personBadgeHtml(sc.rival.name, null, 26, sc.rival.color) +
+        '<span><span class="qt-speaker-name">' + sc.rival.name + '</span> <span class="qt-speaker-party">— ' + sc.rival.partyName + "</span></span></div>" +
+        '<p class="qt-question">' + r.rivalPositionText + "</p>";
+      if (r.answeredLabel) {
+        html += '<p class="qt-answer"><strong>' + r.answeredLabel + "</strong> — " + r.resultText + "</p></div>";
+      } else {
+        html += renderChoiceButtons(r.choices, "debate-choice") + "</div>";
+      }
+    });
+    html += "</div>";
+    return html;
+  }
   // Scena dell'ufficio del leader: un solo scambio, come il Consiglio Comunale — non serve più di un
   // passo per una richiesta a tu per tu.
   function renderUfficioScene() {
@@ -18211,6 +18519,53 @@
           } else {
             state.resultData = res;
             state.salottoScene = null;
+            state.phase = "result";
+            save();
+            render();
+          }
+        });
+      });
+      return;
+    }
+
+    // Confronto TV: checkDebateTrigger richiede già p.playerIsLeader, come Salotto e intervista al leader
+    // — nessun ramo di auto-play necessario per lo sfiduciato. Ogni round applica il proprio effetto reale
+    // subito (come nel Salotto), ma qui si accumula anche il punteggio effettivo del round (letto dai
+    // delta REALI restituiti da applyChoice, già passati per stile/staff/contraccolpo) contro una
+    // prestazione del rivale in parte casuale e in parte legata al suo momentum nei sondaggi: alla fine
+    // dell'ultimo round, il margine tra i due punteggi decide chi vince il confronto (vedi
+    // resolveDebateOutcome), non solo l'ultima battuta pronunciata.
+    if (state.phase === "debate_scene") {
+      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderDebateScene();
+      bindPageNavDrawer(function () {
+        state.debateScene = null;
+        state.currentDossierId = null;
+        state.phase = "building";
+      });
+      app.querySelectorAll("[data-debate-choice]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = parseInt(btn.getAttribute("data-debate-choice"), 10);
+          var sc = state.debateScene;
+          var r = sc.rounds[sc.step];
+          var choice = r.choices[idx];
+          var dossier = { title: "Confronto TV — " + r.noun, cat: "Rivalità Politica" };
+          var res = applyChoice(dossier, choice);
+          var playerRoundScore = (res.deltas.reputazione || 0) * 1.5 + (res.deltas.visibilita || 0) * 0.4;
+          var rivalMomentumBonus = state.parties[sc.rivalId] > state.player.sondaggi ? rand(0, 1) : -rand(0, 1);
+          var rivalRoundScore = rand(-2, 3) + rivalMomentumBonus;
+          sc.playerScore += playerRoundScore;
+          sc.rivalScore += rivalRoundScore;
+          r.answeredLabel = choice.label;
+          r.resultText = choice.result + " " + debateAudienceLine(playerRoundScore, rivalRoundScore);
+          if (sc.step < sc.rounds.length - 1) {
+            sc.step++;
+            save();
+            render();
+          } else {
+            var outcome = resolveDebateOutcome(sc);
+            res.resultText = outcome.resultText;
+            state.resultData = res;
+            state.debateScene = null;
             state.phase = "result";
             save();
             render();
@@ -20046,6 +20401,14 @@
       return;
     }
 
+    // Priorità sopra il Salotto TV ricorrente: la finestra utile per il Confronto TV è stretta (poche
+    // settimane prima del voto, una sola volta per elezione) e non deve rischiare di restare bloccata
+    // dietro una scena più frequente che scatta per prima nella stessa settimana.
+    if (checkDebateTrigger()) {
+      buildDebateScene();
+      return;
+    }
+
     if (checkSalottoTrigger()) {
       buildSalottoScene();
       return;
@@ -20300,6 +20663,20 @@
     if (state.turn >= (p.privateLifeCooldownTurn || 0) && Math.random() < 0.05) {
       p.privateLifeCooldownTurn = state.turn + PRIVATE_LIFE_COOLDOWN_TURNS;
       state.aiDynamicDossier = buildPrivateLifeDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkEndorsementTrigger()) {
+      state.aiDynamicDossier = buildEndorsementDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkForeignLeaderEventTrigger()) {
+      state.aiDynamicDossier = buildForeignLeaderEventDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
@@ -20561,13 +20938,13 @@
   // ("Guida rapida"), per chi vuole rivederla più avanti.
   var TUTORIAL_STEPS = [
     { title: "Benvenuto in Politis-IT", body: "Guidi un partito politico italiano, settimana dopo settimana: dalle prime tessere fino, magari, al governo del Paese. Ogni scelta che fai — dichiarazioni, leggi, alleanze — lascia un segno reale sul Paese e sui tuoi sondaggi.<br><br>Questa guida è lunga perché il gioco è grande: passa in rassegna ogni sezione, una alla volta. Puoi saltarla in qualunque momento con \"Salta il tutorial\" qui sotto, o riaprirla più avanti dal pulsante 💡 \"Guida\" in cima alla pagina." },
-    { title: "Il turno settimanale", body: "Il gioco avanza una settimana alla volta. Quasi ogni settimana ti viene proposto un <strong>dossier</strong> con più scelte: leggi la situazione, scegli una risposta, poi tocca <strong>\"Avanza\"</strong> per passare alla settimana successiva.<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Alcune settimane portano <strong>scene speciali</strong> a schermo intero invece del solito dossier: interviste, il salotto TV, il Question Time in Aula, i congressi internazionali, il consiglio comunale, le riunioni di programma.</li><li>La barra dei pulsanti in cima resta sempre raggiungibile, anche dentro queste scene, così puoi consultare le altre sezioni senza perdere il filo.</li></ul>" },
+    { title: "Il turno settimanale", body: "Il gioco avanza una settimana alla volta. Quasi ogni settimana ti viene proposto un <strong>dossier</strong> con più scelte: leggi la situazione, scegli una risposta, poi tocca <strong>\"Avanza\"</strong> per passare alla settimana successiva.<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Alcune settimane portano <strong>scene speciali</strong> a schermo intero invece del solito dossier: interviste, il salotto TV, un <strong>Confronto TV in diretta</strong> col tuo rivale designato (raro, solo nelle settimane prima del voto, e a differenza del salotto dichiara un vero vincitore), il Question Time in Aula, i congressi internazionali, il consiglio comunale, le riunioni di programma.</li><li>Di tanto in tanto un personaggio pubblico noto — non un politico — si schiera a favore o contro di te con un <strong>Endorsement</strong> pubblico.</li><li>La barra dei pulsanti in cima resta sempre raggiungibile, anche dentro queste scene, così puoi consultare le altre sezioni senza perdere il filo.</li></ul>" },
     { title: "Pagina: Il Partito (1/2)", body: "Il primo pulsante della barra in cima, 🏛️ \"Partito\". Qui vivono l'organizzazione e le risorse del tuo partito:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Eventi di Partito</strong> — iniziative a costo/beneficio che puoi lanciare quando vuoi.</li><li><strong>Correnti interne</strong> — le anime del partito: se si allontanano troppo tra loro rischi una scissione.</li><li><strong>Sezione Giovanile</strong> — un movimento giovanile da coltivare a parte.</li><li><strong>Campagna Elettorale</strong> e <strong>Liste Elettorali</strong> — attivi nelle settimane prima del voto, per depositare i candidati e fare promesse mirate.</li><li><strong>Raccolta Fondi</strong> — azioni dedicate a rimpinguare le casse del partito.</li></ul>" },
     { title: "Pagina: Il Partito (2/2)", body: "Continua da qui il resto della sezione \"Il Partito\":<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Vita Pubblica</strong> — apparizioni mediatiche del leader, ciascuna con formati e tempi di recupero propri.</li><li><strong>Attori Sociali e Istituzionali</strong> — i rapporti con Confindustria, sindacati, Chiesa, BCE, Bankitalia, UE, magistratura, Comuni (ANCI), Università (CRUI) e Coldiretti: non solo numeri, un buon rapporto porta vantaggi concreti e ricorrenti, uno pessimo pesa davvero.</li><li><strong>Movimenti e Organizzazioni</strong> — associazioni e comitati civili che non si presentano alle elezioni ma seguono un tema preciso, e reagiscono da soli a come va davvero il paese su quel fronte.</li><li><strong>Loggia Riservata</strong> — una via più oscura e rischiosa, che si sblocca solo a partito già radicato.</li><li><strong>Direzione Nazionale</strong> — lo staff assumibile per ruolo.</li><li><strong>Programma Elettorale</strong>, <strong>Diario del Leader</strong> e <strong>Profilo Ideologico</strong> — la linea e la voce del partito nel tempo.</li></ul>" },
     { title: "Pagina: Territorio", body: "Il radicamento del partito sul territorio italiano:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Sezioni Locali</strong> — apri una sede di partito in una città per iniziare a radicarti lì.</li><li><strong>Mappa d'Italia</strong> — un colpo d'occhio simbolico su dove sei presente.</li><li><strong>Aggiornamenti dai Nuclei</strong> — la cronaca di quello che succede nelle tue sezioni.</li><li><strong>Sguardo sul Mondo</strong> — le notizie di cronaca e attualità che scandiscono il Paese, scelte tue o no.</li></ul>" },
     { title: "Pagina: Parlamento e Governo (1/2)", body: "Il cuore dell'attività istituzionale:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Gli <strong>emicicli</strong> di Camera e Senato mostrano chi ha i seggi in questo momento.</li><li>Il tuo <strong>gruppo parlamentare</strong>, se sei in Parlamento.</li><li><strong>Mozioni</strong>, <strong>Leggi</strong> ed <strong>Emendamenti</strong> — le tue iniziative legislative vere e proprie, su temi che scegli tu.</li><li><strong>Question Time</strong> — le interrogazioni in Aula, se hai i numeri per farle.</li></ul>" },
     { title: "Pagina: Parlamento e Governo (2/2)", body: "Il resto della sezione, più legato al governo del Paese:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Riforme di Governo</strong> — centinaia di riforme possibili, disponibili solo se sei al governo.</li><li><strong>Grandi Scelte di Politica Estera</strong> e <strong>Programma Spaziale</strong> — decisioni di lungo periodo su scala nazionale.</li><li><strong>Proposta di Referendum</strong> — uno per legislatura, se il partito è abbastanza forte nei sondaggi.</li><li><strong>Opposizione al Regime</strong> — compare solo se il Paese vive sotto un regime e sei all'opposizione: puoi tentare di rovesciarlo.</li></ul>" },
-    { title: "Pagina: Europa e Mondo — Geopolitica", body: "Tutto quello che riguarda l'estero:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Tensione Geopolitica</strong> e <strong>Iniziative UE</strong> — prese di posizione su temi internazionali ed europei.</li><li><strong>Emiciclo Europeo</strong> ed <strong>Europarlamento</strong> — se hai seggi a Bruxelles, anche la scelta del gruppo politico europeo a cui aderire.</li><li><strong>Rapporti con l'Estero</strong> — se sei al governo, tocca una nazione per aprire azioni dirette su di lei: accordo commerciale, visita di Stato, o alzare la tensione diplomatica.</li><li><strong>Organizzazioni Internazionali</strong> — puoi fondarne una tua, invitando altre nazioni.</li></ul>" },
+    { title: "Pagina: Europa e Mondo — Geopolitica", body: "Tutto quello che riguarda l'estero:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Tensione Geopolitica</strong> e <strong>Iniziative UE</strong> — prese di posizione su temi internazionali ed europei.</li><li><strong>Emiciclo Europeo</strong> ed <strong>Europarlamento</strong> — se hai seggi a Bruxelles, anche la scelta del gruppo politico europeo a cui aderire.</li><li><strong>Rapporti con l'Estero</strong> — se sei al governo, tocca una nazione per aprire azioni dirette su di lei: accordo commerciale, visita di Stato, o alzare la tensione diplomatica. Ogni nazione ha anche un capo di Stato/governo con un rapporto personale distinto dalla relazione bilaterale: un vertice riservato o un incidente diplomatico lo spostano più in fretta della diplomazia ordinaria.</li><li><strong>Organizzazioni Internazionali</strong> — puoi fondarne una tua, invitando altre nazioni.</li></ul>" },
     { title: "Pagina: Coalizioni e Alleanze", body: "Nessun partito vince sempre da solo:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Qui vedi la tua <strong>coalizione</strong> attuale (se ne hai una), puoi invitare altri partiti, rinominarla, e la fiducia reciproca tra alleati che la tiene in piedi — più il rapporto con ciascun singolo alleato.</li><li>Un alleato trascurato a lungo può <strong>lasciare la coalizione da solo</strong>, senza aspettare che si sciolga tutta; uno coltivato davvero può <strong>coprirti pubblicamente le spalle</strong> in un momento difficile.</li><li><strong>Riunificazione</strong> — se hai subito una scissione interna, qui puoi provare a ricucire con la corrente che se n'è andata.</li></ul>" },
     { title: "Pagina: Scheda Paese e Bilancio (1/2)", body: "Lo stato di salute reale dell'Italia, indicatore per indicatore, da 1 a 10:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Tocca un <strong>indicatore della Scheda Paese</strong> per aprire il suo andamento nel tempo e i temi concreti che lo riguardano.</li><li><strong>Economia Settoriale</strong> — lo stesso, ma spezzato per settore: agricoltura, turismo, industria, tecnologia, servizi.</li><li><strong>Iniziativa Libera</strong> — un'azione settimanale flessibile, non legata a un dossier specifico.</li></ul>" },
     { title: "Pagina: Scheda Paese e Bilancio (2/2)", body: "Il resto della pagina è la memoria e i conti del Paese:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Storico dei Provvedimenti</strong> — ogni legge, mozione, riforma e referendum varato dal tuo partito, dalla prima volta.</li><li><strong>Storia del Paese</strong> — le grandi epoche di governo che si sono succedute.</li><li><strong>Bilancio dello Stato</strong>, <strong>Politica Fiscale</strong> e <strong>Allocazione del Budget</strong> — entrate, uscite, tasse e come lo Stato spende, se sei al governo.</li></ul>" },
