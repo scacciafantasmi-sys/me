@@ -2469,7 +2469,9 @@
     { id: "combattivo", label: "Combattivo", desc: "Non arretra mai davanti a uno scontro, in Aula come sui social.",
       visMult: 1.2, institRelMult: 0.8, repVolatility: 1.15 },
     { id: "diplomatico", label: "Diplomatico", desc: "Preferisce il tavolo negoziale allo scontro pubblico.",
-      institRelMult: 1.3, fondiMult: 1.05, visMult: 0.88 }
+      institRelMult: 1.3, fondiMult: 1.05, visMult: 0.88 },
+    { id: "editore", label: "Editore-Imprenditore", desc: "Possiede un impero editoriale personale: una testata gli è sempre amica, ma il conflitto di interessi è un'arma che l'opposizione non smetterà mai di usare contro di lui.",
+      fondiMult: 1.1, judicialRiskMult: 1.15 }
   ];
   function leaderTraitById(id) {
     for (var i = 0; i < LEADER_TRAITS.length; i++) if (LEADER_TRAITS[i].id === id) return LEADER_TRAITS[i];
@@ -8228,12 +8230,13 @@
   function renderPressRelationsPanel() {
     var p = state.player;
     var rows = OUTLETS.map(function (o) {
-      return { name: o.name, v: ensureOutletRelation(o, p) };
+      return { id: o.id, name: o.name, v: ensureOutletRelation(o, p) };
     }).sort(function (a, b) { return b.v - a.v; });
     var items = rows.map(function (r) {
       var lbl = outletRelationLabel(r.v);
       return '<div class="party-row"><span class="sw" style="background:var(--border-strong)"></span>' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + '</strong>' +
+        (r.id === p.ownedOutletId ? '<span class="chip accent">Di tua proprietà</span>' : "") +
         '<span class="chip ' + lbl.cls + '">' + lbl.text + "</span></div></div></div>";
     }).join("");
     return '<section aria-label="Rapporti con la stampa"><details class="log">' +
@@ -9008,7 +9011,10 @@
     if (!p) return;
     OUTLETS.forEach(function (o) {
       var cur = ensureOutletRelation(o, p);
-      var target = outletRelationBaseline(o, p.family);
+      // Una testata di proprietà del leader non riflette più il proprio orientamento ideologico: riflette
+      // gli interessi di chi la possiede, punto. Resta sempre vicina alla piena fedeltà, non scivola mai
+      // verso l'ostilità come farebbe qualunque altra testata nel tempo (vedi il tratto "Editore-Imprenditore").
+      var target = (o.id === p.ownedOutletId) ? 95 : outletRelationBaseline(o, p.family);
       p.outletRelations[o.id] = clamp(cur + (target - cur) * 0.05 + rand(-1, 1), 5, 95);
     });
   }
@@ -9059,6 +9065,40 @@
       ];
     }
     return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Rapporti con la Stampa", cat: "Stampa", title: title, brief: brief, choices: choices };
+  }
+
+  // ---------- Conflitto di interessi del leader-editore ----------
+  // Il tratto "Editore-Imprenditore" (vedi LEADER_TRAITS e l'assegnazione di ownedOutletId alla
+  // fondazione/presa in mano del partito) non è mai stato solo un vantaggio a costo zero: possedere una
+  // testata mentre si fa politica, specie da Palazzo Chigi, è un vero conflitto di interessi, uno dei nodi
+  // più discussi della storia politica italiana recente. Molto più frequente quando il partito è al
+  // governo (il conflitto è concreto, non solo teorico) che all'opposizione.
+  var CONFLICT_OF_INTEREST_COOLDOWN_TURNS = 26;
+  function checkConflictOfInteresseTrigger() {
+    var p = state.player;
+    if (!p || !p.ownedOutletId) return false;
+    if (state.turn < (p.conflictOfInterestCooldownTurn || 0)) return false;
+    var chance = p.parliamentRole === "governo" ? 0.1 : 0.03;
+    return Math.random() < chance;
+  }
+  function buildConflictOfInteresseDossier() {
+    var p = state.player;
+    p.conflictOfInterestCooldownTurn = state.turn + CONFLICT_OF_INTEREST_COOLDOWN_TURNS;
+    var outlet = OUTLETS.filter(function (o) { return o.id === p.ownedOutletId; })[0];
+    var inGov = p.parliamentRole === "governo";
+    var brief = inGov
+      ? "L'opposizione torna a puntare il dito su un tema mai davvero risolto: " + p.name + " è al governo, e il suo leader possiede " + outlet.name + ". Un editorialista di un'altra testata parla apertamente di conflitto di interessi, chiedendo un intervento dell'Antitrust (AGCM)."
+      : "Un'interrogazione parlamentare di un partito rivale torna a chiedere conto della proprietà di " + outlet.name + " da parte del tuo leader: un conflitto di interessi che, pur non essendo al governo, continua a far discutere.";
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Conflitto di Interessi",
+      cat: "Conflitto di Interessi", title: "La proprietà di " + outlet.name + " torna sotto i riflettori",
+      brief: brief,
+      choices: [
+        { label: "Affida " + outlet.name + " a un trust cieco indipendente", hint: "Meno controllo diretto, ma disinnesca davvero la polemica", conflictBlindTrust: true, effects: { reputazione: rand(3, 7), fondi: -rand(200, 400) }, result: "L'annuncio di un trust cieco indipendente per " + outlet.name + " spiazza le opposizioni: la mossa costa in gestione diretta, ma è quella che convince di più chi accusava un conflitto di interessi mai affrontato." },
+        { label: "Difendi apertamente la proprietà: nessuna concessione", hint: "Nessun costo immediato, ma il tema non si spegne e cresce il rischio giudiziario", effects: { visibilita: rand(2, 5) }, judicialRiskDelta: rand(2, 5), result: "La difesa a muso duro della proprietà galvanizza la base più fedele, ma alimenta il sospetto istituzionale: il tema resta aperto, e con esso il rischio." },
+        { label: "Prometti una legge sul conflitto di interessi (che non ti riguarda ancora)", hint: "Buona immagine nell'immediato, rischio di essere smentito dai fatti in futuro", effects: { reputazione: rand(1, 3), visibilita: rand(1, 3) }, result: "L'annuncio di una futura legge sul conflitto di interessi acquieta la polemica per ora, anche se qualcuno fa notare che, per come è scritta, non toccherebbe proprio la tua posizione." }
+      ]
+    };
   }
 
   // ---------- Vita autonoma dei partiti rivali ----------
@@ -12647,7 +12687,8 @@
     // 45 è il default per un salvataggio precedente a questa funzionalità (mai avuto occasione di
     // impostarlo esplicitamente): una via di mezzo ragionevole per chi ha già una storia di partito alle
     // spalle, non un neofita né un veterano di fine carriera.
-    ageAtFounding: 45, leaderAgingCooldownTurn: 0, leaderHealthCrisisCooldownTurn: 0, successionAnnounced: false
+    ageAtFounding: 45, leaderAgingCooldownTurn: 0, leaderHealthCrisisCooldownTurn: 0, successionAnnounced: false,
+    ownedOutletId: null, conflictOfInterestCooldownTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -15174,6 +15215,18 @@
       // il secondo argomento di Object.assign, quindi le sue chiavi (leaderTraits incluso) sovrascrivono
       // sempre quelle del primo oggetto, azzerando altrimenti i tratti appena scelti in fase di setup.
       state.player.leaderTraits = d.leaderTraits.slice();
+      // Il tratto "Editore-Imprenditore" porta con sé la proprietà reale di una testata (vedi
+      // ensureOutletRelation/driftOutletRelations più sotto, che la tengono sempre favorevole, e
+      // checkConflictOfInteresseTrigger/buildConflictOfInteresseDossier per il vero conflitto di
+      // interessi che ne consegue): preferita una testata già vicina alla propria area politica, per
+      // coerenza narrativa, non una scelta puramente casuale.
+      if (state.player.leaderTraits.indexOf("editore") !== -1) {
+        var friendlyOutlets = OUTLETS.filter(function (o) { return outletRelationToPlayer(o.lean, state.player.family) === "amico"; });
+        var outletPool = friendlyOutlets.length ? friendlyOutlets : OUTLETS;
+        state.player.ownedOutletId = outletPool[Math.floor(Math.random() * outletPool.length)].id;
+        if (!state.player.outletRelations) state.player.outletRelations = {};
+        state.player.outletRelations[state.player.ownedOutletId] = 92;
+      }
       state.player.logoDataUrl = d.logoDataUrl || null;
       state.player.short = (d.short || "").trim() || null;
       state.player.foundedTurn = state.turn;
@@ -20072,6 +20125,7 @@
         }
         if (choice.hiresFormationOrganizer) state.player.formationOrganizerHired = true;
         if (choice.successionAnnounced) state.player.successionAnnounced = true;
+        if (choice.conflictBlindTrust) state.player.ownedOutletId = null;
         if (choice.retireLeader) {
           var agingSuccessor = choice.forcedSuccessorName || primariesChallengerName(state.player);
           state.player.playerIsLeader = false;
@@ -21598,6 +21652,13 @@
 
     if (checkPressOutletTrigger()) {
       state.aiDynamicDossier = buildPressOutletDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkConflictOfInteresseTrigger()) {
+      state.aiDynamicDossier = buildConflictOfInteresseDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
