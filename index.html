@@ -8728,6 +8728,123 @@
     ]
   };
 
+  // ---------- Comitato Promotore: la Raccolta Firme prima ancora del Congresso Fondativo ----------
+  // Un partito fondato da zero non nasce già "vero" il primo giorno: prima serve un comitato promotore
+  // che raccolga davvero le firme necessarie per depositare le liste — in Italia, per una lista che si
+  // presenta ovunque, un minimo di firme per ciascun collegio uninominale (il gioco non simula i singoli
+  // collegi come entità proprie, un'astrazione voluta: qui la soglia nazionale già rappresenta quel
+  // requisito, non un numero a caso). Finché non la raggiunge, il "dossier della settimana" è sempre
+  // questo: niente Parlamento, niente sondaggi veri, niente Congresso Fondativo — solo comizi, banchetti,
+  // porta a porta e social, esattamente le uniche leve che un comitato promotore ha davvero in mano prima
+  // di essere un partito riconosciuto. Una volta superata la soglia (vedi il controllo in
+  // resolveDossierChoice), il ciclo normale del gioco prende il sopravvento da solo, a partire proprio
+  // dal Congresso Fondativo qui sopra.
+  var FORMATION_SIGNATURE_TARGET = 300000;
+  var FORMATION_ORGANIZER_COST = 900;
+  var FORMATION_ORGANIZER_BOOST = 1.25;
+  function buildFormationDossier() {
+    var p = state.player;
+    var boost = p.formationOrganizerHired ? FORMATION_ORGANIZER_BOOST : 1;
+    var cl = responseCluster({ family: p.family });
+    var socialLabel = {
+      statalista: "Pubblica un video di mobilitazione dal basso sui social",
+      identitario: "Pubblica un contenuto diretto e senza filtri sui social",
+      liberista: "Pubblica un contenuto sui social con dati e proposte concrete",
+      valoriale: "Pubblica un contenuto sobrio ma sentito sui social",
+      territoriale: "Pubblica un contenuto sui social che parla del territorio",
+      riformista: "Pubblica un contenuto sui social equilibrato e propositivo"
+    }[cl] || "Pubblica un contenuto sui social";
+    var choices = [
+      { label: "Organizza un comizio in piazza", hint: "Alta resa, ma costa e ti espone",
+        effects: { fondi: -250, visibilita: rand(3, 6), iscritti: rand(10, 25), formationSignatures: Math.round(rand(1500, 3000) * boost) },
+        result: "Il comizio richiama una buona folla in piazza: molte firme raccolte in un solo pomeriggio." },
+      { label: "Allestisci un banchetto informativo", hint: "Più economico, resa più contenuta",
+        effects: { fondi: -60, iscritti: rand(3, 9), formationSignatures: Math.round(rand(600, 1300) * boost) },
+        result: "Il banchetto informativo raccoglie firme con calma, un passante alla volta." },
+      { label: "Organizza una raccolta porta a porta", hint: "Gratuita, lenta ma capillare",
+        effects: { formationSignatures: Math.round(rand(450, 950) * boost) },
+        result: "La raccolta porta a porta non fa rumore, ma qualche firma in più arriva ogni giorno." },
+      { label: socialLabel, hint: "TikTok, Instagram, canali WhatsApp del comitato",
+        effects: { visibilita: rand(2, 5), formationSignatures: Math.round(rand(500, 1400) * boost) },
+        result: "Il contenuto pubblicato sui canali social del comitato promotore circola bene, e converte qualche firma in più." }
+    ].map(function (c) { return applyOutcomeVariance(c); });
+    if (!p.formationOrganizerHired) {
+      choices.push({
+        label: "Assumi un organizzatore territoriale (" + fmtEuro(FORMATION_ORGANIZER_COST) + ")",
+        hint: "Costo una tantum, aumenta la resa di tutte le attività future",
+        effects: { fondi: -FORMATION_ORGANIZER_COST }, hiresFormationOrganizer: true,
+        result: "Il nuovo organizzatore territoriale porta metodo ed esperienza: da ora ogni iniziativa di raccolta firme rende di più."
+      });
+    }
+    var signatures = Math.round(p.formationSignatures || 0);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Comitato Promotore — Raccolta Firme",
+      cat: "Fondazione", title: "Settimana " + state.turn + " di raccolta firme",
+      brief: "Il comitato promotore di " + p.name + " ha raccolto finora " + signatures.toLocaleString("it-IT") + " firme su " +
+        FORMATION_SIGNATURE_TARGET.toLocaleString("it-IT") + " necessarie (almeno 6.000 per ciascuno dei collegi uninominali del Paese) per depositare le liste e fondare davvero il partito. Come impieghi la settimana?",
+      progressPct: (signatures / FORMATION_SIGNATURE_TARGET) * 100,
+      choices: choices
+    };
+  }
+  // Chiamata da entrambi i punti in cui la Raccolta Firme può far scattare la soglia — la scelta
+  // settimanale del dossier (resolveDossierChoice) e il post social libero (bindFormationSocialInteractions,
+  // che non passa da resolveDossierChoice) — così il controllo e il messaggio restano un'unica fonte di
+  // verità invece di due copie che potrebbero disallinearsi.
+  function checkFormationCompletion(res) {
+    var p = state.player;
+    if (p.formationComplete || (p.formationSignatures || 0) < FORMATION_SIGNATURE_TARGET) return;
+    p.formationComplete = true;
+    // Il Congresso Fondativo (lo statuto verticista/democratico) non spariva: arriva solo ORA, non più al
+    // turno 1 — vedi il controllo in cima ad advanceTurnLogicCore.
+    state.pendingCongressoFondativo = true;
+    res.resultText = res.resultText + " Le firme raccolte superano finalmente la soglia richiesta: il comitato promotore può depositare le liste, e " + p.name + " diventa ufficialmente un partito.";
+    state.log.unshift({ week: state.turn, title: "Il partito è ufficialmente formato", choiceLabel: "Deposito delle liste", result: p.name + " raggiunge le " + FORMATION_SIGNATURE_TARGET.toLocaleString("it-IT") + " firme necessarie e deposita ufficialmente le liste: da oggi è un partito a tutti gli effetti.", headlines: [], type: "cronaca", cat: "Fondazione" });
+  }
+  // Il post libero sui social del comitato promotore: la stessa filosofia delle Dichiarazioni pubbliche
+  // (classifyStatement/buildFreeTextStatementEffects già usati lì), ma disponibile ANCHE durante la
+  // Raccolta Firme, prima che quella pagina sia raggiungibile — e con un bonus diretto sulle firme oltre
+  // ai soliti effetti su reputazione/visibilità. Non consuma la scelta settimanale del dossier: è
+  // un'azione aggiuntiva, non alternativa, un post in più oltre al comizio/banchetto/porta a porta scelto.
+  function renderFormationSocialPanel() {
+    var p = state.player;
+    var onCooldown = state.turn <= (p.formationSocialPostTurn || 0);
+    var html = '<section aria-label="Contenuto social del comitato promotore"><div class="dossier">' +
+      '<span class="chip neutral cat">Comitato Promotore</span>' +
+      "<h2>Scrivi un contenuto per i social del comitato</h2>" +
+      '<p class="brief">Oltre all\'azione della settimana, puoi scrivere di tuo pugno un post per i canali social del comitato (TikTok, Instagram, canali WhatsApp): un contenuto che colpisce raccoglie firme in più.</p>';
+    if (onCooldown) {
+      html += '<p class="ci-hint">Hai già pubblicato un contenuto questa settimana: potrai scriverne un altro dalla prossima.</p>';
+    } else {
+      html += '<div class="field"><label class="field-label" for="formation-social-input">Il tuo post</label>' +
+        '<textarea id="formation-social-input" class="autogrow-textarea" rows="5" placeholder="Scrivi qui il contenuto da pubblicare…"></textarea></div>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="formation-social-publish-btn"><span class="clabel">Pubblica sui social del comitato</span></button></div>';
+    }
+    html += "</div></section>";
+    return html;
+  }
+  function bindFormationSocialInteractions() {
+    bindAutoGrowTextarea("formation-social-input");
+    var btn = document.getElementById("formation-social-publish-btn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var input = document.getElementById("formation-social-input");
+      var text = (input ? input.value : "").trim();
+      if (!text) { showSaveStatus("Scrivi qualcosa prima di pubblicare.", true); return; }
+      var p = state.player;
+      var classification = classifyStatement(text);
+      var eff = buildFreeTextStatementEffects(text, classification.tone, 1);
+      eff.formationSignatures = Math.round(rand(400, 1000) * (classification.tone === "neutro" ? 0.8 : 1.1));
+      var dossier = { title: "Post social del comitato — " + classification.topicLabel, cat: "Fondazione" };
+      var choice = { label: "Post sui social del comitato", effects: eff, result: text };
+      var res = applyChoice(dossier, choice);
+      p.formationSocialPostTurn = state.turn;
+      checkFormationCompletion(res);
+      showSaveStatus("Contenuto pubblicato.", false);
+      save();
+      render();
+    });
+  }
+
   var SNAP_NOTICE = {
     id: "elezioni_anticipate", cat: "Crisi di Governo", title: "Elezioni Anticipate",
     brief: "Il governo in carica cade improvvisamente: il Presidente della Repubblica scioglie le Camere. Si vota prima del previsto, con una campagna lampo.",
@@ -12370,7 +12487,7 @@
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0,
     usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
-    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null, activeArc: null,
+    trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null, activeArc: null, pendingCongressoFondativo: false,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
     passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {},
     govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() },
@@ -12421,7 +12538,12 @@
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
     electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0,
     internationalCongressCooldownTurn: 0, debateLastElectionTurn: 0, endorsementCooldownTurn: 0, foreignLeaderEventCooldownTurn: 0, storyArcCooldownTurn: 0,
-    dichiarazioniWeek: 0, dichiarazioniCount: 0, iniziativaLiberaCooldownTurn: 0
+    dichiarazioniWeek: 0, dichiarazioniCount: 0, iniziativaLiberaCooldownTurn: 0,
+    // true di default (anche per mergeDefaults su un salvataggio vecchio, o per un takeover — un partito
+    // già esistente è per definizione già formato): solo la creazione di un partito NUOVO (vedi il ramo
+    // "new" alla fondazione) lo imposta esplicitamente a false, per attraversare la Raccolta Firme
+    // (vedi buildFormationDossier) prima di poter davvero cominciare a giocare.
+    formationComplete: true, formationSignatures: 0, formationOrganizerHired: false, formationSocialPostTurn: 0
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -12797,6 +12919,9 @@
     // valore passa così com'è, senza moltiplicatori di stile — dà un piccolo scatto immediato e prevedibile,
     // non un effetto amplificabile a dismisura da leadership o staff.
     if (eff.sondaggi) p.sondaggi = clamp(p.sondaggi + eff.sondaggi, 0, 40);
+    // Raccolta Firme del comitato promotore (vedi buildFormationDossier): non tocca alcun moltiplicatore
+    // di stile/staff, è un conteggio grezzo di firme vere raccolte questa settimana.
+    if (eff.formationSignatures) p.formationSignatures = Math.max(0, (p.formationSignatures || 0) + eff.formationSignatures);
     if (eff.spreadDelta) state.spreadBps = clamp(state.spreadBps + jitter(eff.spreadDelta), 40, 400);
     if (eff.consensoGoverno) state.consensoGoverno = clamp(state.consensoGoverno + jitter(eff.consensoGoverno), 0, 100);
     if (eff.rivalExtra) {
@@ -14665,7 +14790,9 @@
   function renderMasthead() {
     if (state.player) {
       mastheadTitle.textContent = state.player.name;
-      mastheadTagline.textContent = familyById(state.player.family).label + " · " + leadershipById(state.player.leadership).label;
+      mastheadTagline.textContent = state.player.formationComplete
+        ? familyById(state.player.family).label + " · " + leadershipById(state.player.leadership).label
+        : "Comitato Promotore — in formazione";
       mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
     } else if (state.career) {
       mastheadTitle.textContent = state.career.name;
@@ -14931,10 +15058,14 @@
       state.player.logoDataUrl = d.logoDataUrl || null;
       state.player.short = (d.short || "").trim() || null;
       state.player.foundedTurn = state.turn;
-      addDiaryEntry(isTakeover ? "Prendo il comando" : "Il primo giorno",
+      // Un partito fondato da zero non nasce già "vero": prima serve un comitato promotore che raccolga
+      // davvero le firme necessarie a depositare le liste (vedi buildFormationDossier) — un partito preso
+      // in mano con "Prendi il comando" esiste già per definizione ed è escluso da questo passaggio.
+      if (!isTakeover) state.player.formationComplete = false;
+      addDiaryEntry(isTakeover ? "Prendo il comando" : "Il comitato promotore",
         isTakeover
           ? "Da oggi " + state.player.name + " è nelle mie mani. Eredito una storia che non ho scritto io, ma da qui in avanti la direzione la do io."
-          : "Oggi nasce " + state.player.name + ". Non abbiamo ancora nulla — solo un nome, un'idea, e la voglia di provarci sul serio.");
+          : "Oggi nasce il comitato promotore di " + state.player.name + ". Non abbiamo ancora nulla di formale — solo un nome, un'idea, e le firme ancora tutte da raccogliere prima di poter davvero scendere in campo.");
       if (isTakeover) {
         // Salvato per poterlo ritrovare più avanti (vedi renderCareerSummary in Storia del Partito): un
         // partito preso in mano ha una storia reale precedente alla presa di comando, che le statistiche
@@ -14993,7 +15124,16 @@
       state.trackMilestonesFired = {};
       state.euGroupPending = false;
       state.phase = "building";
-      state.currentDossierId = CONGRESSO_DOSSIER.id;
+      // Un partito nuovo comincia dalla Raccolta Firme (vedi buildFormationDossier), non dal Congresso
+      // Fondativo: quello arriva solo dopo, appena il comitato promotore raggiunge la soglia di firme.
+      // Un takeover eredita un partito già esistente e riconosciuto: per lui il Congresso Fondativo resta
+      // il primo passo, come prima.
+      if (!isTakeover) {
+        state.aiDynamicDossier = buildFormationDossier();
+        state.currentDossierId = "ai_dynamic";
+      } else {
+        state.currentDossierId = CONGRESSO_DOSSIER.id;
+      }
       save();
       render();
       openTutorialPanel();
@@ -17850,6 +17990,9 @@
         : "Dossier della settimana")) + '</p>' +
       '<div class="dossier"><span class="chip neutral cat">' + dossier.cat + '</span>' +
       "<h2>" + dossier.title + '</h2><p class="brief">' + dossier.brief + "</p>";
+    if (dossier.progressPct !== undefined) {
+      html += '<div class="gauge" style="margin:0.6rem 0 1rem"><span style="width:' + clamp(dossier.progressPct, 0, 100) + '%;background:var(--accent)"></span></div>';
+    }
     if (dossier.choices && dossier.choices.length) {
       html += '<div class="choices">';
       dossier.choices.forEach(function (c, i) {
@@ -19155,6 +19298,7 @@
       body += renderResultCard(state.resultData);
       body += renderHeadlines(state.resultData.headlines);
     }
+    if (state.player && !state.player.formationComplete) body += renderFormationSocialPanel();
 
     // Ordine pensato per la settimana tipo: prima i numeri chiave e le azioni che si usano spesso
     // (statistiche, sondaggi, eventi, riforme, referendum, alleanze, parlamento), poi tutto ciò che è
@@ -19775,6 +19919,8 @@
         if (choice.judicialRiskDelta && state.player.judicialRisk !== undefined) {
           state.player.judicialRisk = clamp(state.player.judicialRisk + choice.judicialRiskDelta, 1, 95);
         }
+        if (choice.hiresFormationOrganizer) state.player.formationOrganizerHired = true;
+        checkFormationCompletion(res);
         // Un Arco Narrativo non finisce mai qui: ogni puntata intermedia si limita ad accumulare
         // pressione (vedi advanceStoryArc) e a passare alla prossima settimana come qualunque altro
         // dossier; solo l'ULTIMA puntata (choice._resolveArc) chiude l'arco e sostituisce il testo
@@ -20428,6 +20574,7 @@
       });
     });
     bindDichiarazioniInteractions();
+    bindFormationSocialInteractions();
     bindIniziativaLiberaInteractions();
     app.querySelectorAll("[data-metric-tile]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -20787,6 +20934,22 @@
   }
   async function advanceTurnLogicCore() {
     state.inlineExpandedTopic = null;
+    // Priorità assoluta, prima di qualunque altra cosa: finché il comitato promotore non ha raccolto le
+    // firme necessarie, il partito non esiste ancora davvero — niente drift settimanale, niente eventi di
+    // partiti rivali, niente Parlamento, solo la Raccolta Firme (vedi buildFormationDossier). Il ciclo
+    // normale di gioco riprende da solo la settimana successiva al superamento della soglia.
+    if (state.player && !state.player.formationComplete) {
+      state.aiDynamicDossier = buildFormationDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    if (state.pendingCongressoFondativo) {
+      state.pendingCongressoFondativo = false;
+      state.currentDossierId = CONGRESSO_DOSSIER.id;
+      state.phase = "building";
+      return;
+    }
     recomputePeriodic();
     updateCoalitionTrust();
     updateCpuOnlyCoalitionTrust();
@@ -21487,6 +21650,7 @@
   // ("Guida rapida"), per chi vuole rivederla più avanti.
   var TUTORIAL_STEPS = [
     { title: "Benvenuto in Politis-IT", body: "Guidi un partito politico italiano, settimana dopo settimana: dalle prime tessere fino, magari, al governo del Paese. Ogni scelta che fai — dichiarazioni, leggi, alleanze — lascia un segno reale sul Paese e sui tuoi sondaggi.<br><br>Questa guida è lunga perché il gioco è grande: passa in rassegna ogni sezione, una alla volta. Puoi saltarla in qualunque momento con \"Salta il tutorial\" qui sotto, o riaprirla più avanti dal pulsante 💡 \"Guida\" in cima alla pagina." },
+    { title: "Il Comitato Promotore", body: "Se hai appena fondato un partito nuovo da zero (non se hai preso il comando di uno già esistente), non parti già come un partito vero e proprio: prima serve un <strong>comitato promotore</strong> che raccolga davvero le firme necessarie a depositare le liste — 300.000 in tutto il Paese, almeno 6.000 per ciascun collegio uninominale.<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Ogni settimana scegli come impiegarti: <strong>comizi</strong> in piazza (alta resa, costano), <strong>banchetti</strong> informativi (più economici), <strong>porta a porta</strong> (gratuito ma lento), o un <strong>contenuto sui social</strong> del comitato (TikTok, Instagram, canali WhatsApp).</li><li>Puoi anche <strong>assumere un organizzatore territoriale</strong> una tantum, per aumentare la resa di tutte le attività successive.</li><li>Oltre alla scelta della settimana, puoi sempre scrivere di tuo pugno un <strong>post per i social</strong> del comitato: il gioco ne legge il tono, proprio come per le Dichiarazioni.</li><li>Appena le firme raggiungono la soglia, il partito è ufficialmente formato: si tiene il Congresso Fondativo e comincia il gioco vero e proprio, con tutte le sezioni che vedrai da qui in avanti.</li></ul>" },
     { title: "Il turno settimanale", body: "Il gioco avanza una settimana alla volta. Quasi ogni settimana ti viene proposto un <strong>dossier</strong> con più scelte: leggi la situazione, scegli una risposta, poi tocca <strong>\"Avanza\"</strong> per passare alla settimana successiva.<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li>Alcune settimane portano <strong>scene speciali</strong> a schermo intero invece del solito dossier: interviste, il salotto TV, un <strong>Confronto TV in diretta</strong> col tuo rivale designato (raro, solo nelle settimane prima del voto, e a differenza del salotto dichiara un vero vincitore), il Question Time in Aula, i congressi internazionali, il consiglio comunale, le riunioni di programma.</li><li>Di tanto in tanto un personaggio pubblico noto — non un politico — si schiera a favore o contro di te con un <strong>Endorsement</strong> pubblico.</li><li>Raramente parte un <strong>Arco Narrativo</strong>: una storia che occupa il dossier per 3-4 settimane di fila (uno scandalo interno, una guerra tra correnti...), dove ogni puntata dipende da come hai gestito la precedente — l'epilogo finale tiene conto di tutto il percorso, non solo dell'ultima scelta.</li><li>La barra dei pulsanti in cima resta sempre raggiungibile, anche dentro queste scene, così puoi consultare le altre sezioni senza perdere il filo.</li></ul>" },
     { title: "Pagina: Il Partito (1/2)", body: "Il primo pulsante della barra in cima, 🏛️ \"Partito\". Qui vivono l'organizzazione e le risorse del tuo partito:<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Eventi di Partito</strong> — iniziative a costo/beneficio che puoi lanciare quando vuoi.</li><li><strong>Correnti interne</strong> — le anime del partito: se si allontanano troppo tra loro rischi una scissione.</li><li><strong>Sezione Giovanile</strong> — un movimento giovanile da coltivare a parte.</li><li><strong>Campagna Elettorale</strong> e <strong>Liste Elettorali</strong> — attivi nelle settimane prima del voto, per depositare i candidati e fare promesse mirate.</li><li><strong>Raccolta Fondi</strong> — azioni dedicate a rimpinguare le casse del partito.</li></ul>" },
     { title: "Pagina: Il Partito (2/2)", body: "Continua da qui il resto della sezione \"Il Partito\":<ul style=\"margin:0.5rem 0 0;padding-left:1.2rem\"><li><strong>Vita Pubblica</strong> — apparizioni mediatiche del leader, ciascuna con formati e tempi di recupero propri.</li><li><strong>Attori Sociali e Istituzionali</strong> — i rapporti con Confindustria, sindacati, Chiesa, BCE, Bankitalia, UE, magistratura, Comuni (ANCI), Università (CRUI) e Coldiretti: non solo numeri, un buon rapporto porta vantaggi concreti e ricorrenti, uno pessimo pesa davvero.</li><li><strong>Movimenti e Organizzazioni</strong> — associazioni e comitati civili che non si presentano alle elezioni ma seguono un tema preciso, e reagiscono da soli a come va davvero il paese su quel fronte.</li><li><strong>Loggia Riservata</strong> — una via più oscura e rischiosa, che si sblocca solo a partito già radicato.</li><li><strong>Direzione Nazionale</strong> — lo staff assumibile per ruolo.</li><li><strong>Programma Elettorale</strong>, <strong>Diario del Leader</strong> e <strong>Profilo Ideologico</strong> — la linea e la voce del partito nel tempo.</li></ul>" },
