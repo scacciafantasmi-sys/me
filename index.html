@@ -8922,15 +8922,6 @@
     });
   }
 
-  var SNAP_NOTICE = {
-    id: "elezioni_anticipate", cat: "Crisi di Governo", title: "Elezioni Anticipate",
-    brief: "Il governo in carica cade improvvisamente: il Presidente della Repubblica scioglie le Camere. Si vota prima del previsto, con una campagna lampo.",
-    choices: [
-      { label: "Ho capito, si parte con la campagna lampo", hint: "Le urne sono ormai vicine", effects: {},
-        result: "La notizia dello scioglimento anticipato delle Camere apre una campagna elettorale improvvisa e serrata." }
-    ]
-  };
-
   // Testate reali della stampa italiana, ciascuna con un orientamento (lean) MAI mostrato esplicitamente
   // al giocatore: lo si intuisce solo leggendo settimana dopo settimana come ciascuna copre le stesse
   // notizie (vedi outletRelationToPlayer/HEADLINE_TEMPLATES più sotto) — esattamente come nella realtà.
@@ -9863,6 +9854,40 @@
     state.worldNews.unshift({ cat: "Governo", text: text });
   }
 
+  // ---------- Mandato esplorativo del Presidente della Repubblica ----------
+  // Finora un governo sotto il 20% di consenso cadeva e portava dritto alle urne, nella stessa identica
+  // settimana: nella realtà italiana, prima di sciogliere le Camere il Capo dello Stato tenta quasi
+  // sempre un mandato esplorativo, per verificare se esiste in quello stesso Parlamento una maggioranza
+  // alternativa che eviti il voto anticipato — ed è proprio questo passaggio, non un tiro di dado
+  // indipendente, a decidere se si vota davvero o se nasce un nuovo governo senza elezioni. Durante il
+  // semestre bianco (vedi isSemestreBianco) il tentativo non è nemmeno facoltativo: la Costituzione vieta
+  // proprio lo scioglimento delle Camere in quella finestra, quindi il mandato esplorativo è l'unica
+  // strada possibile, per definizione.
+  function buildMandatoEsplorativoDossier() {
+    var p = state.player;
+    var semestreBianco = isSemestreBianco();
+    var brief = "Il Governo perde la maggioranza e non ha più i numeri per andare avanti. " +
+      (semestreBianco
+        ? "Siamo nel semestre bianco: la Costituzione vieta al Presidente della Repubblica di sciogliere le Camere in questo periodo, quindi il Colle deve necessariamente cercare una nuova maggioranza in questo stesso Parlamento, senza poter contare sulla minaccia delle urne per far quadrare i numeri."
+        : "Prima di sciogliere le Camere, il Presidente della Repubblica avvia un mandato esplorativo per verificare se esiste, in questo stesso Parlamento, una maggioranza alternativa che eviti il voto anticipato.");
+    var choices;
+    if (p.inParliament) {
+      choices = [
+        { label: "Offri il sostegno del tuo partito a un nuovo governo di scopo", hint: "Aumenta le chance di evitare le urne; se riesce, il tuo partito entra (o resta) al governo", mandatoStance: "sostegno", effects: { reputazione: rand(1, 3) }, result: "Il partito offre pubblicamente il proprio sostegno a un governo di scopo, per evitare le urne." },
+        { label: "Segui la trattativa senza esporti", hint: "Nessun rischio, nessun guadagno particolare", mandatoStance: "neutro", effects: {}, result: "Il partito segue la trattativa senza prendere posizione netta." },
+        { label: "Chiedi apertamente il voto: niente accordi di palazzo", hint: "Riduce le chance di un accordo, premia chi vuole tornare alle urne", mandatoStance: "elezioni", effects: { visibilita: rand(2, 5) }, result: "Il partito chiede apertamente di tornare al voto, senza accordi di palazzo." }
+      ];
+    } else {
+      choices = [{ label: "Segui gli sviluppi", hint: "Il tuo partito non è in Parlamento: non ha voce in capitolo", effects: {}, result: "Non avendo seggi in Parlamento, il partito osserva la trattativa dall'esterno." }];
+    }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Mandato Esplorativo al Quirinale",
+      cat: "Mandato Esplorativo",
+      title: semestreBianco ? "Semestre Bianco: niente elezioni, si cerca un accordo" : "Il Presidente tenta un accordo prima delle urne",
+      brief: brief, mandatoContext: { semestreBianco: semestreBianco }, choices: choices
+    };
+  }
+
   // ---------- Coalizioni spontanee tra partiti terzi ----------
   // Oltre a centrodestra e campolargo, con il tempo può nascere una terza coalizione tra partiti reali
   // vicini per famiglia ideologica ma oggi fuori dai due schieramenti storici (es. Italia Viva e Partito
@@ -10621,9 +10646,26 @@
     return arch ? arch.label : leaning;
   }
   function generatePresidentCandidates() {
-    return PRESIDENT_ARCHETYPES.map(function (a) {
+    var candidates = PRESIDENT_ARCHETYPES.map(function (a) {
       return { id: a.leaning, leaning: a.leaning, name: generateStaffName(), background: a.roles[Math.floor(Math.random() * a.roles.length)] };
     });
+    // Il "bis": un Presidente uscente al primo mandato può essere ricandidato dal Parlamento, esattamente
+    // come Napolitano nel 2013 e Mattarella nel 2022 — un'uscita di sicurezza quando le Camere non
+    // trovano un accordo su un nome nuovo (vedi il bonus di peso in resolvePresidentElection). Un solo
+    // bis per Presidente, mai un terzo mandato: dopo due mandati non torna più tra le opzioni.
+    if (state.president && (state.president.termCount || 1) < 2) {
+      candidates.push({ id: "incumbent", leaning: state.president.leaning, name: state.president.name, background: state.president.background, isIncumbent: true });
+    }
+    return candidates;
+  }
+  // Il semestre bianco: gli ultimi sei mesi (circa 26 settimane) del settennato presidenziale, in cui la
+  // Costituzione vieta al Capo dello Stato di sciogliere le Camere (art. 88 Cost.) — un vincolo reale che
+  // conta soprattutto durante una crisi di governo (vedi buildMandatoEsplorativoDossier più sotto): niente
+  // elezioni anticipate possibili in questa finestra, qualunque cosa succeda in Parlamento.
+  function isSemestreBianco() {
+    if (!state.president || !state.nextPresidentElectionTurn) return false;
+    var weeksLeft = state.nextPresidentElectionTurn - state.turn;
+    return weeksLeft >= 0 && weeksLeft <= 26;
   }
   // Se il referendum "presidenzialismo" (vedi REFERENDUM_TOPICS) è stato approvato durante la partita,
   // il Presidente della Repubblica non è più eletto dal Parlamento in seduta comune ma direttamente dai
@@ -10662,15 +10704,19 @@
     var candidates = generatePresidentCandidates();
     var popular = presidentElectionIsPopular();
     var choices = candidates.map(function (c) {
-      return { label: "Sostieni " + c.name, hint: presidentLeaningLabel(c.leaning) + " — " + c.background, candidateId: c.id, effects: {} };
+      return c.isIncumbent
+        ? { label: "Sostieni la riconferma di " + c.name, hint: "Bis del Presidente uscente — " + presidentLeaningLabel(c.leaning), candidateId: c.id, effects: {} }
+        : { label: "Sostieni " + c.name, hint: presidentLeaningLabel(c.leaning) + " — " + c.background, candidateId: c.id, effects: {} };
     });
     choices.push({ label: "Non prendere posizione", hint: "Nessuna preferenza dichiarata dal partito", candidateId: null, effects: {} });
+    var hasIncumbent = candidates.some(function (c) { return c.isIncumbent; });
     return {
       id: "president_election", kind: "notizia", cat: "Istituzioni",
       title: popular ? "Elezione Diretta del Presidente della Repubblica" : "Elezione del Presidente della Repubblica",
-      brief: popular
+      brief: (popular
         ? "Da quando il referendum sul presidenzialismo è passato, il Presidente della Repubblica è eletto direttamente dai cittadini: è il voto popolare, non più le aule parlamentari, a decidere chi sale al Colle. Chi sostiene il tuo partito?"
-        : "Il Parlamento in seduta comune, con i delegati regionali, è chiamato a eleggere il nuovo Presidente della Repubblica. Chi sostiene il tuo partito?",
+        : "Il Parlamento in seduta comune, con i delegati regionali, è chiamato a eleggere il nuovo Presidente della Repubblica. Chi sostiene il tuo partito?") +
+        (hasIncumbent ? " Tra i nomi in campo c'è anche l'ipotesi di un bis per il Presidente uscente, una via d'uscita se le Camere non trovano un accordo su un nome nuovo." : ""),
       candidates: candidates, popular: popular, choices: choices
     };
   }
@@ -10679,6 +10725,10 @@
     var weights = candidates.map(function (c) {
       var w = presidentLeaningWeight(c.leaning);
       if (choice.candidateId && c.id === choice.candidateId) w += 22 + clamp(state.player.sondaggi, 0, 40) * 0.5;
+      // Il Presidente uscente gode di un vantaggio reale in caso di bis, non solo teorico: è il nome più
+      // rassicurante quando le Camere non trovano un accordo — esattamente il motivo per cui è successo
+      // due volte negli ultimi anni (Napolitano 2013, Mattarella 2022).
+      if (c.isIncumbent) w += 30;
       return w;
     });
     var totalW = weights.reduce(function (a, b) { return a + b; }, 0);
@@ -10686,7 +10736,11 @@
     for (; idx < weights.length - 1; idx++) { acc += weights[idx]; if (roll <= acc) break; }
     var winner = candidates[idx];
     var popular = dossier.popular !== undefined ? dossier.popular : presidentElectionIsPopular();
-    state.president = { name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn, popular: popular };
+    var isBis = !!winner.isIncumbent;
+    state.president = {
+      name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn,
+      popular: popular, termCount: isBis ? (state.president.termCount || 1) + 1 : 1
+    };
     var pFam = state.player.family;
     var playerCd = CENTRODESTRA_ALIGNED_FAMILIES[pFam], playerCl = CAMPOLARGO_ALIGNED_FAMILIES[pFam];
     var aligned = (playerCd && winner.leaning === "destra") || (playerCl && winner.leaning === "sinistra") || winner.leaning === "centro" || winner.leaning === "tecnico";
@@ -10695,8 +10749,11 @@
     state.player.reputazione = clamp(state.player.reputazione + repDelta, 0, 100);
     if (winner.leaning === "tecnico") state.spreadBps = clamp(state.spreadBps - rand(5, 15), 40, 500);
     var electedBy = popular ? " dal voto popolare diretto" : " dal Parlamento in seduta comune";
-    var resultText = winner.name + " (" + presidentLeaningLabel(winner.leaning) + ", " + winner.background + ") viene elett" + (winner.name.indexOf("a ") === 0 ? "a" : "o/a") + " Presidente della Repubblica" + electedBy + "." +
-      (supportedWinner ? " Il partito lo aveva sostenuto fin dall'inizio: un piccolo capitale politico in più." : choice.candidateId ? " Il partito aveva sostenuto un altro candidato, ma prende atto dell'esito." : "");
+    var resultText = isBis
+      ? winner.name + " viene riconfermat" + (winner.name.indexOf("a ") === 0 ? "a" : "o/a") + " Presidente della Repubblica per un secondo mandato" + electedBy + ": un bis raro, ma non senza precedenti, scelto come via d'uscita quando le Camere non trovano un accordo su un nome nuovo." +
+        (supportedWinner ? " Il partito aveva sostenuto la riconferma fin dall'inizio: un piccolo capitale politico in più." : choice.candidateId ? " Il partito aveva sostenuto un altro candidato, ma prende atto dell'esito." : "")
+      : winner.name + " (" + presidentLeaningLabel(winner.leaning) + ", " + winner.background + ") viene elett" + (winner.name.indexOf("a ") === 0 ? "a" : "o/a") + " Presidente della Repubblica" + electedBy + "." +
+        (supportedWinner ? " Il partito lo aveva sostenuto fin dall'inizio: un piccolo capitale politico in più." : choice.candidateId ? " Il partito aveva sostenuto un altro candidato, ma prende atto dell'esito." : "");
     state.log.unshift({ week: state.turn, title: popular ? "Elezione Diretta del Presidente della Repubblica" : "Elezione del Presidente della Repubblica", choiceLabel: choice.label, result: resultText, headlines: [], type: "dossier", cat: "Istituzioni" });
     state.resultData = { resultText: resultText, headlines: [] };
   }
@@ -10830,16 +10887,12 @@
         // dado indipendente da quel numero — vale identicamente qui, nel crollo settimanale e in ogni
         // altro punto che tocca state.consensoGoverno (vedi checkGovernmentConsensusCollapse).
         if (!state.regime && !state.snapElectionPending && state.consensoGoverno < 20) {
-          state.snapElectionPending = true;
-          state.nextElectionTurn = state.turn + 8;
-          // La caduta del governo travolge anche la fiducia interna nella tua leadership, non solo i sondaggi.
-          p.leaderTrust = clamp((p.leaderTrust === undefined || p.leaderTrust === null ? 65 : p.leaderTrust) - rand(30, 45), 0, 100);
-          governmentCrisisDossier = {
-            id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Crisi di governo",
-            cat: "Crisi di Governo", title: "Il Governo Cade",
-            brief: "La sconfitta al referendum promosso dallo stesso partito di maggioranza fa crollare la fiducia nel governo sotto il 20%: gli alleati di governo si sfilano, e il Presidente della Repubblica scioglie le Camere. Si torna al voto in anticipo, con una campagna lampo.",
-            choices: [{ label: "Ho capito, si parte con la campagna lampo", hint: "Le urne sono ormai vicine", effects: {}, result: "La caduta del governo apre una campagna elettorale improvvisa e serrata." }]
-          };
+          // Non più elezioni immediate: prima il Presidente della Repubblica tenta un mandato
+          // esplorativo, esattamente come nel crollo settimanale "normale" (vedi
+          // buildMandatoEsplorativoDossier) — la caduta vera e propria, se arriva, è una conseguenza
+          // dell'ESITO di quel tentativo, non di questo referendum in sé.
+          state.mandatoEsplorativoCooldownTurn = state.turn + 6;
+          governmentCrisisDossier = buildMandatoEsplorativoDossier();
         } else {
           esitoGovernoNote = " La sconfitta mette sotto pressione la tenuta della maggioranza di governo.";
         }
@@ -11252,6 +11305,24 @@
     state.worldNews.unshift({ week: state.turn, cat: "Corte Costituzionale", text: text });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
   }
+  // ---------- Rinvio presidenziale di una legge (art. 74 Cost.) ----------
+  // Un contropotere REALE e distinto da quello della Corte Costituzionale sopra: il Capo dello Stato può
+  // rifiutarsi di promulgare una legge una sola volta, rinviandola alle Camere per un nuovo esame — se il
+  // Parlamento la riapprova senza modifiche, stavolta il Presidente è costituzionalmente tenuto a
+  // firmarla (per questo, sul secondo giro, l'esito è dato per scontato: vedi acceptProb sotto). Scope
+  // volutamente stretto quanto quello della Corte Costituzionale: solo le leggi proposte DAL giocatore
+  // (resolveLeggeIfDue), mai due volte sullo stesso titolo (state.presidentReturnedLawTitles), e molto
+  // più probabile quando il Presidente in carica è politicamente opposto al partito che l'ha proposta.
+  function checkPresidentialReturn(topic) {
+    if (!state.president) return false;
+    if (!state.presidentReturnedLawTitles) state.presidentReturnedLawTitles = [];
+    if (state.presidentReturnedLawTitles.indexOf(topic.title) !== -1) return false;
+    var camp = FAMILY_CAMP[state.player.family];
+    var opposesPresident = ((camp === "destra" || camp === "centrodestra") && state.president.leaning === "sinistra") ||
+      ((camp === "sinistra" || camp === "centrosinistra" || camp === "movimentista") && state.president.leaning === "destra");
+    var chance = opposesPresident ? 0.16 : state.president.leaning === "tecnico" ? 0.05 : 0.02;
+    return Math.random() < chance;
+  }
   function resolveLeggeIfDue() {
     var p = state.player;
     if (!p.pendingLegge) return null;
@@ -11259,6 +11330,18 @@
     var topic = p.pendingLegge;
     p.pendingLegge = null;
     var passed = Math.random() < topic.acceptProb;
+    if (passed && !topic.presidentReturned && checkPresidentialReturn(topic)) {
+      state.presidentReturnedLawTitles.push(topic.title);
+      p.pendingLegge = { title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, acceptProb: 1, resolveTurn: state.turn + 2, presidentReturned: true };
+      var returnText = state.president.name + ", Presidente della Repubblica, rinvia alle Camere la legge su " + topic.noun + " per un nuovo esame, esercitando una delle sue prerogative costituzionali più delicate. Il Parlamento dovrà tornare a votarla: se la riapprova senza modifiche, il Presidente sarà questa volta costituzionalmente tenuto a promulgarla.";
+      state.log.unshift({ week: state.turn, title: "Il Presidente rinvia una legge alle Camere", choiceLabel: topic.title, result: returnText, headlines: [], type: "istituzioni", cat: "Istituzioni" });
+      p.reputazione = clamp(p.reputazione - rand(0.5, 2), 0, 100);
+      return {
+        id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Il Presidente rinvia una legge",
+        cat: "Istituzioni", title: "Rinvio Presidenziale: " + topic.title, brief: returnText,
+        choices: [{ label: "Ho capito, si torna in Aula", hint: "Il Parlamento dovrà rivotare la stessa legge", effects: {}, result: "Il Parlamento si prepara a un nuovo voto sulla stessa legge, questa volta senza possibilità di un secondo rinvio." }]
+      };
+    }
     var mult = institutionalPowerMultiplier(p);
     var isGoverno = p.parliamentRole === "governo";
     var delta = passed ? rand(0.5, 1.0) : rand(-0.1, 0.1);
@@ -12633,7 +12716,7 @@
     foreignLeaders: {}, foreignLeaderRapport: {},
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
     cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, cpuQuestionTimeCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
-    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null,
+    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null, presidentReturnedLawTitles: [], mandatoEsplorativoCooldownTurn: 0,
     countryEpochs: [], currentEpoch: null,
     fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
     spaceProgram: freshSpaceProgram(),
@@ -13600,7 +13683,6 @@
     if (state.currentDossierId === "ai_dynamic" && state.aiDynamicDossier) return state.aiDynamicDossier;
     if (state.currentDossierId === CONGRESSO_DOSSIER.id) return CONGRESSO_DOSSIER;
     if (state.currentDossierId === "alleanza_negoziato") return allianceDossier();
-    if (state.currentDossierId === SNAP_NOTICE.id) return SNAP_NOTICE;
     if (state.currentDossierId === "formazione_correnti") return formazioneCorrentiDossier();
     if (state.currentDossierId === "rischio_scissione") return rischioScissioneDossier();
     if (state.currentDossierId === "eu_group_choice") return euGroupDossier();
@@ -16506,6 +16588,35 @@
     return html;
   }
 
+  // Scheda sempre visibile del Capo dello Stato: prima di questa funzione, il Presidente della
+  // Repubblica esisteva solo come un nome generato al momento dell'elezione, citato ogni tanto in una
+  // dichiarazione o in un dossier — nessun posto fisso dove vedere chi è in carica, da quanto, e con quali
+  // vincoli istituzionali reali (il semestre bianco, vedi isSemestreBianco più sotto). Sempre presente in
+  // cima alla Scheda Paese, anche prima della prima elezione presidenziale della partita.
+  function renderPresidentCard() {
+    var html = '<section aria-label="Presidente della Repubblica"><p class="eyebrow">Capo dello Stato</p><div class="stat-grid">';
+    if (!state.president) {
+      html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Presidente della Repubblica</div>' +
+        '<p class="ci-hint" style="margin:0.3rem 0 0">Nessun Presidente è ancora stato eletto in questa partita: il Parlamento in seduta comune lo eleggerà alla settimana ' + (state.nextPresidentElectionTurn || 260) + ".</p></div>";
+    } else {
+      var pres = state.president;
+      var weeksInCarica = Math.max(0, state.turn - pres.electedTurn);
+      var weeksToNext = Math.max(0, (state.nextPresidentElectionTurn || 0) - state.turn);
+      var semestreBianco = isSemestreBianco();
+      html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Presidente della Repubblica</div>' +
+        '<div class="row"><span class="value">' + pres.name + "</span>" +
+        (pres.termCount >= 2 ? '<span class="chip accent">Secondo mandato (bis)</span>' : "") +
+        (semestreBianco ? '<span class="chip accent">Semestre bianco</span>' : "") + "</div>" +
+        '<p class="ci-hint" style="margin:0.3rem 0 0">' + presidentLeaningLabel(pres.leaning) + " — " + pres.background + ". In carica da " + weeksInCarica + " settiman" + (weeksInCarica === 1 ? "a" : "e") +
+        (pres.popular ? ", eletto dal voto popolare diretto" : ", eletto dal Parlamento in seduta comune") + ". " +
+        (semestreBianco
+          ? "Negli ultimi sei mesi di mandato, la Costituzione gli vieta di sciogliere le Camere: un'eventuale crisi di governo dovrà per forza risolversi senza elezioni anticipate."
+          : "Prossima elezione presidenziale tra " + weeksToNext + " settimane.") + "</p></div>";
+    }
+    html += "</div></section>";
+    return html;
+  }
+
   // Bilancio dello Stato semplificato: entrate, uscite, saldo, debito e deficit sul PIL. Sempre
   // visibile, con un dettaglio in più (voci di spesa indicative) quando il partito è a governo.
   function renderBilancioStato() {
@@ -18725,7 +18836,7 @@
         return renderReunificationPanel() + renderCoalitionPanel();
       } },
     { id: "paese", label: "Scheda Paese e Bilancio dello Stato", icon: "📊", nav: "Paese", render: function () {
-        return renderNationalStrip() + renderCountryProfile() + renderEconomySectors() + renderIniziativaLiberaPanel() + renderPolicyHistoryPanel() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
+        return renderNationalStrip() + renderPresidentCard() + renderCountryProfile() + renderEconomySectors() + renderIniziativaLiberaPanel() + renderPolicyHistoryPanel() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", icon: "🎭", nav: "Partiti", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -20110,6 +20221,31 @@
         state.pendingConsultazioni.roundsLeft -= 1;
         if (state.pendingConsultazioni.roundsLeft <= 0) state.pendingConsultazioni = null;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.cat === "Mandato Esplorativo") {
+        var mandatoCtx = dossier.mandatoContext || {};
+        var mandatoSuccessChance = clamp(0.35 +
+          (choice.mandatoStance === "sostegno" ? 0.25 : choice.mandatoStance === "elezioni" ? -0.25 : 0) +
+          (mandatoCtx.semestreBianco ? 0.15 : 0), 0.05, 0.9);
+        var mandatoSuccess = Math.random() < mandatoSuccessChance;
+        var mandatoText;
+        if (mandatoSuccess) {
+          state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+          if (choice.mandatoStance === "sostegno" && state.player.inParliament) state.player.parliamentRole = "governo";
+          mandatoText = "Il mandato esplorativo va a buon fine: nasce un nuovo governo, sostenuto da una maggioranza diversa da quella uscita dalle urne, senza bisogno di elezioni anticipate." +
+            (choice.mandatoStance === "sostegno" ? " Il tuo partito, avendo offerto sostegno fin dall'inizio, ne fa parte." : "");
+          state.log.unshift({ week: state.turn, title: "Mandato Esplorativo riuscito", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
+        } else if (mandatoCtx.semestreBianco) {
+          state.consensoGoverno = 22;
+          mandatoText = "Il mandato esplorativo fallisce, ma la Costituzione vieta comunque lo scioglimento delle Camere nel semestre bianco: il governo, ormai privo di una vera maggioranza, resta in carica per la sola gestione degli affari correnti fino alla fine del semestre.";
+          state.log.unshift({ week: state.turn, title: "Semestre Bianco: governo per gli affari correnti", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
+        } else {
+          state.snapElectionPending = true;
+          state.nextElectionTurn = state.turn + 8;
+          applyGovernmentCollapseLeadershipShock();
+          mandatoText = "Il mandato esplorativo fallisce: nessuna maggioranza alternativa è possibile in questo Parlamento. Il Presidente della Repubblica scioglie le Camere: si torna al voto in anticipo, con una campagna lampo.";
+          state.log.unshift({ week: state.turn, title: "Mandato Esplorativo fallito: Camere sciolte", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
+        }
+        state.resultData = { resultText: mandatoText, headlines: [] };
       } else if (dossier.id === "primarie_leadership") {
         resolvePrimariesChoice(dossier, choice);
       } else if (dossier.cpuMozioneMeta) {
@@ -21195,11 +21331,14 @@
     // da quel numero — la fiducia di governo è l'unico vero indicatore di tenuta della maggioranza.
     // Questo controllo va eseguito PRIMA di qualunque altro blocco che possa fare return in anticipo,
     // altrimenti la caduta di governo non scatterebbe quasi mai.
-    if (!state.snapElectionPending && state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20) {
-      state.snapElectionPending = true;
-      state.nextElectionTurn = state.turn + 8;
-      applyGovernmentCollapseLeadershipShock();
-      state.currentDossierId = SNAP_NOTICE.id;
+    if (!state.snapElectionPending && state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+      // Non più elezioni immediate: prima il Presidente della Repubblica tenta un mandato esplorativo
+      // per evitare le urne (vedi buildMandatoEsplorativoDossier e la sua risoluzione in
+      // resolveDossierChoice) — le elezioni anticipate restano possibili, ma solo come ESITO di quel
+      // tentativo quando fallisce, non come conseguenza automatica del crollo di consenso.
+      state.mandatoEsplorativoCooldownTurn = state.turn + 6;
+      state.aiDynamicDossier = buildMandatoEsplorativoDossier();
+      state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
     }
