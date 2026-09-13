@@ -12579,7 +12579,7 @@
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
-    cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false,
+    cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConsultazioni: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0,
@@ -14678,6 +14678,21 @@
       // governo e il paese, non un contatore che continua a scendere elezione dopo elezione.
       state.consensoGoverno = 50;
       openNewEpoch();
+      // Consultazioni al Quirinale: in Italia una coalizione di più forze non diventa governo dall'oggi
+      // al domani, servono settimane di trattativa prima ancora di poter scegliere i ministri (vedi
+      // pendingCabinetFormation, già calcolato più sotto ma tenuto in attesa da questo blocco finché le
+      // consultazioni non si concludono). Solo per il giocatore che fa DAVVERO parte della coalizione
+      // vincitrice, e solo se è una vera coalizione di più forze: una maggioranza monocolore non ha
+      // bisogno di settimane di trattative, né nella realtà né qui.
+      var playerInWinningEntity = (p.allianceId || "player") === winner.id;
+      if (playerInWinningEntity && winner.isCoalition && winner.members.length >= 2) {
+        var consultRounds = Math.min(5, 2 + Math.floor(winner.members.length / 2));
+        state.pendingConsultazioni = { roundsLeft: consultRounds, totalRounds: consultRounds, coalitionLabel: winner.label };
+      } else {
+        state.pendingConsultazioni = null;
+      }
+    } else {
+      state.pendingConsultazioni = null;
     }
 
     // Trova l'entità che include davvero il giocatore tra i suoi membri, non più per id fisso
@@ -17136,6 +17151,29 @@
         { label: "Rifiuta di giurare", hint: "Gesto clamoroso: il governo cade prima ancora di insediarsi", swearOath: false,
           effects: { reputazione: -8, visibilita: 15 },
           result: "Il rifiuto di giurare fedeltà manda in crisi il governo prima ancora che si insedi davvero: una scelta clamorosa, con conseguenze politiche pesanti." }
+      ]
+    };
+  }
+  // ---------- Consultazioni al Quirinale ----------
+  // Prima di questa funzionalità, una coalizione vinceva le elezioni e passava direttamente alla scelta
+  // dei ministri (vedi cabinetFormationDossier) nella stessa identica settimana: nella realtà italiana,
+  // una maggioranza di più partiti impiega invece settimane di trattative — le "consultazioni" al
+  // Quirinale — prima di poter anche solo iniziare a discutere di nomi. pendingConsultazioni (vedi
+  // resolveElection) tiene in sospeso pendingCabinetFormation, già calcolato ma non ancora mostrato,
+  // finché queste settimane non sono passate: nessuna maggioranza monocolore le attraversa, solo le vere
+  // coalizioni di più forze, proprio come nella realtà.
+  function buildConsultazioniDossier() {
+    var c = state.pendingConsultazioni;
+    var roundNum = c.totalRounds - c.roundsLeft + 1;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: "Consultazioni per il nuovo Governo",
+      cat: "Formazione del Governo", title: roundNum + "ª tornata di consultazioni",
+      brief: "Il voto ha premiato " + c.coalitionLabel + ", ma in Italia una coalizione di più partiti non diventa governo dall'oggi al domani: al Quirinale sono in corso le consultazioni tra le forze della maggioranza per definire nomi e programma, prima ancora di poter giurare. Mancano ancora circa " + c.roundsLeft + " settiman" + (c.roundsLeft === 1 ? "a" : "e") + " prima che il nuovo governo possa insediarsi davvero.",
+      choices: [
+        { label: "Spingi per chiudere in fretta la trattativa", hint: "Meno attrito nella coalizione, ma meno peso specifico nel programma finale", effects: { reputazione: 1 }, result: "La linea della rapidità aiuta a smussare gli attriti nella coalizione, anche se lascia sul tavolo qualche richiesta di programma." },
+        { label: "Insisti sui tuoi punti programmatici", hint: "Più peso nel programma, ma negoziato più lungo e teso", effects: { reputazione: 2, visibilita: 2 }, result: "L'insistenza sui propri punti programmatici allunga la trattativa, ma porta a casa qualcosa in più per il proprio elettorato." },
+        { label: "Lascia che siano le forze maggiori a decidere", hint: "Nessuna esposizione, nessun guadagno particolare", effects: {}, result: "Scegli di non esporti nella trattativa, lasciando che siano le forze maggiori della coalizione a definire i dettagli." }
       ]
     };
   }
@@ -20015,6 +20053,10 @@
       } else if (dossier.cat === "Referendum Nazionale" && choice.stance !== undefined && state.pendingNationalReferendum) {
         state.pendingNationalReferendum.stance = choice.stance;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.cat === "Formazione del Governo" && state.pendingConsultazioni) {
+        state.pendingConsultazioni.roundsLeft -= 1;
+        if (state.pendingConsultazioni.roundsLeft <= 0) state.pendingConsultazioni = null;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "primarie_leadership") {
         resolvePrimariesChoice(dossier, choice);
       } else if (dossier.cpuMozioneMeta) {
@@ -21191,6 +21233,13 @@
     if (state.euGroupPending) {
       state.euGroupPending = false;
       state.currentDossierId = "eu_group_choice";
+      state.phase = "building";
+      return;
+    }
+
+    if (state.pendingConsultazioni) {
+      state.aiDynamicDossier = buildConsultazioniDossier();
+      state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
     }
