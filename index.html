@@ -10415,16 +10415,21 @@
     var topic = pool[Math.floor(Math.random() * pool.length)];
     if (!state.referendumTopicHistory) state.referendumTopicHistory = {};
     state.referendumTopicHistory[topic.id] = state.turn;
-    state.pendingNationalReferendum = { topic: topic, stance: undefined, resolveTurn: state.turn + 5 + Math.floor(Math.random() * 5) };
+    // baseTurnout: alcuni quesiti scaldano il paese, altri lasciano indifferenti — proprio come nella
+    // realtà italiana, dove il quorum (vedi resolveNationalReferendumIfDue) è spesso la vera partita, più
+    // del Sì o del No.
+    var baseTurnout = rand(30, 55);
+    state.pendingNationalReferendum = { topic: topic, stance: undefined, resolveTurn: state.turn + 5 + Math.floor(Math.random() * 5), baseTurnout: baseTurnout };
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
       eyebrow: isRevisit ? "Un vecchio quesito torna alle urne" : "Referendum nazionale annunciato",
       cat: "Referendum Nazionale", title: topic.title,
       brief: (isRevisit ? "Il paese aveva già votato su questo quesito in passato, senza approvarlo: a distanza di tempo, torna alle urne. " : "") +
-        topic.brief + " Si vota tra qualche settimana: il tuo partito può fare campagna per il SÌ, per il NO, oppure restare neutrale — la tua campagna sposta un po' l'esito, in proporzione al peso reale del partito.",
+        topic.brief + " Si vota tra qualche settimana: come ogni referendum abrogativo, è valido solo se vota almeno il 50%+1 degli aventi diritto, a prescindere da come si esprime chi vota — il tuo partito può fare campagna per il SÌ, per il NO, invitare all'astensione per far mancare il quorum, oppure restare neutrale.",
       choices: [
-        { label: "Fai campagna per il SÌ", stance: "si", hint: "Spinge l'esito verso il SÌ, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il SÌ su questo referendum." },
-        { label: "Fai campagna per il NO", stance: "no", hint: "Spinge l'esito verso il NO, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il NO su questo referendum." },
+        { label: "Fai campagna per il SÌ", stance: "si", hint: "Spinge l'esito verso il SÌ e aiuta il quorum, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il SÌ su questo referendum." },
+        { label: "Fai campagna per il NO", stance: "no", hint: "Spinge l'esito verso il NO e aiuta il quorum, in proporzione al peso reale del partito", effects: { visibilita: rand(3, 7), iscritti: rand(10, 25) }, result: "Il partito scende apertamente in campo per il NO su questo referendum." },
+        { label: "Invita all'astensione", stance: "astensione", hint: "Non conta sul Sì/No: prova a far mancare il quorum, l'arma classica di chi vuole affossare un referendum scomodo", effects: { visibilita: rand(2, 5) }, result: "Il partito invita apertamente a disertare le urne, puntando tutto sul mancato quorum." },
         { label: "Non prendere posizione", stance: null, hint: "Nessun impatto sull'esito, nessuna esposizione politica", effects: {}, result: "Il partito sceglie di non schierarsi su questo referendum." }
       ]
     };
@@ -10436,12 +10441,31 @@
     state.pendingNationalReferendum = null;
     var p = state.player;
     var topic = r.topic;
+    // Quorum: un referendum abrogativo italiano è valido SOLO se vota almeno il 50%+1 degli aventi
+    // diritto, a prescindere da come si esprime chi vota — è per questo che, nella realtà, chi vuole
+    // affossare un quesito scomodo spesso invita all'astensione invece di fare campagna per il No (che
+    // conterebbe comunque come un voto valido, aiutando il quorum). La campagna per il Sì o per il No
+    // aiuta leggermente il quorum (mobilita elettori), l'invito all'astensione lo danneggia parecchio,
+    // in proporzione al peso reale del partito.
+    var turnoutSwing = clamp(institutionalPowerMultiplier(p) * 6, 0, 18);
+    var turnout = clamp(r.baseTurnout + (r.stance === "si" || r.stance === "no" ? turnoutSwing : r.stance === "astensione" ? -turnoutSwing * 1.4 : 0) + rand(-4, 4), 3, 92);
+    if (turnout < 50) {
+      var quorumStanceNote = r.stance === "astensione"
+        ? " Il partito aveva invitato apertamente all'astensione: il mancato quorum è anche un po' merito suo."
+        : (r.stance === "si" || r.stance === "no") ? " Nonostante la mobilitazione del partito, il quorum non viene raggiunto lo stesso." : "";
+      var quorumText = "Il referendum non raggiunge il quorum: ha votato solo il " + fmt1(turnout) + "% degli aventi diritto, contro il 50%+1 richiesto. La consultazione è nulla, a prescindere da come si sarebbe espressa la maggioranza di chi ha votato: la legge attuale resta invariata.";
+      state.log.unshift({
+        week: state.turn, title: topic.title, choiceLabel: "Quorum non raggiunto", result: quorumText + quorumStanceNote,
+        headlines: [], type: "referendum", cat: "Referendum Nazionale"
+      });
+      return null;
+    }
     var nudge = r.stance ? clamp(institutionalPowerMultiplier(p) * 0.025, 0, 0.22) : 0;
     var passProb = 0.5 + (r.stance === "si" ? nudge : r.stance === "no" ? -nudge : 0);
     var passed = Math.random() < passProb;
     var delta = passed ? topic.passDelta : topic.failDelta;
     state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
-    var esito = passed ? topic.passText : topic.failText;
+    var esito = "Ha votato il " + fmt1(turnout) + "% degli aventi diritto, quorum raggiunto. " + (passed ? topic.passText : topic.failText);
     var stanceNote = r.stance === "si"
       ? (passed ? " Il partito aveva fatto campagna per il SÌ: la vittoria è anche un po' sua." : " Il partito aveva fatto campagna per il SÌ, ma il NO prevale comunque.")
       : r.stance === "no"
