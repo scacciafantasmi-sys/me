@@ -2095,12 +2095,28 @@
       if (state.countryProfile[metric] === undefined) return;
       state.countryProfile[metric] = clamp(state.countryProfile[metric] + metricDeltas[metric], 1, 10);
     });
+    // Finora gli stanziamenti/tagli decisi qui muovevano SOLO gli indicatori della Scheda Paese: il
+    // Bilancio dello Stato vero e proprio (state.bilancioStato.uscite, la stessa spesa pubblica da cui
+    // driftBilancioStato calcola saldo/deficit/debito ogni settimana) restava del tutto indifferente a
+    // quanto il giocatore stanziava o tagliava — segnalato da un giocatore come il motivo per cui il
+    // bilancio sembrava "non esistere" davvero, sempre uguale a se stesso qualunque cosa si facesse. Ora
+    // la spesa aggiuntiva/il risparmio deciso qui si somma stabilmente alla spesa pubblica di base: da
+    // qui in avanti la deriva settimanale (driftBilancioStato) parte da questa nuova base, quindi
+    // l'effetto sul saldo, sul deficit e infine sul debito pubblico arriva davvero, non solo sugli
+    // indicatori settoriali della Scheda Paese.
+    var netBudgetImpact = totalAllocated - totalCut;
+    state.bilancioStato.uscite = Math.max(400, state.bilancioStato.uscite + netBudgetImpact);
+    // Azzerato per il prossimo anno: il tesoretto è una decisione ANNUALE, non un ordine permanente —
+    // senza questo reset, un modulo mai più toccato dopo il primo anno si ripeterebbe identico (e si
+    // risommerebbe alla spesa pubblica) ogni 52 settimane all'infinito.
+    state.budgetAllocations = {};
+    var saldoAnno = Math.round((state.bilancioStato.entrate - state.bilancioStato.uscite) * 10) / 10;
     var positives = lines.filter(function (l) { return l.outcome === "positivo"; }).length;
     var negatives = lines.filter(function (l) { return l.outcome === "negativo"; }).length;
     var cuts = lines.filter(function (l) { return l.outcome === "taglio"; }).length;
     var report = {
       year: Math.floor(state.turn / 52), week: state.turn, totalAllocated: Math.round(totalAllocated * 10) / 10,
-      totalCut: Math.round(totalCut * 10) / 10,
+      totalCut: Math.round(totalCut * 10) / 10, saldoAnno: saldoAnno,
       lines: lines, positives: positives, negatives: negatives, cuts: cuts, govLabel: govEntityLabel()
     };
     state.budgetHistory.unshift(report);
@@ -2111,7 +2127,7 @@
         result: "Il governo ha stanziato " + fmtEuroMld(report.totalAllocated) + " su " + (lines.length - cuts) + " voci di investimento (" +
           positives + " successi, " + negatives + " sprechi o fallimenti)" +
           (cuts ? ", e ha tagliato " + fmtEuroMld(report.totalCut) + " su " + cuts + " voci" : "") +
-          ". Il dettaglio è nella Scheda Paese e Bilancio dello Stato.",
+          ". Il bilancio dello Stato chiude quest'anno in " + (saldoAnno >= 0 ? "avanzo" : "disavanzo") + " di " + fmtEuroMld(Math.abs(saldoAnno)) + ".",
         headlines: [], type: "cronaca"
       });
     }
@@ -16216,7 +16232,8 @@
       '<p class="ci-hint">Il bilancio annuale degli investimenti pubblici è un atto pubblico: chiunque, al governo o all\'opposizione, può consultarne il dettaglio completo, voce per voce.</p>' +
       '<p class="eyebrow" style="margin-top:0.6rem">Ultimo bilancio annuale chiuso (settimana ' + last.week + ') — ' + last.govLabel + '</p>' +
       '<p class="ci-hint">Stanziati ' + fmtEuroMld(last.totalAllocated) + ': ' + last.positives + " investimenti riusciti, " + last.negatives + " sprechi o fallimenti" +
-      (last.totalCut ? ", e tagliati " + fmtEuroMld(last.totalCut) + " su " + (last.cuts || 0) + " voci" : "") + '.</p>' +
+      (last.totalCut ? ", e tagliati " + fmtEuroMld(last.totalCut) + " su " + (last.cuts || 0) + " voci" : "") +
+      (last.saldoAnno !== undefined ? ". Bilancio dello Stato chiuso in " + (last.saldoAnno >= 0 ? "avanzo" : "disavanzo") + " di " + fmtEuroMld(Math.abs(last.saldoAnno)) : "") + '.</p>' +
       '<ul class="enacted-policy-list">' + last.lines.map(function (l) {
         return '<li><strong>' + l.catLabel + ' — ' + l.subLabel + '</strong> <span class="ci-hint">(' + fmtEuroMld(l.amount) + ')</span> ' +
           '<span class="budget-outcome ' + l.outcome + '">' + l.outcome.toUpperCase() + '</span><br>' + l.note + '</li>';
@@ -16260,7 +16277,8 @@
       var last = state.budgetHistory[0];
       html += '<p class="eyebrow" style="margin-top:1.2rem">Ultimo bilancio annuale chiuso (settimana ' + last.week + ')</p>' +
         '<p class="ci-hint">' + last.govLabel + ' ha stanziato ' + fmtEuroMld(last.totalAllocated) + ': ' + last.positives + ' investimenti riusciti, ' + last.negatives + ' sprechi o fallimenti' +
-        (last.totalCut ? ", e ha tagliato " + fmtEuroMld(last.totalCut) + " su " + (last.cuts || 0) + " voci" : "") + '.</p>' +
+        (last.totalCut ? ", e ha tagliato " + fmtEuroMld(last.totalCut) + " su " + (last.cuts || 0) + " voci" : "") +
+        (last.saldoAnno !== undefined ? ". Bilancio dello Stato chiuso in " + (last.saldoAnno >= 0 ? "avanzo" : "disavanzo") + " di " + fmtEuroMld(Math.abs(last.saldoAnno)) : "") + '.</p>' +
         '<ul class="enacted-policy-list">' + last.lines.map(function (l) {
           return '<li><strong>' + l.catLabel + ' — ' + l.subLabel + '</strong> <span class="ci-hint">(' + fmtEuroMld(l.amount) + ')</span> ' +
             '<span class="budget-outcome ' + l.outcome + '">' + l.outcome.toUpperCase() + '</span><br>' + l.note + '</li>';
@@ -18420,7 +18438,12 @@
         state.uiPage = btn.getAttribute("data-nav-page");
         save();
         render();
-        window.scrollTo(0, 0);
+        // Scorre fino al contenuto della pagina appena scelta (vedi #page-content-anchor), non in cima
+        // a tutta la schermata: dossier/statistiche/sondaggi restano sempre sopra, quindi tornare
+        // all'assoluto inizio nascondeva proprio quello che si era appena andati a cercare.
+        var anchor = document.getElementById("page-content-anchor");
+        if (anchor) anchor.scrollIntoView({ block: "start" });
+        else window.scrollTo(0, 0);
       });
     });
   }
@@ -19140,6 +19163,12 @@
     body += renderPlayerStats();
     body += renderPollGrid(state.prevSnapshot);
     body += renderPublicOpinionPanel();
+    // Punto di aggancio per lo scroll dopo un cambio di pagina dalla barra in cima (vedi
+    // bindPageNavDrawer): senza un riferimento stabile, cambiare pagina riportava sempre in cima
+    // all'intera schermata (dossier, statistiche, sondaggi...), sopra al contenuto della pagina appena
+    // scelta — il giocatore doveva scorrere a mano ogni volta per vedere quello che aveva appena
+    // richiesto. id anziché una classe: deve essere unico e trovabile con getElementById dopo ogni render.
+    body += '<div id="page-content-anchor"></div>';
     body += activePageDef().render();
     // Ogni render() ricostruisce l'intero DOM da zero (innerHTML), quindi lo stato open/closed di ogni
     // <details> richiudibile andrebbe perso a ogni singolo click che causa un re-render — anche solo
