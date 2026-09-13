@@ -10645,6 +10645,17 @@
     var arch = PRESIDENT_ARCHETYPES.filter(function (a) { return a.leaning === leaning; })[0];
     return arch ? arch.label : leaning;
   }
+  // Requisiti reali per la Presidenza (art. 84 Cost. richiede solo 50 anni d'età e la cittadinanza, ma
+  // qui si traducono in un equivalente di gioco concreto): una lunga carriera politica alle spalle (25
+  // anni, come richiesto) e l'aver fatto parte di almeno un governo di maggioranza, non semplicemente
+  // essere stati in Parlamento — cumulativeGovWeeks (già tracciato per il freno di crescita delle
+  // ideologie di nicchia, vedi recomputePeriodic) è >0 se e solo se il partito del giocatore ha davvero
+  // governato almeno una settimana in tutta la partita, quindi non serve alcun nuovo campo salvato.
+  var PLAYER_PRESIDENT_MIN_CAREER_TURNS = 1300; // 25 anni di carriera politica
+  function playerPresidentEligible() {
+    var p = state.player;
+    return !!(p && p.playerIsLeader && state.turn >= PLAYER_PRESIDENT_MIN_CAREER_TURNS && (p.cumulativeGovWeeks || 0) > 0);
+  }
   function generatePresidentCandidates() {
     var candidates = PRESIDENT_ARCHETYPES.map(function (a) {
       return { id: a.leaning, leaning: a.leaning, name: generateStaffName(), background: a.roles[Math.floor(Math.random() * a.roles.length)] };
@@ -10655,6 +10666,20 @@
     // bis per Presidente, mai un terzo mandato: dopo due mandati non torna più tra le opzioni.
     if (state.president && (state.president.termCount || 1) < 2) {
       candidates.push({ id: "incumbent", leaning: state.president.leaning, name: state.president.name, background: state.president.background, isIncumbent: true });
+    }
+    // Il giocatore stesso, se rispetta i requisiti reali (vedi playerPresidentEligible): il nome è
+    // generato di proposito qui, non riutilizzato altrove, perché è la prima volta in tutta la partita
+    // che il leader smette di essere "tu" dietro il nome del partito e diventa una persona con un nome
+    // proprio, come richiede una carica individuale e non di parte come questa.
+    if (playerPresidentEligible()) {
+      var pLeaning = FAMILY_CAMP[state.player.family] === "destra" || FAMILY_CAMP[state.player.family] === "centrodestra" ? "destra"
+        : FAMILY_CAMP[state.player.family] === "sinistra" || FAMILY_CAMP[state.player.family] === "centrosinistra" || FAMILY_CAMP[state.player.family] === "movimentista" ? "sinistra"
+        : "centro";
+      var yearsCareer = Math.floor(state.turn / 52), yearsGov = Math.floor((state.player.cumulativeGovWeeks || 0) / 52);
+      candidates.push({
+        id: "player", leaning: pLeaning, name: generateStaffName(), isPlayerCandidate: true,
+        background: "già leader di " + state.player.name + ", con " + yearsCareer + " anni di carriera politica e " + Math.max(1, yearsGov) + " anni di esperienza di governo alle spalle"
+      });
     }
     return candidates;
   }
@@ -10704,19 +10729,22 @@
     var candidates = generatePresidentCandidates();
     var popular = presidentElectionIsPopular();
     var choices = candidates.map(function (c) {
+      if (c.isPlayerCandidate) return { label: "Candidati tu stesso alla Presidenza della Repubblica", hint: c.background, candidateId: c.id, effects: {} };
       return c.isIncumbent
         ? { label: "Sostieni la riconferma di " + c.name, hint: "Bis del Presidente uscente — " + presidentLeaningLabel(c.leaning), candidateId: c.id, effects: {} }
         : { label: "Sostieni " + c.name, hint: presidentLeaningLabel(c.leaning) + " — " + c.background, candidateId: c.id, effects: {} };
     });
     choices.push({ label: "Non prendere posizione", hint: "Nessuna preferenza dichiarata dal partito", candidateId: null, effects: {} });
     var hasIncumbent = candidates.some(function (c) { return c.isIncumbent; });
+    var playerCandidate = candidates.filter(function (c) { return c.isPlayerCandidate; })[0];
     return {
       id: "president_election", kind: "notizia", cat: "Istituzioni",
       title: popular ? "Elezione Diretta del Presidente della Repubblica" : "Elezione del Presidente della Repubblica",
       brief: (popular
         ? "Da quando il referendum sul presidenzialismo è passato, il Presidente della Repubblica è eletto direttamente dai cittadini: è il voto popolare, non più le aule parlamentari, a decidere chi sale al Colle. Chi sostiene il tuo partito?"
         : "Il Parlamento in seduta comune, con i delegati regionali, è chiamato a eleggere il nuovo Presidente della Repubblica. Chi sostiene il tuo partito?") +
-        (hasIncumbent ? " Tra i nomi in campo c'è anche l'ipotesi di un bis per il Presidente uscente, una via d'uscita se le Camere non trovano un accordo su un nome nuovo." : ""),
+        (hasIncumbent ? " Tra i nomi in campo c'è anche l'ipotesi di un bis per il Presidente uscente, una via d'uscita se le Camere non trovano un accordo su un nome nuovo." : "") +
+        (playerCandidate ? " Dopo una carriera politica così lunga e un'esperienza di governo alle spalle, anche il tuo nome inizia a circolare per il Colle: potresti candidarti tu stesso." : ""),
       candidates: candidates, popular: popular, choices: choices
     };
   }
@@ -10729,6 +10757,13 @@
       // rassicurante quando le Camere non trovano un accordo — esattamente il motivo per cui è successo
       // due volte negli ultimi anni (Napolitano 2013, Mattarella 2022).
       if (c.isIncumbent) w += 30;
+      // Anche il giocatore, se davvero si candida, parte con un vantaggio proporzionale al proprio peso
+      // istituzionale reale, alla propria reputazione e agli anni passati al governo: più a lungo e più
+      // in alto si è governato, più credibile è il proprio nome per il Colle — esattamente come nella
+      // realtà, dove la Presidenza premia una lunga carriera istituzionale, non la sola popolarità.
+      if (c.isPlayerCandidate) {
+        w += 15 + institutionalPowerMultiplier(state.player) * 3 + clamp(state.player.reputazione - 50, -20, 30) * 0.6 + Math.min((state.player.cumulativeGovWeeks || 0) / 52, 10) * 2;
+      }
       return w;
     });
     var totalW = weights.reduce(function (a, b) { return a + b; }, 0);
@@ -10736,6 +10771,7 @@
     for (; idx < weights.length - 1; idx++) { acc += weights[idx]; if (roll <= acc) break; }
     var winner = candidates[idx];
     var popular = dossier.popular !== undefined ? dossier.popular : presidentElectionIsPopular();
+    if (winner.isPlayerCandidate) { beginPlayerPresidency(winner, popular); return; }
     var isBis = !!winner.isIncumbent;
     state.president = {
       name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn,
@@ -10756,6 +10792,211 @@
         (supportedWinner ? " Il partito lo aveva sostenuto fin dall'inizio: un piccolo capitale politico in più." : choice.candidateId ? " Il partito aveva sostenuto un altro candidato, ma prende atto dell'esito." : "");
     state.log.unshift({ week: state.turn, title: popular ? "Elezione Diretta del Presidente della Repubblica" : "Elezione del Presidente della Repubblica", choiceLabel: choice.label, result: resultText, headlines: [], type: "dossier", cat: "Istituzioni" });
     state.resultData = { resultText: resultText, headlines: [] };
+  }
+  // ---------- Il giocatore diventa Presidente della Repubblica ----------
+  // La Presidenza è una carica non di parte (art. 87 Cost.): chi la ricopre lascia la guida del proprio
+  // partito, che riusa esattamente la stessa infrastruttura playerIsLeader/interimLeaderName già rodata
+  // per primarie perse, pensionamento per età e condanne giudiziarie — il partito prosegue sotto un
+  // successore, contende le elezioni come qualunque altro, e la partita del giocatore continua, ma da
+  // un punto di vista completamente diverso: vedi advancePresidentTurnLogic e renderPresidentModePage per
+  // la modalità di gioco dedicata che si apre da qui, fino alla fine del settennato.
+  function beginPlayerPresidency(winner, popular) {
+    var p = state.player;
+    var successor = primariesChallengerName(p);
+    var formerPartyName = p.name;
+    var yearsCareer = Math.floor(state.turn / 52), yearsGov = Math.floor((p.cumulativeGovWeeks || 0) / 52);
+    p.playerIsLeader = false;
+    p.interimLeaderName = successor;
+    state.president = { name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn, popular: popular, termCount: 1, isPlayer: true };
+    state.presidentTerm = {
+      playerName: winner.name, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: state.turn + 364,
+      actsSigned: 0, vetoesUsed: 0, graziesGranted: 0, judgesAppointed: 0, senatorsAppointed: 0, crisesManaged: 0,
+      lastJudgeAppointTurn: state.turn, lastSenatorAppointTurn: state.turn, cooldownTurn: state.turn + 4
+    };
+    state.mode = "president";
+    var text = "Dopo " + yearsCareer + " anni di carriera politica e " + Math.max(1, yearsGov) + " anni di esperienza di governo, il Parlamento in seduta comune elegge " + winner.name +
+      " Presidente della Repubblica" + (popular ? " (in questa partita, per voto popolare diretto)" : "") + ": sei tu. Lasci la guida di " + formerPartyName + " a " + successor +
+      " e sali al Colle, al di sopra delle parti: da oggi il tuo ruolo nella Repubblica cambia radicalmente.";
+    state.log.unshift({ week: state.turn, title: "Eletto/a Presidente della Repubblica", choiceLabel: "Il Colle", result: text, headlines: [], type: "dossier", cat: "Istituzioni" });
+    state.resultData = { resultText: text, headlines: [] };
+  }
+
+  // ---------- La modalità di gioco "Presidente" ----------
+  // Da qui in avanti, finché dura il settennato, il turno del giocatore non passa più dalla catena di
+  // dossier di partito (mozioni, leggi, primarie, scandali...): quelli restano gli strumenti di un leader
+  // di partito, e il giocatore non lo è più. Il paese continua a vivere esattamente come prima — partiti,
+  // governo, parlamento, bilancio, relazioni internazionali — ma il giocatore lo osserva e lo influenza
+  // solo attraverso i VERI poteri costituzionali del Capo dello Stato: firma o rinvio delle leggi, grazia,
+  // nomina di giudici costituzionali e senatori a vita, gestione delle crisi di governo. Vedi
+  // advancePresidentTurnLogic (richiamata da advanceTurnLogicCore) e renderPresidentModePage per la vista
+  // dedicata. Finito il settennato, la partita si chiude con un epilogo (vedi renderPresidentEpilogue):
+  // non si ritorna alla guida di un partito.
+  function buildRoutinePresidentDossier() {
+    var metric = COUNTRY_PROFILE_METRICS[Math.floor(Math.random() * COUNTRY_PROFILE_METRICS.length)];
+    var govLabel = govEntityLabel();
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Atti Presidenziali",
+      cat: "Atto Presidenziale", title: "Un provvedimento su " + metric.label.toLowerCase() + " attende la tua firma",
+      brief: "Il Parlamento ha approvato, su iniziativa di " + govLabel + ", un provvedimento su " + metric.label.toLowerCase() + ". Come Presidente della Repubblica, tocca a te promulgarlo — o rinviarlo alle Camere per un riesame, se ritieni ci siano ragioni sufficienti.",
+      presidentMetric: metric.key,
+      choices: [
+        { label: "Promulga il provvedimento", hint: "L'iter prosegue senza intoppi", presidentAct: "firma", effects: {}, result: "Firmi il provvedimento senza rilievi: la legge entra regolarmente in vigore." },
+        { label: "Rinvia alle Camere per un riesame", hint: "Una delle tue prerogative più delicate; se il Parlamento lo riapprova senza modifiche, sarai comunque tenuto a firmarlo", presidentAct: "rinvio", effects: {}, result: "Rinvii il provvedimento alle Camere per un nuovo esame: un gesto raro, che il Parlamento nota." }
+      ]
+    };
+  }
+  var PRESIDENT_GRAZIA_REASONS = [
+    "una condanna per reati minori, dopo anni di buona condotta e un percorso di reinserimento ormai completo",
+    "gravi motivi di salute, con una pena residua che rischia di trasformarsi in una condanna a morte di fatto",
+    "un caso giudiziario mai del tutto chiarito, riconosciuto informalmente da più parti ma mai formalmente riparato",
+    "un gesto di clemenza chiesto da larga parte dell'opinione pubblica dopo una lunga campagna a suo favore",
+    "l'età molto avanzata e le condizioni di salute, incompatibili nella sostanza con la detenzione"
+  ];
+  function buildGraziaDossier() {
+    var term = state.presidentTerm;
+    term.graziaCooldownTurn = state.turn + 40;
+    var name = generateStaffName();
+    var reason = PRESIDENT_GRAZIA_REASONS[Math.floor(Math.random() * PRESIDENT_GRAZIA_REASONS.length)];
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Potere di Grazia",
+      cat: "Grazia Presidenziale", title: "Una richiesta di grazia sulla tua scrivania",
+      brief: "Il Ministero della Giustizia trasmette una richiesta di grazia per " + name + ": " + reason + ". La decisione finale, per la Costituzione, spetta solo a te.",
+      choices: [
+        { label: "Concedi la grazia", hint: "Un atto di clemenza, non privo di conseguenze politiche", presidentAct: "grazia_concessa", effects: {}, result: "Concedi la grazia a " + name + ": un atto che divide l'opinione pubblica, ma che rientra pienamente nelle tue prerogative." },
+        { label: "Respingi la richiesta", hint: "Nessuna clemenza: la pena prosegue", presidentAct: "grazia_negata", effects: {}, result: "Respingi la richiesta di grazia: " + name + " continuerà a scontare la pena residua." }
+      ]
+    };
+  }
+  function buildJudgeAppointmentDossier() {
+    var term = state.presidentTerm;
+    term.lastJudgeAppointTurn = state.turn;
+    var name = generateStaffName();
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Nomine Istituzionali",
+      cat: "Nomina Presidenziale", title: "Un seggio alla Corte Costituzionale è vacante",
+      brief: "Un giudice della Corte Costituzionale conclude il proprio mandato: tra i cinque giudici di nomina presidenziale (su quindici totali), tocca a te scegliere chi nominare al suo posto.",
+      choices: [
+        { label: "Nomina " + name + ", un giurista di area a te vicina", hint: "Rafforza il proprio orientamento in Corte, ma espone a critiche di parzialità", presidentAct: "giudice_vicino", effects: {}, result: "Nomini " + name + " alla Corte Costituzionale: un giurista di area vicina alla tua storia politica, scelta che non manca di sollevare qualche critica." },
+        { label: "Nomina " + name + ", un profilo indipendente ed equidistante", hint: "Coerente con l'imparzialità richiesta dal ruolo, meno peso politico diretto", presidentAct: "giudice_indipendente", effects: {}, result: "Nomini " + name + " alla Corte Costituzionale: un profilo indipendente, scelto per equidistanza più che per vicinanza politica." }
+      ]
+    };
+  }
+  var PRESIDENT_SENATOR_FIELDS = ["la ricerca scientifica", "le arti e la cultura", "l'imprenditoria industriale", "il volontariato e l'impegno sociale", "il diritto costituzionale"];
+  function buildSenatorAppointmentDossier() {
+    var term = state.presidentTerm;
+    term.lastSenatorAppointTurn = state.turn;
+    var name = generateStaffName();
+    var field = PRESIDENT_SENATOR_FIELDS[Math.floor(Math.random() * PRESIDENT_SENATOR_FIELDS.length)];
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Nomine Istituzionali",
+      cat: "Nomina Presidenziale", title: "Un nuovo Senatore a vita",
+      brief: "La Costituzione ti permette di nominare Senatori a vita per altissimi meriti in campo sociale, scientifico, artistico o letterario: " + name + ", figura di primo piano in " + field + ", è tra i nomi possibili.",
+      choices: [
+        { label: "Nomina " + name + " Senatore a vita", hint: "Un seggio in più al Senato, storicamente indipendente dagli schieramenti", presidentAct: "senatore_nominato", effects: {}, result: "Nomini " + name + " Senatore a vita: un riconoscimento che aggiunge un seggio in più, storicamente indipendente, all'Aula di Palazzo Madama." },
+        { label: "Rinuncia per ora alla nomina", hint: "Nessun nuovo seggio", presidentAct: "senatore_rinuncia", effects: {}, result: "Decidi di non procedere con la nomina per il momento." }
+      ]
+    };
+  }
+  function pickPresidentDutyDossier() {
+    var term = state.presidentTerm;
+    var options = [];
+    if (state.turn >= (term.graziaCooldownTurn || 0) && Math.random() < 0.10) options.push("grazia");
+    if ((term.judgesAppointed || 0) < 5 && state.turn >= (term.lastJudgeAppointTurn || 0) + 90 && Math.random() < 0.5) options.push("giudice");
+    if ((term.senatorsAppointed || 0) < 3 && state.turn >= (term.lastSenatorAppointTurn || 0) + 120 && Math.random() < 0.3) options.push("senatore");
+    if (options.length) {
+      var pick = options[Math.floor(Math.random() * options.length)];
+      if (pick === "grazia") return buildGraziaDossier();
+      if (pick === "giudice") return buildJudgeAppointmentDossier();
+      if (pick === "senatore") return buildSenatorAppointmentDossier();
+    }
+    return buildRoutinePresidentDossier();
+  }
+  // La crisi di governo, vista dalla Presidenza, è una decisione istituzionale vera: a differenza di un
+  // partito qualunque (vedi buildMandatoEsplorativoDossier), il Presidente può anche scegliere di
+  // sciogliere subito le Camere senza nemmeno tentare un mandato esplorativo — un'opzione costituzionale
+  // in più, disponibile solo a chi occupa davvero il Colle, e comunque mai durante il semestre bianco.
+  function buildPresidentCrisisDossier() {
+    var semestreBianco = isSemestreBianco();
+    var brief = "Il Governo perde la maggioranza e non ha più i numeri per andare avanti: la crisi arriva sulla tua scrivania. " +
+      (semestreBianco
+        ? "Sei nel semestre bianco del tuo stesso mandato: la Costituzione ti vieta di sciogliere le Camere in questo periodo, quindi l'unica strada percorribile è un mandato esplorativo per una nuova maggioranza in questo stesso Parlamento."
+        : "Come Presidente, decidi tu come procedere: tentare un mandato esplorativo per una maggioranza alternativa, o sciogliere subito le Camere.");
+    var choices = [
+      { label: "Avvia un mandato esplorativo per una nuova maggioranza", hint: "La strada più prudente: eviti le urne se trovi un accordo", presidentCrisisChoice: "mandato", effects: {}, result: "Avvii un mandato esplorativo per verificare se esiste, in questo Parlamento, una maggioranza alternativa." }
+    ];
+    if (!semestreBianco) {
+      choices.push({ label: "Sciogli subito le Camere: si torna al voto", hint: "Nessun tentativo di mediazione: elezioni anticipate certe", presidentCrisisChoice: "scioglimento", effects: {}, result: "Decidi di sciogliere subito le Camere, senza tentare un mandato esplorativo: si torna alle urne." });
+    }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Crisi di Governo — decidi tu",
+      cat: "Crisi di Governo (Presidenza)", title: semestreBianco ? "Semestre Bianco: nessuno scioglimento possibile" : "Una crisi di governo attende la tua decisione",
+      brief: brief, presidentCrisisContext: { semestreBianco: semestreBianco }, choices: choices
+    };
+  }
+  function buildPresidentEpilogue() {
+    var term = state.presidentTerm;
+    return {
+      formerPartyName: term.formerPartyName, playerName: term.playerName,
+      years: Math.round((state.turn - term.electedTurn) / 52 * 10) / 10,
+      actsSigned: term.actsSigned || 0, vetoesUsed: term.vetoesUsed || 0, graziesGranted: term.graziesGranted || 0,
+      judgesAppointed: term.judgesAppointed || 0, senatorsAppointed: term.senatorsAppointed || 0, crisesManaged: term.crisesManaged || 0
+    };
+  }
+  // Il "turno" della Presidenza: sostituisce interamente la catena di dossier di partito di
+  // advanceTurnLogicCore finché dura il settennato (vedi la chiamata in cima a quella funzione). Il paese
+  // continua a essere simulato con le stesse funzioni periodiche di sempre — partiti, coalizioni, governo,
+  // bilancio, relazioni internazionali — ma nessun dossier rivolto a un leader di partito può più
+  // presentarsi: quel ruolo, per il giocatore, semplicemente non esiste più.
+  function advancePresidentTurnLogic() {
+    var term = state.presidentTerm;
+    if (state.turn >= term.termEndTurn) {
+      state.phase = "president_epilogue";
+      return;
+    }
+    recomputePeriodic();
+    updateCoalitionTrust();
+    updateCpuOnlyCoalitionTrust();
+    triggerCoalitionAllyReaction();
+    triggerRivalPartyEvent();
+    triggerPlayerNewsEvent();
+    triggerExternalMovementEvent();
+    triggerGovernmentCrisisContagion();
+    triggerPartyLifecycleFollowup();
+    triggerSpontaneousPartyFormation();
+    triggerDynamicCoalitionFormation();
+    triggerFixedCoalitionExpansion();
+    triggerPartyIdeologicalDrift();
+    triggerLeaderSuccession();
+    updateForeignRelations();
+    triggerEuMembershipShift();
+    updateNatoEuStanding();
+    triggerCpuNatoEuExit();
+    triggerCpuEuFederalization();
+    resolveAnnualBudget();
+    resolveMonthlyPartyTax();
+    triggerWorldNews();
+    triggerMinorCountryEvent();
+    triggerCountryShock();
+    triggerNucleoUpdate();
+    triggerLocalElectionCycle();
+    resolveEuropeanElection();
+
+    if (state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+      state.mandatoEsplorativoCooldownTurn = state.turn + 6;
+      state.aiDynamicDossier = buildPresidentCrisisDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (!state.regime && state.turn >= state.nextElectionTurn) {
+      resolveElection();
+      return;
+    }
+
+    state.aiDynamicDossier = pickPresidentDutyDossier();
+    state.currentDossierId = "ai_dynamic";
+    state.phase = "building";
   }
 
   // ---------- Referendum proposti dal giocatore ----------
@@ -12716,7 +12957,7 @@
     foreignLeaders: {}, foreignLeaderRapport: {},
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
     cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, cpuQuestionTimeCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
-    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null, presidentReturnedLawTitles: [], mandatoEsplorativoCooldownTurn: 0,
+    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null, presidentReturnedLawTitles: [], mandatoEsplorativoCooldownTurn: 0, presidentTerm: null,
     countryEpochs: [], currentEpoch: null,
     fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
     spaceProgram: freshSpaceProgram(),
@@ -15030,7 +15271,11 @@
   }
 
   function renderMasthead() {
-    if (state.player) {
+    if (state.mode === "president" && state.presidentTerm) {
+      mastheadTitle.textContent = state.presidentTerm.playerName;
+      mastheadTagline.textContent = "Presidente della Repubblica — in carica dal " + weekLabel(state.presidentTerm.electedTurn);
+      mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
+    } else if (state.player) {
       mastheadTitle.textContent = state.player.name;
       mastheadTagline.textContent = state.player.formationComplete
         ? familyById(state.player.family).label + " · " + leadershipById(state.player.leadership).label
@@ -16605,6 +16850,7 @@
       var semestreBianco = isSemestreBianco();
       html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Presidente della Repubblica</div>' +
         '<div class="row"><span class="value">' + pres.name + "</span>" +
+        (pres.isPlayer ? '<span class="chip good">Sei tu</span>' : "") +
         (pres.termCount >= 2 ? '<span class="chip accent">Secondo mandato (bis)</span>' : "") +
         (semestreBianco ? '<span class="chip accent">Semestre bianco</span>' : "") + "</div>" +
         '<p class="ci-hint" style="margin:0.3rem 0 0">' + presidentLeaningLabel(pres.leaning) + " — " + pres.background + ". In carica da " + weeksInCarica + " settiman" + (weeksInCarica === 1 ? "a" : "e") +
@@ -16615,6 +16861,59 @@
     }
     html += "</div></section>";
     return html;
+  }
+
+  // Cruscotto della modalità Presidente: sostituisce interamente il sistema di pagine di partito (nessuna
+  // barra di navigazione: un Capo dello Stato non ha "Partito", "Parlamento" o "Dichiarazioni" da gestire),
+  // con il riepilogo del proprio settennato in corso e la Scheda Paese, che resta di interesse reale anche
+  // da un punto di vista super partes.
+  function renderPresidentModePage() {
+    var term = state.presidentTerm;
+    var years = Math.round((state.turn - term.electedTurn) / 52 * 10) / 10;
+    var yearsLeft = Math.max(0, Math.round((term.termEndTurn - state.turn) / 52 * 10) / 10);
+    var html = '<section aria-label="Il tuo settennato"><p class="eyebrow">Il tuo settennato al Quirinale</p><div class="stat-grid">';
+    html += '<div class="stat-tile"><div class="label">Anni di mandato</div><div class="row"><span class="value">' + years + " / 7</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Anni al termine del mandato</div><div class="row"><span class="value">' + yearsLeft + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Atti firmati</div><div class="row"><span class="value">' + (term.actsSigned || 0) + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Leggi rinviate alle Camere</div><div class="row"><span class="value">' + (term.vetoesUsed || 0) + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Grazie concesse</div><div class="row"><span class="value">' + (term.graziesGranted || 0) + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Giudici costituzionali nominati</div><div class="row"><span class="value">' + (term.judgesAppointed || 0) + " / 5</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Senatori a vita nominati</div><div class="row"><span class="value">' + (term.senatorsAppointed || 0) + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Crisi di governo gestite</div><div class="row"><span class="value">' + (term.crisesManaged || 0) + "</span></div></div>";
+    html += "</div>" +
+      '<p class="ci-hint" style="margin-top:0.6rem">Hai lasciato la guida di ' + term.formerPartyName + ", ora nelle mani di " + (state.player ? (state.player.interimLeaderName || "un successore") : "un successore") +
+      ": il partito prosegue la propria storia in Parlamento, ma da qui in avanti la segui solo come una qualunque altra forza politica del paese, non più come sua guida.</p></section>";
+    html += renderNationalStrip();
+    html += renderCountryProfile();
+    return html;
+  }
+
+  // Schermata finale: allo scadere del settennato la partita si conclude qui, con un epilogo dedicato —
+  // coerente con come è pensata la Presidenza (un traguardo che chiude la storia, non una carica da cui
+  // si torna alla guida di un partito). Stesso stile a schermo intero di renderSetup/renderCrashRecovery.
+  function renderPresidentEpilogue() {
+    var summary = buildPresidentEpilogue();
+    app.innerHTML = '<div class="setup-card"><p class="eyebrow">Fine del Settennato</p>' +
+      "<h2>" + summary.playerName + ": sette anni al Quirinale</h2>" +
+      '<p class="lead">Il tuo mandato da Presidente della Repubblica si conclude dopo ' + summary.years + ' anni. Da leader di ' + summary.formerPartyName + ' a Capo dello Stato, al di sopra delle parti: qui si chiude la tua storia in questa partita.</p>' +
+      '<ul class="enacted-policy-list">' +
+      "<li><strong>Atti firmati:</strong> " + summary.actsSigned + "</li>" +
+      "<li><strong>Leggi rinviate alle Camere:</strong> " + summary.vetoesUsed + "</li>" +
+      "<li><strong>Grazie concesse:</strong> " + summary.graziesGranted + "</li>" +
+      "<li><strong>Giudici costituzionali nominati:</strong> " + summary.judgesAppointed + " su 5</li>" +
+      "<li><strong>Senatori a vita nominati:</strong> " + summary.senatorsAppointed + "</li>" +
+      "<li><strong>Crisi di governo gestite:</strong> " + summary.crisesManaged + "</li>" +
+      "</ul>" +
+      '<p class="ci-hint">Puoi esportare questa partita dalla barra in alto per conservarne un ricordo. Per continuare a giocare serve una nuova partita: la Presidenza, una volta conclusa, non torna alla guida di un partito.</p>' +
+      '<div class="choices"><button type="button" class="choice-btn" id="president-epilogue-newgame-btn"><span class="clabel">Inizia una nuova partita</span></button></div></div>';
+    var newGameBtn = document.getElementById("president-epilogue-newgame-btn");
+    if (newGameBtn) {
+      newGameBtn.addEventListener("click", function () {
+        if (!window.confirm("Sei sicuro? Questa partita, ormai conclusa, andrà persa definitivamente se non l'hai già esportata.")) return;
+        localStorage.removeItem(currentStorageKey());
+        window.location.reload();
+      });
+    }
   }
 
   // Bilancio dello Stato semplificato: entrate, uscite, saldo, debito e deficit sul PIL. Sempre
@@ -18966,6 +19265,7 @@
 
     if (state.phase === "setup") { renderSetup(); return; }
     if (state.phase === "career") { renderCareerDashboard(); return; }
+    if (state.phase === "president_epilogue") { renderPresidentEpilogue(); return; }
 
     if (state.phase === "election_result") {
       app.innerHTML = renderElectionResult();
@@ -19586,45 +19886,63 @@
     // mondo, parlamento) la pagina è diventata lunga — se il pulsante "Avanti" finisse in fondo, su un
     // telefono resterebbe fuori schermo anche tornando in cima, e sembrerebbe che il gioco si sia
     // bloccato quando non è così.
-    var body = renderPageNav();
-    if (state.phase === "building") {
-      var activeDossier = currentDossier();
-      if (!activeDossier) { pickNextDossier(); activeDossier = currentDossier(); }
-      // Se il giocatore ha perso le ultime primarie, non è più lui a scegliere: la CPU risolve da sola
-      // il dossier della settimana (una scelta a caso tra quelle disponibili) e si passa direttamente
-      // all'esito, senza aspettare un click che non arriverà mai — l'unica azione rimasta è "Avanti".
-      // Eccezione: le primarie stesse restano SEMPRE interattive, anche da sfiduciati — sono l'unico modo
-      // concreto per riconquistare la guida del partito, e auto-risolverle a caso lo impedirebbe.
-      if (state.player && !state.player.playerIsLeader && activeDossier && activeDossier.id !== "primarie_leadership" && activeDossier.choices && activeDossier.choices.length) {
-        var autoIdx = Math.floor(Math.random() * activeDossier.choices.length);
-        resolveDossierChoice(activeDossier, activeDossier.choices[autoIdx]);
-        state.resultData.autoPlayed = true;
-        state.phase = "result";
-        save();
+    var body;
+    if (state.mode === "president") {
+      // La modalità Presidente non ha pagine di partito: nessuna barra di navigazione, nessuna statistica
+      // di partito, nessun pannello di sondaggi — solo il dossier della settimana (i veri poteri
+      // costituzionali, vedi advancePresidentTurnLogic) e un cruscotto dedicato al settennato in corso.
+      body = "";
+      if (state.phase === "building") {
+        var presDossier = currentDossier();
+        if (!presDossier) { advancePresidentTurnLogic(); presDossier = currentDossier(); }
+        body += renderDossierCard(presDossier);
+      } else if (state.phase === "result") {
+        body += renderResultCard(state.resultData);
+        body += renderHeadlines(state.resultData.headlines);
       }
-    }
-    if (state.phase === "building") {
-      body += renderDossierCard(activeDossier);
-    } else if (state.phase === "result") {
-      body += renderResultCard(state.resultData);
-      body += renderHeadlines(state.resultData.headlines);
-    }
-    if (state.player && !state.player.formationComplete) body += renderFormationSocialPanel();
+      body += '<div id="page-content-anchor"></div>';
+      body += renderPresidentModePage();
+    } else {
+      body = renderPageNav();
+      if (state.phase === "building") {
+        var activeDossier = currentDossier();
+        if (!activeDossier) { pickNextDossier(); activeDossier = currentDossier(); }
+        // Se il giocatore ha perso le ultime primarie, non è più lui a scegliere: la CPU risolve da sola
+        // il dossier della settimana (una scelta a caso tra quelle disponibili) e si passa direttamente
+        // all'esito, senza aspettare un click che non arriverà mai — l'unica azione rimasta è "Avanti".
+        // Eccezione: le primarie stesse restano SEMPRE interattive, anche da sfiduciati — sono l'unico modo
+        // concreto per riconquistare la guida del partito, e auto-risolverle a caso lo impedirebbe.
+        if (state.player && !state.player.playerIsLeader && activeDossier && activeDossier.id !== "primarie_leadership" && activeDossier.choices && activeDossier.choices.length) {
+          var autoIdx = Math.floor(Math.random() * activeDossier.choices.length);
+          resolveDossierChoice(activeDossier, activeDossier.choices[autoIdx]);
+          state.resultData.autoPlayed = true;
+          state.phase = "result";
+          save();
+        }
+      }
+      if (state.phase === "building") {
+        body += renderDossierCard(activeDossier);
+      } else if (state.phase === "result") {
+        body += renderResultCard(state.resultData);
+        body += renderHeadlines(state.resultData.headlines);
+      }
+      if (state.player && !state.player.formationComplete) body += renderFormationSocialPanel();
 
-    // Ordine pensato per la settimana tipo: prima i numeri chiave e le azioni che si usano spesso
-    // (statistiche, sondaggi, eventi, riforme, referendum, alleanze, parlamento), poi tutto ciò che è
-    // più di consultazione occasionale — raccolto in blocchi richiudibili per non allungare la pagina
-    // di default (vedi wrapCollapsed).
-    body += renderPlayerStats();
-    body += renderPollGrid(state.prevSnapshot);
-    body += renderPublicOpinionPanel();
-    // Punto di aggancio per lo scroll dopo un cambio di pagina dalla barra in cima (vedi
-    // bindPageNavDrawer): senza un riferimento stabile, cambiare pagina riportava sempre in cima
-    // all'intera schermata (dossier, statistiche, sondaggi...), sopra al contenuto della pagina appena
-    // scelta — il giocatore doveva scorrere a mano ogni volta per vedere quello che aveva appena
-    // richiesto. id anziché una classe: deve essere unico e trovabile con getElementById dopo ogni render.
-    body += '<div id="page-content-anchor"></div>';
-    body += activePageDef().render();
+      // Ordine pensato per la settimana tipo: prima i numeri chiave e le azioni che si usano spesso
+      // (statistiche, sondaggi, eventi, riforme, referendum, alleanze, parlamento), poi tutto ciò che è
+      // più di consultazione occasionale — raccolto in blocchi richiudibili per non allungare la pagina
+      // di default (vedi wrapCollapsed).
+      body += renderPlayerStats();
+      body += renderPollGrid(state.prevSnapshot);
+      body += renderPublicOpinionPanel();
+      // Punto di aggancio per lo scroll dopo un cambio di pagina dalla barra in cima (vedi
+      // bindPageNavDrawer): senza un riferimento stabile, cambiare pagina riportava sempre in cima
+      // all'intera schermata (dossier, statistiche, sondaggi...), sopra al contenuto della pagina appena
+      // scelta — il giocatore doveva scorrere a mano ogni volta per vedere quello che aveva appena
+      // richiesto. id anziché una classe: deve essere unico e trovabile con getElementById dopo ogni render.
+      body += '<div id="page-content-anchor"></div>';
+      body += activePageDef().render();
+    }
     // Ogni render() ricostruisce l'intero DOM da zero (innerHTML), quindi lo stato open/closed di ogni
     // <details> richiudibile andrebbe perso a ogni singolo click che causa un re-render — anche solo
     // aprire una presa di posizione dentro "Iniziative al Parlamento Europeo" richiuderebbe l'intero
@@ -20246,6 +20564,56 @@
           state.log.unshift({ week: state.turn, title: "Mandato Esplorativo fallito: Camere sciolte", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
         }
         state.resultData = { resultText: mandatoText, headlines: [] };
+      } else if (dossier.cat === "Atto Presidenziale") {
+        var termAct = state.presidentTerm;
+        if (choice.presidentAct === "firma") {
+          termAct.actsSigned = (termAct.actsSigned || 0) + 1;
+          if (dossier.presidentMetric && state.countryProfile[dossier.presidentMetric] !== undefined) {
+            state.countryProfile[dossier.presidentMetric] = clamp(state.countryProfile[dossier.presidentMetric] + rand(0.05, 0.2), 1, 10);
+          }
+        } else if (choice.presidentAct === "rinvio") {
+          termAct.vetoesUsed = (termAct.vetoesUsed || 0) + 1;
+        }
+        state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "istituzioni", cat: "Atto Presidenziale" });
+        state.resultData = { resultText: choice.result, headlines: [] };
+      } else if (dossier.cat === "Grazia Presidenziale") {
+        var termGrazia = state.presidentTerm;
+        if (choice.presidentAct === "grazia_concessa") termGrazia.graziesGranted = (termGrazia.graziesGranted || 0) + 1;
+        state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "istituzioni", cat: "Grazia Presidenziale" });
+        state.resultData = { resultText: choice.result, headlines: [] };
+      } else if (dossier.cat === "Nomina Presidenziale") {
+        var termNom = state.presidentTerm;
+        if (choice.presidentAct === "giudice_vicino" || choice.presidentAct === "giudice_indipendente") termNom.judgesAppointed = (termNom.judgesAppointed || 0) + 1;
+        if (choice.presidentAct === "senatore_nominato") termNom.senatorsAppointed = (termNom.senatorsAppointed || 0) + 1;
+        state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "istituzioni", cat: "Nomina Presidenziale" });
+        state.resultData = { resultText: choice.result, headlines: [] };
+      } else if (dossier.cat === "Crisi di Governo (Presidenza)") {
+        var termCrisi = state.presidentTerm;
+        termCrisi.crisesManaged = (termCrisi.crisesManaged || 0) + 1;
+        var crisisCtx = dossier.presidentCrisisContext || {};
+        var crisisText;
+        if (choice.presidentCrisisChoice === "scioglimento") {
+          state.snapElectionPending = true;
+          state.nextElectionTurn = state.turn + 8;
+          applyGovernmentCollapseLeadershipShock();
+          crisisText = "Sciogli le Camere senza tentare un mandato esplorativo: il paese torna al voto con una campagna lampo.";
+        } else {
+          var presMandatoChance = clamp(0.4 + (crisisCtx.semestreBianco ? 0.15 : 0), 0.1, 0.85);
+          if (Math.random() < presMandatoChance) {
+            state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+            crisisText = "Il mandato esplorativo va a buon fine: nasce un nuovo governo senza bisogno di elezioni anticipate.";
+          } else if (crisisCtx.semestreBianco) {
+            state.consensoGoverno = 22;
+            crisisText = "Il mandato esplorativo fallisce, ma il semestre bianco del tuo stesso mandato ti impedisce comunque di sciogliere le Camere: il governo prosegue per i soli affari correnti fino alla fine del semestre.";
+          } else {
+            state.snapElectionPending = true;
+            state.nextElectionTurn = state.turn + 8;
+            applyGovernmentCollapseLeadershipShock();
+            crisisText = "Il mandato esplorativo fallisce: sciogli le Camere e il paese torna al voto.";
+          }
+        }
+        state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: crisisText, headlines: [], type: "istituzioni", cat: "Crisi di Governo (Presidenza)" });
+        state.resultData = { resultText: crisisText, headlines: [] };
       } else if (dossier.id === "primarie_leadership") {
         resolvePrimariesChoice(dossier, choice);
       } else if (dossier.cpuMozioneMeta) {
@@ -21281,6 +21649,10 @@
   }
   async function advanceTurnLogicCore() {
     state.inlineExpandedTopic = null;
+    // Se il giocatore è diventato Presidente della Repubblica (vedi beginPlayerPresidency), l'intera
+    // catena di dossier di partito qui sotto non si applica più: il turno passa per intero da
+    // advancePresidentTurnLogic, con le sue proprie regole, finché non finisce il settennato.
+    if (state.mode === "president") { advancePresidentTurnLogic(); return; }
     // Priorità assoluta, prima di qualunque altra cosa: finché il comitato promotore non ha raccolto le
     // firme necessarie, il partito non esiste ancora davvero — niente drift settimanale, niente eventi di
     // partiti rivali, niente Parlamento, solo la Raccolta Firme (vedi buildFormationDossier). Il ciclo
