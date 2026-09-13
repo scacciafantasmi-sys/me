@@ -6820,6 +6820,67 @@
     };
   }
 
+  // ---------- Invecchiamento del leader ----------
+  // Finora il leader non invecchiava mai: anche in un salvataggio di 35 anni di gioco (vedi il salvataggio
+  // reale usato per i test di regressione) restava, di fatto, eternamente giovane. L'età non si salva e si
+  // aggiorna turno per turno: si CALCOLA da ageAtFounding + gli anni di gioco trascorsi da foundedTurn, così
+  // resta sempre coerente da sola, e un salvataggio precedente a questa funzionalità riceve comunque un'età
+  // di partenza ragionevole (vedi PLAYER_FIELD_DEFAULTS.ageAtFounding) senza bisogno di alcuna migrazione.
+  function leaderAge(p) {
+    if (!p) return 45;
+    var years = Math.floor(Math.max(0, state.turn - (p.foundedTurn || 0)) / 52);
+    var base = (p.ageAtFounding !== undefined && p.ageAtFounding !== null) ? p.ageAtFounding : 45;
+    return Math.round(base + years);
+  }
+  var LEADER_AGING_COOLDOWN_TURNS = 120;
+  function checkLeaderAgingTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader) return false;
+    if (leaderAge(p) < 68) return false;
+    if (state.turn < (p.leaderAgingCooldownTurn || 0)) return false;
+    var chance = clamp((leaderAge(p) - 65) * 0.006, 0.01, 0.14);
+    return Math.random() < chance;
+  }
+  function buildLeaderAgingDossier() {
+    var p = state.player;
+    p.leaderAgingCooldownTurn = state.turn + LEADER_AGING_COOLDOWN_TURNS;
+    var age = leaderAge(p);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Il peso degli anni",
+      cat: "Vita Privata", title: "A " + age + " anni, che fare della leadership?",
+      brief: "Hai ormai " + age + " anni. Non è una domanda che ti fai spesso, ma dentro il partito qualcuno ha iniziato a farsela per te: quanto ancora vuoi, e puoi, restare alla guida?",
+      choices: [
+        { label: "Continua a guidare il partito come sempre", hint: "Nessun cambiamento, ma il tema tornerà", effects: { reputazione: 1 }, result: "Scegli di continuare come se nulla fosse: il partito prende atto, anche se il tema tornerà a riproporsi." },
+        { label: "Avvia un percorso di successione, restando alla guida", hint: "Rassicura il partito sul futuro, senza lasciare subito", successionAnnounced: true, effects: { reputazione: 2 }, result: "Annunci pubblicamente l'avvio di un percorso di successione interna, pur restando alla guida per ora: il partito apprezza la chiarezza su un tema che finora tutti evitavano di affrontare apertamente." },
+        { label: "Ritirati ora, lascia la guida a un successore", hint: "Chiudi qui la tua stagione da leader, ma resti nel partito", retireLeader: true, effects: { reputazione: 3 }, result: "Annunci il ritiro dalla guida del partito, con un passaggio di consegne ordinato: una scelta che ti guadagna rispetto, anche da parte di chi non ti ha mai amato particolarmente." }
+      ]
+    };
+  }
+  var LEADER_HEALTH_CRISIS_COOLDOWN_TURNS = 60;
+  function checkLeaderHealthCrisisTrigger() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader) return false;
+    if (leaderAge(p) < 82) return false;
+    if (state.turn < (p.leaderHealthCrisisCooldownTurn || 0)) return false;
+    var chance = clamp((leaderAge(p) - 80) * 0.003, 0.005, 0.06);
+    return Math.random() < chance;
+  }
+  function buildLeaderHealthCrisisDossier() {
+    var p = state.player;
+    p.leaderHealthCrisisCooldownTurn = state.turn + LEADER_HEALTH_CRISIS_COOLDOWN_TURNS;
+    var age = leaderAge(p);
+    var successor = primariesChallengerName(p);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Un malore improvviso",
+      cat: "Vita Privata", title: "Un malore ti costringe a fermarti",
+      brief: "A " + age + " anni, un malore improvviso ti costringe a un ricovero precauzionale. I medici parlano di prognosi favorevole, ma il messaggio politico è inevitabile: il partito ha bisogno di una guida sempre presente. " + (p.short || p.name) + " affida la guida operativa a " + successor + ".",
+      choices: [
+        { label: "Accetta il passaggio di consegne con un messaggio pubblico", hint: "Un'uscita di scena ordinata, che guadagna rispetto", retireLeader: true, forcedSuccessorName: successor, effects: { reputazione: 4 }, result: "Il messaggio pubblico trasforma un momento delicato in un passaggio di consegne ordinato: " + successor + " prende la guida del partito, e il partito ne esce senza scosse." },
+        { label: "Prova a restare formalmente alla guida nonostante tutto", hint: "Rischi di apparire in negazione, ma resti leader sulla carta", retireLeader: true, forcedSuccessorName: successor, effects: { reputazione: -3 }, result: "Il tentativo di restare formalmente alla guida nonostante il malore viene letto come un rifiuto di fare i conti con la realtà: " + successor + " gestisce comunque tutto nella pratica, mentre la tua immagine ne risente." }
+      ]
+    };
+  }
+
   // ---------- Endorsement pubblici ----------
   // Nessun personaggio pubblico esterno al mondo dei partiti aveva mai un momento proprio, in bene o in
   // male: solo la stampa (Rapporti con la Stampa) e gli attori istituzionali reagivano al partito. Qui un
@@ -12580,7 +12641,13 @@
     // già esistente è per definizione già formato): solo la creazione di un partito NUOVO (vedi il ramo
     // "new" alla fondazione) lo imposta esplicitamente a false, per attraversare la Raccolta Firme
     // (vedi buildFormationDossier) prima di poter davvero cominciare a giocare.
-    formationComplete: true, formationSignatures: 0, formationOrganizerHired: false, formationSocialPostTurn: 0
+    formationComplete: true, formationSignatures: 0, formationOrganizerHired: false, formationSocialPostTurn: 0,
+    // Età di partenza del leader al momento della fondazione/presa in mano del partito: da qui, insieme a
+    // foundedTurn, si calcola l'età attuale (vedi leaderAge) senza bisogno di aggiornarla turno per turno.
+    // 45 è il default per un salvataggio precedente a questa funzionalità (mai avuto occasione di
+    // impostarlo esplicitamente): una via di mezzo ragionevole per chi ha già una storia di partito alle
+    // spalle, non un neofita né un veterano di fine carriera.
+    ageAtFounding: 45, leaderAgingCooldownTurn: 0, leaderHealthCrisisCooldownTurn: 0, successionAnnounced: false
   };
   // Riempie in target ogni campo assente in defaults (senza mai sovrascrivere un valore già presente),
   // scendendo di un livello negli oggetti annidati (es. countryProfile) così anche un singolo indicatore
@@ -15095,6 +15162,10 @@
       state.player.logoDataUrl = d.logoDataUrl || null;
       state.player.short = (d.short || "").trim() || null;
       state.player.foundedTurn = state.turn;
+      // Chi fonda un partito da zero è più spesso una figura più giovane, in cerca di spazio; chi prende
+      // il comando di un partito già esistente eredita più spesso una leadership già navigata (vedi
+      // leaderAge, che da qui in avanti fa invecchiare il leader davvero, un anno di gioco alla volta).
+      state.player.ageAtFounding = Math.round(isTakeover ? rand(40, 66) : rand(32, 58));
       // Un partito fondato da zero non nasce già "vero": prima serve un comitato promotore che raccolga
       // davvero le firme necessarie a depositare le liste (vedi buildFormationDossier) — un partito preso
       // in mano con "Prendi il comando" esiste già per definizione ed è escluso da questo passaggio.
@@ -16743,6 +16814,7 @@
     var govWeeks = p.cumulativeGovWeeks || 0;
     var govShare = weeksActive > 0 ? Math.round((govWeeks / weeksActive) * 100) : 0;
     var stats = [
+      { label: "Età attuale del leader", value: leaderAge(p) + " anni" + (p.successionAnnounced && p.playerIsLeader ? " (percorso di successione avviato)" : "") + (!p.playerIsLeader ? " — non più alla guida: ora tocca a " + (p.interimLeaderName || "un successore") : "") },
       { label: isTakeoverParty ? "Settimane sotto la tua guida" : "Settimane di attività", value: weeksActive },
       { label: "Iscritti attuali", value: Math.round(p.iscritti || 0).toLocaleString("it-IT") },
       { label: isTakeoverParty ? "Picco nei sondaggi sotto la tua guida" : "Picco storico nei sondaggi", value: (p.peakSondaggi || p.sondaggi || 0).toFixed(1) + "%" },
@@ -19957,6 +20029,12 @@
           state.player.judicialRisk = clamp(state.player.judicialRisk + choice.judicialRiskDelta, 1, 95);
         }
         if (choice.hiresFormationOrganizer) state.player.formationOrganizerHired = true;
+        if (choice.successionAnnounced) state.player.successionAnnounced = true;
+        if (choice.retireLeader) {
+          var agingSuccessor = choice.forcedSuccessorName || primariesChallengerName(state.player);
+          state.player.playerIsLeader = false;
+          state.player.interimLeaderName = agingSuccessor;
+        }
         checkFormationCompletion(res);
         // Un Arco Narrativo non finisce mai qui: ogni puntata intermedia si limita ad accumulare
         // pressione (vedi advanceStoryArc) e a passare alla prossima settimana come qualunque altro
@@ -21412,6 +21490,20 @@
     if (state.turn >= (p.privateLifeCooldownTurn || 0) && Math.random() < 0.05) {
       p.privateLifeCooldownTurn = state.turn + PRIVATE_LIFE_COOLDOWN_TURNS;
       state.aiDynamicDossier = buildPrivateLifeDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkLeaderHealthCrisisTrigger()) {
+      state.aiDynamicDossier = buildLeaderHealthCrisisDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkLeaderAgingTrigger()) {
+      state.aiDynamicDossier = buildLeaderAgingDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
