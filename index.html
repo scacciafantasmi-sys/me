@@ -11146,6 +11146,9 @@
     if (state.turn < (p.referendumCooldownTurn || 0)) return null;
     if (p.pendingReferendum) return null;
     if (p.fondi < REFERENDUM_PROPOSAL_COST) return null;
+    // Rete di sicurezza oltre alla pulizia della cache in renderReferendumProposal: se per qualunque motivo
+    // arriva qui un quesito già risolto (da questo o da un altro sistema), non va comunque riproposto.
+    if ((p.acceptedReferendum || []).indexOf(topic.title) !== -1 || (p.resolvedTopicNouns || []).indexOf(topic.noun) !== -1) return null;
     p.fondi -= REFERENDUM_PROPOSAL_COST;
     p.referendumLegislatureUsed = state.legislature;
     p.referendumCooldownTurn = state.turn + 30;
@@ -11288,6 +11291,16 @@
     if (p.fondi < REFERENDUM_PROPOSAL_COST) {
       html += '<p class="ci-hint">Servono almeno ' + fmtEuro(REFERENDUM_PROPOSAL_COST) + " per avviare la raccolta firme.</p></section>";
       return html;
+    }
+    // Il pool era generato una volta e poi tenuto in cache finché non del tutto esaurito (proposto o
+    // "Rimescola"): un quesito passava di "resolvedTopicNouns" per un'altra via — un rivale CPU, oppure
+    // il giocatore stesso da un ALTRO sistema (mozione/legge sullo stesso tema) — e restava comunque
+    // visibile e PROPONIBILE qui, perché nulla filtrava mai la cache già popolata contro lo stato
+    // aggiornato. Ora la cache viene ripulita a ogni render (non solo rigenerata da zero quando è vuota),
+    // così un quesito già affrontato sparisce subito dalla lista, da qualunque sistema sia stato risolto.
+    if (p.referendumCandidates && p.referendumCandidates.length) {
+      var acceptedRef = p.acceptedReferendum || [], resolvedNounsRef = p.resolvedTopicNouns || [];
+      p.referendumCandidates = p.referendumCandidates.filter(function (t) { return acceptedRef.indexOf(t.title) === -1 && resolvedNounsRef.indexOf(t.noun) === -1; });
     }
     if (!p.referendumCandidates || !p.referendumCandidates.length) p.referendumCandidates = generateReferendumCandidates(p);
     html += '<p class="ci-hint">Scegli un quesito da proporre: costa ' + fmtEuro(REFERENDUM_PROPOSAL_COST) + ", con un tempo di raccolta firme prima dell'esito.</p>" +
@@ -11513,6 +11526,8 @@
     if (!p.inParliament) return null;
     if (state.turn < (p.mozioneCooldownTurn || 0)) return null;
     if (p.pendingMozione) return null;
+    // Rete di sicurezza oltre alla pulizia della cache in renderMozioniPanel.
+    if ((p.acceptedMozioni || []).indexOf(topic.title) !== -1 || (p.resolvedTopicNouns || []).indexOf(topic.noun) !== -1) return null;
     p.mozioneCooldownTurn = state.turn + MOZIONE_COOLDOWN_TURNS;
     p.pendingMozione = {
       title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun,
@@ -11595,6 +11610,8 @@
     if (!p.inParliament) return null;
     if (state.turn < (p.leggeCooldownTurn || 0)) return null;
     if (p.pendingLegge) return null;
+    // Rete di sicurezza oltre alla pulizia della cache in renderLeggiPanel.
+    if ((p.acceptedLeggi || []).indexOf(topic.title) !== -1 || (p.resolvedTopicNouns || []).indexOf(topic.noun) !== -1) return null;
     p.leggeCooldownTurn = state.turn + LEGGE_COOLDOWN_TURNS;
     p.pendingLegge = {
       title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun,
@@ -11724,6 +11741,8 @@
     if (!p.inParliament) return null;
     if (state.turn < (p.amendmentCooldownTurn || 0)) return null;
     if (p.pendingAmendment) return null;
+    // Rete di sicurezza oltre alla pulizia della cache in renderAmendmentPanel.
+    if ((p.acceptedAmendments || []).indexOf(topic.title) !== -1) return null;
     p.amendmentCooldownTurn = state.turn + AMENDMENT_COOLDOWN_TURNS;
     p.pendingAmendment = {
       title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun,
@@ -12038,6 +12057,17 @@
       html += '<p class="ci-hint">Puoi presentare una nuova mozione tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
       return html;
     }
+    // Stessa correzione della cache vista per i referendum sopra (vedi il commento lì): un tema già
+    // affrontato — anche da un rivale CPU, o dal giocatore su un altro sistema (legge/referendum) — non
+    // deve restare visibile qui solo perché il pool era stato generato prima che il tema si risolvesse.
+    if (p.mozioneCandidates && p.mozioneCandidates.length) {
+      var acceptedMoz = p.acceptedMozioni || [], resolvedNounsMoz = p.resolvedTopicNouns || [];
+      var isGovernoMoz = p.parliamentRole === "governo";
+      p.mozioneCandidates = p.mozioneCandidates.filter(function (t) {
+        return acceptedMoz.indexOf(t.title) === -1 && resolvedNounsMoz.indexOf(t.noun) === -1 &&
+          (!isGovernoMoz || t.title.indexOf("di contrasto sul Governo") === -1);
+      });
+    }
     if (!p.mozioneCandidates || !p.mozioneCandidates.length) p.mozioneCandidates = generateMozioneCandidates(p);
     var probHint = Math.round(mozioneAcceptProbability(p) * 100);
     html += '<p class="ci-hint">Presentabile una volta ogni ' + MOZIONE_COOLDOWN_TURNS + ' settimane, gratuita. In base alla distanza dalla linea del Governo in carica, ha circa il ' + probHint + '% di probabilità di essere approvata. Scegli una mozione da presentare:</p><div class="option-grid">';
@@ -12062,6 +12092,11 @@
       html += '<p class="ci-hint">Puoi depositare una nuova proposta di legge tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
       return html;
     }
+    // Stessa correzione della cache vista per referendum e mozioni sopra.
+    if (p.leggeCandidates && p.leggeCandidates.length) {
+      var acceptedLeg = p.acceptedLeggi || [], resolvedNounsLeg = p.resolvedTopicNouns || [];
+      p.leggeCandidates = p.leggeCandidates.filter(function (t) { return acceptedLeg.indexOf(t.title) === -1 && resolvedNounsLeg.indexOf(t.noun) === -1; });
+    }
     if (!p.leggeCandidates || !p.leggeCandidates.length) p.leggeCandidates = generateLawCandidates(p);
     var probHint = Math.round(leggeAcceptProbability(p) * 100);
     html += '<p class="ci-hint">A differenza di una mozione (un atto di indirizzo), una proposta di legge diventa davvero legge dello Stato se approvata: effetti reali più forti, ma più difficile da far passare. Presentabile una volta ogni ' + LEGGE_COOLDOWN_TURNS + ' settimane, gratuita. In base alla distanza dalla linea del Governo in carica, ha circa il ' + probHint + '% di probabilità di essere approvata. Scegli una proposta da depositare:</p><div class="option-grid">';
@@ -12085,6 +12120,11 @@
     if (weeksLeft > 0) {
       html += '<p class="ci-hint">Puoi depositare una nuova proposta di modifica tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
       return html;
+    }
+    // Stessa correzione della cache vista sopra per referendum/mozioni/leggi.
+    if (p.amendmentCandidates && p.amendmentCandidates.length) {
+      var acceptedAmend = p.acceptedAmendments || [];
+      p.amendmentCandidates = p.amendmentCandidates.filter(function (t) { return acceptedAmend.indexOf(t.title) === -1; });
     }
     if (!p.amendmentCandidates || !p.amendmentCandidates.length) p.amendmentCandidates = generateAmendmentCandidates(p);
     var probHint = Math.round(amendmentAcceptProbability(p) * 100);
