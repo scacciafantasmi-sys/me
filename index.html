@@ -19531,13 +19531,10 @@
         if (onBeforeNavigate) onBeforeNavigate();
         state.uiPage = btn.getAttribute("data-nav-page");
         save();
+        // render() stesso riporta la vista in cima quando uiPage cambia (vedi lastRenderScrollKey in
+        // renderCore): non serve più uno scroll separato qui, e uno scrollIntoView aggiuntivo dopo
+        // finirebbe solo per sovrascriverlo scorrendo di nuovo più in basso, verso #page-content-anchor.
         render();
-        // Scorre fino al contenuto della pagina appena scelta (vedi #page-content-anchor), non in cima
-        // a tutta la schermata: dossier/statistiche/sondaggi restano sempre sopra, quindi tornare
-        // all'assoluto inizio nascondeva proprio quello che si era appena andati a cercare.
-        var anchor = document.getElementById("page-content-anchor");
-        if (anchor) anchor.scrollIntoView({ block: "start" });
-        else window.scrollTo(0, 0);
       });
     });
   }
@@ -19598,8 +19595,23 @@
       });
     }
   }
-  var lastScrolledResultPhase = false;
+  // Riporta la vista in cima ogni volta che cambia davvero SCHERMATA (fase di gioco, dossier corrente,
+  // settimana, pagina di navigazione...), non a ogni singolo re-render — altrimenti aprire un pannello
+  // <details> o compilare un campo del form richiamerebbe render() e scatterebbe uno scroll indesiderato
+  // in mezzo all'interazione. Prima questo scorreva in cima SOLO quando si entrava in fase "result", ed
+  // era piazzato in fondo a renderCore(): fasi che escono prima (setup, career, president_epilogue,
+  // election_result, regime_choice...) non lo raggiungevano mai, e un nuovo dossier della settimana (fase
+  // "building" dopo aver premuto "Avanti") non veniva mai considerato — da cui le due lamentele: l'inizio
+  // partita e il cambio pagina che non tornavano in cima, e il contenuto della nuova settimana che compariva
+  // sotto lo scroll residuo della settimana precedente, sembrando che il gioco si fosse bloccato.
+  var lastRenderScrollKey = null;
   function renderCore() {
+    var scrollKey = state.phase + "|" + (state.currentDossierId || "") + "|" + state.turn + "|" + state.uiPage + "|" + (state.mode || "");
+    if (scrollKey !== lastRenderScrollKey && typeof window !== "undefined" && window.scrollTo) {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+    lastRenderScrollKey = scrollKey;
+
     renderMasthead();
     updateSaveControls();
     applyGameTheme();
@@ -20297,19 +20309,6 @@
       });
     }
     bindInteractions();
-
-    // Dopo aver risolto un'iniziativa l'utente resta spesso con lo scroll in basso, dov'era la
-    // casella di testo: senza questo, il pulsante "Avanti alla settimana
-    // successiva" (che compare in cima al nuovo contenuto) può restare fuori dallo schermo e sembrare
-    // che il gioco si sia bloccato, quando in realtà ha già prodotto un esito ed è pronto a proseguire.
-    // Deve però scattare una volta sola all'ingresso nella fase "result": la fase resta "result" anche
-    // mentre l'utente interagisce con pannelli sempre visibili (Riforme di Governo, Mozioni, Proposte di
-    // Legge) senza premere "Avanti", e un re-render a ogni click su quei pannelli non deve rimandarlo
-    // in cima alla pagina ogni volta.
-    if (state.phase === "result" && !lastScrolledResultPhase && typeof window !== "undefined" && window.scrollTo) {
-      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-    }
-    lastScrolledResultPhase = state.phase === "result";
   }
 
   // Estratto in una funzione a sé (richiamata sia dal click sulle scelte, sia dall'auto-risoluzione in
