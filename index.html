@@ -868,15 +868,22 @@
   // maggioritario delle famiglie "storiche" — vedi il moltiplicatore di crescita in recomputePeriodic.
   var NICHE_FAMILIES = { fascista: true, monarchico: true, comunista: true, gratuitista: true, comunismolusso: true };
   // Posizione approssimativa sull'asse sinistra-destra di ogni famiglia ideologica (-3 estrema sinistra,
-  // +3 estrema destra): usata SOLO per bloccare in modo categorico le coalizioni platealmente assurde
-  // (es. un partito comunista alleato con uno nazional-fascista) — non per graduare la probabilità, che
-  // resta affidata alle relazioni tra partiti già esistenti (vedi inviteParty/inviteToBloc).
+  // +3 estrema destra): usata per bloccare in modo categorico le coalizioni ideologicamente incoerenti —
+  // non per graduare la probabilità, che resta affidata alle relazioni tra partiti già esistenti (vedi
+  // inviteParty/inviteToBloc).
   var LEFT_RIGHT_POSITION = {
     comunista: -3, comunismolusso: -3, sinistra: -2, gratuitista: -2, progressista: -1.5, movimentista: -1,
     tecnoprogressista: 0, europeista: 0, regionalista: 0, meridionalista: 0, cattolico: 0.5,
     libertario: 1, liberale: 1, sovranista: 2, monarchico: 2, nazionalpopolare: 2.5, fascista: 3
   };
-  var COALITION_IDEOLOGY_GAP_LIMIT = 4.4;
+  // Prima il limite era 4.4 su una scala di ampiezza 6 (-3/+3): abbastanza largo da lasciar allearsi un
+  // partito di centro (posizione 0) sia con l'estrema sinistra comunista (gap 3) sia con l'estrema destra
+  // nazional-fascista (gap 3), segnalato da un giocatore che vedeva Potere al Popolo/Rifondazione tra gli
+  // alleati invitabili in una coalizione di centro. 2.0 è il minimo che lascia intatte le due coalizioni
+  // storiche già codificate (serve un gap di 2 per includere il meridionalista in Centrodestra, la
+  // combinazione più larga tra quelle esistenti) mentre rende ogni altra coalizione ideologicamente
+  // coerente: solo famiglie davvero vicine sull'asse possono allearsi, mai capo e coda dello spettro.
+  var COALITION_IDEOLOGY_GAP_LIMIT = 2;
   function ideologicallyIncompatible(famIdA, famIdB) {
     var a = LEFT_RIGHT_POSITION[famIdA], b = LEFT_RIGHT_POSITION[famIdB];
     if (a === undefined || b === undefined) return false;
@@ -18616,7 +18623,7 @@
       // durante la partita.
       var takenIds2 = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
       (state.dynamicCoalitions || []).forEach(function (c) { takenIds2 = takenIds2.concat(c.members); });
-      var expandCandidates = activeParties().filter(function (party) { return takenIds2.indexOf(party.id) === -1; })
+      var expandCandidates = activeParties().filter(function (party) { return takenIds2.indexOf(party.id) === -1 && !ideologicallyIncompatible(p.family, party.familyId); })
         .sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
       if (expandCandidates.length) {
         html += '<p class="ci-hint">Puoi invitare qualsiasi altro partito a unirsi alla tua coalizione:</p><div class="option-grid">';
@@ -18628,7 +18635,7 @@
         html += "</div>";
       }
     } else {
-      html += '<p class="ci-hint">Nessuna alleanza in corso: puoi invitare un blocco o un singolo partito — QUALSIASI partito, in qualsiasi momento. L\'invito può essere accettato o rifiutato, non è mai automatico.</p><div class="option-grid">';
+      html += '<p class="ci-hint">Nessuna alleanza in corso: puoi invitare un blocco o un singolo partito, ma solo tra quelli ideologicamente vicini a te — i partiti troppo distanti sull\'asse sinistra-destra non compaiono nemmeno tra gli invitabili. L\'invito può comunque essere accettato o rifiutato, non è mai automatico.</p><div class="option-grid">';
       [["centrodestra", "Centrodestra", "FdI, Lega, Forza Italia"], ["campolargo", "Campo Largo", "PD, AVS, M5S"]].forEach(function (b) {
         var cd = p.coalitionInviteCooldowns[b[0]] || 0;
         var weeksLeft = cd - state.turn;
@@ -18652,7 +18659,11 @@
       });
       var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
       (state.dynamicCoalitions || []).forEach(function (c) { takenIds = takenIds.concat(c.members); });
-      var candidates = activeParties().filter(function (party) { return takenIds.indexOf(party.id) === -1; })
+      // I partiti ideologicamente incompatibili (vedi ideologicallyIncompatible) non compaiono proprio tra
+      // gli invitabili: prima restavano visibili con un rifiuto garantito, lasciando pensare che una
+      // coalizione tra capo e coda dello spettro (es. centro + comunista, o centro + nazional-fascista)
+      // fosse comunque un tentativo sensato da poter fare.
+      var candidates = activeParties().filter(function (party) { return takenIds.indexOf(party.id) === -1 && !ideologicallyIncompatible(p.family, party.familyId); })
         .sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
       candidates.forEach(function (party) {
         var cd = p.coalitionInviteCooldowns[party.id] || 0;
