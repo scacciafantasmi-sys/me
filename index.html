@@ -2922,6 +2922,245 @@
       '<div class="nuclei-grid">' + pills + '</div>' + extra + '</section>';
   }
 
+  // ---------- Le Regioni d'Italia: un livello politico proprio, non solo un'etichetta sotto il nome
+  // della città ---------- Prima "regione" esisteva solo come stringa libera su ITALY_LOCATIONS, mai
+  // aggregata: nessun presidente di regione, nessuna maggioranza regionale, nessuna vera elezione
+  // regionale distinta da quella comunale (un'unica tornata generica "comunali/provinciali/regionali"
+  // fingeva di coprire tutti e tre i livelli con la stessa formula). Segnalato da un giocatore: le
+  // elezioni regionali non avevano alcun peso proprio. Qui le 20 regioni diventano entità persistenti,
+  // ciascuna con un presidente/famiglia di riferimento, un proprio calendario elettorale sfalsato (come
+  // nella realtà, non tutte insieme lo stesso giorno) e due temi-simbolo che ne caratterizzano i problemi
+  // reali, usati sia dal dossier di elezione sia da eventi periodici di "problema regionale" — riusando
+  // lo stesso motore di scelte (buildSituationChoices/THEME_POLICY_ARCHETYPES) già collaudato ovunque nel
+  // gioco, non un contenuto scritto da zero e quindi più povero.
+  var ITALIAN_REGIONS = [
+    { id: "Lazio", area: "centro", issues: ["sanita", "trasporti"] },
+    { id: "Lombardia", area: "nord", issues: ["economia", "trasporti"] },
+    { id: "Campania", area: "sud", issues: ["lavoro", "casa"] },
+    { id: "Piemonte", area: "nord", issues: ["economia", "lavoro"] },
+    { id: "Emilia-Romagna", area: "nord", issues: ["economia", "agricoltura"] },
+    { id: "Toscana", area: "centro", issues: ["cultura", "ambiente"] },
+    { id: "Puglia", area: "sud", issues: ["energia", "lavoro"] },
+    { id: "Veneto", area: "nord", issues: ["economia", "immigrazione"] },
+    { id: "Liguria", area: "nord", issues: ["trasporti", "lavoro"] },
+    { id: "Sicilia", area: "isole", issues: ["lavoro", "immigrazione"] },
+    { id: "Sardegna", area: "isole", issues: ["energia", "infrastrutture"] },
+    { id: "Marche", area: "centro", issues: ["economia", "lavoro"] },
+    { id: "Umbria", area: "centro", issues: ["economia", "giovani"] },
+    { id: "Abruzzo", area: "sud", issues: ["trasporti", "infrastrutture"] },
+    { id: "Basilicata", area: "sud", issues: ["lavoro", "ambiente"] },
+    { id: "Calabria", area: "sud", issues: ["sanita", "lavoro"] },
+    { id: "Trentino-Alto Adige", area: "nord", issues: ["ambiente", "economia"] },
+    { id: "Friuli-Venezia Giulia", area: "nord", issues: ["sicurezza", "economia"] },
+    { id: "Molise", area: "sud", issues: ["lavoro", "sanita"] },
+    { id: "Valle d'Aosta", area: "nord", issues: ["energia", "ambiente"] }
+  ];
+  function regionById(id) { return ITALIAN_REGIONS.filter(function (r) { return r.id === id; })[0] || null; }
+  var REGIONAL_ELECTION_CYCLE_WEEKS = 260; // un mandato regionale, come nella realtà, dura 5 anni
+  // Non una mappa geografica reale (i governatori veri sono persone reali, mai riprodotte in questo
+  // gioco dichiaratamente fittizio): solo un'inclinazione plausibile per macroarea, sulla stessa base
+  // sinistra-destra già usata per le coalizioni (CENTRODESTRA_ALIGNED_FAMILIES/CAMPOLARGO_ALIGNED_FAMILIES).
+  function pickRegionalGoverningFamily(area) {
+    var cdPool = Object.keys(CENTRODESTRA_ALIGNED_FAMILIES);
+    var clPool = Object.keys(CAMPOLARGO_ALIGNED_FAMILIES);
+    var cdChance = area === "nord" ? 0.68 : area === "centro" ? 0.38 : 0.5;
+    var pool = Math.random() < cdChance ? cdPool : clPool;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  function pickPartyForFamily(famId) {
+    var candidates = PARTIES.filter(function (pt) { return pt.familyId === famId; });
+    if (!candidates.length) candidates = PARTIES;
+    return candidates[Math.floor(Math.random() * candidates.length)].id;
+  }
+  // Inizializza (o ripara, per i salvataggi precedenti a questa funzionalità) lo stato di tutte e 20 le
+  // regioni: chiamata difensivamente da ogni funzione regionale, sullo stesso modello già usato altrove
+  // nel file per lo stato aggiunto in corsa (es. "if (!state.dynamicCoalitions) state.dynamicCoalitions
+  // = [];"). Il calendario elettorale è sfalsato su un'intera legislatura regionale invece che tutte le
+  // regioni lo stesso identico turno, cosi' le elezioni regionali diventano un evento che torna a
+  // scadenze diverse tutto l'anno, non un'unica tornata annunciata una volta sola.
+  function ensureRegionsInit() {
+    if (state.regions && Object.keys(state.regions).length >= ITALIAN_REGIONS.length) return;
+    if (!state.regions) state.regions = {};
+    ITALIAN_REGIONS.forEach(function (region, idx) {
+      if (state.regions[region.id]) return;
+      var famId = pickRegionalGoverningFamily(region.area);
+      state.regions[region.id] = {
+        governorFamilyId: famId, governorPartyId: pickPartyForFamily(famId), playerGoverns: false,
+        lastElectionTurn: null,
+        nextElectionTurn: state.turn + 10 + Math.floor((idx / ITALIAN_REGIONS.length) * REGIONAL_ELECTION_CYCLE_WEEKS) + Math.floor(Math.random() * 15)
+      };
+    });
+  }
+  function playerSectionsInRegion(regionId) {
+    return openNuclei().filter(function (loc) { return loc.region === regionId; });
+  }
+  // Quanto pesa la campagna del giocatore in quella specifica regione: sondaggi nazionali (un partito
+  // conosciuto parte avvantaggiato ovunque) più un bonus per ogni sezione aperta proprio lì (radicamento
+  // reale, non solo notorietà) più un piccolo bonus per la presenza complessiva sul territorio.
+  function computeRegionalCampaignStrength(regionId) {
+    var p = state.player;
+    var sectionsHere = playerSectionsInRegion(regionId).length;
+    return clamp(p.sondaggi * 0.5, 0, 20) + sectionsHere * 4 + Math.min(openNuclei().length, 10) * 0.3;
+  }
+  // Una regione dove il giocatore non ha alcuna sezione resta cronaca di sottofondo: la maggioranza
+  // cambia solo in minoranza dei casi (più stabilità nel tempo, non un ribaltone ogni 5 anni ovunque),
+  // pesata sulla stessa inclinazione per macroarea usata all'inizializzazione.
+  function resolveRegionalElectionBackground(regionId) {
+    var region = regionById(regionId);
+    var r = state.regions[regionId];
+    var prevFamId = r.governorFamilyId;
+    var stays = Math.random() < 0.65;
+    var newFamId = stays ? prevFamId : pickRegionalGoverningFamily(region.area);
+    r.governorFamilyId = newFamId;
+    r.governorPartyId = pickPartyForFamily(newFamId);
+    r.playerGoverns = false;
+    r.lastElectionTurn = state.turn;
+    r.nextElectionTurn = state.turn + REGIONAL_ELECTION_CYCLE_WEEKS + Math.floor(Math.random() * 15) - 7;
+    if (!stays) {
+      var famLabel = (familyById(newFamId) || {}).label || newFamId;
+      var text = "In " + regionId + " le elezioni regionali cambiano la maggioranza: vince l'area " + famLabel.toLowerCase() + ".";
+      state.log.unshift({ week: state.turn, title: "Elezioni Regionali — " + regionId, choiceLabel: famLabel, result: text, headlines: [], type: "locale", cat: "Elezioni Regionali" });
+      state.worldNews.unshift({ cat: "Elezioni Regionali", text: text });
+    }
+  }
+  // La versione che coinvolge davvero il giocatore: scatta solo per una regione dove ha almeno una
+  // sezione aperta. A differenza della cronaca di sottofondo, qui l'esito diventa il dossier della
+  // settimana — il giocatore può anche conquistare la presidenza della regione, non solo qualche
+  // consigliere, se la campagna regge davvero.
+  function resolveRegionalElectionForPlayer(regionId, sectionsHere) {
+    var p = state.player;
+    var region = regionById(regionId);
+    var r = state.regions[regionId];
+    var won = Math.round(clamp(computeRegionalCampaignStrength(regionId), 0, 40));
+    var becomesGovernor = won >= 22 && Math.random() < clamp((won - 18) / 30, 0.05, 0.6);
+    r.lastElectionTurn = state.turn;
+    r.nextElectionTurn = state.turn + REGIONAL_ELECTION_CYCLE_WEEKS + Math.floor(Math.random() * 15) - 7;
+    if (!p.regionsWon) p.regionsWon = {};
+    var city = sectionsHere[0].name;
+    var title, text;
+    if (becomesGovernor) {
+      r.governorFamilyId = p.family;
+      r.governorPartyId = "player";
+      r.playerGoverns = true;
+      p.regionsWon[regionId] = true;
+      p.amministratoriLocali = (p.amministratoriLocali || 0) + won;
+      p.reputazione = clamp(p.reputazione + rand(5, 9), 0, 100);
+      p.visibilita = clamp(p.visibilita + rand(6, 11), 0, 100);
+      p.iscritti = Math.max(0, p.iscritti + won * 15);
+      title = "Vittoria storica: " + p.name + " guida la " + regionId;
+      text = "Il partito vince le elezioni regionali in " + regionId + " ed esprime il nuovo presidente di regione: un risultato che pesa, ben oltre il perimetro di " + city + ".";
+    } else if (won >= 5) {
+      r.playerGoverns = false;
+      p.amministratoriLocali = (p.amministratoriLocali || 0) + won;
+      p.reputazione = clamp(p.reputazione + Math.min(5, won * 0.35), 0, 100);
+      p.visibilita = clamp(p.visibilita + Math.min(7, won * 0.5), 0, 100);
+      p.iscritti = Math.max(0, p.iscritti + won * 10);
+      title = "Elezioni Regionali in " + regionId;
+      text = "Il partito elegge " + won + " consiglieri regionali in " + regionId + ": un ingresso in Consiglio Regionale, ma la presidenza resta ad altri.";
+    } else {
+      r.playerGoverns = false;
+      title = "Elezioni Regionali in " + regionId;
+      text = "In " + regionId + " il partito si presenta ma non riesce a entrare davvero in Consiglio Regionale questa volta.";
+    }
+    state.log.unshift({ week: state.turn, title: title, choiceLabel: regionId, result: text, headlines: [], type: "locale", cat: "Elezioni Regionali" });
+    state.worldNews.unshift({ cat: "Elezioni Regionali", text: text });
+    var themeId = region.issues[Math.floor(Math.random() * region.issues.length)];
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var choices = buildSituationChoices({ noun: "il risultato ottenuto in " + regionId, city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: THEME_TO_NATIONAL_METRIC[themeId], themeId: themeId, inParliament: !!p.inParliament }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Elezioni Regionali — " + regionId,
+      cat: "Elezioni Regionali", title: title, brief: text + " Come usi politicamente questo risultato?",
+      choices: choices
+    };
+  }
+  // Chiamata ogni settimana: se una o più regioni hanno raggiunto la loro data, le risolve. Al massimo UNA
+  // diventa il dossier della settimana (quella dove il giocatore ha davvero una sezione aperta, se c'è);
+  // le altre restano cronaca di sottofondo. Una regione rimasta indietro (più di una dovuta nella stessa
+  // settimana) resta "in scadenza" e viene ripresa alla prima chiamata utile successiva, non persa.
+  function triggerRegionalElectionCycle() {
+    ensureRegionsInit();
+    var p = state.player;
+    var dueRegions = ITALIAN_REGIONS.filter(function (region) { return state.turn >= state.regions[region.id].nextElectionTurn; });
+    if (!dueRegions.length) return null;
+    var playerDossier = null;
+    dueRegions.forEach(function (region) {
+      var sectionsHere = p ? playerSectionsInRegion(region.id) : [];
+      if (p && sectionsHere.length && !playerDossier) {
+        playerDossier = resolveRegionalElectionForPlayer(region.id, sectionsHere);
+      } else {
+        resolveRegionalElectionBackground(region.id);
+      }
+    });
+    return playerDossier;
+  }
+  // ---------- Problemi regionali: non solo il giorno del voto ----------
+  // Fuori dal ciclo elettorale, una sezione aperta in una regione porta periodicamente in primo piano uno
+  // dei due temi-simbolo di quella regione (vedi ITALIAN_REGIONS.issues): non uno dei tanti temi generici
+  // possibili ovunque, ma proprio quello che più caratterizza QUELLA regione — così anche fuori dal voto
+  // "le regioni" restano vive, con i loro problemi reali, non solo un'etichetta sotto il nome della città.
+  var REGIONAL_ISSUE_COOLDOWN_TURNS = 14;
+  function checkRegionalIssueTrigger() {
+    var p = state.player;
+    if (!p || state.turn < (p.regionalIssueCooldownTurn || 0)) return false;
+    if (!openNuclei().length) return false;
+    return Math.random() < 0.22;
+  }
+  function buildRegionalIssueDossier() {
+    var p = state.player;
+    p.regionalIssueCooldownTurn = state.turn + REGIONAL_ISSUE_COOLDOWN_TURNS;
+    var sections = openNuclei();
+    var loc = sections[Math.floor(Math.random() * sections.length)];
+    var region = regionById(loc.region);
+    if (!region) return null;
+    var themeId = region.issues[Math.floor(Math.random() * region.issues.length)];
+    var theme = SITUATION_THEME_BY_ID[themeId];
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var choices = buildSituationChoices({ noun: noun, city: loc.name, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: THEME_TO_NATIONAL_METRIC[themeId], themeId: themeId, inParliament: !!p.inParliament }, 5);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Problema Regionale — " + loc.region,
+      cat: "Politica Regionale", title: noun.charAt(0).toUpperCase() + noun.slice(1) + " a " + loc.name,
+      brief: "A " + loc.name + ", in " + loc.region + ", " + noun + " torna al centro del dibattito locale: la tua sezione territoriale è chiamata a dire la sua.",
+      choices: choices
+    };
+  }
+  // Pannello sempre visibile nella pagina Territorio: la mappa politica delle 20 regioni, chi le governa
+  // oggi e, per quelle dove il partito ha già radicamento, il conto alla rovescia alla prossima elezione
+  // regionale — così "le regioni" smettono di essere invisibili fuori dal giorno del voto.
+  function renderRegionsPanel() {
+    ensureRegionsInit();
+    var p = state.player;
+    var playerRegionIds = {};
+    (p ? openNuclei() : []).forEach(function (loc) { playerRegionIds[loc.region] = true; });
+    var rows = ITALIAN_REGIONS.map(function (region) {
+      var r = state.regions[region.id];
+      var isPlayerGov = !!r.playerGoverns;
+      var govParty = isPlayerGov ? null : partyById(r.governorPartyId);
+      var govLabel = isPlayerGov ? (p ? p.name : "Tu") : (govParty ? govParty.name : (familyById(r.governorFamilyId) || {}).label || r.governorFamilyId);
+      var govColor = isPlayerGov ? (p ? p.color : "#888") : (govParty ? govParty.color : "#888");
+      var weeksLeft = r.nextElectionTurn - state.turn;
+      var presentHere = !!playerRegionIds[region.id];
+      return { name: region.id, govLabel: govLabel, govColor: govColor, isPlayerGov: isPlayerGov, weeksLeft: weeksLeft, presentHere: presentHere };
+    }).sort(function (a, b) {
+      if (a.isPlayerGov !== b.isPlayerGov) return a.isPlayerGov ? -1 : 1;
+      if (a.presentHere !== b.presentHere) return a.presentHere ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    var items = rows.map(function (r) {
+      var chip = r.isPlayerGov ? '<span class="chip good">Governi tu</span>' : "";
+      var countdown = r.presentHere ? '<span class="ci-hint">Prossime elezioni regionali tra ' + Math.max(0, r.weeksLeft) + " settiman" + (Math.abs(r.weeksLeft) === 1 ? "a" : "e") + "</span>" : "";
+      return '<div class="party-row"><span class="sw" style="background:' + r.govColor + '"></span>' +
+        '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + '</strong>' + chip + '</div>' +
+        '<div class="party-row-sub">Governatore: ' + r.govLabel + (r.presentHere ? " — presenza del tuo partito" : "") + '</div>' +
+        countdown + '</div></div>';
+    }).join("");
+    return '<section aria-label="Le Regioni d\'Italia"><details class="log"><summary>Le Regioni d\'Italia<span>▾</span></summary>' +
+      '<p class="ci-hint">Chi governa oggi ciascuna delle 20 regioni, e quando torna a votare. Ogni regione ha un proprio calendario elettorale, sfalsato dalle altre, e due temi che ne caratterizzano davvero i problemi.</p>' +
+      '<div class="party-directory">' + items + "</div></details></section>";
+  }
+
   // ---------- Apertura mirata di sezioni locali, con coalizioni civiche locali ----------
   // A differenza del vecchio meccanismo (una sezione in più capitava quasi a caso da un evento
   // generico), qui il giocatore sceglie ESPLICITAMENTE in quale città radicarsi, tra un elenco che va
@@ -11254,6 +11493,7 @@
     triggerCountryShock();
     triggerNucleoUpdate();
     triggerLocalElectionCycle();
+    triggerRegionalElectionCycle();
     resolveEuropeanElection();
 
     if (state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
@@ -13340,7 +13580,7 @@
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0,
     usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
-    dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [],
+    dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [], regions: null,
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null, activeArc: null, pendingCongressoFondativo: false,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
     passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {},
@@ -13364,6 +13604,7 @@
     allianceId: null, inParliament: false, everElected: false, seatsCamera: 0, seatsSenato: 0,
     currents: null, staff: [], parliamentRole: null,
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
+    regionsWon: {}, regionalIssueCooldownTurn: 0,
     reformCooldownTurn: 0, completedReformDomains: [], lastReformOutcome: null, civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
     cumulativeGovWeeks: 0, lingeringScandal: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
@@ -19552,7 +19793,7 @@
         return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", icon: "🗺️", nav: "Territorio", render: function () {
-        return renderLocalSectionPanel() + renderItalyMap() + renderNucleiUpdates() + renderWorldNews();
+        return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", icon: "⚖️", nav: "Parlamento", render: function () {
         return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
@@ -22124,6 +22365,7 @@
     triggerCountryShock();
     triggerNucleoUpdate();
     var localElectionSpotlight = triggerLocalElectionCycle();
+    var regionalElectionSpotlight = triggerRegionalElectionCycle();
     resolveEuropeanElection();
 
     // Il governo cade per un'unica ragione, sempre la stessa, sia che a governare sia il giocatore sia
@@ -22168,6 +22410,16 @@
     // consecutiva — smetterebbe di valere se restasse bloccato dietro altre scene per turni di fila.
     if (checkStoryArcTrigger()) {
       state.aiDynamicDossier = buildStoryArcDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    // Le elezioni regionali hanno priorità sulla generica tornata locale (comunali/provinciali): sono
+    // l'evento territoriale più importante, con una vera posta in gioco (la presidenza di una regione),
+    // non solo qualche consigliere in più.
+    if (regionalElectionSpotlight) {
+      state.aiDynamicDossier = regionalElectionSpotlight;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
@@ -22559,6 +22811,16 @@
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
+    }
+
+    if (checkRegionalIssueTrigger()) {
+      var regionalIssueDossier = buildRegionalIssueDossier();
+      if (regionalIssueDossier) {
+        state.aiDynamicDossier = regionalIssueDossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
     }
 
     if (checkEndorsementTrigger()) {
