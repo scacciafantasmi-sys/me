@@ -220,6 +220,22 @@
   </div>
 
   <div class="card" id="controlsCard" style="display:none;">
+    <h2 class="section-title"><span class="n">0</span>Tipo di sorgente</h2>
+    <div class="toggle-row" style="margin-bottom:18px;">
+      <div>
+        <div style="font-size:13px;">Separa voce da strumentale prima di pulire</div>
+        <div class="hint" id="separateHint">Attivo per una canzone intera (voce + musica): una rete neurale isola prima la voce
+          (scarica un modello IA di circa 166&nbsp;MB alla prima esecuzione, richiede una connessione internet e qualche
+          minuto di elaborazione), la pulisce, poi la rimescola con lo strumentale rimasto intatto. Disattivalo solo se il
+          file caricato è già voce isolata (podcast, dettato, acappella): in quel caso l'elaborazione resta istantanea e
+          completamente offline.</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="separateMode" checked>
+        <span class="track"><span class="thumb"></span></span>
+      </label>
+    </div>
+
     <h2 class="section-title"><span class="n">1</span>Preset rapidi</h2>
     <div class="presets">
       <button data-preset="speech" class="active">Voce parlata / podcast</button>
@@ -290,6 +306,8 @@
     <div class="process-row">
       <button class="btn-primary" id="processBtn">Elabora voce</button>
       <button class="btn-secondary" id="downloadBtn" disabled>Scarica WAV pulito</button>
+      <button class="btn-ghost" id="downloadVocalsBtn" style="display:none;">Scarica solo voce</button>
+      <button class="btn-ghost" id="downloadInstBtn" style="display:none;">Scarica solo strumentale</button>
       <div class="progress-wrap" id="progressWrap">
         <div class="progress-label"><span id="progressText">Analisi del rumore…</span><span id="progressPct">0%</span></div>
         <div class="progress-bar"><div id="progressFill"></div></div>
@@ -301,8 +319,11 @@
   <div class="empty-hint" id="emptyHint">Carica un file per iniziare.</div>
 
   <footer>
-    Nessun file viene inviato a server esterni: decodifica, analisi del rumore, equalizzazione e compressione avvengono
-    tutte nel tuo browser tramite Web Audio API. Chiudendo la pagina i dati vengono persi: se ti serve il risultato, scaricalo.
+    Il file audio non viene mai inviato a un server: decodifica, separazione voce/strumentale, riduzione del rumore,
+    equalizzazione e compressione avvengono tutte nel tuo browser. Solo la separazione voce/strumentale scarica, la prima
+    volta, i pesi di un modello IA open source (HT-Demucs, circa 166&nbsp;MB) da Hugging Face — richiede quindi una
+    connessione internet e resta poi in cache nel browser; il resto dell'elaborazione, e l'intero strumento se disattivi la
+    separazione, funziona anche offline. Chiudendo la pagina i dati vengono persi: se ti serve il risultato, scaricalo.
   </footer>
 
 </div>
@@ -321,12 +342,13 @@
   const abOriginal = $("abOriginal"), abProcessed = $("abProcessed");
   const emptyHint = $("emptyHint");
   const processBtn = $("processBtn"), downloadBtn = $("downloadBtn");
+  const downloadVocalsBtn = $("downloadVocalsBtn"), downloadInstBtn = $("downloadInstBtn");
   const progressWrap = $("progressWrap"), progressText = $("progressText"), progressPct = $("progressPct"), progressFill = $("progressFill");
   const statusMsg = $("statusMsg");
 
   const sliderIds = ["noiseStrength","rumbleCut","presence","deess","compAmount"];
   const sliders = {}; sliderIds.forEach(id => sliders[id] = $(id));
-  const humRemove = $("humRemove"), normalize = $("normalize");
+  const humRemove = $("humRemove"), normalize = $("normalize"), separateMode = $("separateMode");
   const presetButtons = document.querySelectorAll(".presets button");
 
   // ---------- State ----------
@@ -346,7 +368,12 @@
     abMode: "original",
     rafId: null,
     worker: null,
-    processing: false
+    processing: false,
+    separatedVocals: null,        // [Float32Array, Float32Array] @ 44.1kHz, cached raw vocal stem
+    separatedInstrumental: null,  // [Float32Array, Float32Array] @ 44.1kHz, cached raw instrumental
+    separatedSampleRate: 44100,
+    vocalsOnlyBuffer: null,       // last cleaned vocals-only AudioBuffer (per download)
+    instrumentalOnlyBuffer: null  // instrumental-only AudioBuffer (per download)
   };
 
   function ensureAudioCtx(){
@@ -436,6 +463,10 @@
       state.fileName = file.name.replace(/\.[^.]+$/, "") || "traccia";
       state.duration = buffer.duration;
       state.pauseOffset = 0;
+      state.separatedVocals = null;
+      state.separatedInstrumental = null;
+      state.vocalsOnlyBuffer = null;
+      state.instrumentalOnlyBuffer = null;
 
       trackName.textContent = file.name;
       const chLabel = buffer.numberOfChannels > 1 ? "stereo" : "mono";
@@ -456,6 +487,8 @@
       abProcessed.classList.remove("active");
       state.abMode = "original";
       downloadBtn.disabled = true;
+      downloadVocalsBtn.style.display = "none";
+      downloadInstBtn.style.display = "none";
       setStatus("File caricato. Regola i controlli e premi “Elabora voce”.", "ok");
     } catch (err){
       console.error(err);
@@ -909,22 +942,146 @@
     source.start(0);
     const rendered = await octx.startRendering();
 
-    if (opts.normalize){
-      let peak = 0;
-      for (let c=0;c<rendered.numberOfChannels;c++){
-        const d = rendered.getChannelData(c);
-        for (let i=0;i<d.length;i++){ const a = Math.abs(d[i]); if (a>peak) peak = a; }
-      }
-      if (peak > 0.0001){
-        const target = 0.891; // ~ -1 dBFS
-        const g = Math.min(target/peak, 3);
-        for (let c=0;c<rendered.numberOfChannels;c++){
-          const d = rendered.getChannelData(c);
-          for (let i=0;i<d.length;i++) d[i] *= g;
-        }
-      }
-    }
+    if (opts.normalize) normalizeBufferInPlace(rendered);
     return rendered;
+  }
+
+  function normalizeBufferInPlace(buffer, target, maxGain){
+    target = target || 0.891; // ~ -1 dBFS
+    maxGain = maxGain || 3;
+    let peak = 0;
+    for (let c=0;c<buffer.numberOfChannels;c++){
+      const d = buffer.getChannelData(c);
+      for (let i=0;i<d.length;i++){ const a = Math.abs(d[i]); if (a>peak) peak = a; }
+    }
+    if (peak <= 0.0001) return buffer;
+    const g = Math.min(target/peak, maxGain);
+    for (let c=0;c<buffer.numberOfChannels;c++){
+      const d = buffer.getChannelData(c);
+      for (let i=0;i<d.length;i++) d[i] *= g;
+    }
+    return buffer;
+  }
+
+  // ---------- Vocal/instrumental separation (HT-Demucs ONNX, runs locally in the browser) ----------
+  // Model: StemSplitio/htdemucs-ft-vocals-onnx (fp16 weights, ~166 MB), MIT-licensed ONNX export
+  // of Meta's HT-Demucs (Rouard, Massa, Défossez, ICASSP 2023). Fetched once from Hugging Face,
+  // then cached by the browser. Chunking/overlap-add matches the model's own reference inference.
+  const SEP_MODEL_URL = "https://huggingface.co/StemSplitio/htdemucs-ft-vocals-onnx/resolve/main/htdemucs_ft_vocals_fp16weights.onnx";
+  const SEP_ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.mjs";
+  const SEP_SAMPLE_RATE = 44100;
+  const SEP_N_SAMPLES = Math.round(7.8 * SEP_SAMPLE_RATE); // 343980, fixed by the exported graph
+  const SEP_N_CHANNELS = 2;
+  const SEP_OVERLAP = Math.floor(SEP_N_SAMPLES / 4);
+  const SEP_STRIDE = SEP_N_SAMPLES - SEP_OVERLAP;
+  const SEP_VOCALS_ROW = 3; // stems order: drums=0, bass=1, other=2, vocals=3
+
+  let ortModulePromise = null;
+  function loadOrt(){
+    if (!ortModulePromise) ortModulePromise = import(/* webpackIgnore: true */ SEP_ORT_URL);
+    return ortModulePromise;
+  }
+
+  let separationSessionPromise = null;
+  function getSeparationSession(onStatus){
+    if (!separationSessionPromise){
+      separationSessionPromise = (async () => {
+        const ort = await loadOrt();
+        ort.env.wasm.numThreads = Math.min(navigator.hardwareConcurrency || 2, 4);
+        if (onStatus) onStatus("Scaricamento modello IA (circa 166 MB, solo la prima volta)…");
+        return ort.InferenceSession.create(SEP_MODEL_URL, {
+          executionProviders: ["wasm"],
+          graphOptimizationLevel: "all"
+        });
+      })();
+    }
+    return separationSessionPromise;
+  }
+
+  function makeTriangularWindow(segment, overlap){
+    const w = new Float32Array(segment).fill(1);
+    for (let i=0;i<overlap;i++){
+      const v = i/overlap;
+      w[i] = v;
+      w[segment-1-i] = v;
+    }
+    return w;
+  }
+
+  async function resampleTo44kStereo(buffer){
+    if (buffer.sampleRate === SEP_SAMPLE_RATE && buffer.numberOfChannels >= 2){
+      return [new Float32Array(buffer.getChannelData(0)), new Float32Array(buffer.getChannelData(1))];
+    }
+    const OfflineCtxCls = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const length = Math.ceil(buffer.duration * SEP_SAMPLE_RATE);
+    const octx = new OfflineCtxCls(2, length, SEP_SAMPLE_RATE);
+    const src = octx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(octx.destination);
+    src.start(0);
+    const rendered = await octx.startRendering();
+    const left = rendered.getChannelData(0);
+    const right = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : rendered.getChannelData(0);
+    return [new Float32Array(left), new Float32Array(right)];
+  }
+
+  async function separateVocals(buffer, onStatus){
+    const session = await getSeparationSession(onStatus);
+    const ort = await loadOrt();
+    if (onStatus) onStatus("Preparazione audio per la separazione…", 0);
+    const mix = await resampleTo44kStereo(buffer);
+    const totalLen = mix[0].length;
+    const nChunks = Math.max(1, Math.ceil(totalLen / SEP_STRIDE));
+    const vocals = [new Float32Array(totalLen), new Float32Array(totalLen)];
+    const weight = new Float32Array(totalLen);
+    const win = makeTriangularWindow(SEP_N_SAMPLES, SEP_OVERLAP);
+    const chunkBuf = new Float32Array(SEP_N_CHANNELS * SEP_N_SAMPLES);
+
+    for (let i=0;i<nChunks;i++){
+      const start = i * SEP_STRIDE;
+      const end = Math.min(start + SEP_N_SAMPLES, totalLen);
+      chunkBuf.fill(0);
+      for (let c=0;c<SEP_N_CHANNELS;c++){
+        chunkBuf.subarray(c*SEP_N_SAMPLES, c*SEP_N_SAMPLES + (end-start)).set(mix[c].subarray(start, end));
+      }
+      const inputTensor = new ort.Tensor("float32", chunkBuf, [1, SEP_N_CHANNELS, SEP_N_SAMPLES]);
+      const result = await session.run({ mix: inputTensor });
+      const stems = result.stems.data;
+      const vocalsOffset = SEP_VOCALS_ROW * SEP_N_CHANNELS * SEP_N_SAMPLES;
+      const chunkLen = end - start;
+      for (let c=0;c<SEP_N_CHANNELS;c++){
+        const rowStart = vocalsOffset + c*SEP_N_SAMPLES;
+        for (let s=0;s<chunkLen;s++) vocals[c][start+s] += stems[rowStart+s] * win[s];
+      }
+      for (let s=0;s<chunkLen;s++) weight[start+s] += win[s];
+      if (onStatus) onStatus(`Separazione voce/strumentale: blocco ${i+1}/${nChunks}…`, (i+1)/nChunks);
+      await new Promise(r => setTimeout(r, 0));
+    }
+    for (let c=0;c<SEP_N_CHANNELS;c++){
+      for (let s=0;s<totalLen;s++) vocals[c][s] /= Math.max(weight[s], 1e-8);
+    }
+    const instrumental = [new Float32Array(totalLen), new Float32Array(totalLen)];
+    for (let c=0;c<SEP_N_CHANNELS;c++){
+      for (let s=0;s<totalLen;s++) instrumental[c][s] = mix[c][s] - vocals[c][s];
+    }
+    return { vocals, instrumental, sampleRate: SEP_SAMPLE_RATE };
+  }
+
+  function stereoDataToBuffer(ctx, data, sampleRate){
+    const buffer = ctx.createBuffer(2, data[0].length, sampleRate);
+    buffer.copyToChannel(data[0], 0);
+    buffer.copyToChannel(data[1], 1);
+    return buffer;
+  }
+
+  function sumBuffersToNew(ctx, a, b){
+    const len = Math.min(a.length, b.length);
+    const out = ctx.createBuffer(2, len, a.sampleRate);
+    for (let c=0;c<2;c++){
+      const da = a.getChannelData(c), db = b.getChannelData(c), d = out.getChannelData(c);
+      for (let i=0;i<len;i++) d[i] = da[i] + db[i];
+    }
+    return out;
   }
 
   // ---------- WAV encoding ----------
@@ -973,28 +1130,61 @@
     state.processing = true;
     processBtn.disabled = true;
     downloadBtn.disabled = true;
+    downloadVocalsBtn.style.display = "none";
+    downloadInstBtn.style.display = "none";
     abProcessed.disabled = true;
     progressWrap.classList.add("show");
     setStatus("");
 
     try {
-      const buffer = state.originalBuffer;
-      const numCh = buffer.numberOfChannels;
-      const channelsData = [];
-      for (let c=0;c<numCh;c++) channelsData.push(new Float32Array(buffer.getChannelData(c)));
+      const ctx = ensureAudioCtx();
+      const useSeparation = separateMode.checked;
+      let vocalsSourceBuffer, instrumentalData = null, sepSampleRate = state.originalBuffer.sampleRate;
 
+      if (useSeparation){
+        if (!state.separatedVocals){
+          progressText.textContent = "Caricamento del modello di separazione…";
+          progressFill.style.width = "2%"; progressPct.textContent = "2%";
+          const sep = await separateVocals(state.originalBuffer, (text, frac) => {
+            progressText.textContent = text;
+            if (typeof frac === "number"){
+              const pct = Math.round(5 + frac*45);
+              progressFill.style.width = pct + "%";
+              progressPct.textContent = pct + "%";
+            }
+          });
+          state.separatedVocals = sep.vocals;
+          state.separatedInstrumental = sep.instrumental;
+          state.separatedSampleRate = sep.sampleRate;
+        } else {
+          progressText.textContent = "Riuso la separazione già calcolata per questo file…";
+          progressFill.style.width = "50%"; progressPct.textContent = "50%";
+        }
+        vocalsSourceBuffer = stereoDataToBuffer(ctx, state.separatedVocals, state.separatedSampleRate);
+        instrumentalData = state.separatedInstrumental;
+        sepSampleRate = state.separatedSampleRate;
+      } else {
+        vocalsSourceBuffer = state.originalBuffer;
+      }
+
+      const numCh = vocalsSourceBuffer.numberOfChannels;
+      const channelsData = [];
+      for (let c=0;c<numCh;c++) channelsData.push(new Float32Array(vocalsSourceBuffer.getChannelData(c)));
+
+      const baseProgress = useSeparation ? 50 : 0;
+      const denoiseSpan = useSeparation ? 25 : 70;
       const strength = (+sliders.noiseStrength.value/100) * 0.9;
       progressText.textContent = "Riduzione del rumore…";
       const denoisedChannels = await runDenoise(channelsData, strength, (frac) => {
-        const pct = Math.round(frac*70);
+        const pct = Math.round(baseProgress + frac*denoiseSpan);
         progressFill.style.width = pct + "%";
         progressPct.textContent = pct + "%";
       });
 
       progressText.textContent = "Equalizzazione e compressione…";
-      progressFill.style.width = "80%"; progressPct.textContent = "80%";
-      const ctx = ensureAudioCtx();
-      const denoisedBuffer = ctx.createBuffer(numCh, buffer.length, buffer.sampleRate);
+      const afterDenoisePct = baseProgress + denoiseSpan;
+      progressFill.style.width = afterDenoisePct + "%"; progressPct.textContent = afterDenoisePct + "%";
+      const denoisedBuffer = ctx.createBuffer(numCh, vocalsSourceBuffer.length, vocalsSourceBuffer.sampleRate);
       for (let c=0;c<numCh;c++) denoisedBuffer.copyToChannel(denoisedChannels[c], c);
 
       const opts = {
@@ -1004,19 +1194,45 @@
         deess: +sliders.deess.value,
         compAmount: +sliders.compAmount.value,
         hum: humRemove.checked,
-        normalize: normalize.checked
+        normalize: useSeparation ? false : normalize.checked
       };
-      const rendered = await renderChain(denoisedBuffer, opts);
+      const cleanedVocals = await renderChain(denoisedBuffer, opts);
+
+      let finalBuffer;
+      if (useSeparation){
+        progressText.textContent = "Remix con lo strumentale…";
+        progressFill.style.width = "95%"; progressPct.textContent = "95%";
+        const instrumentalBuffer = stereoDataToBuffer(ctx, instrumentalData, sepSampleRate);
+        finalBuffer = sumBuffersToNew(ctx, cleanedVocals, instrumentalBuffer);
+        if (normalize.checked){
+          normalizeBufferInPlace(finalBuffer);
+        } else {
+          let peak = 0;
+          for (let c=0;c<finalBuffer.numberOfChannels;c++){
+            const d = finalBuffer.getChannelData(c);
+            for (let i=0;i<d.length;i++){ const a = Math.abs(d[i]); if (a>peak) peak = a; }
+          }
+          if (peak > 0.995) normalizeBufferInPlace(finalBuffer, 0.98, 1);
+        }
+        state.vocalsOnlyBuffer = cleanedVocals;
+        state.instrumentalOnlyBuffer = instrumentalBuffer;
+        downloadVocalsBtn.style.display = "inline-block";
+        downloadInstBtn.style.display = "inline-block";
+      } else {
+        finalBuffer = cleanedVocals;
+      }
 
       progressFill.style.width = "100%"; progressPct.textContent = "100%";
-      state.processedBuffer = rendered;
+      state.processedBuffer = finalBuffer;
       abProcessed.disabled = false;
       downloadBtn.disabled = false;
       setAbMode("processed");
-      setStatus("Voce elaborata. Confronta Originale/Migliorata con il pulsante qui sopra, poi scarica il file.", "ok");
+      setStatus(useSeparation
+        ? "Voce isolata, pulita e rimescolata con lo strumentale originale. Confronta Originale/Migliorata, poi scarica il file."
+        : "Voce elaborata. Confronta Originale/Migliorata con il pulsante qui sopra, poi scarica il file.", "ok");
     } catch (err){
       console.error(err);
-      setStatus("Si è verificato un errore durante l'elaborazione. Riprova, eventualmente con impostazioni meno estreme.", "err");
+      setStatus("Si è verificato un errore durante l'elaborazione. Se avevi attivato la separazione voce/strumentale, verifica la connessione internet (serve per scaricare il modello la prima volta), oppure disattivala se il file è già voce isolata.", "err");
     } finally {
       state.processing = false;
       processBtn.disabled = false;
@@ -1024,18 +1240,22 @@
     }
   });
 
-  downloadBtn.addEventListener("click", () => {
-    if (!state.processedBuffer) return;
-    const blob = encodeWav(state.processedBuffer);
+  function downloadBufferAsWav(buffer, suffix){
+    if (!buffer) return;
+    const blob = encodeWav(buffer);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = state.fileName + "-pulita.wav";
+    a.download = state.fileName + suffix + ".wav";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-  });
+  }
+
+  downloadBtn.addEventListener("click", () => downloadBufferAsWav(state.processedBuffer, "-pulita"));
+  downloadVocalsBtn.addEventListener("click", () => downloadBufferAsWav(state.vocalsOnlyBuffer, "-solo-voce"));
+  downloadInstBtn.addEventListener("click", () => downloadBufferAsWav(state.instrumentalOnlyBuffer, "-strumentale"));
 
 })();
 </script>
