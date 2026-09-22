@@ -171,7 +171,7 @@
       <button id="autoBtn" class="auto-btn" type="button">Automatizza mix &amp; master</button>
       <span id="autoStatus" class="auto-status"></span>
     </div>
-    <p class="hint" style="margin:-10px 0 16px;">Analizza il volume di ogni traccia, il bilanciamento tra bassi/medi/alti e la dinamica del mix, poi imposta da sola i fader e l'intera catena di mastering qui sotto. Resta comunque tutto modificabile a mano dopo.</p>
+    <p class="hint" style="margin:-10px 0 16px;">Analizza il volume di ogni traccia (ignorando i silenzi) e la dinamica del mix, poi imposta da sola i fader, il compressore e il limiter. Non tocca EQ, saturazione né ampiezza stereo: restano neutri e modificabili a mano qui sotto.</p>
 
     <div class="preset-row">
       <label for="presetSelect">Preset di mastering</label>
@@ -298,14 +298,17 @@
     return new Blob([arrBuf], {type:'audio/wav'});
   }
 
-  // Curva "morbida" di saturazione armonica: a k=0 è l'identità.
+  // Curva di saturazione armonica, normalizzata con tangente iperbolica: a "drive" basso resta
+  // pressoché lineare (trasparente) fino a livelli medi e cresce solo dolcemente verso i picchi,
+  // invece di amplificare i segnali bassi come faceva una versione precedente di questa curva.
   function makeSaturationCurve(amount){
-    const k = amount*80;
+    const drive = amount*2.5;
     const n = 1024;
     const curve = new Float32Array(n);
+    const norm = Math.tanh(drive);
     for (let i=0;i<n;i++){
       const x = i*2/n - 1;
-      curve[i] = k===0 ? x : (1+k)*x/(1+k*Math.abs(x));
+      curve[i] = drive===0 ? x : Math.tanh(drive*x)/norm;
     }
     return curve;
   }
@@ -828,17 +831,35 @@
   // ---------- Analisi audio per l'automazione ----------
   const rmsToDb = rms => rms>0 ? 20*Math.log10(rms) : -100;
 
-  function computeRms(buffer, maxSamplesPerChannel){
+  // RMS "a gate": ignora i blocchi quasi silenziosi invece di mediarli con quelli attivi.
+  // Una traccia percussiva/intermittente (un 808, un kick) ha buchi di silenzio fra i colpi che
+  // farebbero risultare "debole" l'RMS calcolato su tutto il file, spingendo l'automazione ad
+  // alzarne il fader oltre il dovuto: qui si misura invece quanto è forte la traccia SOLO
+  // quando sta effettivamente suonando.
+  function computeGatedRms(buffer, maxSamplesPerChannel){
     maxSamplesPerChannel = maxSamplesPerChannel || 200000;
     const chCount = buffer.numberOfChannels;
     const len = buffer.length;
     const step = Math.max(1, Math.floor(len/maxSamplesPerChannel));
+    const blockLen = Math.max(1, Math.round((0.05*buffer.sampleRate)/step)); // ~50ms per blocco
+    const blockRms = [];
     let sumSq = 0, count = 0;
-    for (let ch=0; ch<chCount; ch++){
-      const data = buffer.getChannelData(ch);
-      for (let i=0; i<len; i+=step){ const v = data[i]; sumSq += v*v; count++; }
+    for (let i=0; i<len; i+=step){
+      let v = 0;
+      for (let ch=0; ch<chCount; ch++) v += buffer.getChannelData(ch)[i];
+      v /= chCount;
+      sumSq += v*v; count++;
+      if (count>=blockLen){ blockRms.push(Math.sqrt(sumSq/count)); sumSq=0; count=0; }
     }
-    return Math.sqrt(sumSq/Math.max(1,count));
+    if (count>0) blockRms.push(Math.sqrt(sumSq/count));
+    if (blockRms.length===0) return 0;
+    const peakBlock = Math.max(...blockRms);
+    if (peakBlock<=0) return 0;
+    const gate = peakBlock * dbToGain(-40);
+    const active = blockRms.filter(r=>r>=gate);
+    if (active.length===0) return peakBlock;
+    const meanSq = active.reduce((s,r)=>s+r*r,0)/active.length;
+    return Math.sqrt(meanSq);
   }
 
   function analyzeBuffer(buffer, maxSamplesPerChannel){
@@ -860,30 +881,11 @@
     return { rms, peak, rmsDb: rmsToDb(rms), peakDb: rmsToDb(peak) };
   }
 
-  function analyzeStereoWidth(buffer, maxSamplesPerChannel){
-    if (buffer.numberOfChannels < 2) return { ratio: 1 };
-    maxSamplesPerChannel = maxSamplesPerChannel || 200000;
-    const L = buffer.getChannelData(0), R = buffer.getChannelData(1);
-    const len = buffer.length;
-    const step = Math.max(1, Math.floor(len/maxSamplesPerChannel));
-    let sumMid = 0, sumSide = 0, count = 0;
-    for (let i=0; i<len; i+=step){
-      const m = (L[i]+R[i])*0.5;
-      const s = (L[i]-R[i])*0.5;
-      sumMid += m*m; sumSide += s*s; count++;
-    }
-    const midRms = Math.sqrt(sumMid/Math.max(1,count));
-    const sideRms = Math.sqrt(sumSide/Math.max(1,count));
-    return { ratio: midRms>0 ? sideRms/midRms : 0 };
-  }
-
-  // Rende il mix delle tracce (livelli/pan correnti, senza catena master) in un OfflineAudioContext,
-  // opzionalmente passandolo da un filtro (per isolare una banda di frequenze da analizzare).
-  async function renderTracksMix(filterSetup){
+  // Rende il mix delle tracce (livelli/pan correnti, senza catena master) in un OfflineAudioContext.
+  async function renderTracksMix(){
     const total = getTotalDuration();
     const sampleRate = tracks[0].buffer.sampleRate;
     const offlineCtx = new OfflineAudioContext(2, Math.max(1, Math.ceil(total*sampleRate)), sampleRate);
-    const bus = offlineCtx.createGain();
     const anySolo = tracks.some(t=>t.solo);
     tracks.forEach(t=>{
       const eff = (t.mute || (anySolo && !t.solo)) ? 0 : dbToGain(t.volumeDb);
@@ -891,32 +893,21 @@
       src.buffer = t.buffer;
       const g = offlineCtx.createGain(); g.gain.value = eff;
       const pan = offlineCtx.createStereoPanner(); pan.pan.value = t.pan;
-      src.connect(g); g.connect(pan); pan.connect(bus);
+      src.connect(g); g.connect(pan); pan.connect(offlineCtx.destination);
       src.start(0);
     });
-    const out = filterSetup ? filterSetup(offlineCtx, bus) : bus;
-    out.connect(offlineCtx.destination);
     return offlineCtx.startRendering();
   }
 
-  function lowBandFilter(ctx, input){
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 200; f.Q.value = 0.707;
-    input.connect(f); return f;
-  }
-  function midBandFilter(ctx, input){
-    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 200; hp.Q.value = 0.707;
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4000; lp.Q.value = 0.707;
-    input.connect(hp); hp.connect(lp); return lp;
-  }
-  function highBandFilter(ctx, input){
-    const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 4000; f.Q.value = 0.707;
-    input.connect(f); return f;
-  }
-
-  // Analizza le tracce caricate e imposta da sola fader e catena master:
-  // 1) bilancia il volume di ogni traccia sul livello RMS medio del gruppo;
-  // 2) misura l'energia in tre bande (bassi/medi/alti) sul mix risultante e corregge l'EQ per appiattirla;
-  // 3) misura il fattore di cresta (picco/RMS) per calibrare compressore, guadagno di recupero e ampiezza stereo.
+  // Analizza le tracce caricate e imposta da sola fader e master, restando volutamente conservativa:
+  // 1) bilancia il volume di ogni traccia sul livello RMS medio del gruppo (RMS a gate: ignora i
+  //    silenzi, così una traccia percussiva/intermittente come un 808 non viene sovrastimata debole
+  //    e quindi alzata troppo);
+  // 2) misura il fattore di cresta (picco/RMS) del mix risultante per tarare soglia/rapporto del
+  //    compressore e il guadagno di recupero, con margini prudenti.
+  // Non tocca EQ, saturazione né ampiezza stereo: un'euristica generica su musica reale e diversa
+  // per genere (es. bassi/808 volutamente prominenti in molti generi) rischia di "correggere" cose
+  // che non erano affatto sbagliate. Quei controlli restano neutri e disponibili qui sotto a mano.
   async function autoMixAndMaster(){
     if (tracks.length === 0){
       autoStatus.textContent = 'Carica almeno una traccia prima di automatizzare.';
@@ -926,10 +917,10 @@
     autoBtn.disabled = true;
     try {
       autoStatus.textContent = 'Bilanciamento dei volumi delle tracce…';
-      const levels = tracks.map(t => ({ track: t, rmsDb: rmsToDb(computeRms(t.buffer)) }));
+      const levels = tracks.map(t => ({ track: t, rmsDb: rmsToDb(computeGatedRms(t.buffer)) }));
       const avgRmsDb = levels.reduce((s,a)=> s+a.rmsDb, 0) / levels.length;
       levels.forEach(a=>{
-        const newVol = clamp(avgRmsDb - a.rmsDb, -60, 6);
+        const newVol = clamp((avgRmsDb - a.rmsDb) * 0.85, -18, 6);
         a.track.volumeDb = newVol;
         if (a.track.volSliderEl){
           a.track.volSliderEl.value = String(newVol);
@@ -938,35 +929,9 @@
       });
       recomputeAllTrackGains();
 
-      autoStatus.textContent = 'Analisi del bilanciamento tonale e della dinamica…';
-      const [rawMix, lowMix, midMix, highMix] = await Promise.all([
-        renderTracksMix(null),
-        renderTracksMix(lowBandFilter),
-        renderTracksMix(midBandFilter),
-        renderTracksMix(highBandFilter)
-      ]);
-
+      autoStatus.textContent = 'Analisi della dinamica del mix…';
+      const rawMix = await renderTracksMix();
       const rawA = analyzeBuffer(rawMix);
-      const lowA = analyzeBuffer(lowMix);
-      const midA = analyzeBuffer(midMix);
-      const highA = analyzeBuffer(highMix);
-      const widthInfo = analyzeStereoWidth(rawMix);
-
-      // Un mix reale non ha MAI energia piatta fra bassi/medi/alti (i medi portano naturalmente
-      // più energia: fondamentali di voce/chitarre/synth vivono quasi tutti lì) — forzare le tre
-      // bande alla stessa energia "scava" il mix e suona artificiale. Si corregge quindi solo se
-      // bassi o alti escono da un intervallo ampio e plausibile rispetto ai medi, con interventi
-      // piccoli; i medi non vengono mai toccati dall'automazione.
-      function tameOutlier(relDb, expectedMin, expectedMax, maxCorrection){
-        if (relDb < expectedMin) return clamp((expectedMin - relDb) * 0.3, 0, maxCorrection);
-        if (relDb > expectedMax) return clamp((expectedMax - relDb) * 0.3, -maxCorrection, 0);
-        return 0;
-      }
-      const lowRelToMid = lowA.rmsDb - midA.rmsDb;
-      const highRelToMid = highA.rmsDb - midA.rmsDb;
-      const eqLow = tameOutlier(lowRelToMid, -8, 10, 3);
-      const eqMid = 0;
-      const eqHigh = tameOutlier(highRelToMid, -22, -2, 3);
 
       const crestDb = rawA.peakDb - rawA.rmsDb;
       const compThreshold = clamp(rawA.rmsDb - 6, -40, -12);
@@ -978,28 +943,24 @@
       // resta comunque l'ultima parola sul tetto di uscita, quindi qui basta restare moderati per
       // evitare un "muro" di limiting troppo udibile.
       const gainReductionDb = Math.max(0, rawA.rmsDb - compThreshold) * (1 - 1/compRatio);
-      const outputTrim = clamp(gainReductionDb * 0.7, -4, 4);
-
-      let width = 1;
-      if (widthInfo.ratio < 0.12) width = 1.15;
-      else if (widthInfo.ratio < 0.3) width = 1.08;
+      const outputTrim = clamp(gainReductionDb * 0.6, -3, 3);
 
       masterParams = {
-        eqLow, eqMid, eqMidFreq: 1000, eqHigh,
+        eqLow: 0, eqMid: 0, eqMidFreq: 1000, eqHigh: 0,
         compThreshold, compRatio, compAttack, compRelease,
-        width, sat: 0.1, ceiling: -1, outputTrim
+        width: 1, sat: 0, ceiling: -1, outputTrim
       };
       applyParamsToSliders();
       applyParamsToLiveNodes();
       saveParams();
       presetSelect.value = 'auto';
 
-      autoStatus.textContent = 'Fatto: mix bilanciato e master impostati dall’analisi audio.';
+      autoStatus.textContent = 'Fatto: volumi bilanciati e compressore/limiter impostati dall’analisi. EQ, saturazione e ampiezza stereo restano neutri: li trovi qui sotto se vuoi intervenire tu.';
     } catch(err){
       autoStatus.textContent = 'Errore durante l’automazione: ' + err.message;
     } finally {
       autoBtn.disabled = false;
-      setTimeout(()=>{ autoStatus.textContent = ''; }, 8000);
+      setTimeout(()=>{ autoStatus.textContent = ''; }, 9000);
     }
   }
 
