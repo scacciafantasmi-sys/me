@@ -876,14 +876,16 @@
     tecnoprogressista: 0, europeista: 0, regionalista: 0, meridionalista: 0, cattolico: 0.5,
     libertario: 1, liberale: 1, sovranista: 2, monarchico: 2, nazionalpopolare: 2.5, fascista: 3
   };
-  // Prima il limite era 4.4 su una scala di ampiezza 6 (-3/+3): abbastanza largo da lasciar allearsi un
-  // partito di centro (posizione 0) sia con l'estrema sinistra comunista (gap 3) sia con l'estrema destra
-  // nazional-fascista (gap 3), segnalato da un giocatore che vedeva Potere al Popolo/Rifondazione tra gli
-  // alleati invitabili in una coalizione di centro. 2.0 è il minimo che lascia intatte le due coalizioni
-  // storiche già codificate (serve un gap di 2 per includere il meridionalista in Centrodestra, la
-  // combinazione più larga tra quelle esistenti) mentre rende ogni altra coalizione ideologicamente
-  // coerente: solo famiglie davvero vicine sull'asse possono allearsi, mai capo e coda dello spettro.
-  var COALITION_IDEOLOGY_GAP_LIMIT = 2;
+  // Prima il limite era 4.4, poi 2.0 su una scala di ampiezza 6 (-3/+3) — il minimo che lasciava intatta
+  // l'adesione del meridionalista al Centrodestra. Segnalato di nuovo da un giocatore: anche 2.0 restava
+  // troppo permissivo, e non voleva un compromesso per salvare quel singolo caso — voleva che le alleanze,
+  // sia del giocatore SIA della CPU, restassero riservate a famiglie DAVVERO vicine, non "abbastanza
+  // vicine". Sceso a 1.5: resta ancora possibile un'alleanza come quella già citata nei commenti altrove
+  // in questo file (es. Noi Moderati, cattolico, nel Centrodestra a base sovranista/liberale — gap
+  // esattamente 1.5), ma non più una combinazione ampia come meridionalista (gap 2). Applicato in modo
+  // identico da entrambi i lati: gli inviti del giocatore (wouldExceedCoalitionSpread, vedi
+  // inviteParty/inviteToBloc) e le adesioni spontanee della CPU (vedi triggerFixedCoalitionExpansion).
+  var COALITION_IDEOLOGY_GAP_LIMIT = 1.5;
   function ideologicallyIncompatible(famIdA, famIdB) {
     var a = LEFT_RIGHT_POSITION[famIdA], b = LEFT_RIGHT_POSITION[famIdB];
     if (a === undefined || b === undefined) return false;
@@ -10555,9 +10557,17 @@
   function triggerFixedCoalitionExpansion() {
     var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
     (state.dynamicCoalitions || []).forEach(function (c) { takenIds = takenIds.concat(c.members); });
+    // Segnalato da un giocatore: questo controllo si fermava a "famiglia allineata al blocco" in senso
+    // largo (le 4-5 famiglie storicamente vicine a Centrodestra/Campo Largo), senza mai verificare
+    // l'estensione ideologica REALE del blocco al momento dell'adesione — a differenza degli inviti del
+    // giocatore (vedi wouldExceedCoalitionSpread), che quel controllo lo applicano già. Un'adesione
+    // spontanea della CPU poteva così allargare un blocco anche verso una famiglia ideologicamente troppo
+    // lontana dagli altri membri attuali. Ora usa la stessa identica regola, per entrambi i lati.
     var candidates = activeParties().filter(function (p) {
-      return takenIds.indexOf(p.id) === -1 && p.familyId && state.parties[p.id] >= 0.8 &&
-        (CENTRODESTRA_ALIGNED_FAMILIES[p.familyId] || CAMPOLARGO_ALIGNED_FAMILIES[p.familyId]);
+      if (takenIds.indexOf(p.id) !== -1 || !p.familyId || state.parties[p.id] < 0.8) return false;
+      var blocId = CENTRODESTRA_ALIGNED_FAMILIES[p.familyId] ? "centrodestra" : CAMPOLARGO_ALIGNED_FAMILIES[p.familyId] ? "campolargo" : null;
+      if (!blocId) return false;
+      return !wouldExceedCoalitionSpread(coalitionFamilyIds(blocId), p.familyId);
     });
     if (!candidates.length) return;
     if (Math.random() > 0.01 * politicalVolatilityMultiplier()) return;
@@ -18401,9 +18411,13 @@
     var sum = members.reduce(function (s, mid) { return s + (state.partyRelations && state.partyRelations[mid] !== undefined ? state.partyRelations[mid] : 50); }, 0);
     return sum / members.length;
   }
-  function coalitionMemberCount(coal) {
+  // Prende l'id esplicitamente, non coal.id: coalitionById() per una coalizione DINAMICA restituisce un
+  // oggetto ricostruito al volo ({label, members}, vedi coalitionById) senza mai portarsi dietro l'id
+  // originale — usare coal.id qui avrebbe sempre dato undefined per qualunque coalizione dinamica, e di
+  // conseguenza il giocatore non veniva MAI contato come membro, qualunque fosse la sua alleanza.
+  function coalitionMemberCount(coal, id) {
     if (!coal) return 0;
-    return coal.members.length + (state.player && state.player.allianceId === coal.id ? 1 : 0);
+    return coal.members.length + (state.player && state.player.allianceId === id ? 1 : 0);
   }
   // Prima il controllo di compatibilità ideologica di un invito guardava SOLO alla distanza tra il
   // giocatore e il singolo partito invitato — mai a chi era GIÀ dentro la coalizione. Un giocatore poteva
@@ -18447,17 +18461,19 @@
   // significava solo più seggi, mai più rischio — un giocatore poteva accumulare quanti alleati voleva
   // senza pagarne mai il prezzo, un vero e proprio modo per aggirare la difficoltà del gioco. Segnalato
   // da un giocatore: più una coalizione ha membri, più deve essere fragile da tenere unita, esattamente
-  // come càpita alle coalizioni reali più affollate (più voci, più interessi da conciliare, più attrito).
-  // Oltre i primi due alleati "fisiologici", ogni membro aggiuntivo abbassa il tetto di fiducia
-  // raggiungibile — non solo alla fondazione, ma come bersaglio permanente verso cui la fiducia deriva
-  // ogni settimana (vedi updateCoalitionTrust/updateCpuOnlyCoalitionTrust), quindi una coalizione enorme
-  // non si stabilizza mai su una fiducia alta, anche se gli alleati vengono coltivati bene.
+  // come càpita alle coalizioni reali più affollate (più voci, più interessi da conciliare, più attrito) —
+  // ma solo quando i membri diventano DAVVERO tanti: fino a 4 (giocatore/blocco storico compreso) è una
+  // coalizione fisiologica, non ancora affollata, e non deve perdere nulla solo per esistere. Oltre i
+  // primi 4, ogni membro aggiuntivo abbassa il tetto di fiducia raggiungibile — non solo alla fondazione,
+  // ma come bersaglio permanente verso cui la fiducia deriva ogni settimana (vedi
+  // updateCoalitionTrust/updateCpuOnlyCoalitionTrust), quindi una coalizione enorme non si stabilizza mai
+  // su una fiducia alta, anche se gli alleati vengono coltivati bene.
   function coalitionSizePenalty(memberCount) {
-    return clamp((memberCount - 2) * 4, 0, 30);
+    return clamp((memberCount - 4) * 6, 0, 30);
   }
   function initialCoalitionTrust(id) {
     var coal = coalitionById(id);
-    return clamp(20 + avgCoalitionRelation(id) * 0.7 - coalitionSizePenalty(coalitionMemberCount(coal)), 15, 85);
+    return clamp(20 + avgCoalitionRelation(id) * 0.7 - coalitionSizePenalty(coalitionMemberCount(coal, id)), 15, 85);
   }
   // ---------- Approvazione della coalizione di governo ----------
   // Quando si governa in coalizione, nessuna scelta di governo è più unilaterale: prima di applicare gli
@@ -18567,7 +18583,7 @@
     state.dynamicCoalitions.slice().forEach(function (c) {
       if (p.allianceId === c.id) return;
       if (state.coalitionTrust[c.id] === undefined) state.coalitionTrust[c.id] = initialCoalitionTrust(c.id);
-      var avgRel = avgCoalitionRelation(c.id) - coalitionSizePenalty(coalitionMemberCount(c));
+      var avgRel = avgCoalitionRelation(c.id) - coalitionSizePenalty(coalitionMemberCount(c, c.id));
       var trust = clamp(state.coalitionTrust[c.id] + (avgRel - state.coalitionTrust[c.id]) * 0.08 + (Math.random() - 0.5) * 1.8, 0, 100);
       state.coalitionTrust[c.id] = trust;
       if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(c.id);
@@ -18578,7 +18594,7 @@
     if (!p.allianceId) return;
     if (!state.coalitionTrust) state.coalitionTrust = {};
     if (state.coalitionTrust[p.allianceId] === undefined) state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId);
-    var avgRel = avgCoalitionRelation(p.allianceId) - coalitionSizePenalty(coalitionMemberCount(coalitionById(p.allianceId)));
+    var avgRel = avgCoalitionRelation(p.allianceId) - coalitionSizePenalty(coalitionMemberCount(coalitionById(p.allianceId), p.allianceId));
     var trust = clamp(state.coalitionTrust[p.allianceId] + (avgRel - state.coalitionTrust[p.allianceId]) * 0.08 + (Math.random() - 0.5) * 1.8, 0, 100);
     state.coalitionTrust[p.allianceId] = trust;
     if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(p.allianceId);
