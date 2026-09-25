@@ -9214,14 +9214,56 @@
   // presenta ovunque, un minimo di firme per ciascun collegio uninominale (il gioco non simula i singoli
   // collegi come entità proprie, un'astrazione voluta: qui la soglia nazionale già rappresenta quel
   // requisito, non un numero a caso). Finché non la raggiunge, il "dossier della settimana" è sempre
-  // questo: niente Parlamento, niente sondaggi veri, niente Congresso Fondativo — solo comizi, banchetti,
-  // porta a porta e social, esattamente le uniche leve che un comitato promotore ha davvero in mano prima
-  // di essere un partito riconosciuto. Una volta superata la soglia (vedi il controllo in
-  // resolveDossierChoice), il ciclo normale del gioco prende il sopravvento da solo, a partire proprio
-  // dal Congresso Fondativo qui sopra.
+  // questo: niente Parlamento, niente Congresso Fondativo — solo comizi, banchetti, porta a porta e
+  // social, esattamente le uniche leve che un comitato promotore ha davvero in mano prima di essere un
+  // partito riconosciuto (il resto del paese, invece, continua a muoversi sullo sfondo: vedi il gate in
+  // advanceTurnLogicCore). Una volta superata la soglia (vedi il controllo in resolveDossierChoice), il
+  // ciclo normale del gioco prende il sopravvento da solo, a partire proprio dal Congresso Fondativo qui
+  // sopra.
   var FORMATION_SIGNATURE_TARGET = 300000;
   var FORMATION_ORGANIZER_COST = 900;
   var FORMATION_ORGANIZER_BOOST = 1.25;
+  // Segnalato da un giocatore: la Raccolta Firme era sempre la stessa identica schermata, settimana dopo
+  // settimana (stesse 4 etichette, stessa frase di apertura) — solo il conteggio delle firme cambiava.
+  // Qui sotto due pool di varianti puramente testuali (l'effetto meccanico di ciascuna azione resta
+  // identico, cambia solo come viene raccontata) più un "umore della settimana" che apre il brief con un
+  // piccolo evento di colore diverso ogni volta: bastano a rendere ogni settimana visivamente diversa
+  // dalla precedente senza toccare l'equilibrio economico già tarato.
+  var FORMATION_WEEK_MOODS = [
+    "", "La pioggia non aiuta, ma il comitato promotore va avanti lo stesso. ",
+    "Un articolo poco lusinghiero sulla stampa locale non scoraggia i volontari più convinti. ",
+    "Un video amatoriale di uno dei banchetti gira più del previsto sui social locali. ",
+    "Una figura conosciuta del territorio si espone a favore del comitato, dando morale a tutti. ",
+    "Un simpatizzante di un partito rivale prova a disturbare l'ultimo banchetto, senza successo. ",
+    "Un piccolo gruppo civico locale presta il proprio gazebo per la settimana. ",
+    "Il freddo non scoraggia i volontari più convinti: la settimana si chiude comunque con soddisfazione. ",
+    "Qualche nuovo volontario si aggiunge al comitato promotore questa settimana. ",
+    "Una piccola polemica social nata da un commento mal interpretato si sgonfia rapidamente. ",
+    "Una testata locale dedica un trafiletto al comitato promotore: piccola visibilità, ma reale. ",
+    "Una settimana di ordinaria amministrazione, senza colpi di scena. "
+  ];
+  var FORMATION_ACTION_VARIANTS = {
+    comizio: [
+      { label: "Organizza un comizio in piazza", result: "Il comizio richiama una buona folla in piazza: molte firme raccolte in un solo pomeriggio." },
+      { label: "Organizza un comizio davanti alla stazione", result: "Il flusso di pendolari davanti alla stazione si rivela un bersaglio perfetto per raccogliere firme." },
+      { label: "Organizza un comizio nel mercato rionale", result: "Tra le bancarelle del mercato il comitato raccoglie firme una dopo l'altra, tra una spesa e l'altra." },
+      { label: "Organizza un comizio serale davanti al municipio", result: "Il comizio serale davanti al municipio attira curiosi e simpatizzanti, e con loro molte firme." }
+    ],
+    banchetto: [
+      { label: "Allestisci un banchetto informativo", result: "Il banchetto informativo raccoglie firme con calma, un passante alla volta." },
+      { label: "Allestisci un banchetto fuori dal centro commerciale", result: "Il viavai del centro commerciale porta al banchetto più firme del previsto." },
+      { label: "Allestisci un banchetto all'uscita della metro", result: "All'uscita della metro il banchetto intercetta un flusso costante di pendolari disposti a fermarsi." }
+    ],
+    portaaporta: [
+      { label: "Organizza una raccolta porta a porta", result: "La raccolta porta a porta non fa rumore, ma qualche firma in più arriva ogni giorno." },
+      { label: "Organizza un giro porta a porta nel quartiere popolare", result: "Nel quartiere popolare il porta a porta trova ascolto: la gente ha tempo di fermarsi e parlare." },
+      { label: "Organizza un giro porta a porta nell'hinterland", result: "Nell'hinterland il porta a porta è lento, ma capillare: firma dopo firma, il numero sale." }
+    ]
+  };
+  function pickFormationVariant(kind) {
+    var pool = FORMATION_ACTION_VARIANTS[kind];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
   function buildFormationDossier() {
     var p = state.player;
     var boost = p.formationOrganizerHired ? FORMATION_ORGANIZER_BOOST : 1;
@@ -9246,16 +9288,17 @@
     // lungo prima ancora di cominciare a giocare davvero. Il traguardo resta 300.000 (il numero reale
     // citato in partenza), a cambiare è quanto rende ogni singola iniziativa.
     var COMIZIO_COST = 250, BANCHETTO_COST = 60;
+    var comizioV = pickFormationVariant("comizio"), banchettoV = pickFormationVariant("banchetto"), portaV = pickFormationVariant("portaaporta");
     var choiceDefs = [
-      { label: "Organizza un comizio in piazza", hint: "Alta resa, ma costa e ti espone", cost: COMIZIO_COST,
+      { label: comizioV.label, hint: "Alta resa, ma costa e ti espone", cost: COMIZIO_COST,
         effects: { fondi: -COMIZIO_COST, visibilita: rand(3, 6), iscritti: rand(10, 25), formationSignatures: Math.round(rand(4500, 9000) * boost) },
-        result: "Il comizio richiama una buona folla in piazza: molte firme raccolte in un solo pomeriggio." },
-      { label: "Allestisci un banchetto informativo", hint: "Più economico, resa più contenuta", cost: BANCHETTO_COST,
+        result: comizioV.result },
+      { label: banchettoV.label, hint: "Più economico, resa più contenuta", cost: BANCHETTO_COST,
         effects: { fondi: -BANCHETTO_COST, iscritti: rand(3, 9), formationSignatures: Math.round(rand(1800, 3900) * boost) },
-        result: "Il banchetto informativo raccoglie firme con calma, un passante alla volta." },
-      { label: "Organizza una raccolta porta a porta", hint: "Gratuita, lenta ma capillare", cost: 0,
+        result: banchettoV.result },
+      { label: portaV.label, hint: "Gratuita, lenta ma capillare", cost: 0,
         effects: { formationSignatures: Math.round(rand(1350, 2850) * boost) },
-        result: "La raccolta porta a porta non fa rumore, ma qualche firma in più arriva ogni giorno." },
+        result: portaV.result },
       { label: socialLabel, hint: "TikTok, Instagram, canali WhatsApp del comitato", cost: 0,
         effects: { visibilita: rand(2, 5), formationSignatures: Math.round(rand(1500, 4200) * boost) },
         result: "Il contenuto pubblicato sui canali social del comitato promotore circola bene, e converte qualche firma in più." }
@@ -9270,10 +9313,11 @@
       });
     }
     var signatures = Math.round(p.formationSignatures || 0);
+    var mood = FORMATION_WEEK_MOODS[Math.floor(Math.random() * FORMATION_WEEK_MOODS.length)];
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Comitato Promotore — Raccolta Firme",
       cat: "Fondazione", title: "Settimana " + state.turn + " di raccolta firme",
-      brief: "Il comitato promotore di " + p.name + " ha raccolto finora " + signatures.toLocaleString("it-IT") + " firme su " +
+      brief: mood + "Il comitato promotore di " + p.name + " ha raccolto finora " + signatures.toLocaleString("it-IT") + " firme su " +
         FORMATION_SIGNATURE_TARGET.toLocaleString("it-IT") + " necessarie (almeno 6.000 per ciascuno dei collegi uninominali del Paese) per depositare le liste e fondare davvero il partito. Come impieghi la settimana?",
       progressPct: (signatures / FORMATION_SIGNATURE_TARGET) * 100,
       choices: choices
@@ -13699,7 +13743,7 @@
       resultData: null,
       log: [],
       electionResults: [],
-      setupDraft: { name: "", short: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "", mode: "new", takeoverId: null, logoDataUrl: null, city: null, leaderTraits: [] }
+      setupDraft: { name: "", short: "", motto: "", color: SWATCHES[0], family: null, leadership: null, ideologyText: "", leaderCharacter: "", mode: "new", takeoverId: null, logoDataUrl: null, city: null, leaderTraits: [], skipFormation: false, leaderAge: null, leaderAgeTouched: false }
     }, JSON.parse(JSON.stringify(STATE_FIELD_DEFAULTS)), { countryProfile: freshCountryProfile() });
   }
 
@@ -15993,6 +16037,13 @@
     var mode = d.mode || "new";
     if (mode === "career") { renderCareerSetup(); return; }
     var takeoverParty = d.takeoverId ? PARTIES.filter(function (pt) { return pt.id === d.takeoverId; })[0] : null;
+    // Prima l'età del leader era sempre scelta a caso in un range fisso (32-58 per chi fonda da zero,
+    // 40-66 per chi prende il comando), mai una vera scelta del giocatore. Qui diventa un campo esplicito
+    // (20-80): se non lo si tocca resta comunque un valore plausibile per la modalità scelta, scritto
+    // subito in state.setupDraft.leaderAge così quel default è davvero quello poi usato alla fondazione
+    // (vedi il click handler di #found-btn), non solo quello mostrato nel campo.
+    if (!d.leaderAgeTouched) d.leaderAge = mode === "takeover" ? 52 : 42;
+    var leaderAgeValue = d.leaderAge;
     var html = '<div class="setup-import-prompt"><p>Hai già una partita salvata?</p>' +
       '<button type="button" id="setup-import-btn" class="save-bar-btn primary">Importa partita salvata</button></div>' +
       '<div class="setup-card"><p class="eyebrow">Fondazione</p>' +
@@ -16034,10 +16085,21 @@
             '<span class="olabel">' + f.label + '</span><span class="odesc">' + f.desc + '</span></button>';
         }).join("") + "</div></div>";
     }
+    if (mode === "new") {
+      html += '<div class="field"><label class="field-label">Raccolta firme</label><div class="option-grid">' +
+        '<button type="button" class="option-card' + (!d.skipFormation ? " selected" : "") + '" data-skip-formation="0">' +
+        '<span class="olabel">Parti dal comitato promotore</span><span class="odesc">Il percorso classico: raccogli le firme necessarie settimana dopo settimana prima di fondare davvero il partito</span></button>' +
+        '<button type="button" class="option-card' + (d.skipFormation ? " selected" : "") + '" data-skip-formation="1">' +
+        '<span class="olabel">Salta la raccolta firme</span><span class="odesc">Parti già con le firme depositate: il partito nasce ufficialmente da subito, come per chi prende il comando di un partito esistente</span></button>' +
+        "</div></div>";
+    }
     html += '<div class="field"><label class="field-label" for="ideology-text-input">Ideologia specifica del partito (facoltativo)</label>' +
       '<textarea id="ideology-text-input" maxlength="300" placeholder="Es. Sovranista ma su base ambientalista, vicino ai piccoli agricoltori, molto ostile alle grandi multinazionali">' +
       (d.ideologyText || "").replace(/</g, "&lt;") + '</textarea>' +
       '<p class="field-hint">Oltre all\'area politica sopra: descrivi con parole tue le sfumature specifiche. Resta una nota di ruolo, senza un effetto meccanico diretto.</p></div>' +
+      '<div class="field"><label class="field-label" for="leader-age-input">Età del leader all\'inizio della partita</label>' +
+      '<input type="number" id="leader-age-input" min="20" max="80" value="' + leaderAgeValue + '">' +
+      '<p class="field-hint">Tra 20 e 80 anni. Un leader più giovane ha più tempo davanti a sé; uno più anziano parte con più esperienza, ma più vicino ai limiti dell\'età (vedi l\'invecchiamento del leader durante la partita).</p></div>' +
       '<div class="field"><label class="field-label">Stile di leadership</label><div class="option-grid">' +
       LEADERSHIP_STYLES.map(function (l) {
         return '<button type="button" class="option-card' + (d.leadership === l.id ? " selected" : "") + '" data-leadership="' + l.id + '">' +
@@ -16081,6 +16143,12 @@
     if (ideologyTextInput) ideologyTextInput.addEventListener("input", function () { state.setupDraft.ideologyText = ideologyTextInput.value; });
     var leaderCharacterInput = document.getElementById("leader-character-input");
     if (leaderCharacterInput) leaderCharacterInput.addEventListener("input", function () { state.setupDraft.leaderCharacter = leaderCharacterInput.value; });
+    var leaderAgeInput = document.getElementById("leader-age-input");
+    if (leaderAgeInput) leaderAgeInput.addEventListener("input", function () {
+      var v = parseInt(leaderAgeInput.value, 10);
+      state.setupDraft.leaderAgeTouched = true;
+      if (!isNaN(v)) state.setupDraft.leaderAge = clamp(v, 20, 80);
+    });
     app.querySelectorAll(".swatch-btn").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.setupDraft.color = btn.getAttribute("data-color");
@@ -16098,6 +16166,12 @@
     app.querySelectorAll("[data-family]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.setupDraft.family = btn.getAttribute("data-family");
+        renderSetup();
+      });
+    });
+    app.querySelectorAll("[data-skip-formation]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.setupDraft.skipFormation = btn.getAttribute("data-skip-formation") === "1";
         renderSetup();
       });
     });
@@ -16209,14 +16283,21 @@
       state.player.logoDataUrl = d.logoDataUrl || null;
       state.player.short = (d.short || "").trim() || null;
       state.player.foundedTurn = state.turn;
-      // Chi fonda un partito da zero è più spesso una figura più giovane, in cerca di spazio; chi prende
-      // il comando di un partito già esistente eredita più spesso una leadership già navigata (vedi
-      // leaderAge, che da qui in avanti fa invecchiare il leader davvero, un anno di gioco alla volta).
-      state.player.ageAtFounding = Math.round(isTakeover ? rand(40, 66) : rand(32, 58));
+      // Prima l'età di partenza era sempre scelta a caso (32-58 per chi fonda da zero, 40-66 per chi
+      // prende il comando), mai una vera scelta del giocatore: ora è il valore impostato nel campo "Età
+      // del leader" del form (20-80, vedi renderSetup/bindSetupInteractions), con lo stesso range casuale
+      // di prima come ripiego solo per i salvataggi che non passano mai da lì (non dovrebbe capitare, dato
+      // che il campo si autoinizializza a un default plausibile già in renderSetup).
+      state.player.ageAtFounding = (d.leaderAge !== null && d.leaderAge !== undefined)
+        ? clamp(Math.round(d.leaderAge), 20, 80)
+        : Math.round(isTakeover ? rand(40, 66) : rand(32, 58));
       // Un partito fondato da zero non nasce già "vero": prima serve un comitato promotore che raccolga
       // davvero le firme necessarie a depositare le liste (vedi buildFormationDossier) — un partito preso
-      // in mano con "Prendi il comando" esiste già per definizione ed è escluso da questo passaggio.
-      if (!isTakeover) state.player.formationComplete = false;
+      // in mano con "Prendi il comando" esiste già per definizione ed è escluso da questo passaggio, e lo
+      // stesso vale per chi fonda da zero ma sceglie esplicitamente di saltare la raccolta firme
+      // (d.skipFormation, vedi il selettore nel form di fondazione).
+      var skipsFormation = isTakeover || !!d.skipFormation;
+      if (!skipsFormation) state.player.formationComplete = false;
       addDiaryEntry(isTakeover ? "Prendo il comando" : "Il comitato promotore",
         isTakeover
           ? "Da oggi " + state.player.name + " è nelle mie mani. Eredito una storia che non ho scritto io, ma da qui in avanti la direzione la do io."
@@ -16281,9 +16362,10 @@
       state.phase = "building";
       // Un partito nuovo comincia dalla Raccolta Firme (vedi buildFormationDossier), non dal Congresso
       // Fondativo: quello arriva solo dopo, appena il comitato promotore raggiunge la soglia di firme.
-      // Un takeover eredita un partito già esistente e riconosciuto: per lui il Congresso Fondativo resta
-      // il primo passo, come prima.
-      if (!isTakeover) {
+      // Un takeover eredita un partito già esistente e riconosciuto, e lo stesso vale per chi ha scelto
+      // di saltare la raccolta firme (skipsFormation): per entrambi il Congresso Fondativo resta il
+      // primo passo, come prima.
+      if (!skipsFormation) {
         state.aiDynamicDossier = buildFormationDossier();
         state.currentDossierId = "ai_dynamic";
       } else {
@@ -18319,8 +18401,63 @@
     var sum = members.reduce(function (s, mid) { return s + (state.partyRelations && state.partyRelations[mid] !== undefined ? state.partyRelations[mid] : 50); }, 0);
     return sum / members.length;
   }
+  function coalitionMemberCount(coal) {
+    if (!coal) return 0;
+    return coal.members.length + (state.player && state.player.allianceId === coal.id ? 1 : 0);
+  }
+  // Prima il controllo di compatibilità ideologica di un invito guardava SOLO alla distanza tra il
+  // giocatore e il singolo partito invitato — mai a chi era GIÀ dentro la coalizione. Un giocatore poteva
+  // così allargarla un passo alla volta, ciascun invito singolarmente entro il limite dal proprio partito
+  // ma finendo per mettere insieme, nel complesso, membri agli estremi opposti tra loro (es. un alleato
+  // molto a sinistra e uno molto a destra, mai verificati l'uno contro l'altro). Segnalato da un
+  // giocatore: qui il controllo guarda all'intera ESTENSIONE ideologica della coalizione (dal membro più a
+  // sinistra a quello più a destra, giocatore incluso), non solo alla coppia giocatore-candidato.
+  function wouldExceedCoalitionSpread(existingFamilyIds, candidateFamilyId) {
+    var candPos = LEFT_RIGHT_POSITION[candidateFamilyId];
+    if (candPos === undefined) return false;
+    var positions = existingFamilyIds.map(function (f) { return LEFT_RIGHT_POSITION[f]; }).filter(function (v) { return v !== undefined; });
+    if (!positions.length) return false;
+    positions.push(candPos);
+    return (Math.max.apply(null, positions) - Math.min.apply(null, positions)) > COALITION_IDEOLOGY_GAP_LIMIT;
+  }
+  // Le famiglie ideologiche di chi è GIÀ nella coalizione a cui appartiene il giocatore (se ne ha una),
+  // giocatore compreso: la base contro cui misurare un nuovo invito (vedi wouldExceedCoalitionSpread).
+  function currentCoalitionFamilyIds() {
+    var p = state.player;
+    var famIds = p.family ? [p.family] : [];
+    if (p.allianceId) {
+      var coal = coalitionById(p.allianceId);
+      if (coal) {
+        coal.members.forEach(function (mid) {
+          var pt = partyById(mid);
+          if (pt && pt.familyId) famIds.push(pt.familyId);
+        });
+      }
+    }
+    return famIds;
+  }
+  // Le famiglie ideologiche dei membri di una coalizione qualunque (per id), usata per valutare un invito
+  // a UNIRSI a un blocco esistente (vedi inviteToBloc) invece che ad allargare la propria.
+  function coalitionFamilyIds(coalId) {
+    var coal = coalitionById(coalId);
+    if (!coal) return [];
+    return coal.members.map(function (mid) { var pt = partyById(mid); return pt ? pt.familyId : null; }).filter(Boolean);
+  }
+  // Prima una coalizione poteva crescere all'infinito senza alcuna controindicazione: più alleati
+  // significava solo più seggi, mai più rischio — un giocatore poteva accumulare quanti alleati voleva
+  // senza pagarne mai il prezzo, un vero e proprio modo per aggirare la difficoltà del gioco. Segnalato
+  // da un giocatore: più una coalizione ha membri, più deve essere fragile da tenere unita, esattamente
+  // come càpita alle coalizioni reali più affollate (più voci, più interessi da conciliare, più attrito).
+  // Oltre i primi due alleati "fisiologici", ogni membro aggiuntivo abbassa il tetto di fiducia
+  // raggiungibile — non solo alla fondazione, ma come bersaglio permanente verso cui la fiducia deriva
+  // ogni settimana (vedi updateCoalitionTrust/updateCpuOnlyCoalitionTrust), quindi una coalizione enorme
+  // non si stabilizza mai su una fiducia alta, anche se gli alleati vengono coltivati bene.
+  function coalitionSizePenalty(memberCount) {
+    return clamp((memberCount - 2) * 4, 0, 30);
+  }
   function initialCoalitionTrust(id) {
-    return clamp(20 + avgCoalitionRelation(id) * 0.7, 15, 85);
+    var coal = coalitionById(id);
+    return clamp(20 + avgCoalitionRelation(id) * 0.7 - coalitionSizePenalty(coalitionMemberCount(coal)), 15, 85);
   }
   // ---------- Approvazione della coalizione di governo ----------
   // Quando si governa in coalizione, nessuna scelta di governo è più unilaterale: prima di applicare gli
@@ -18430,7 +18567,7 @@
     state.dynamicCoalitions.slice().forEach(function (c) {
       if (p.allianceId === c.id) return;
       if (state.coalitionTrust[c.id] === undefined) state.coalitionTrust[c.id] = initialCoalitionTrust(c.id);
-      var avgRel = avgCoalitionRelation(c.id);
+      var avgRel = avgCoalitionRelation(c.id) - coalitionSizePenalty(coalitionMemberCount(c));
       var trust = clamp(state.coalitionTrust[c.id] + (avgRel - state.coalitionTrust[c.id]) * 0.08 + (Math.random() - 0.5) * 1.8, 0, 100);
       state.coalitionTrust[c.id] = trust;
       if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(c.id);
@@ -18441,7 +18578,7 @@
     if (!p.allianceId) return;
     if (!state.coalitionTrust) state.coalitionTrust = {};
     if (state.coalitionTrust[p.allianceId] === undefined) state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId);
-    var avgRel = avgCoalitionRelation(p.allianceId);
+    var avgRel = avgCoalitionRelation(p.allianceId) - coalitionSizePenalty(coalitionMemberCount(coalitionById(p.allianceId)));
     var trust = clamp(state.coalitionTrust[p.allianceId] + (avgRel - state.coalitionTrust[p.allianceId]) * 0.08 + (Math.random() - 0.5) * 1.8, 0, 100);
     state.coalitionTrust[p.allianceId] = trust;
     if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(p.allianceId);
@@ -18758,10 +18895,10 @@
     var fam = familyById(p.family);
     var label = coal ? coal.label : blocId;
     // Due linee politiche agli estremi opposti (es. un partito comunista e uno nazional-fascista) non
-    // possono in nessun caso allearsi: qui il rifiuto è categorico, non solo una bassa probabilità.
-    var blocFamilyId = blocId === "centrodestra" ? "sovranista" : blocId === "campolargo" ? "progressista"
-      : ((state.dynamicCoalitions || []).filter(function (c) { return c.id === blocId; })[0] || {}).familyId;
-    if (blocFamilyId && ideologicallyIncompatible(fam.id, blocFamilyId)) {
+    // possono in nessun caso allearsi: qui il rifiuto è categorico, non solo una bassa probabilità. Guarda
+    // all'ESTENSIONE ideologica reale del blocco (tutti i suoi membri attuali), non a una singola famiglia
+    // rappresentativa: Centrodestra/Campo Largo mettono già insieme più famiglie diverse tra loro.
+    if (wouldExceedCoalitionSpread(coalitionFamilyIds(blocId), fam.id)) {
       p.reputazione = clamp(p.reputazione - rand(0.5, 2), 0, 100);
       state.log.unshift({ week: state.turn, title: "Invito di alleanza rifiutato", choiceLabel: label, result: label + " rifiuta categoricamente: le due linee politiche sono troppo distanti per un'alleanza credibile.", headlines: [], type: "dossier", cat: "Strategia Elettorale" });
       return { accepted: false, label: label, incompatible: true };
@@ -18794,8 +18931,9 @@
     var party = activeParties().filter(function (pt) { return pt.id === partyId; })[0];
     if (!party) return null;
     p.coalitionInviteCooldowns[partyId] = state.turn + 10;
-    // Rifiuto categorico, non solo improbabile, tra due linee politiche agli estremi opposti.
-    if (party.familyId && ideologicallyIncompatible(p.family, party.familyId)) {
+    // Rifiuto categorico, non solo improbabile: guarda all'estensione ideologica dell'intera coalizione
+    // (giocatore compreso), non solo alla distanza dal giocatore — vedi wouldExceedCoalitionSpread.
+    if (party.familyId && wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId)) {
       p.reputazione = clamp(p.reputazione - rand(0.5, 2), 0, 100);
       state.log.unshift({ week: state.turn, title: "Invito di alleanza rifiutato", choiceLabel: party.name, result: party.name + " rifiuta categoricamente: le due linee politiche sono troppo distanti per un'alleanza credibile.", headlines: [], type: "dossier", cat: "Strategia Elettorale" });
       return { accepted: false, label: party.name, incompatible: true };
@@ -18835,7 +18973,7 @@
   // Etichetta di vicinanza/status da mostrare accanto a ciascun invito, cosi' la scelta di chi invitare
   // è informata (quanto è probabile un sì) invece di essere alla cieca.
   function inviteStatusText(party, p) {
-    if (party.familyId && ideologicallyIncompatible(p.family, party.familyId)) return "Ideologicamente incompatibile: rifiuterà sempre";
+    if (party.familyId && wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId)) return "Ideologicamente incompatibile: rifiuterà sempre";
     var rel = Math.round(state.partyRelations && state.partyRelations[party.id] !== undefined ? state.partyRelations[party.id] : 50);
     var lbl = relationLabel(rel);
     var cd = p.coalitionInviteCooldowns[party.id] || 0;
@@ -18941,7 +19079,7 @@
       // durante la partita.
       var takenIds2 = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
       (state.dynamicCoalitions || []).forEach(function (c) { takenIds2 = takenIds2.concat(c.members); });
-      var expandCandidates = activeParties().filter(function (party) { return takenIds2.indexOf(party.id) === -1 && !ideologicallyIncompatible(p.family, party.familyId); })
+      var expandCandidates = activeParties().filter(function (party) { return takenIds2.indexOf(party.id) === -1 && !wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId); })
         .sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
       if (expandCandidates.length) {
         html += '<p class="ci-hint">Puoi invitare qualsiasi altro partito a unirsi alla tua coalizione:</p><div class="option-grid">';
@@ -18977,11 +19115,11 @@
       });
       var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
       (state.dynamicCoalitions || []).forEach(function (c) { takenIds = takenIds.concat(c.members); });
-      // I partiti ideologicamente incompatibili (vedi ideologicallyIncompatible) non compaiono proprio tra
+      // I partiti ideologicamente incompatibili (vedi wouldExceedCoalitionSpread) non compaiono proprio tra
       // gli invitabili: prima restavano visibili con un rifiuto garantito, lasciando pensare che una
       // coalizione tra capo e coda dello spettro (es. centro + comunista, o centro + nazional-fascista)
       // fosse comunque un tentativo sensato da poter fare.
-      var candidates = activeParties().filter(function (party) { return takenIds.indexOf(party.id) === -1 && !ideologicallyIncompatible(p.family, party.familyId); })
+      var candidates = activeParties().filter(function (party) { return takenIds.indexOf(party.id) === -1 && !wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId); })
         .sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
       candidates.forEach(function (party) {
         var cd = p.coalitionInviteCooldowns[party.id] || 0;
@@ -22323,10 +22461,20 @@
     // advancePresidentTurnLogic, con le sue proprie regole, finché non finisce il settennato.
     if (state.mode === "president") { advancePresidentTurnLogic(); return; }
     // Priorità assoluta, prima di qualunque altra cosa: finché il comitato promotore non ha raccolto le
-    // firme necessarie, il partito non esiste ancora davvero — niente drift settimanale, niente eventi di
-    // partiti rivali, niente Parlamento, solo la Raccolta Firme (vedi buildFormationDossier). Il ciclo
-    // normale di gioco riprende da solo la settimana successiva al superamento della soglia.
+    // firme necessarie, il partito non esiste ancora davvero come soggetto elettorale — niente Parlamento,
+    // niente elezioni, niente dossier riservati a un partito riconosciuto, solo la Raccolta Firme (vedi
+    // buildFormationDossier). Il ciclo normale di gioco riprende da solo la settimana successiva al
+    // superamento della soglia. Il RESTO del paese, però, non deve restare congelato nel frattempo:
+    // segnalato da un giocatore, prima gli altri partiti non si muovevano affatto nei sondaggi e nessun
+    // altro indicatore avanzava finché durava la raccolta firme, a volte per decine di settimane — come se
+    // il mondo intero fosse in pausa. recomputePeriodic() fa muovere i sondaggi CPU, la Scheda Paese e
+    // l'economia esattamente come farebbe ogni altra settimana; triggerRivalPartyEvent()/triggerWorldNews()
+    // aggiungono un po' di cronaca di sottofondo — nessuno dei due prova mai a mostrare un proprio dossier
+    // (sono aggiornamenti silenziosi), quindi non entrano in conflitto con quello della Raccolta Firme.
     if (state.player && !state.player.formationComplete) {
+      recomputePeriodic();
+      triggerRivalPartyEvent();
+      triggerWorldNews();
       state.aiDynamicDossier = buildFormationDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
