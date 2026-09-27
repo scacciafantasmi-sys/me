@@ -13637,6 +13637,7 @@
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [], regions: null,
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null, activeArc: null, pendingCongressoFondativo: false,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
+    visitedPages: {}, explorationHintDismissed: false,
     passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {},
     govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() },
     foreignRelations: {}, euMembershipOverrides: {}, euFederalized: false,
@@ -14655,15 +14656,22 @@
         alliance: currentId, keepCurrent: true
       });
     }
-    if (currentId !== "centrodestra") {
+    // Segnalato da un giocatore (partito europeista finito nel Campo Largo, insieme a PD/AVS/M5S molto più
+    // a sinistra): questa trattativa automatica pre-elettorale offriva SEMPRE entrambi i blocchi storici,
+    // qualunque fosse la distanza ideologica reale — solo un malus di reputazione se non allineato, mai un
+    // vero blocco. Un'incoerenza rispetto a tutti gli altri punti d'ingresso alle coalizioni (inviti del
+    // giocatore, adesioni spontanee della CPU), che invece già escludono categoricamente chi supererebbe
+    // COALITION_IDEOLOGY_GAP_LIMIT — vedi wouldExceedCoalitionSpread. Qui si applica lo stesso identico
+    // controllo, così un partito troppo lontano da un blocco non lo vede proprio più tra le opzioni.
+    if (currentId !== "centrodestra" && !wouldExceedCoalitionSpread(coalitionFamilyIds("centrodestra"), fam.id)) {
       choices.push({ label: "Allearsi con il Centrodestra", hint: "FdI, Lega, Forza Italia — soglia coalizione 10%",
-        effects: { reputazione: CENTRODESTRA_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
+        effects: { reputazione: 3 },
         result: "L'accordo con il centrodestra apre le porte a un listino comune, con soglia di coalizione al 10%.",
         alliance: "centrodestra" });
     }
-    if (currentId !== "campolargo") {
+    if (currentId !== "campolargo" && !wouldExceedCoalitionSpread(coalitionFamilyIds("campolargo"), fam.id)) {
       choices.push({ label: "Allearsi con il Campo Largo (PD–AVS)", hint: "PD, AVS — soglia coalizione 10%",
-        effects: { reputazione: CAMPOLARGO_ALIGNED_FAMILIES[fam.id] ? 3 : -4 },
+        effects: { reputazione: 3 },
         result: "L'intesa con il campo largo porta il partito dentro una coalizione ampia, soglia al 10%.",
         alliance: "campolargo" });
     }
@@ -19994,6 +20002,21 @@
   // modo di consultare le altre sezioni finché non la concludeva). Non c'è più un cassetto da aprire e
   // chiudere: ogni pulsante è un mini logo (icona) + un'etichetta breve, e scorre in orizzontale sui
   // telefoni se non entra tutto in una riga.
+  // Piccolo invito, non invasivo, a esplorare le altre sezioni della barra qui sopra: appena fondato o
+  // preso in mano un partito, il giocatore atterra sempre sul dossier della settimana con sotto la sola
+  // pagina di default ("Il Partito") — senza nulla che lo spinga a cliccare le altre schede, molti
+  // continuano ad avanzare settimana dopo settimana senza mai aprirle. Sparisce da solo appena il
+  // giocatore ha visitato almeno 3 sezioni diverse, o subito se lo chiude a mano.
+  function renderExplorationHint() {
+    if (!state.player || state.explorationHintDismissed) return "";
+    var visitedCount = Object.keys(state.visitedPages || {}).length;
+    if (visitedCount >= 3) return "";
+    return '<section aria-label="Suggerimento" class="exploration-hint">' +
+      '<p class="ci-hint" style="margin:0;display:flex;align-items:center;justify-content:space-between;gap:0.6rem;flex-wrap:wrap">' +
+      '<span>💡 Oltre alla scelta della settimana, usa la barra qui sopra per esplorare le altre sezioni — Partito, Territorio, Parlamento, Alleanze e le altre: c\'è molto altro da scoprire e da fare.</span>' +
+      '<button type="button" class="save-bar-btn" id="exploration-hint-dismiss-btn" style="flex-shrink:0">Ho capito</button>' +
+      "</p></section>";
+  }
   function renderPageNav() {
     var current = activePageDef().id;
     var tutorialBtn = '<button type="button" class="page-nav-btn" id="nav-tutorial-btn" title="Guida rapida">' +
@@ -20013,6 +20036,8 @@
       btn.addEventListener("click", function () {
         if (onBeforeNavigate) onBeforeNavigate();
         state.uiPage = btn.getAttribute("data-nav-page");
+        if (!state.visitedPages) state.visitedPages = {};
+        state.visitedPages[state.uiPage] = true;
         save();
         // render() stesso riporta la vista in cima quando uiPage cambia (vedi lastRenderScrollKey in
         // renderCore): non serve più uno scroll separato qui, e uno scrollIntoView aggiuntivo dopo
@@ -20233,7 +20258,7 @@
         state.phase = "result";
         save();
       } else {
-        app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderQuestionTimeScene();
+        app.innerHTML = renderPageNav() + renderQuestionTimeScene() + renderPollGrid(state.prevSnapshot);
         bindPageNavDrawer(function () {
           var qtAuto2 = state.qtScene;
           var autoChoiceList2 = qtAuto2.playerTurn.mode === "answer" ? qtAuto2.playerTurn.choices : null;
@@ -20299,7 +20324,7 @@
         state.phase = "result";
         save();
       } else {
-        app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderQtManualScene();
+        app.innerHTML = renderPageNav() + renderQtManualScene() + renderPollGrid(state.prevSnapshot);
         bindPageNavDrawer(function () {
           var qtmAutoChoice2 = qtm.choices[Math.floor(Math.random() * qtm.choices.length)];
           var qtmAutoDossier2 = { title: "Question Time — " + qtm.noun, cat: "Opposizione" };
@@ -20328,7 +20353,7 @@
     // p.playerIsLeader per scattare, quindi qui non serve un ramo di auto-play per lo sfiduciato — se il
     // giocatore non è più leader, questa scena non si genera affatto).
     if (state.phase === "leader_interview_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderLeaderInterviewScene();
+      app.innerHTML = renderPageNav() + renderLeaderInterviewScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.leaderInterview = null;
         state.currentDossierId = null;
@@ -20365,7 +20390,7 @@
     // viene anche pubblicato come una vera dichiarazione pubblica (pushStatement), visibile nel registro
     // Dichiarazioni: parlare a un congresso internazionale resta comunque una presa di posizione pubblica.
     if (state.phase === "international_congress_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderInternationalCongressScene();
+      app.innerHTML = renderPageNav() + renderInternationalCongressScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.internationalCongress = null;
         state.currentDossierId = null;
@@ -20410,7 +20435,7 @@
     // Congresso/manifestazione/cena di partito: scena in due passi, avviata dal giocatore stesso (non un
     // trigger periodico), vedi launchPartyEventScene richiamata dal pannello Eventi di Partito più sotto.
     if (state.phase === "party_event_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderPartyEventScene();
+      app.innerHTML = renderPageNav() + renderPartyEventScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.partyEventScene = null;
         state.currentDossierId = null;
@@ -20449,7 +20474,7 @@
     }
 
     if (state.phase === "consiglio_comunale_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderConsiglioComunaleScene();
+      app.innerHTML = renderPageNav() + renderConsiglioComunaleScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.consiglioComunaleScene = null;
         state.currentDossierId = null;
@@ -20475,7 +20500,7 @@
     // Riunione di programma: checkProgramMeetingTrigger già richiede p.playerIsLeader per scattare, come
     // l'intervista al leader — nessun ramo di auto-play necessario per lo sfiduciato.
     if (state.phase === "program_meeting_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderProgramMeetingScene();
+      app.innerHTML = renderPageNav() + renderProgramMeetingScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.programMeeting = null;
         state.currentDossierId = null;
@@ -20609,7 +20634,7 @@
     // Salotto TV: checkSalottoTrigger già richiede p.playerIsLeader per scattare, come intervista al
     // leader e riunione di programma — nessun ramo di auto-play necessario per lo sfiduciato.
     if (state.phase === "salotto_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderSalottoScene();
+      app.innerHTML = renderPageNav() + renderSalottoScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.salottoScene = null;
         state.currentDossierId = null;
@@ -20649,7 +20674,7 @@
     // dell'ultimo round, il margine tra i due punteggi decide chi vince il confronto (vedi
     // resolveDebateOutcome), non solo l'ultima battuta pronunciata.
     if (state.phase === "debate_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderDebateScene();
+      app.innerHTML = renderPageNav() + renderDebateScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.debateScene = null;
         state.currentDossierId = null;
@@ -20689,7 +20714,7 @@
     }
 
     if (state.phase === "ufficio_scene") {
-      app.innerHTML = renderPageNav() + renderPollGrid(state.prevSnapshot) + renderUfficioScene();
+      app.innerHTML = renderPageNav() + renderUfficioScene() + renderPollGrid(state.prevSnapshot);
       bindPageNavDrawer(function () {
         state.ufficioScene = null;
         state.currentDossierId = null;
@@ -20763,6 +20788,7 @@
         body += renderHeadlines(state.resultData.headlines);
       }
       if (state.player && !state.player.formationComplete) body += renderFormationSocialPanel();
+      body += renderExplorationHint();
 
       // Ordine pensato per la settimana tipo: prima i numeri chiave e le azioni che si usano spesso
       // (statistiche, sondaggi, eventi, riforme, referendum, alleanze, parlamento), poi tutto ciò che è
@@ -20785,12 +20811,22 @@
     // pannello sotto i piedi dell'utente. Qui si ricorda quali erano aperti (per testo del sommario,
     // ragionevolmente stabile) e li si riapre subito dopo aver rigenerato il markup.
     var openSummaries = Array.prototype.map.call(app.querySelectorAll("details[open] > summary"), function (s) { return s.textContent; });
+    // Segnalato dall'utente: cliccare una scelta PRO/CONTRO/NEUTRALE inline (Geopolitica, Iniziative UE,
+    // Riforme, Vita Pubblica, Attori Istituzionali...) a volte riportava la vista in cima alla pagina, pur
+    // restando sulla stessissima schermata (nessun cambio di fase/dossier/turno/pagina, quindi lo
+    // scrollKey sopra non era il colpevole). La causa reale è che app.innerHTML = body ricostruisce l'intero
+    // DOM da zero: quando il pannello inline si richiude, il documento si accorcia e alcuni motori di
+    // rendering (soprattutto su mobile) non garantiscono che scrollY resti quello di prima dopo una
+    // sostituzione così ampia. Catturarlo qui e ripristinarlo subito dopo lo scambio del DOM lo rende
+    // esplicito invece di lasciarlo al comportamento (non garantito) del browser.
+    var scrollYBeforeSwap = typeof window !== "undefined" ? window.scrollY : 0;
     app.innerHTML = body;
     if (openSummaries.length) {
       app.querySelectorAll("details > summary").forEach(function (s) {
         if (openSummaries.indexOf(s.textContent) !== -1) s.parentElement.open = true;
       });
     }
+    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo({ top: scrollYBeforeSwap, left: 0, behavior: "auto" });
     bindInteractions();
   }
 
@@ -21474,6 +21510,14 @@
 
   function bindInteractions() {
     bindPageNavDrawer(null);
+    var explorationHintDismissBtn = document.getElementById("exploration-hint-dismiss-btn");
+    if (explorationHintDismissBtn) {
+      explorationHintDismissBtn.addEventListener("click", function () {
+        state.explorationHintDismissed = true;
+        save();
+        render();
+      });
+    }
     var logShowMoreBtn = document.getElementById("log-show-more-btn");
     if (logShowMoreBtn) {
       logShowMoreBtn.addEventListener("click", function () {
