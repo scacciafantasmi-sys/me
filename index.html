@@ -15734,7 +15734,31 @@
     // alle elezioni non conta chi prende più voti in assoluto come partito, conta chi somma più seggi nel
     // proprio blocco — è quello che stabilisce davvero chi vince (vedi "winner" subito sotto). Mostrata
     // nella schermata di risultato elettorale (renderElectionResult), non come pannello permanente.
-    state.lastElectionStandings = qualified.map(function (e) {
+    // Segnalato da un giocatore: se la propria alleanza non raggiunge la soglia combinata del 10%,
+    // computeQualifiedElectionEntities() la fa correttamente tornare in corsa per conto proprio (per i
+    // seggi, sopra: chi tra i suoi membri supera comunque il 3% individuale li vince lo stesso — quello
+    // resta invariato), ma qui in classifica il giocatore compariva come se avesse corso da solo fin
+    // dall'inizio, mentre in realtà ha corso con un'alleanza che semplicemente non ha superato la soglia.
+    // La riga in classifica deve raccontare CON CHI ha corso (nome dell'alleanza, voti aggregati dei
+    // partiti che la compongono), non azzerare quell'appartenenza solo perché sotto soglia.
+    var standingsRows = qualified;
+    var playerRunEntity = entities.filter(function (e) { return e.members.indexOf("player") !== -1; })[0];
+    if (playerRunEntity && !playerRunEntity.isCoalition && p.allianceId) {
+      var ownCoalForStandings = coalitionById(p.allianceId);
+      var ownCoalActiveMembers = ownCoalForStandings
+        ? ownCoalForStandings.members.filter(function (id) { return activeParties().some(function (pt) { return pt.id === id; }); })
+        : [];
+      if (ownCoalForStandings && ownCoalActiveMembers.length) {
+        var ownCoalVotes = ownCoalActiveMembers.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0) + p.sondaggi;
+        var ownCoalSeats = ownCoalActiveMembers.concat(["player"]).reduce(function (s, id) {
+          return s + (seatsById[id] ? seatsById[id].camera + seatsById[id].senato : 0);
+        }, 0);
+        standingsRows = qualified.filter(function (e) { return e.id !== "player"; }).concat([{
+          id: p.allianceId, label: ownCoalForStandings.label, votes: ownCoalVotes, isCoalition: true, totalSeats: ownCoalSeats
+        }]);
+      }
+    }
+    state.lastElectionStandings = standingsRows.map(function (e) {
       return { id: e.id, label: e.label, votes: e.votes, isCoalition: e.isCoalition, seats: e.totalSeats };
     }).sort(function (a, b) { return b.seats - a.seats; });
 
