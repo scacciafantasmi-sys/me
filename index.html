@@ -950,7 +950,13 @@
   // fuori dalle istituzioni non toccano affatto il paese reale.
   function institutionalPowerMultiplier(p) {
     var hasSeats = !!p.inParliament || (p.seggiEuropei || 0) > 0;
-    if (!hasSeats) return 0;
+    // Segnalato da un giocatore: un partito ancora senza seggi (tipico a inizio partita) otteneva un
+    // moltiplicatore di 0 netto, quindi OGNI presa di posizione con effetto sulla Scheda Paese (Geopolitica,
+    // Iniziative UE, ma anche altri sistemi che passano da qui) restava del tutto senza conseguenze reali,
+    // pur essendo presentata come "sempre disponibile, qualunque sia la dimensione del partito". Un piccolo
+    // pavimento non nullo rappresenta il minimo peso mediatico che anche un movimento extraparlamentare ha
+    // sull'opinione pubblica, restando comunque molto sotto chiunque abbia già seggi veri.
+    if (!hasSeats) return 0.15;
     var base = p.parliamentRole === "governo" ? 3 : p.inParliament ? 1.2 : 0.6;
     var seatWeight = clamp(((p.seatsCamera || 0) + (p.seatsSenato || 0)) / 150, 0, 3);
     var euWeight = clamp((p.seggiEuropei || 0) / 25, 0, 2);
@@ -2698,6 +2704,51 @@
     var tpl = WORLD_NEWS_TEMPLATES[Math.floor(Math.random() * WORLD_NEWS_TEMPLATES.length)];
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ week: state.turn, cat: tpl.cat, text: tpl.text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
+
+  // ---------- Guerre reali in corso nel mondo ----------
+  // Segnalato da un giocatore: oltre ai conflitti regionali generati dal gioco (CONFLICT_REGIONS sopra,
+  // che restano per le guerre che POSSONO scoppiare nel corso della partita, su nazioni ed esiti inventati),
+  // vuole che nel mondo di gioco esistano anche le guerre reali già in corso, con sviluppi che continuano
+  // nel tempo — non un evento singolo. Qui si tengono deliberatamente astratti: nessuna dichiarazione
+  // inventata attribuita a un leader reale specifico, solo sviluppi generici e plausibili (un'offensiva,
+  // un tentativo di mediazione, una tregua parziale, un nuovo pacchetto di aiuti) nello stesso stile
+  // volutamente vago di WORLD_NEWS_TEMPLATES sopra. Le prese di posizione vere e proprie, con conseguenze
+  // reali sul paese, restano nei domini di Geopolitica e Iniziative UE più sotto: qui c'è solo la cronaca
+  // di sottofondo che li tiene vivi settimana dopo settimana.
+  var REAL_WORLD_CONFLICTS = [
+    { id: "guerra_ucraina", label: "Guerra in Ucraina", devTemplates: [
+      "Nuovi combattimenti si registrano lungo la linea del fronte in Ucraina.",
+      "Un nuovo round di colloqui di pace sulla guerra in Ucraina si chiude senza un'intesa vera.",
+      "La comunità internazionale discute un nuovo pacchetto di sanzioni legato al conflitto in Ucraina.",
+      "Kyiv chiede ai partner occidentali nuovi aiuti militari ed economici.",
+      "Mosca respinge l'ultima proposta di mediazione internazionale sul conflitto ucraino.",
+      "Una tregua parziale, limitata alle infrastrutture civili, regge per qualche settimana in Ucraina.",
+      "Cresce la pressione diplomatica internazionale per un cessate il fuoco duraturo in Ucraina.",
+      "Un nuovo negoziato sulla guerra in Ucraina si apre in una capitale terza, sotto mediazione internazionale."
+    ] },
+    { id: "guerra_gaza", label: "Guerra a Gaza", devTemplates: [
+      "Nuovi scontri si registrano nella Striscia di Gaza, riaccendendo la crisi umanitaria.",
+      "Un tentativo di mediazione internazionale sulla crisi di Gaza non porta a un accordo duraturo.",
+      "Le Nazioni Unite tornano a discutere della crisi umanitaria a Gaza in sessione straordinaria.",
+      "Una tregua temporanea a Gaza permette l'ingresso di nuovi aiuti umanitari.",
+      "Le tensioni sulla crisi di Gaza si riflettono anche nelle piazze italiane, con nuove manifestazioni.",
+      "I negoziati sulla crisi di Gaza proseguono a fasi alterne, senza una soluzione stabile all'orizzonte.",
+      "Un nuovo piano di mediazione internazionale sulla crisi di Gaza raccoglie consensi contrastanti."
+    ] }
+  ];
+  var REAL_CONFLICT_NEWS_COOLDOWN_TURNS = 6;
+  function triggerRealConflictNews() {
+    if (Math.random() > 0.35) return;
+    if (!state.realConflictNewsCooldowns) state.realConflictNewsCooldowns = {};
+    var available = REAL_WORLD_CONFLICTS.filter(function (c) { return state.turn >= (state.realConflictNewsCooldowns[c.id] || 0); });
+    if (!available.length) return;
+    var conflict = available[Math.floor(Math.random() * available.length)];
+    state.realConflictNewsCooldowns[conflict.id] = state.turn + REAL_CONFLICT_NEWS_COOLDOWN_TURNS;
+    var text = conflict.devTemplates[Math.floor(Math.random() * conflict.devTemplates.length)];
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ week: state.turn, cat: "Geopolitica", text: text });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
   }
 
@@ -11543,6 +11594,7 @@
     resolveAnnualBudget();
     resolveMonthlyPartyTax();
     triggerWorldNews();
+    triggerRealConflictNews();
     triggerMinorCountryEvent();
     triggerCountryShock();
     triggerNucleoUpdate();
@@ -12932,7 +12984,14 @@
     { id: "aziende_ue", label: "Semplificazione per le Imprese Europee", noun: "un pacchetto di semplificazione normativa per le imprese europee", metric: "aziende",
       proStance: "un taglio deciso alla burocrazia europea per le imprese", controStance: "mantenere le attuali tutele normative, anche a costo di più adempimenti" },
     { id: "giustizia_ue", label: "Procura Europea Antifrode", noun: "il rafforzamento dei poteri della Procura Europea contro le frodi", metric: "giustizia",
-      proStance: "poteri investigativi più ampi per la Procura Europea", controStance: "le indagini su frodi e corruzione lasciate alle magistrature nazionali" }
+      proStance: "poteri investigativi più ampi per la Procura Europea", controStance: "le indagini su frodi e corruzione lasciate alle magistrature nazionali" },
+    // Le stesse due guerre reali del dominio Geopolitica (vedi GEOPOLITICA_DOMAINS), qui votate a livello
+    // di Parlamento Europeo: l'Unione può prendere una linea comune diversa da quella del singolo governo
+    // italiano, con conseguenze proprie sulla Scheda Paese.
+    { id: "guerra_ucraina_ue", label: "Linea Europea sulla Guerra in Ucraina", noun: "la linea comune europea sulla guerra in Ucraina", metric: "relazioniDiplomatiche",
+      proStance: "una linea europea comune di sostegno pieno all'Ucraina, anche militare", controStance: "una linea europea più prudente, orientata al negoziato con Mosca" },
+    { id: "guerra_gaza_ue", label: "Linea Europea sulla Guerra a Gaza", noun: "la linea comune europea sulla guerra a Gaza", metric: "relazioniDiplomatiche",
+      proStance: "una linea europea di pieno sostegno a Israele", controStance: "una linea europea più critica verso Israele, a tutela della popolazione civile palestinese" }
   ];
   // Trasforma le "posizioni" concrete di ciascun dominio (proStance/controStance) in 4 scelte
   // realmente collegate al contenuto specifico della votazione, non in un testo generico riusato
@@ -12944,11 +13003,15 @@
   // riutilizzabile ogni 13-15 settimane, l'insieme di tutte le posizioni prese nel tempo altrimenti
   // faceva schizzare i sondaggi in modo irrealistico. L'impatto sulla Scheda Paese (eff.national) resta
   // invece invariato: quello riguarda il paese, non la popolarità del partito.
+  // Segnalato da un giocatore: l'impatto sulla Scheda Paese era troppo debole per sentirsi reale,
+  // specie combinato con il moltiplicatore di institutionalPowerMultiplier — raddoppiato qui (e non nel
+  // moltiplicatore) per toccare solo le prese di posizione PRO/CONTRO, non tutti gli altri sistemi che
+  // condividono lo stesso moltiplicatore (riforme, leggi...).
   function buildStanceChoices(domain, ctxLabel) {
     return [
-      { label: "PRO — Sostieni con decisione " + domain.proStance, hint: "Posizione PRO netta, più esposizione politica, impatto reale ma contenuto", effects: { visibilita: rand(0.6, 1.2), reputazione: rand(0.15, 0.4), national: reformMetricEffect(domain.metric, rand(0.3, 0.5)) }, result: "Il sostegno deciso a " + domain.proStance + " pesa nell'esito, in proporzione alla forza reale del partito." },
-      { label: "PRO — Sostieni con cautela " + domain.proStance + ", cercando mediazioni", hint: "Posizione PRO moderata, meno esposta", effects: { reputazione: rand(0.08, 0.2), national: reformMetricEffect(domain.metric, rand(0.1, 0.25)) }, result: "Il sostegno cauto a " + domain.proStance + " pesa un po' meno, ma resta un contributo reale nella stessa direzione." },
-      { label: "CONTRO — Sostieni con decisione " + domain.controStance, hint: "Posizione CONTRO netta, isola il partito su " + ctxLabel, effects: { reputazione: rand(-0.3, 0.15), iscritti: rand(1, 3), national: reformMetricEffect(domain.metric, -rand(0.2, 0.4)) }, result: "La linea decisa su " + domain.controStance + " scontenta parte degli alleati, ma premia chi in patria voleva un segnale netto in quella direzione." },
+      { label: "PRO — Sostieni con decisione " + domain.proStance, hint: "Posizione PRO netta, più esposizione politica, impatto reale ma contenuto", effects: { visibilita: rand(0.6, 1.2), reputazione: rand(0.15, 0.4), national: reformMetricEffect(domain.metric, rand(0.6, 1)) }, result: "Il sostegno deciso a " + domain.proStance + " pesa nell'esito, in proporzione alla forza reale del partito." },
+      { label: "PRO — Sostieni con cautela " + domain.proStance + ", cercando mediazioni", hint: "Posizione PRO moderata, meno esposta", effects: { reputazione: rand(0.08, 0.2), national: reformMetricEffect(domain.metric, rand(0.2, 0.5)) }, result: "Il sostegno cauto a " + domain.proStance + " pesa un po' meno, ma resta un contributo reale nella stessa direzione." },
+      { label: "CONTRO — Sostieni con decisione " + domain.controStance, hint: "Posizione CONTRO netta, isola il partito su " + ctxLabel, effects: { reputazione: rand(-0.3, 0.15), iscritti: rand(1, 3), national: reformMetricEffect(domain.metric, -rand(0.4, 0.8)) }, result: "La linea decisa su " + domain.controStance + " scontenta parte degli alleati, ma premia chi in patria voleva un segnale netto in quella direzione." },
       { label: "NEUTRALE — Non prendere posizione su " + domain.noun, hint: "Nessun impatto, nessun rischio politico", effects: { reputazione: -rand(0.1, 0.25) }, result: "L'assenza di posizione su " + domain.noun + " passa quasi inosservata, ma qualcuno in patria la nota." }
     ];
   }
@@ -13051,7 +13114,15 @@
     { id: "spazio", label: "Corsa allo Spazio", noun: "gli investimenti pubblici italiani nei programmi spaziali internazionali", metric: "ricercaSviluppo",
       proStance: "un forte aumento degli investimenti pubblici nei programmi spaziali", controStance: "una spesa spaziale più contenuta a favore di altre priorità" },
     { id: "diritti_umani", label: "Diritti Umani e Politica Estera", noun: "il peso dei diritti umani nella politica estera italiana", metric: "relazioniDiplomatiche",
-      proStance: "una politica estera che condiziona gli accordi al rispetto dei diritti umani", controStance: "una politica estera pragmatica, senza condizionalità sui diritti umani" }
+      proStance: "una politica estera che condiziona gli accordi al rispetto dei diritti umani", controStance: "una politica estera pragmatica, senza condizionalità sui diritti umani" },
+    // Le due guerre reali in corso nel mondo (vedi anche REAL_WORLD_CONFLICTS, che ne tiene viva la
+    // cronaca settimana dopo settimana): a differenza delle voci generiche sopra ("russia",
+    // "medioriente"), qui la presa di posizione riguarda esplicitamente il conflitto in sé, non i
+    // rapporti diplomatici generali col paese.
+    { id: "guerra_ucraina", label: "Guerra in Ucraina", noun: "la guerra in Ucraina", metric: "relazioniDiplomatiche",
+      proStance: "un sostegno più deciso all'Ucraina, anche con nuove forniture militari", controStance: "una linea di massima prudenza verso la Russia, per non aggravare l'escalation" },
+    { id: "guerra_gaza", label: "Guerra a Gaza", noun: "la guerra a Gaza", metric: "relazioniDiplomatiche",
+      proStance: "un sostegno netto a Israele nel suo diritto alla sicurezza", controStance: "un riconoscimento più deciso delle ragioni palestinesi e uno stop alle forniture militari a Israele" }
   ];
   // ---------- Rapporti con l'estero (le 40 nazioni principali) ----------
   // Sbloccato solo mentre si è al governo: ogni nazione ha un proprio orientamento ideologico (una delle
@@ -13633,7 +13704,7 @@
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0,
-    usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {},
+    usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {}, realConflictNewsCooldowns: {},
     dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [], regions: null,
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null, activeArc: null, pendingCongressoFondativo: false,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
@@ -22559,6 +22630,7 @@
       recomputePeriodic();
       triggerRivalPartyEvent();
       triggerWorldNews();
+      triggerRealConflictNews();
       state.aiDynamicDossier = buildFormationDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
@@ -22593,6 +22665,7 @@
     resolveAnnualBudget();
     resolveMonthlyPartyTax();
     triggerWorldNews();
+    triggerRealConflictNews();
     triggerMinorCountryEvent();
     triggerCountryShock();
     triggerNucleoUpdate();
