@@ -62,7 +62,17 @@ Roguelike a turni e a caselle (`vetrata.html`), ispirato ai server GTA RP. L'Iso
 - **Veicoli e mare**: auto, Ape, scooter, bici, gozzi e gommoni; motori che fondono in salita, freni che cedono in discesa, gomme che si consumano, benzina, patente nautica, mareggiate.
 - **Personaggio a scelta**: 40 origini (pescatore, sfollato, ex carabiniere, infermiera, rider, guardiaparco, radioamatore…), aspetto, età e tratti; oppure tutto a caso col dado.
 - **Destino emergente**: non si sceglie all'inizio. Si compie giocando (Sindaco, imprenditore, eroe, mille mestieri, chi non ha pagato il pizzo…) e lo leggi nel necrologio.
-- **118 mestieri** in 12 settori, con paghe, orari, requisiti e promozioni: bacheca al Centro per l'Impiego e voce «💼 Lavori qui» in ogni luogo.
+- **131 mestieri** in 12 settori, con paghe, orari, requisiti e promozioni: bacheca al Centro per l'Impiego e voce «💼 Lavori qui» in ogni luogo. Fra i nuovi: tecnico informatico, sistemista, venditore d'auto, collaudatore, ambulante, spazzino, custode del museo.
+- **Abitanti con un carattere**: 32 indoli diverse (burbero, chiacchierone, sarcastico, romantico, complottista, poeta…), interessi, umore del giorno e una storia personale. Parlare dei loro argomenti preferiti, fare battute, complimenti o regali azzeccati fa crescere l'amicizia.
+- **Gli altri giocatori del server**: decine di «player» con nickname, stile di gioco (streamer, troll, grinder, poliziotto zelante, cacciatore di misteri…) che si connettono a orari diversi, si muovono per l'isola, lavorano e postano sul social.
+- **Diventare amici e fare cose insieme**: prendi il numero, chatti, ti dai appuntamento, fondi una crew. Oltre 15 attività di coppia (caffè, cena, giro in moto, tramonto, pesca, festa, karaoke, gara sui tornanti…).
+- **Vetragram**, il social del server: bacheca con post, like, risposte, chat private, follower.
+- **ElettroVetrata**: negozio di informatica dove compri componenti (CPU, RAM, scheda video, SDR, antenne…) e li assembli al banco in computer, portatili, scanner di frequenze e stazioni d'analisi forense — strumenti per il mistero di Canale 0 e per l'hacking (minigiochi di accesso agli archivi, decrittazione, analisi delle foto-prova).
+- **Il computer VetrOS** (a casa o portatile): social, home banking, borsa, anagrafe, archivi protetti, analisi delle prove.
+- **Concessionario Tirreno Motori**: compra, permuta, finanzia a rate auto e moto; più le funzioni di officina (riparazioni, gomme, diagnosi OBD, antifurto GPS).
+- **La notte è pericolosa**: nelle zone sconosciute e nei boschi, al buio, può andare male — presenze, agguati, bestie, voci che chiamano. Una torcia o un veicolo aiutano.
+- **Codice dell'Isola**: la storia e i segreti di Vetrata (i vetrai, il Faro, Canale 0, le famiglie, Partenope…) si svelano giocando.
+- **Borsa viva** che oscilla ora per ora, e **salvataggi manuali** in tre slot oltre all'autosalvataggio.
 - **Eventi a scelta** con illustrazioni disegnate al momento, **mestieri** con minigiochi (bar, cucina, cassa, pratiche, sorveglianza, guida turistica, officina, ambulatorio, consegne, charter, giornalismo, limoni, musica), **attività** da comprare in gioco e gestire (Il Faraglione, il Ristorante, I Tornanti, Marinas, Garage, Boutique, Gioielleria), Borsa, banca, posta, notaio.
 - **Politica**: lista civica, firme, manifesti, comizi, dibattito, elezioni proporzionali, poteri del Sindaco (tasse, sussidi, coprifuoco, ZTL, appalti, Giunta, Regione).
 - **Horror analogico**: Canale 0 alle 3 di notte, stazione numerica a onde corte, restauro VHS, fotografie analogiche che mostrano ciò che l'occhio non vede, cabine che squillano, voci nel Parco; tre misteri diversi con indizi che cambiano a ogni partita.
