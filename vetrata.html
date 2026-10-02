@@ -2089,6 +2089,7 @@ function needsTick() {
   if ((G.stats.drunkMin || 0) > 3000 && !G.flags.liver) { G.flags.liver = true; toast('Il medico te l\'aveva detto: il fegato comincia a lamentarsi. Salute massima ridotta.', 'bad'); }
   if (G.flags.liver && p.health > 85) p.health = 85;
   if (p.energia <= 0 && chance(0.01)) { toast('Crolli dalla stanchezza.', 'bad'); p.stress = Math.min(100, p.stress + 5); }
+  try { addictionTick(); } catch (e) { }
 }
 const maxStamina = () => 100 + (hasTrait('atleta') ? 25 : 0) - (hasTrait('asmatico') ? 20 : 0) + skill('atletica') * 0.2;
 function hurt(amt, cause) { const p = G.player; if (G.dead || p.down) return; p.health -= amt; p.lastCause = cause; if (amt > 4) { anim.shake = 0.3; AU.sfx('heart'); } if (p.health <= 0) { p.health = 0; playerDown(cause); } }
@@ -2098,7 +2099,7 @@ const OFFENSES = { aggressione: { n: 'Aggressione in una rissa', heat: 30, sev: 
 function offense(type, witnessed = 0.6) {
   const O = OFFENSES[type]; G.record.pending.push({ type, day: G.day });
   if (chance(witnessed)) { G.wanted.heat = clamp(G.wanted.heat + O.heat, 0, 100); updateWantedLevel(); toast(`🚓 Qualcuno ha chiamato la Polizia Insulare: ${O.n.toLowerCase()}.`, 'bad'); }
-  spreadRumor({ kind: 'crime', text: { aggressione: 'ha fatto a botte', guida: 'guida come un pazzo', coprifuoco: 'se ne frega del coprifuoco', resistenza: 'ha fatto a botte con la polizia', investimento: 'ha investito qualcuno', multe: 'non paga le multe', molestie: 'fa casino di notte' }[type], mag: -O.sev * 5 });
+  spreadRumor({ kind: 'crime', text: ({ aggressione: 'ha fatto a botte', guida: 'guida come un pazzo', coprifuoco: 'se ne frega del coprifuoco', resistenza: 'ha fatto a botte con la polizia', investimento: 'ha investito qualcuno', multe: 'non paga le multe', molestie: 'fa casino di notte', spaccio: 'gira brutta gente intorno a lui', detenzione: 'ha roba che non dovrebbe', coltivazione: 'coltiva qualcosa nei boschi', produzione: 'ha le mani in cose storte', hacking: 'smanetta con cose illegali', ricettazione: 'compra roba rubata' }[type] || 'ne combina di tutti i colori'), mag: -O.sev * 5 });
 }
 function updateWantedLevel() { const h = G.wanted.heat; G.wanted.level = h >= 70 ? 3 : h >= 35 ? 2 : h > 1 ? 1 : 0; }
 function policeCheck(c) {
@@ -2117,7 +2118,7 @@ function policeStop(curfew) {
   AU.sfx('siren');
   const v = vehicleHere(); const driving = !!G.player.veh;
   openPanel('🚓 Alt! Polizia Insulare', `<p class="desc">Una Gazzella si mette di traverso, lampeggianti blu sulle facciate. ${esc(reason)}</p>`, [
-    { t: '🙋 Collabora', c: 'pri', f: () => { closePanel(); if (G.wanted.level || G.record.warrants.length) arrestPlayer('Fermato dalla Polizia Insulare'); else { fine(curfew ? 60 : 30, curfew ? 'Violazione del coprifuoco' : 'Controllo documenti'); offense('coprifuoco', 0); advance(15); } } },
+    { t: '🙋 Collabora', c: 'pri', f: () => { closePanel(); const found = hasContraband() && chance(0.75); if (found) { toast('Ti perquisiscono. Trovano la merce.', 'bad'); G.record.pending.push({ type: contrabandHeat() > 60 ? 'spaccio' : 'detenzione', day: G.day }); for (let i = G.inv.length - 1; i >= 0; i--) if (ITEMS[G.inv[i].id] && ITEMS[G.inv[i].id].illegal) G.inv.splice(i, 1); arrestPlayer('Perquisito dalla Polizia Insulare'); } else if (G.wanted.level || G.record.warrants.length) arrestPlayer('Fermato dalla Polizia Insulare'); else { fine(curfew ? 60 : 30, curfew ? 'Violazione del coprifuoco' : 'Controllo documenti'); offense('coprifuoco', 0); advance(15); } } },
     { t: '🗣️ Prova a spiegare', d: 'Eloquenza ' + Math.floor(skill('eloquenza')), f: () => { closePanel(); advance(10); if (chance(0.25 + skill('eloquenza') / 160 - G.wanted.level * 0.15)) { toast('L\'agente sbuffa e ti lascia andare. «Che non ti riveda.»'); gainSkill('eloquenza', 2); } else { toast('«Sì, sì. Racconta tutto in Questura.»', 'bad'); if (G.wanted.level || G.record.warrants.length) arrestPlayer('Fermato dalla Polizia Insulare'); else fine(80, 'Violazione del coprifuoco'); } } },
     { t: driving ? '🏎️ Accelera e scappa' : '🏃 Scappa', d: driving ? 'Guida ' + Math.floor(skill('guida')) : 'Atletica ' + Math.floor(skill('atletica')), f: () => { closePanel(); const sk = driving ? skill('guida') + (v ? VMODELS[v.model].max / 10 : 0) : skill('atletica') + G.player.stamina / 3; if (chance(clamp(0.2 + sk / 220, 0.1, 0.8))) { toast('Li semini tra i vicoli. Il cuore ti esce dal petto.', 'warn'); offense('resistenza', 1); G.player.stress = Math.min(100, G.player.stress + 20); advance(10); if (driving) gainSkill('guida', 3); else gainSkill('atletica', 3); } else { toast('Ti prendono.', 'bad'); offense('resistenza', 1); arrestPlayer('Inseguito e fermato'); } } }], { noClose: true });
 }
@@ -2319,6 +2320,7 @@ function islandDaily() {
   // posta in casella
   if (chance(0.35)) G.mailbox.push(pick([{ from: 'ENEL Vetrata', text: `Bolletta luce: ${money(28 + G.player.homeLevel * 12)}.`, bill: 28 + G.player.homeLevel * 12 }, { from: 'Comune di Vetrata', text: 'Censimento della popolazione: la invitiamo a registrare la residenza in Municipio.' }, { from: 'Anonimo', text: 'Una cartolina senza firma con la foto del Faro. Sul retro: «Ore 3».' }, { from: 'Parrocchia', text: 'Raccolta di vestiti per gli sfollati di Partenope.' }, { from: 'Banca Insulare', text: 'ATTENZIONE: nessun operatore le chiederà mai i codici via SMS.' }]));
   spawnShoals(); checkDestiny(); bountiesDaily(); stocksDaily();
+  if (G.grow && G.grow.plots) for (const pl of G.grow.plots) { if (!pl.dead && G.day - (pl.watered || pl.day) > 3) pl.dead = true; }
 }
 function npcMayorActs() {
   const I = G.island, P = G.pol, n = NPCS[P.mayorNpc];
@@ -2430,7 +2432,7 @@ function advance(minutes, opts = {}) {
   if (!opts.noUI) refreshSide();
 }
 function hourlyTick(opts) {
-  bizHourly(); spreadHourly(); checkMissions(true); eventsHourly(); checkDestiny(); try { feedHourly(); stocksHourly(); } catch (e) { }
+  bizHourly(); spreadHourly(); checkMissions(true); eventsHourly(); checkDestiny(); try { feedHourly(); stocksHourly(); traceDecay(); } catch (e) { }
   if (G.wanted.heat > 0) { G.wanted.heat = Math.max(0, G.wanted.heat - (G.wanted.level >= 3 ? 3 : 6)); updateWantedLevel(); }
   for (const d of G.deliveries) if (!d.told && d.at <= G.day) { d.told = true; sendMsg('Poste Insulari', `Il tuo pacco (${ITEMS[d.id].n}) è arrivato all'Ufficio Postale. Codice di tracciamento VT${ri(10000, 99999)}.`); }
   if (G.job.id && G.job.onDuty) jobHourly();
@@ -3258,6 +3260,7 @@ function refreshSide() {
     <div class="top" style="margin-top:6px"><span class="chip big" style="color:#9ee6a3">${money(G.cash)}</span><span class="chip">🏦 ${money(G.bank, false)}</span>${lvl ? `<span class="chip" id="stars">${'★'.repeat(lvl)}</span>` : G.record.warrants.length ? '<span class="chip badc">⚠ Mandato</span>' : ''}</div>
     ${G.pol.curfew !== null || G.pol.ztl || G.island.blockade > G.day ? `<div class="small warnc" style="margin-top:4px">📜 ${[G.pol.curfew !== null ? 'Coprifuoco ' + G.pol.curfew + ':00' : '', G.pol.ztl ? 'ZTL in Centro' : '', G.island.blockade > G.day ? 'Blocco navale' : ''].filter(Boolean).join(' · ')}</div>` : ''}
     <div class="needs">${NEEDS_DEF.map(n => needBar(...n)).join('')}</div>
+    ${(p.addiction || 0) > 5 || (G.trace || 0) > 5 ? `<div class="small">${(p.addiction || 0) > 5 ? '💉 Dipendenza <b class="badc">' + Math.round(p.addiction) + '%</b> ' : ''}${(G.trace || 0) > 5 ? '· 🕵️ Tracciamento <b class="warnc">' + Math.round(Math.min(100, G.trace)) + '%</b>' : ''}</div>` : ''}
     <div class="small muted">🌡️ ${p.temp.toFixed(1)}°C${p.wet > 30 ? ' · 💦 bagnato' : ''}${p.bleed > 0 ? ' · <span class="badc">🩸 emorragia</span>' : ''}${p.sick > 0 ? ' · 🤢 malato' : ''}${p.alcol > 40 ? ' · 🍷 brillo' : ''}${p.trauma > G.day ? ' · 😰 trauma' : ''} · ⚖️ ${invWeight().toFixed(1)}/${carryCap().toFixed(0)} kg</div>
     ${v ? `<div class="card" style="margin-top:6px;padding:6px 10px"><b>${esc(VMODELS[v.model].n)}</b> <span class="muted small">${v.plate}</span><div class="small">${VMODELS[v.model].fuel ? `⛽ ${v.fuel.toFixed(1)}/${VMODELS[v.model].fuel} L · ` : ''}${VMODELS[v.model].heat ? `🌡️ ${Math.round(v.temp)}° · ` : ''}🔧 ${Math.round(v.hp / VMODELS[v.model].hp * 100)}%${VMODELS[v.model].type === 'car' || VMODELS[v.model].type === 'moto' ? ` · 🛞 ${Math.round(v.tire)}% · 🛑 ${v.brake > 0.7 ? '<span class="badc">surriscaldati</span>' : 'ok'}` : ''}</div></div>` : ''}
     <div class="sec"><div class="zoneT">${esc(cellTitle(c))}</div><div class="small muted">${cellTerrainName(c)} · X ${String(c.cx * CF).padStart(3, '0')} Y ${String(c.cy * CF).padStart(3, '0')} · ${Math.round(Math.max(0, c.h) * 600)} m s.l.m.</div></div>
@@ -3281,6 +3284,7 @@ function refreshSide() {
       ${!c.water && c.coast && hasInv('canna') ? '<button class="act" onclick="rodFishing()"><span>🎣</span>Pesca</button>' : ''}
       ${c.water && !v && ITEMS[p.wear].wear.dive ? '<button class="act" onclick="dive()"><span>🤿</span>Immergiti</button>' : ''}
       ${G.job.id ? `<button class="act" onclick="jobPanel()"><span>💼</span>Lavoro</button>` : ''}
+      ${G.inv.some(it => ITEMS[it.id] && ITEMS[it.id].dose) && canDeal() ? '<button class="act" onclick="openSpaccio()"><span>🌙</span>Spaccia</button>' : ''}
       ${G.pol.candidate && c.plaza ? '<button class="act" onclick="rally()"><span>📣</span>Comizio</button>' : ''}
       ${G.pol.candidate && hasInv('manifesti') && c.b.length && !G.pol.campaign.posters.some(q => q.c === cid(c.cx, c.cy)) ? '<button class="act" onclick="putPoster()"><span>🧾</span>Manifesto</button>' : ''}
       ${c.plaza && G.flags.flyers ? '<button class="act" onclick="giveFlyers()"><span>📄</span>Volantini</button>' : ''}
@@ -3515,6 +3519,7 @@ function openInventory() {
     if (sel >= 0 && G.inv[sel]) {
       const it = G.inv[sel], I = ITEMS[it.id], acts = [];
       if (I.eat || I.heal || I.buff || I.fuel || I.repair) acts.push(['Usa', () => { const r = consume(it); if (r === true) useItemInst(it); sel = -1; render(); refreshSide(); }]);
+      if (I.dose) acts.push(['Fatti una dose', () => { useDrug(it); sel = -1; render(); refreshSide(); }]);
       if (I.wear) acts.push([G.player.wear === it.id ? 'Indossato' : 'Indossa', () => { if (G.player.wear !== it.id) { G.player.wear = it.id; advance(3); toast('Ti cambi: ' + I.n + '.'); render(); } }]);
       if (it.id === 'radio_oc' || it.id === 'sdr_scanner') acts.push(['Accendi', () => { closePanel(); openShortwave(); }]);
       if (it.id === 'portatile') acts.push(['Accendi il portatile', () => { closePanel(); usePC(true); }]);
@@ -3569,6 +3574,7 @@ function openDialog(n, byPhone) {
   if (!byPhone) { const giftable = G.inv.filter(it => !ITEMS[it.id].uniq && (ITEMS[it.id].price || 0) > 0); if (giftable.length && st.met) opts.push({ t: '🎀 Fai un regalo', d: 'Azzecca i suoi gusti per un bonus', f: () => { closePanel(); giftMenu(n); } }); }
   if (st.op > 45 && st.loanDay !== G.day) opts.push({ t: '🤲 Chiedi un prestito', f: () => { st.loanDay = G.day; const a = Math.round(100 + n.wealth * 900); if (chance(0.4 + st.op / 200)) { earn(a, 'Prestito da ' + n.first); G.debts.push({ to: npcName(n), amount: a, due: G.day + 10, npc: n.id }); say(n, `Tieni ${money(a)}. Ridammeli entro dieci giorni.`); } else say(n, 'Mi dispiace, non posso proprio.'); refreshDlg(n); } });
   if (n.role === 'parroco') opts.push({ t: '🙏 Confessati', d: 'Stress − (e il parroco sa cose)', f: () => { p.stress = Math.max(0, p.stress - (hasTrait('devoto') ? 30 : 15)); advance(20, { noUI: true }); say(n, parrocoLore()); refreshDlg(n); } });
+  if (G.job.id === 'polizia' && G.job.onDuty && !isPl(n)) opts.push({ t: '🔍 Perquisisci (sei in servizio)', d: 'Cerca merce o refurtiva addosso', f: () => { advance(10); const dirty = n.addict || n.faction === 'carannante' || n.faction === 'brigata'; if (dirty && chance(0.5)) { st.op -= 20; G.island.crime = Math.max(0, (G.island.crime || 20) - 1); addRep('polizia', 4); gainSkill('indagine', 2); say(n, pick(['«Non ho fatto niente!» Ma la roba ce l\'ha.', 'Trema. Gli trovi delle dosi in tasca.'])); toast('🚔 Arresto effettuato: un pusher in meno sulla strada.', 'good'); npcState(n).jailed = G.day + ri(2, 6); } else { st.op -= 8; say(n, pick(['«Ma che modi!»', 'Niente. Pulito. Ti guarda male.'])); } refreshDlg(n); } });
   if (isPl(n)) opts.push({ t: 'ℹ️ Chi è questo giocatore', d: plStyle(n).ico + ' ' + plStyle(n).n, f: () => { const S = plStyle(n); openPanel('🎮 ' + esc(n.pl.tag), `<p class="desc"><b>${S.ico} ${S.n}</b><br>${esc(S.d)}</p><p class="small">Ore di gioco: ${n.pl.hours} · Stile: ${esc(npcCar(n).n)}<br>${plOnline(n) ? '<span class="good">🟢 online adesso</span>' : '<span class="muted">⚫ offline</span>'}</p>`, [{ t: 'Indietro', c: 'pri', f: () => openDialog(n, byPhone) }]); } });
   if (n.role === 'boss') { discoverLore('carannante'); opts.push(...bossOptions(n, st)); }
   if (n.role === 'capobrigata') { discoverLore('brigata'); opts.push(...brigataOptions(n, st)); }
@@ -3902,6 +3908,7 @@ function openAmbulatorio(b) {
     { t: `📄 Visita di idoneità (${money(80)})`, d: 'Certificato per arruolarsi o per le licenze speciali.', f: () => { if (p.alcol > 20 || p.health < 70) return toast('«Torni quando è sobrio e in salute.»', 'warn'); if (pay(80, 'Certificato')) { addInv('certificato', 1, { title: 'Certificato di idoneità', day: G.day }); advance(40); closePanel(); } } },
     { t: `💊 Colloquio per lo stress (${money(50)})`, d: 'Ricetta per ansiolitici, e due parole che aiutano.', f: () => { if (pay(50, 'Visita')) { G.flags.ricetta = G.day + 14; p.stress = Math.max(0, p.stress - 10); if (p.trauma > G.day) p.trauma = G.day + 1; advance(40); closePanel(); toast('Ricetta valida 14 giorni.'); } } },
     { t: '🧪 Controllo del fegato', d: money(40), f: () => { if (pay(40)) { closePanel(); toast(G.flags.liver ? '«Lei beve troppo. Il danno c\'è.»' : (G.stats.drunkMin || 0) > 1500 ? '«Valori al limite. Rallenti col vino.»' : '«Tutto a posto.»', G.flags.liver ? 'bad' : ''); } } },
+    (G.player.addiction || 0) > 10 ? { t: `🩹 Disintossicazione (${money(rehabCost())})`, d: 'Dipendenza al ' + Math.round(G.player.addiction) + '%: liberatene', f: () => { closePanel(); openRehab(); } } : null,
     jobOpt('medico'), workOpt('medico')]);
 }
 function openChiesa(b) {
@@ -4050,6 +4057,9 @@ function openDistilleria(b) {
   showPlace(b, b.n, 'Un rudere nei boschi alti: alambicchi di rame verdi di ossido, botti sfondate. Una botola nel pavimento scende in una cantina asciutta, sorprendentemente grande.', [
     { t: '🔦 Esplora la cantina', f: () => { advance(40); closePanel(); if (!G.flags.distDoc) { G.flags.distDoc = true; addInv('lettera', 1, { title: 'Etichetta del 1970', text: '«Grappa dei Vetrai — distillata alla luna nuova». Sul retro, a matita: un numero, ' + (G.mystery.freq / 1000).toFixed(3) + '.' }); } else toast('Bottiglie vuote, ragnatele, un topo grosso come un gatto.'); } },
     !owned ? { t: `🏷️ Compra il rudere come base (${money(45000)})`, d: 'Un rifugio tuo nei boschi: magazzino, branda, e la Brigata ti rispetta', f: () => { if (pay(45000, 'Distilleria', { atCounter: true, bankOnly: true })) { G.flags.ownDistilleria = true; addRep('brigata', 15); toast('Il rudere è tuo. Una base nei boschi.', 'money'); closePanel(); } } } : { t: '📦 Il tuo magazzino', f: () => { closePanel(); const keep = G.home; G.home = { ...G.home, stash: G.distStash || (G.distStash = []), fridge: false }; openStash(); setTimeout(() => G.home = keep, 0); } },
+    owned ? { t: '🌿 La serra nascosta', d: 'Coltiva e raccogli (illegale)', f: () => { closePanel(); openColtivazione(); } } : null,
+    owned ? { t: '⚗️ Lavora una partita grezza', d: 'Taglia il materiale in dosi (illegale)', f: () => { closePanel(); const raws = [['pasta_coca', 'bianca'], ['pasta_bruna', 'bruna'], ['erba_verde', 'erba']].filter(([r]) => hasInv(r)); if (!raws.length) return toast('Non hai materiale grezzo.', 'warn'); const o = raws.map(([r, dr]) => ({ t: '⚗️ ' + ITEMS[r].n, f: () => { closePanel(); processDrug(dr); } })); openPanel('⚗️ Lavorazione', optList(o), [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(o); } } : null,
+    owned && hasInv('erba') || hasInv('bianca') || hasInv('bruna') ? { t: '💰 Vendi all\'ingrosso al clan', d: 'Meno guadagno, meno rischio della strada', f: () => { closePanel(); wholesaleSell(); } } : null,
     owned ? { t: '😴 Dormi nella cantina', f: () => { closePanel(); sleepHours(7, 'home'); } } : null]);
 }
 function openDepositi(b) {
@@ -4280,11 +4290,13 @@ function bossOptions(n, st) {
   return [
     G.player.clanDebt > 0 ? { t: `💸 Salda il debito (${money(G.player.clanDebt)})`, f: () => { if (pay(G.player.clanDebt, 'Debito Carannante', { atCounter: true })) { const d = G.debts.find(d => /Carannante/.test(d.to) && !d.paid); if (d) d.paid = true; G.player.clanDebt = 0; addRep('carannante', 15); say(n, 'Sei una persona seria. Mi piacciono le persone serie.'); } } } : null,
     { t: '🤝 Chiedi un appoggio per la campagna elettorale', d: 'Soldi facili. Che prima o poi qualcuno ti chiederà indietro.', dis: !G.pol.candidate, f: () => { G.pol.campaign.funds += 15000; G.pol.campaign.dirty = (G.pol.campaign.dirty || 0) + 1; addRep('carannante', 10); G.flags.scandalRisk = (G.flags.scandalRisk || 0) + 1; say(n, 'Quindicimila per i manifesti. Gli amici si aiutano. E si ricordano.'); } },
+    G.rep.carannante > 20 ? { t: '📦 Chiedi una partita di merce', d: 'Materiale grezzo da lavorare (illegale, pericoloso)', f: () => { const o = [['pasta_coca', 3000, 'bianca'], ['pasta_bruna', 3800, 'bruna']].map(([id, pr, dr]) => ({ t: `${ITEMS[id].ico} ${ITEMS[id].n} — ${money(pr)}`, d: 'Da lavorare in dosi alla tua base', dis: G.bank + G.cash < pr, f: () => { if (pay(pr, 'Partita (clan)', { atCounter: true })) { addInv(id, 1); addRep('carannante', 4); G.wanted.heat = clamp(G.wanted.heat + 6, 0, 100); updateWantedLevel(); closePanel(); toast('La merce è tua. Ora sei dentro, davvero.', 'warn'); } } })); o.push({ t: 'Lascia stare', f: () => openDialog(n) }); openPanel('📦 Il clan Carannante', '<p class="desc">«Hai fegato. Questa è roba seria: se ti beccano, sono anni. Se parli, sono guai peggiori.»</p>' + optList(o), [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(o); } } : null,
     { t: '✋ «Dalle mie attività stai lontano»', d: 'Coraggio', f: () => { addRep('carannante', -15); if (check('eloquenza', 60)) say(n, 'Hai fegato. Vedremo quanto ti dura.'); else say(n, '…Ripetilo, se hai il coraggio.'); } }].filter(Boolean);
 }
 function brigataOptions(n, st) {
   return [
     { t: '🏁 Sfida sui tornanti all\'alba', d: `Posta ${money(100)} · Guida · corsa illegale`, dis: !curVehType('moto') && !curVehType('car'), f: () => { closePanel(); streetRace(n); } },
+    { t: '🌱 Compra semi (illegale)', d: money(60) + ' a bustina', f: () => { if (pay(60, 'Semi', { cashOnly: true })) { addInv('seme_erba'); addRep('brigata', 2); say(n, 'Piantali dove non guarda nessuno. E non fare il furbo.'); } } },
     { t: '🔧 Dai una mano in officina (2 ore)', f: () => { closePanel(); advance(120); gainSkill('meccanica', 5); addRep('brigata', 6); st.op += 5; toast('Pistoni, birra, bestemmie. Ti trattano come uno di loro.'); } },
     G.rep.brigata > 40 && !hasInv('felpa') ? { t: '🧥 Chiedi di entrare nella Brigata', f: () => { addInv('felpa'); addRep('brigata', 15); say(n, 'Questa felpa non si toglie più. Ricordatelo.'); } } : null].filter(Boolean);
 }
@@ -5029,6 +5041,7 @@ function assignCharacters(seed) {
       if (n.age < 28) pool.push('festaiolo', 'nerd', 'impulsivo', 'sportivo');
       n.car = pick(pool, r);
     }
+    if (n.addict === undefined && n.role !== 'parroco' && !n.police && !n.medic) n.addict = (n.role === 'sfollato' || n.role === 'giovane') ? r() < 0.18 : r() < 0.05;
     if (!n.ints) { const C = CAR[n.car]; const a = C.likes.slice(); while (a.length < 4) { const k = pick(keys, r); if (!a.includes(k)) a.push(k); } n.ints = shuffle(a, r).slice(0, 3); n.hates = pick(keys.filter(k => !a.includes(k)), r); }
   }
 }
@@ -5485,7 +5498,7 @@ function accessArchive(t) {
   if (skill('hacking') < 10) return toast('Non ne sai abbastanza di informatica. Studia (corsi al Centro per l\'Impiego).', 'warn');
   // minigioco astratto: ricomponi la sequenza di accesso al momento giusto
   minigameTiming({ title: '🔓 ' + t.n, desc: `Accesso al sistema: ferma l'indicatore nella zona verde a ogni livello. Più è protetto, più è stretta.`, pins: 4, speed: 1 + t.diff / 120, zone: 0.26 - t.diff / 400 + skill('hacking') / 400,
-    onWin: () => { advance(30); gainSkill('hacking', 5); archiveReward(t); },
+    onWin: () => { advance(30); gainSkill('hacking', 5); addTrace(30 + t.diff / 2); G.record.pending.push({ type: 'hacking', day: G.day }); archiveReward(t); },
     onFail: () => { advance(10); const caught = chance(0.35 + t.diff / 150 - skill('hacking') / 200); if (caught) { toast('🚨 Allarme silenzioso! Hanno il tuo accesso.', 'bad'); offense('molestie', 0.9); G.wanted.heat = clamp(G.wanted.heat + 25, 0, 100); updateWantedLevel(); } else toast('Accesso negato. Ti stacchi prima che scatti l\'allarme.', 'warn'); } });
 }
 function archiveReward(t) {
@@ -5712,8 +5725,157 @@ async function loadFromSlot(i) {
   closePanel(); connectAndLoad();
 }
 
+/* ===== VETRATA v6: malavita (astratta, con polizia e galera) ===== */
+/* =====================================================================
+   MALAVITA — narcotici come economia di gioco (astratta, GTA-RP).
+   Niente istruzioni reali: solo il ciclo produci→spaccia→rischio, con
+   polizia, arresti, galera e dipendenza come conseguenze concrete.
+   ===================================================================== */
+// Oggetti di contrabbando (merce astratta, valore di strada)
+const DRUG_ITEMS = {
+  seme_erba: { n: 'Bustina di semi', ico: '🌱', w: 0.02, price: 60, illegal: true, d: "Da piantare in un posto nascosto. Serve una base tua." },
+  erba_verde: { n: 'Infiorescenza grezza', ico: '🌿', w: 0.3, price: 0, illegal: true, drug: 'erba', raw: true, uniq: false, d: "Appena raccolta. Va essiccata e lavorata prima di venderla." },
+  erba: { n: 'Dose d\'erba', ico: '🍀', w: 0.05, price: 40, illegal: true, drug: 'erba', dose: true, heat: 10, high: { stress: -22, energia: -6, fame: 12 }, addict: 0.3, d: "Pronta per la strada. Spacciarla è reato." },
+  pasta_coca: { n: 'Partita grezza (bianca)', ico: '📦', w: 1, price: 0, illegal: true, drug: 'bianca', raw: true, d: "Materiale importato dai Carannante. Va lavorato e tagliato in dosi." },
+  bianca: { n: 'Dose di bianca', ico: '❄️', w: 0.02, price: 120, illegal: true, drug: 'bianca', dose: true, heat: 28, high: { stress: -30, energia: 40, stamina: 30 }, addict: 0.7, d: "Potente e devastante. Pena pesante se ti beccano." },
+  pasta_bruna: { n: 'Partita grezza (bruna)', ico: '📦', w: 1, price: 0, illegal: true, drug: 'bruna', raw: true, d: "La merce più pericolosa che passa per l'isola." },
+  bruna: { n: 'Dose di bruna', ico: '🟤', w: 0.02, price: 150, illegal: true, drug: 'bruna', dose: true, heat: 36, high: { stress: -45, energia: -20, health: -4 }, addict: 0.9, d: "Rovina chi la usa e chi la vende. La pena è durissima." }
+};
+const DRUGS = {
+  erba: { n: 'Erba', street: 40, growDays: 5, risk: 1, clan: 'brigata' },
+  bianca: { n: 'Bianca', street: 120, growDays: 0, risk: 2.4, clan: 'carannante' },
+  bruna: { n: 'Bruna', street: 150, growDays: 0, risk: 3, clan: 'carannante' }
+};
+const CRIME_OFFENSES = {
+  spaccio: { n: 'Spaccio di stupefacenti', heat: 40, sev: 2.2 },
+  detenzione: { n: 'Detenzione di stupefacenti', heat: 30, sev: 1.4 },
+  coltivazione: { n: 'Coltivazione illecita', heat: 25, sev: 1.6 },
+  produzione: { n: 'Produzione e taglio di droga', heat: 45, sev: 2.6 },
+  hacking: { n: 'Accesso abusivo a sistema informatico', heat: 35, sev: 2 },
+  ricettazione: { n: 'Ricettazione', heat: 20, sev: 1 }
+};
+
+function hasContraband() { return G.inv.some(it => ITEMS[it.id] && ITEMS[it.id].illegal); }
+function contrabandHeat() { return G.inv.filter(it => ITEMS[it.id] && ITEMS[it.id].illegal).reduce((s, it) => s + (ITEMS[it.id].heat || 15) * (it.q || 1), 0); }
+
+/* ---------- Coltivazione: solo in una base tua, astratta ---------- */
+function openColtivazione() {
+  if (!G.flags.ownDistilleria) return toast('Ti serve una base nascosta (compra il rudere della Distilleria).', 'warn');
+  G.grow = G.grow || { plots: [] };
+  const render = () => {
+    const rows = G.grow.plots.map((pl, k) => {
+      const age = G.day - pl.day, ready = age >= DRUGS.erba.growDays;
+      const state = pl.dead ? '<span class="badc">seccata</span>' : ready ? '<span class="good">pronta da raccogliere</span>' : `in crescita (${age}/${DRUGS.erba.growDays} giorni)${pl.watered === G.day ? ' · annaffiata' : ''}`;
+      return `<div class="msg">🪴 Pianta #${k + 1} — ${state}<div class="row" style="margin-top:4px">${ready && !pl.dead ? `<button class="btn sm pri" data-harv="${k}">✂️ Raccogli</button>` : pl.dead ? `<button class="btn sm" data-rip="${k}">🗑️ Estirpa</button>` : `<button class="btn sm" data-water="${k}" ${pl.watered === G.day ? 'disabled' : ''}>💧 Annaffia</button>`}</div></div>`;
+    }).join('');
+    $('#growBody').innerHTML = `<p class="small">Piante: ${G.grow.plots.length}/6. Più ne tieni, più la Brigata e la Polizia ci fanno caso. Raccogli, essicca, lavora in dosi, poi spaccia di notte.</p>${rows || '<p class="muted">Nessuna pianta. Pianta un seme.</p>'}<div style="margin-top:8px"><button class="btn sm" id="plant" ${!hasInv('seme_erba') || G.grow.plots.length >= 6 ? 'disabled' : ''}>🌱 Pianta un seme${hasInv('seme_erba') ? '' : ' (non ne hai)'}</button> ${hasInv('erba_verde') ? `<button class="btn sm pri" id="dry">🌾 Essicca e lavora il raccolto (${countInv('erba_verde')})</button>` : ''}</div>`;
+    if ($('#plant')) $('#plant').onclick = () => { removeInv('seme_erba', 1); G.grow.plots.push({ day: G.day, watered: G.day }); advance(20); render(); };
+    document.querySelectorAll('[data-water]').forEach(b => b.onclick = () => { G.grow.plots[+b.dataset.water].watered = G.day; advance(10); render(); });
+    document.querySelectorAll('[data-rip]').forEach(b => b.onclick = () => { G.grow.plots.splice(+b.dataset.rip, 1); render(); });
+    document.querySelectorAll('[data-harv]').forEach(b => b.onclick = () => { const k = +b.dataset.harv; const pl = G.grow.plots[k]; const yield0 = 2 + (pl.wateredCount || 0 > 2 ? 1 : 0) + ri(0, 2); G.grow.plots.splice(k, 1); harvestGame(yield0, render); });
+    if ($('#dry')) $('#dry').onclick = () => { closePanel(); processDrug('erba'); };
+  };
+  openPanel('🌿 La serra nascosta', '<div id="growBody"></div>', [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
+  render();
+}
+function harvestGame(yield0, back) {
+  // minigioco astratto: raccogli al volo (click), poi diventa materia grezza
+  minigameClick(n => { const got = Math.max(1, Math.min(yield0, Math.round(n / 3))); for (let i = 0; i < got; i++) addInv('erba_verde', 1, null, true); advance(30); offense('coltivazione', 0.1); toast(`Raccolte ${got} infiorescenze. Ora vanno lavorate.`, 'warn'); if (back) openColtivazione(); }, { title: '✂️ Raccolta', desc: 'Clicca le cime mature, lascia le foglie. 20 secondi.', good: '#6aa84f', bad: '#8a7a3a', bg: ['#2f4a2a', '#3a5a33'], goodLabel: 'cime' });
+}
+// lavorazione/taglio: minigioco di precisione astratto (nessun metodo reale)
+function processDrug(drug) {
+  const D = DRUGS[drug];
+  const rawId = drug === 'erba' ? 'erba_verde' : drug === 'bianca' ? 'pasta_coca' : 'pasta_bruna';
+  const have = countInv(rawId);
+  if (!have) return toast('Non hai materiale grezzo da lavorare.', 'warn');
+  minigameTiming({ title: '⚗️ Lavorazione: ' + D.n, desc: 'Lavoro di precisione: ferma l\'indicatore nella zona giusta a ogni passaggio. Un errore rovina la partita.', pins: 5, speed: 1.05 - skill('meccanica') / 300, zone: 0.16 + skill('meccanica') / 500,
+    onWin: () => { removeInv(rawId, 1); const doses = (drug === 'erba' ? 3 : 6) + ri(0, 3) + Math.floor(skill('meccanica') / 25); const outId = drug; for (let i = 0; i < doses; i++) addInv(outId, 1, null, true); advance(90); gainSkill('meccanica', 2); offense('produzione', 0.05); toast(`Lavorazione riuscita: ${doses} dosi di ${D.n.toLowerCase()}.`, 'warn'); },
+    onFail: () => { removeInv(rawId, 1); advance(60); if (chance(0.2)) { hurt(rr(2, 8), 'esalazioni nella lavorazione'); } toast('Partita rovinata. Materiale sprecato.', 'bad'); } });
+}
+
+/* ---------- Spaccio: di notte, in strada ---------- */
+function canDeal() { const c = playerCell(); return isNight() || (c && c.zone && ['boschi', 'scogli', 'marina'].includes(c.zone)); }
+function openSpaccio() {
+  const doses = G.inv.filter(it => ITEMS[it.id] && ITEMS[it.id].dose);
+  if (!doses.length) return toast('Non hai dosi da vendere. Lavora la merce prima.', 'warn');
+  if (!canDeal()) return toast('Troppa gente, troppa luce. Si spaccia di notte, o in posti isolati.', 'warn');
+  const c = playerCell();
+  const demand = 1 + (G.island.crime || 20) / 100 + (isNight() ? 0.3 : 0);
+  const opts = doses.map(it => { const I = ITEMS[it.id]; const price = Math.round(I.price * demand * (0.8 + Math.random() * 0.4)); return { t: `${I.ico} Vendi ${I.n.toLowerCase()} — ~${money(price)}`, d: `Ne hai ${countInv(it.id)} · rischio ${['','basso','medio','alto'][Math.min(3,Math.round((I.heat||10)/14))]}`, f: () => dealDose(it.id, price) }; });
+  opts.push({ t: '↩︎ Lascia perdere', f: closePanel });
+  openPanel('🌙 Spaccio', `<p class="desc">Un cliente si avvicina nell'ombra, lo sguardo nervoso. ${G.wanted.level ? '<span class="badc">Sei già nel mirino della Polizia.</span>' : ''} Ogni vendita attira l'attenzione: a volte il cliente è un civetta.</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
+}
+function dealDose(id, price) {
+  const I = ITEMS[id];
+  // il cliente può essere un poliziotto in borghese
+  const bustChance = clamp(0.06 + G.wanted.level * 0.05 + (I.heat || 10) / 300 + (G.pol.crackdown ? 0.08 : 0) - skill('eloquenza') / 400, 0.03, 0.5);
+  advance(10);
+  if (chance(bustChance)) {
+    closePanel();
+    eventPanel('🚨 Era un civetta!', 'vicolo', `Il «cliente» tira fuori un tesserino. «Polizia Insulare. Fermo lì.» Altri due escono dall'ombra.`, [
+      { t: '🏃 Scappa', d: 'Atletica', f: () => { closePanel(); if (check('atletica', 45)) { toast('Li semini tra i vicoli, col cuore in gola.'); offense('spaccio', 0.9); } else { toast('Ti placcano a terra.', 'bad'); G.record.pending.push({ type: 'spaccio', day: G.day }); arrestPlayer('Arrestato in flagranza di spaccio'); } } },
+      { t: '🤝 Consegnati', c: 'pri', f: () => { closePanel(); G.record.pending.push({ type: 'spaccio', day: G.day }); if (hasContraband()) G.record.pending.push({ type: 'detenzione', day: G.day }); arrestPlayer('Arrestato per spaccio'); } }]);
+    return;
+  }
+  removeInv(id, 1); earn(price, 'Vendita strada', 'cash'); G.stats.deals = (G.stats.deals || 0) + 1;
+  G.island.crime = Math.min(100, (G.island.crime || 20) + (I.heat || 10) / 20);
+  if (chance(0.3 + (I.heat || 10) / 200)) { G.wanted.heat = clamp(G.wanted.heat + (I.heat || 10) / 3, 0, 100); updateWantedLevel(); }
+  // un tossico conosciuto diventa più legato (e più rovinato)
+  const addicts = npcsHere().filter(n => n.addict); if (addicts.length) { const a = addicts[0]; npcState(a).op += 2; npcState(a).addiction = Math.min(100, (npcState(a).addiction || 40) + 8); }
+  openPanel('🌙 Spaccio', `<p class="desc">Passaggio di mano veloce, poi sparisce nel buio. +${money(price)}.</p>`, [{ t: 'Continua', c: 'pri', f: () => { closePanel(); openSpaccio(); } }, { t: 'Basta per stanotte', f: closePanel }]);
+}
+
+/* ---------- Uso e dipendenza del giocatore ---------- */
+function useDrug(it) {
+  const I = ITEMS[it.id], p = G.player;
+  p.addiction = p.addiction || 0;
+  for (const k in I.high) { if (k === 'stamina') p.stamina = clamp(p.stamina + I.high[k], 0, maxStamina()); else p[k] = clamp((p[k] || 0) + I.high[k], 0, 100); }
+  p.addiction = Math.min(100, p.addiction + (I.addict || 0.3) * 20);
+  p.highUntil = G.min + 90; G.stats.used = (G.stats.used || 0) + 1;
+  useItemInst(it);
+  toast(`${I.ico} Ti fai. Per un po' va tutto bene. Poi arriva il conto.`, 'warn');
+  if (p.addiction > 50 && !G.flags.addictWarn) { G.flags.addictWarn = true; log('Ne senti già il bisogno appena svanisce. Sta diventando un problema.', 'bad'); }
+  advance(20);
+}
+function addictionTick() {
+  const p = G.player; if (!p.addiction) return;
+  // astinenza quando non ti fai da un po'
+  if (p.highUntil && G.min > p.highUntil + 240) {
+    if (chance(0.02 + p.addiction / 500)) { p.stress = Math.min(100, p.stress + p.addiction / 20); if (p.addiction > 60) hurt(p.addiction / 400, 'l\'astinenza'); if (chance(0.3)) log('🥶 Sudi freddo, tremi. Il corpo chiede la dose.', 'bad'); }
+  }
+  p.addiction = Math.max(0, p.addiction - 0.02); // cala lentamente da sobrio
+}
+function rehabCost() { return Math.round(400 + G.player.addiction * 20); }
+function openRehab(n) {
+  const p = G.player; if (!p.addiction || p.addiction < 10) return toast('Non ne hai bisogno.');
+  const cost = rehabCost();
+  openPanel('🩺 Disintossicazione', `<p class="desc">Il medico ti guarda serio. «Posso aiutarti. Ci vogliono giorni, e ${money(cost)}. Ma devi volerlo tu.»</p>`, [
+    { t: `✅ Disintossicati (${money(cost)}, 3 giorni)`, c: 'pri', dis: G.bank + G.cash < cost, f: () => { if (pay(cost, 'Disintossicazione', { atCounter: true })) { closePanel(); advance(3 * 1440, { quiet: true }); p.addiction = Math.max(0, p.addiction - 70); p.stress = Math.min(100, p.stress + 20); toast('Tre giorni d\'inferno. Ne esci pulito, o quasi.', 'good'); } } },
+    { t: 'Non ora', f: closePanel }]);
+}
+
+/* ---------- Conseguenze dell'hacking: tracciamento e indagine ---------- */
+function addTrace(amt) {
+  G.trace = (G.trace || 0) + amt;
+  if (G.trace > 100 && !G.record.warrants.some(w => w.type === 'hacking')) {
+    G.record.warrants.push({ type: 'hacking', day: G.day });
+    sendMsg('Numero privato', 'Hanno risalito i tuoi accessi. Spariscono le tracce solo se stai fermo. O se ti pentisci.', { force: true });
+    toast('🚨 La Polizia Postale ha un mandato a tuo nome: accesso abusivo ai sistemi.', 'bad');
+    G.wanted.heat = clamp(G.wanted.heat + 30, 0, 100); updateWantedLevel();
+  } else if (G.trace > 60 && !G.flags.traceWarn) { G.flags.traceWarn = true; toast('I log dei tuoi accessi iniziano a lasciare una scia. Occhio.', 'warn'); }
+}
+function traceDecay() { if (G.trace > 0) G.trace = Math.max(0, G.trace - 1.5); }
+function wholesaleSell() {
+  const doses = G.inv.filter(it => ITEMS[it.id] && ITEMS[it.id].dose);
+  if (!doses.length) return toast('Non hai dosi da vendere.', 'warn');
+  const opts = doses.map(it => { const I = ITEMS[it.id], pr = Math.round(I.price * 0.55); return { t: `${I.ico} ${I.n} ×${countInv(it.id)} — ${money(pr)} cad.`, f: () => { const q = countInv(it.id); removeInv(it.id, q); earn(pr * q, 'Vendita all\'ingrosso', 'bank'); addRep(DRUGS[I.drug] ? DRUGS[I.drug].clan : 'carannante', 6); G.wanted.heat = clamp(G.wanted.heat + 4, 0, 100); updateWantedLevel(); closePanel(); toast(`Venduto in blocco: ${money(pr * q)}. Il clan è contento.`, 'money'); } }; });
+  opts.push({ t: 'Chiudi', c: 'pri', f: closePanel });
+  openPanel('💰 Vendita all\'ingrosso', '<p class="desc">Il clan compra in blocco: paghi meno rischio, guadagni meno. I soldi finiscono puliti sul conto.</p>' + optList(opts), [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
+}
+
 // merge tech items & stocks
 try { Object.assign(ITEMS, TECH_ITEMS); } catch(e){}
+try { Object.assign(ITEMS, DRUG_ITEMS); Object.assign(OFFENSES, CRIME_OFFENSES); } catch(e){}
 if (!STOCKS.some(x=>x.id==='ELV')) STOCKS.push({ id: 'ELV', n: 'ElettroVetrata SpA' });
 
 /* ---------- Ciclo di animazione ---------- */
