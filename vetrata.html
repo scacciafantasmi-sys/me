@@ -171,6 +171,11 @@ input[type=range]{accent-color:var(--orange)}
 .vetros{font-family:var(--mono)}.vetros-bar{background:#0a1a2a;border:1px solid #37506b;border-radius:6px;padding:5px 9px;font-size:11px;color:#6fa8d8;margin-bottom:8px}
 .homeview{border-radius:12px;padding:14px;margin-bottom:10px;min-height:90px}
 .homeroom{display:flex;flex-wrap:wrap;gap:10px;font-size:30px;align-items:center;min-height:60px;background:rgba(0,0,0,.12);border-radius:8px;padding:10px}
+#phone .appb input,.vg-search input{}
+.vg-search{display:flex;gap:6px;margin-bottom:6px}
+.vg-search input{flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:18px;color:#fff;padding:8px 14px;font-size:13px}
+.vn-sel{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#fff;padding:5px 8px;font-size:12px}
+.vn-sel option{background:#17202c}
 </style>
 </head>
 <body>
@@ -3285,6 +3290,7 @@ function refreshSide() {
       <button class="act" onclick="togglePhone()"><span>📱</span>Telefono</button>
       <button class="act" onclick="openMap()"><span>🗺️</span>Mappa</button>
       <button class="act" onclick="openNotebook()"><span>📓</span>Taccuino</button>
+      <button class="act" onclick="quickSave()"><span>💾</span>Salva</button>
       <button class="act" onclick="openShortwave()" ${hasInv('radio_oc') || hasInv('sdr_scanner') ? '' : 'disabled'}><span>📻</span>Onde corte</button>
       <button class="act" onclick="takePhoto()" ${hasInv('fotocamera') ? '' : 'disabled'}><span>📷</span>Foto${G.film.loaded ? ' (' + G.film.loaded + ')' : ''}</button>
       <button class="act" onclick="toggleTorch()" ${hasInv('torcia') ? '' : 'disabled'}><span>🔦</span>${p.torch ? 'Spegni' : 'Torcia'}</button>
@@ -4894,6 +4900,8 @@ function restoreWorldState() {
   SHOALS = G.shoals || []; if (!SHOALS.length) spawnShoals();
   syncMarkers(); invalidateWhere();
 }
+function quickSave() { if (!G || !G.player || G.dead) return toast('Non c\'è niente da salvare.', 'warn'); saveGame(); AU.sfx('ok'); toast('💾 Partita salvata.', 'good'); }
+function openSaveMenu() { openPanel('💾 Salvataggi', '<p class="desc">La partita si salva da sola ogni pochi secondi e quando dormi. Puoi anche salvare a mano qui, o usare i 3 slot.</p>', [{ t: '💾 Salva adesso', c: 'pri', f: () => { quickSave(); closePanel(); } }, { t: '📁 Slot di salvataggio (3)', f: () => { closePanel(); slotsScreen(() => { hideScreen(); }); } }, { t: 'Chiudi', f: closePanel }]); }
 function saveGame() {
   if (!G || !G.player) return;
   try {
@@ -6131,25 +6139,66 @@ function allBusinesses() {
   for (const n of NPCS.filter(x => x.pl && x.pl.style === 'imprenditore')) { const seed = n.id; list.push({ kind: 'npcco', key: 'n' + n.id, name: ['Vetrata', 'Tirreno', 'Faro', 'Blu', 'Costa'][seed % 5] + ' ' + ['Servizi', 'Trasporti', 'Food', 'Store', 'Tech', 'Nautica'][(seed >> 1) % 6] + ' S.r.l.', type: 'Servizi', owner: n.pl.tag, web: 1 + (seed % 3), sponsored: false, rep: 40 + seed % 40 }); }
   return list;
 }
+let vetrQ = { q: '', sector: '', site: '', sort: 'rilevanza' };
 function openVetrNet() {
-  const list = allBusinesses().sort((a, b) => (b.sponsored - a.sponsored) || (b.rep - a.rep));
-  const rows = list.map(x => `<div class="vg-post" ${x.kind === 'co' || x.kind === 'biz' ? `data-visit="${x.kind}:${x.key}"` : ''} style="cursor:pointer">
+  const all = allBusinesses();
+  const sectors = [...new Set(all.map(x => x.type))].sort();
+  const q = (vetrQ.q || '').toLowerCase().trim();
+  let list = all.filter(x => {
+    if (q && !(x.name.toLowerCase().includes(q) || (x.type || '').toLowerCase().includes(q) || (x.owner || '').toLowerCase().includes(q))) return false;
+    if (vetrQ.sector && x.type !== vetrQ.sector) return false;
+    if (vetrQ.site === 'si' && !x.web) return false;
+    if (vetrQ.site === 'no' && x.web) return false;
+    return true;
+  });
+  const sorters = {
+    rilevanza: (a, b) => (b.sponsored - a.sponsored) || (b.rep - a.rep),
+    reputazione: (a, b) => b.rep - a.rep,
+    nome: (a, b) => a.name.localeCompare(b.name),
+    sito: (a, b) => (b.web || 0) - (a.web || 0)
+  };
+  list.sort(sorters[vetrQ.sort] || sorters.rilevanza);
+  const rows = list.map((x, i) => `<div class="vg-post" data-visit="${i}" style="cursor:pointer">
     <div class="vg-head">${x.sponsored ? '<span class="pltag sm">★ Sponsor</span>' : ''}<b>${x.ico || '🏢'} ${esc(x.name)}</b><span class="muted tiny sp">${esc(x.type)}</span></div>
-    <div class="small">Gestita da <b>${esc(x.owner)}</b> · reputazione ${x.rep}/100 · ${x.web ? `🌐 sito (qualità ${x.web}/3)` : '<span class="muted">nessun sito</span>'}</div></div>`).join('');
-  openPanel('🌐 VetrNet — Attività dell\'Isola', `<p class="desc">La vetrina online di Vetrata: ${list.length} attività. Gli sponsor compaiono in cima. Clicca per visitare un sito.</p><div class="vg-feed">${rows}</div>`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
-  document.querySelectorAll('[data-visit]').forEach(el => el.onclick = () => { const [kind, key] = el.dataset.visit.split(':'); visitSite(kind, key); });
+    <div class="small">Gestita da <b>${esc(x.owner)}</b> · reputazione ${x.rep}/100 · ${x.web ? `🌐 <span class="good">visita il sito (qualità ${x.web}/3)</span>` : '<span class="muted">nessun sito — scheda</span>'}</div></div>`).join('');
+  const secOpts = ['<option value="">Tutti i settori</option>', ...sectors.map(sc => `<option value="${esc(sc)}" ${vetrQ.sector === sc ? 'selected' : ''}>${esc(sc)}</option>`)].join('');
+  openPanel('🌐 VetrNet — Cerca sull\'Isola', `
+    <div class="vg-search">
+      <input id="vnQ" placeholder="🔎 Cerca attività, settore, titolare…" value="${esc(vetrQ.q)}" autocomplete="off">
+      <button class="btn sm pri" id="vnGo">Cerca</button>
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin:6px 0">
+      <select id="vnSec" class="vn-sel">${secOpts}</select>
+      <select id="vnSite" class="vn-sel"><option value="">Con o senza sito</option><option value="si" ${vetrQ.site === 'si' ? 'selected' : ''}>Solo con sito web</option><option value="no" ${vetrQ.site === 'no' ? 'selected' : ''}>Solo senza sito</option></select>
+      <select id="vnSort" class="vn-sel">${['rilevanza', 'reputazione', 'nome', 'sito'].map(s => `<option value="${s}" ${vetrQ.sort === s ? 'selected' : ''}>Ordina: ${s}</option>`).join('')}</select>
+      ${(vetrQ.q || vetrQ.sector || vetrQ.site) ? '<button class="btn sm" id="vnClr">✕ azzera</button>' : ''}
+    </div>
+    <div class="small muted" style="margin-bottom:6px">${list.length} risultati su ${all.length} attività.</div>
+    <div class="vg-feed">${rows || '<p class="muted">Nessun risultato. Prova con altre parole o azzera i filtri.</p>'}</div>`,
+    [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
+  const run = () => { vetrQ.q = $('#vnQ').value; openVetrNet(); };
+  $('#vnGo').onclick = run;
+  $('#vnQ').onkeydown = e => { if (e.key === 'Enter') run(); };
+  $('#vnSec').onchange = e => { vetrQ.sector = e.target.value; openVetrNet(); };
+  $('#vnSite').onchange = e => { vetrQ.site = e.target.value; openVetrNet(); };
+  $('#vnSort').onchange = e => { vetrQ.sort = e.target.value; openVetrNet(); };
+  if ($('#vnClr')) $('#vnClr').onclick = () => { vetrQ = { q: '', sector: '', site: '', sort: 'rilevanza' }; openVetrNet(); };
+  $('#vnQ').focus();
+  document.querySelectorAll('[data-visit]').forEach(el => el.onclick = () => { const x = list[+el.dataset.visit]; if (x) visitSite(x); });
 }
-function visitSite(kind, key) {
-  const c = kind === 'co' ? companyById(key) : null;
-  const biz = kind === 'biz' ? G.biz[key] : null;
-  const name = c ? c.name : BIZ[key].n;
-  const web = c ? c.website : (biz.website || 0);
-  if (!web) return openPanel('🌐 ' + esc(name), '<p class="desc">«Sito non trovato». Questa attività non ha ancora un sito web. Online è invisibile.</p>', [{ t: 'Indietro', c: 'pri', f: () => openVetrNet() }]);
-  const sec = c ? SECTORS[c.type] : { ico: PLACES[BIZ[key].type] ? PLACES[BIZ[key].type].ico : '🏢', n: BIZ[key].type };
+function visitSite(x) {
+  // x = oggetto da allBusinesses() {kind, key, name, type, ico, owner, web, rep}
+  const c = x.kind === 'co' ? companyById(x.key) : null;
+  const web = x.web || 0, name = x.name;
+  const sec = c ? SECTORS[c.type] : { ico: x.ico || '🏢', n: x.type };
+  if (!web) {
+    return openPanel('🌐 ' + esc(name), `<div class="vetros"><div class="vetros-bar">🔎 risultato di ricerca</div><div class="card" style="text-align:center;padding:20px"><div style="font-size:44px">${sec.ico}</div><h3>${esc(name)}</h3><p class="small">${esc(sec.n)} · gestita da ${esc(x.owner)}</p><p class="small muted">Questa attività <b>non ha ancora un sito web</b>: online è quasi invisibile. (Un sito porterebbe più clienti.)</p>${x.kind === 'co' && c && c.owner === 'player' ? '<p class="small good">È tua: creane uno dalla gestione dell\'impresa!</p>' : ''}</div></div>`, [{ t: '← Torna ai risultati', c: 'pri', f: () => openVetrNet() }], { wide: true });
+  }
   const quality = ['essenziale', 'professionale', 'eccellente'][web - 1] || 'base';
-  openPanel('🌐 ' + esc(name), `<div class="vetros"><div class="vetros-bar">www.${name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 14)}.vt · sito ${quality}</div>
-    <div class="card" style="text-align:center;padding:24px"><div style="font-size:48px">${sec.ico}</div><h3>${esc(name)}</h3><p class="small">${esc(sec.n)} a Vetrata.</p><p class="small muted">${['«Qualità e tradizione dell\'isola.»', '«Dal 2026, al servizio di Vetrata.»', '«L\'eccellenza, sul mare.»'][web - 1] || ''}</p>${web >= 2 ? '<p class="small">📞 Contatti · 📍 Dove siamo · 🕐 Orari</p>' : ''}${web >= 3 ? '<p class="small good">🛒 Ordina online · ⭐ Recensioni dei clienti</p>' : ''}</div></div>`,
-    [{ t: 'Indietro', c: 'pri', f: () => openVetrNet() }], { wide: true });
+  const claims = ['«Qualità e tradizione dell\'isola.»', '«Dal 2026, al servizio di Vetrata.»', '«L\'eccellenza, sul mare.»'];
+  openPanel('🌐 ' + esc(name), `<div class="vetros"><div class="vetros-bar">www.${name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16)}.vt · sito ${quality}</div>
+    <div class="card" style="text-align:center;padding:24px"><div style="font-size:48px">${sec.ico}</div><h3>${esc(name)}</h3><p class="small">${esc(sec.n)} a Vetrata · gestita da ${esc(x.owner)}</p><p class="small muted">${claims[web - 1] || claims[0]}</p>${web >= 2 ? '<p class="small">📞 Contatti · 📍 Dove siamo · 🕐 Orari</p>' : ''}${web >= 3 ? '<p class="small good">🛒 Ordina online · ⭐ Recensioni dei clienti · ★★★★☆</p>' : ''}</div></div>`,
+    [{ t: '← Torna ai risultati', c: 'pri', f: () => openVetrNet() }], { wide: true });
 }
 function sponsorCompany(c) {
   const cost = 2500;
@@ -6164,7 +6213,7 @@ function companyWeb(c) {
   const opts = [
     c.website < 3 ? { t: '🛠️ Costruisci il sito da solo', d: 'Serve Informatica. Minigioco. Qualità modesta.', f: () => { closePanel(); buildSiteSelf(c); } } : null,
     c.website < 3 ? { t: '🧑‍💻 Fallo fare a un\'agenzia web (giocatore)', d: 'Paghi un player del settore tech: sito migliore', f: () => { closePanel(); hireWebAgency(c); } } : null,
-    c.website ? { t: '🌐 Vedi il tuo sito', f: () => { closePanel(); visitSite('co', c.id); } } : null,
+    c.website ? { t: '🌐 Vedi il tuo sito', f: () => { closePanel(); visitSite({ kind: 'co', key: c.id, name: c.name, type: SECTORS[c.type].n, ico: SECTORS[c.type].ico, owner: 'TU', web: c.website, rep: Math.round(c.rep) }); } } : null,
     { t: 'Indietro', c: 'pri', f: () => openCompany(c.id) }
   ];
   openPanel('🌐 Presenza online — ' + esc(c.name), `<p class="desc">Un sito porta clienti e reputazione. Qualità attuale: <b>${c.website}/3</b>. Puoi costruirlo tu o commissionarlo a un'agenzia web di un altro giocatore.</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
