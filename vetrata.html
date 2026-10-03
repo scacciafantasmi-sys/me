@@ -2110,19 +2110,12 @@ function needsTick() {
   if (p.temp > 38.6) { hurt((p.temp - 38.6) * 0.1, 'un colpo di calore'); if (chance(0.02)) log('🥵 Il caldo ti fa girare la testa.', 'bad'); }
   if (inWater) { p.stamina = Math.max(0, p.stamina - 0.6 * (hasTrait('nuotatore') ? 0.6 : 1)); if (p.stamina <= 0) hurt(1.2, 'annegamento'); }
   else p.stamina = Math.min(maxStamina(), p.stamina + 0.6 * (p.energia < 15 ? 0.5 : 1));
-  if (c && ['parco', 'boschi'].includes(c.zone) && curMonth() >= 4 && curMonth() <= 9 && !(p.buffs.repellente > G.min) && !indoors) { p.stress = clamp(p.stress + 0.04, 0, 100); if (chance(0.004)) log('🦟 Le zanzare ti divorano. Un repellente servirebbe.', 'warn'); }
-  // stress: cala con calma quando stai bene, sale per cause precise; equilibrio basso ma vivo
-  const calm = p.fame > 25 && p.sete > 25 && p.health > 40 && !G.wanted.level;
-  let ds = calm ? -0.06 : -0.025;                      // calmo: circa −3,5/ora (non azzera tutto subito)
-  if (indoors || (c && c.b.some(id => W.buildings[id] && W.buildings[id].playerHome))) ds -= 0.02;
-  if (G.home && G.home.own) { try { ds -= homeComfort() / 900; } catch (e) { } }
-  if (p.fame < 12 || p.sete < 12) ds += 0.04; if (p.health < 30) ds += 0.05; if (G.wanted.level) ds += 0.03 * G.wanted.level;
-  if (isNight() && c && ['boschi', 'parco', 'cimitero'].includes(c.zone) && !indoors) ds += 0.04;
-  if (hasTrait('fumatore') && G.min - (p.lastSmoke || 0) > 360) { ds += 0.03; if (chance(0.003)) log('🚬 Ti servirebbe una sigaretta.', 'warn'); }
-  if (hasTrait('bevitore') && G.min - (p.lastDrink || 0) > 600) ds += 0.02;
-  if (hasTrait('claustrofobico') && p.inside && ['bunker', 'distilleria'].includes(p.inside)) ds += 0.25;
-  if (p.trauma > G.day) ds += 0.02;
-  if (ds > 0) ds *= hasTrait('ansioso') ? 1.3 : hasTrait('freddo') ? 0.5 : 1; // i tratti pesano solo quando lo stress SALE
+  if (c && ['parco', 'boschi'].includes(c.zone) && curMonth() >= 4 && curMonth() <= 9 && !(p.buffs.repellente > G.min) && !indoors && chance(0.004)) log('🦟 Le zanzare ti divorano. Un repellente servirebbe.', 'warn');
+  // stress: non deve mai essere un problema. Cala sempre e in fretta (circa -12/ora da sveglio); gli eventi forti lo alzano ma si riassorbe subito.
+  let ds = -0.2;
+  if (indoors || (c && c.b.some(id => W.buildings[id] && W.buildings[id].playerHome))) ds -= 0.06;
+  if (G.home && G.home.own) { try { ds -= homeComfort() / 600; } catch (e) { } }
+  if (hasTrait('claustrofobico') && p.inside && ['bunker', 'distilleria'].includes(p.inside)) ds += 0.3; // unico stress ambientale rimasto, con causa chiara
   p.stress = clamp(p.stress + ds, 0, 100);
   if (p.fame > 40 && p.sete > 40 && p.energia > 20 && p.bleed <= 0 && p.health < 100 && p.temp > 35.5) p.health = Math.min(100, p.health + 0.025);
   if (p.bleed > 0) hurt(p.bleed * 0.15, 'un\'emorragia');
@@ -3455,13 +3448,13 @@ function sleepOutside() {
   $('#slH').oninput = e => $('#slV').textContent = e.target.value + ' ore';
 }
 function sleepHours(h, place) {
-  const p = G.player; let slept = 0; const msg = [];
+  const p = G.player; let slept = 0; const msg = []; const stress0 = p.stress;
   fadeTo(() => {
     for (let k = 0; k < h; k++) {
       advance(60, { sleep: true, noUI: true }); slept++;
       const out = place === 'out';
       const cmf = place === 'home' && G.home.own ? 1 + homeComfort() / 120 : 1;
-      p.energia = clamp(p.energia + (hasTrait('insonne') ? 7 : 11) * (out ? 0.6 : 1) * cmf, 0, 100); p.stress = Math.max(0, p.stress - (out ? 2.5 : 5) * cmf); p.health = Math.min(100, p.health + (out ? 0.5 : 1.5) * cmf); p.stamina = maxStamina();
+      p.energia = clamp(p.energia + (hasTrait('insonne') ? 7 : 11) * (out ? 0.6 : 1) * cmf, 0, 100); p.stress = Math.max(0, p.stress - (out ? 12 : 30) * cmf); p.health = Math.min(100, p.health + (out ? 0.5 : 1.5) * cmf); p.stamina = maxStamina();
       if (out) { const amb = ambientTemp(); if (amb < 14) { p.temp -= (14 - amb) * 0.06 / (ITEMS[p.wear].wear.warm || 1); if (p.temp < 35.2) { msg.push('Ti svegli tremando dal freddo.'); break; } } if (WEATHER[G.weather.cur].rain) { p.wet = 100; msg.push('Ti sveglia la pioggia. Sei fradicio.'); break; } if (hauntedHere() > 0.3 && chance(0.2)) { msg.push('Ti svegli di soprassalto: qualcuno sussurrava il tuo nome vicinissimo.'); p.stress += 15; break; } }
       if (place === 'home' && G.home.kind === 'dormitorio' && chance(0.05) && G.cash > 20) { const l = Math.round(G.cash * rr(0.2, 0.5)); G.cash -= l; msg.push(`Ti svegli e ti mancano ${money(l)} dal portafoglio.`); break; }
       if (place === 'home' && G.home.own && !G.home.alarm && chance(0.01)) { const it = G.home.stash.length ? G.home.stash.splice(ri(0, G.home.stash.length - 1), 1)[0] : null; msg.push(`Di notte sono entrati i ladri${it ? ' e si sono presi: ' + ITEMS[it.id].n : ', ma non hanno trovato niente'}. Un allarme servirebbe.`); }
@@ -3469,7 +3462,7 @@ function sleepHours(h, place) {
       if (hasTrait('insonne') && chance(0.1)) { msg.push('Ti svegli alle ' + hhmm() + ' e non riesci più a dormire.'); break; }
       if (G.dead) break;
     }
-    toast(`Hai dormito ${slept} or${slept > 1 ? 'e' : 'a'}.`); for (const m of msg) toast(m, 'warn'); if (!G.dead) { saveGame(); toast('💾 Partita salvata.', 'good'); } refreshSide();
+    const drop = Math.round(stress0 - p.stress); toast(`Hai dormito ${slept} or${slept > 1 ? 'e' : 'a'}.${drop > 0 ? (p.stress <= 0 ? ' Ti svegli riposato: stress azzerato.' : ` Stress −${drop}.`) : ''}`, drop > 0 ? 'good' : undefined); for (const m of msg) toast(m, 'warn'); if (!G.dead) { saveGame(); toast('💾 Partita salvata.', 'good'); } refreshSide();
   }, 700);
 }
 
@@ -3998,7 +3991,7 @@ function shelterCount() { const base = Math.round(3 + (G.island.unemployment || 
 function shelterSleep() {
   const p = G.player;
   openPanel('🛏️ Rifugio della parrocchia', `<p class="desc">Il salone sul retro: file di brande, coperte grigie, il respiro di chi non ha un altro posto dove andare. Il parroco non chiede niente. ${(G.home && G.home.own) ? 'Tu una casa ce l\'hai: lascia il posto a chi non ce l\'ha, se puoi.' : 'Stanotte, almeno, hai un tetto.'}</p>`, [
-    { t: '😴 Dormi al rifugio (fino al mattino)', c: 'pri', f: () => { closePanel(); const h = clamp(13 - hourOf() + (hourOf() < 7 ? 0 : 24), 4, 9); fadeTo(() => { for (let k = 0; k < h; k++) { advance(60, { sleep: true, noUI: true }); p.energia = clamp(p.energia + 8, 0, 100); p.stress = Math.max(0, p.stress - 2); p.health = Math.min(100, p.health + 0.8); p.fame = Math.min(100, p.fame + 2); if (G.dead) break; } toast('Hai dormito al rifugio. Non è casa, ma è caldo.'); if (!G.dead) { saveGame(); } refreshSide(); }, 700); } },
+    { t: '😴 Dormi al rifugio (fino al mattino)', c: 'pri', f: () => { closePanel(); const h = clamp(13 - hourOf() + (hourOf() < 7 ? 0 : 24), 4, 9); fadeTo(() => { for (let k = 0; k < h; k++) { advance(60, { sleep: true, noUI: true }); p.energia = clamp(p.energia + 8, 0, 100); p.stress = Math.max(0, p.stress - 18); p.health = Math.min(100, p.health + 0.8); p.fame = Math.min(100, p.fame + 2); if (G.dead) break; } toast('Hai dormito al rifugio. Non è casa, ma è caldo.' + (p.stress <= 0 ? ' Stress azzerato.' : ''), 'good'); if (!G.dead) { saveGame(); } refreshSide(); }, 700); } },
     { t: '🤝 Lascia un\'offerta e vai', dis: G.cash < 5, f: () => { G.cash -= 10; spreadRumor({ kind: 'gift', text: 'sostiene il rifugio della parrocchia', mag: 2 }); closePanel(); toast('Dieci caprini nella cassetta. Il parroco annuisce.'); } },
     { t: 'Esci', f: closePanel }]);
 }
