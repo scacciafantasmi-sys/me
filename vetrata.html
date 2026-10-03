@@ -5377,6 +5377,7 @@ function plStep(s) {
 }
 function plTick(minutes) {
   if (!G.pls) G.pls = {};
+  try { crewFollowTick(); } catch (e) { }
   const mins = Math.min(minutes, 240);
   for (const n of NPCS) {
     if (!n.pl) continue; const s = plState(n), st = npcState(n);
@@ -5569,19 +5570,35 @@ function crewInvite(n) {
   toast(`🐺 ${esc(n.first)} entra ne «${esc(G.social.crew.name)}»! (${G.social.crew.members.length} membri)`, 'good');
   sendMsg('Crew ' + G.social.crew.name, `${n.first} è entrato nella crew. Benvenuto!`, { force: true });
 }
+const FOLLOW_FOREVER = 1e9;
 function callOverCrew() {
   const crew = G.social.crew; if (!crew || !crew.members.length) return toast('Non hai ancora una crew. Diventa amico di qualcuno e invitalo.', 'warn');
-  let n = 0, offline = 0;
+  G.crewFollow = true; let n = 0, offline = 0;
   for (const id of crew.members) {
     const m = NPCS[id]; const st = npcState(m);
     if (!st.alive || st.gone || (st.jailed && st.jailed > G.day)) continue;
-    if (isPl(m)) { if (!plOnline(m)) { offline++; continue; } const s = plState(m); s.on = true; s.follow = G.min + 180; s.cx = G.player.cx; s.cy = G.player.cy; s.inB = null; }
-    else { st.follow = G.min + 180; st.meetAt = null; }
+    if (isPl(m)) { if (!plOnline(m)) { offline++; continue; } const s = plState(m); s.on = true; s.follow = G.min + FOLLOW_FOREVER; s.cx = G.player.cx; s.cy = G.player.cy; s.inB = null; }
+    else { st.follow = G.min + FOLLOW_FOREVER; st.meetAt = null; }
     n++;
   }
-  if (n) toast(`📣 La crew ti raggiunge: ${n} ${n > 1 ? 'arrivano' : 'arriva'} e ${n > 1 ? 'ti seguono' : 'ti segue'} per un po'.`, 'good');
-  if (offline) toast(`${offline} della crew ${offline > 1 ? 'non sono' : 'non è'} online adesso: ${offline > 1 ? 'arriveranno' : 'arriverà'} quando ${offline > 1 ? 'si collegano' : 'si collega'}.`, 'warn');
+  if (n) toast(`📣 La crew è con te: ${n} ${n > 1 ? 'ti seguono' : 'ti segue'}. Resteranno accanto finché non li congedi.`, 'good');
+  if (offline) toast(`${offline} della crew ${offline > 1 ? 'sono' : 'è'} offline: ${offline > 1 ? 'si uniranno' : 'si unirà'} appena ${offline > 1 ? 'si collegano' : 'si collega'}.`, 'warn');
   if (!n && !offline) toast('Nessuno della crew può raggiungerti adesso.', 'warn');
+}
+function dismissCrew(silent) {
+  G.crewFollow = false; const crew = G.social && G.social.crew; if (!crew) return;
+  for (const id of crew.members) { const m = NPCS[id]; if (!m) continue; const s = isPl(m) ? plState(m) : npcState(m); if (s) s.follow = 0; }
+  if (!silent) toast('🫡 Hai congedato la crew. Tornano ai fatti loro.');
+}
+// la crew resta al tuo fianco a tempo indeterminato: la mantiene, accoglie chi si collega, si scioglie se qualcuno muore
+function crewFollowTick() {
+  if (!G.crewFollow) return; const crew = G.social && G.social.crew; if (!crew || !crew.members.length) { G.crewFollow = false; return; }
+  for (const id of crew.members) { const m = NPCS[id]; if (!m) continue; const st = npcState(m); if (!st.alive || st.gone) { toast(`💔 ${esc(m.first)} non c'è più. La crew si scioglie.`, 'bad'); dismissCrew(true); return; } }
+  for (const id of crew.members) {
+    const m = NPCS[id], st = npcState(m); if (!st.alive || st.gone || (st.jailed && st.jailed > G.day)) continue;
+    if (isPl(m)) { if (plOnline(m)) { const s = plState(m); s.on = true; if (s.follow <= G.min) { s.cx = G.player.cx; s.cy = G.player.cy; s.inB = null; } s.follow = G.min + FOLLOW_FOREVER; } }
+    else { st.follow = G.min + FOLLOW_FOREVER; }
+  }
 }
 
 /* =====================================================================
@@ -6115,8 +6132,10 @@ function crewPanel() {
   G.social = G.social || {}; const crew = G.social.crew;
   if (!crew || !crew.members.length) { openPanel('🐺 La tua crew', '<p class="desc">Non hai ancora una crew. Diventa amico di qualcuno (opinione 35+) e invitalo dalla conversazione.</p>', [{ t: 'Chiudi', c: 'pri', f: closePanel }]); return; }
   const rows = crew.members.map(id => { const n = NPCS[id], st = npcState(n); return `<div class="msg"><b>${esc(isPl(n) ? n.pl.tag : npcName(n, false))}</b> ${hearts(st.op)} <span class="muted small">${online(n) ? '🟢' : '⚫'} ${esc(npcCar(n).n)}</span></div>`; }).join('');
-  const opts = [{ t: '📣 Chiama la crew qui', d: 'Gli amici online ti raggiungono', f: () => { closePanel(); callOverCrew(); } }, { t: 'Chiudi', c: 'pri', f: closePanel }];
-  openPanel('🐺 ' + esc(crew.name), `<p class="desc">${crew.members.length} membri.</p>${rows}${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
+  const opts = [{ t: '📣 Chiama la crew qui', d: 'Ti raggiungono e ti seguono finché non li congedi', f: () => { closePanel(); callOverCrew(); } }];
+  if (G.crewFollow) opts.push({ t: '🫡 Congeda la crew', d: 'Smettono di seguirti', f: () => { closePanel(); dismissCrew(); } });
+  opts.push({ t: 'Chiudi', c: 'pri', f: closePanel });
+  openPanel('🐺 ' + esc(crew.name), `<p class="desc">${crew.members.length} membri.${G.crewFollow ? ' <span class="good">Ti stanno seguendo.</span>' : ''}</p>${rows}${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
 }
 /* ---------- Slot di salvataggio manuali ---------- */
 const SLOT_KEY = i => 'villafranca_rp_slot' + i;
