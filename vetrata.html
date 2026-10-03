@@ -2547,7 +2547,7 @@ function vehicleStep(v, from, to) {
   if (M.type === 'bici') { const p = G.player; const st = 1.5 + Math.max(0, dh) * 120; if (p.stamina < st) { toast('Non ce la fai più a pedalare in salita. Scendi e spingi.', 'warn'); return false; } p.stamina -= st; gainSkill('atletica', 0.1); return true; }
   if (M.type === 'boat') {
     const sea = WEATHER[G.weather.cur].sea;
-    if (sea > 0.85 && chance(0.12 - skill('nautica') / 1000)) { v.hp -= rr(5, 18); toast('🌊 Un\'onda ti prende di traverso: l\'acqua entra a bordo!', 'bad'); G.player.wet = 100; G.player.stress = Math.min(100, G.player.stress + 8); if (v.hp <= 0) { sinkBoat(v); return false; } }
+    if (sea > 0.85 && chance(0.12 - skill('nautica') / 1000)) { v.hp = Math.max(20, v.hp - rr(1, 3)); toast('🌊 Un\'onda ti prende di traverso: l\'acqua entra a bordo!', 'bad'); G.player.wet = 100; }
     gainSkill('nautica', 0.3);
     if (!hasTrait('patente_nautica') && skill('nautica') < 25 && chance(0.03)) { toast('La motovedetta della Guardia Costiera ti affianca: niente patente nautica.', 'bad'); fine(250, 'Conduzione di natante senza patente'); }
     return true;
@@ -2560,11 +2560,11 @@ function vehicleStep(v, from, to) {
     if (v.temp > 152) { v.temp = 104; G.stats.overheats = (G.stats.overheats || 0) + 1; toast('💨 Il motore si pianta dal caldo: aspetta che si raffreddi e riparti. (Non si è rotto.)', 'warn'); AU.sfx('bad'); return false; }
     if (v.temp < 100) v.hotWarn = false;
   }
-  if (dh < -0.008) { v.brake = clamp(v.brake + (-dh) * 11, 0, 1.4); if (v.brake > 1.2 && chance(0.05)) { const p = G.player; toast('🛑 I freni non rispondono più: fading! Esci di strada e ti fermi contro un muretto.', 'bad'); v.hp -= rr(6, 16); hurt(rr(2, 7), 'un incidente stradale'); v.brake = 0.5; G.stats.crashes = (G.stats.crashes || 0) + 1; anim.shake = 0.5; AU.sfx('crash'); if (G.player.down) return false; } } else v.brake = Math.max(0, v.brake - 0.22);
+  if (dh < -0.008) { v.brake = clamp(v.brake + (-dh) * 11, 0, 1.4); if (v.brake > 1.2 && chance(0.04)) { toast('🛑 I freni scaldano: rallenti a fatica. Vai piano in discesa.', 'warn'); v.brake = 0.5; anim.shake = 0.3; AU.sfx('bad'); } } else v.brake = Math.max(0, v.brake - 0.22);
   if (to.road === RD_DIRT || !to.road) { v.tire = Math.max(0, v.tire - rr(0.2, 0.8)); v.dirt = Math.min(1, v.dirt + (G.weather.wetGround > 0.3 ? 0.08 : 0.03)); if (!v.flat && chance(0.0035 * (1 + (100 - v.tire) / 25))) { v.flat = true; toast('💥 Hai forato! Ti serve una ruota di scorta (cambiala qui) o un meccanico.', 'bad'); return false; } }
   if (v.flat) { toast('Con la gomma a terra non si va da nessuna parte.', 'warn'); return false; }
   if (G.pol.ztl && M.type === 'car' && to.road === RD_COBBLE && to.zone === 'centro' && G.min - (G.flags.lastZtl || -999) > 120) { G.flags.lastZtl = G.min; fine(80, 'Accesso alla ZTL del Centro Storico'); }
-  if (G.player.alcol > 55 && chance(0.06)) { toast('Hai bevuto troppo: sbandi e prendi in pieno un cassonetto.', 'bad'); v.hp -= 14; offense('guida', 0.5); anim.shake = 0.4; AU.sfx('crash'); }
+  if (G.player.alcol > 55 && chance(0.06)) { toast('Hai bevuto troppo: sbandi e tocchi un cassonetto.', 'bad'); v.hp = Math.max(20, v.hp - 2); offense('guida', 0.5); anim.shake = 0.3; }
   if (G.player.energia < 8 && chance(0.08)) { toast('Ti si chiudono gli occhi al volante… un clacson ti sveglia appena in tempo.', 'bad'); G.player.stress = Math.min(100, G.player.stress + 15); }
   if (v.hp <= 0) { v.broken = true; toast('Il veicolo è distrutto. Chiama il carro attrezzi.', 'bad'); return false; }
   gainSkill('guida', 0.08);
@@ -3905,7 +3905,7 @@ function buyUsedVehicle(u, b) {
   if (!pay(u.price, 'Usato ' + u.M.n, { atCounter: true })) return;
   let cx = b.cell[0], cy = b.cell[1]; if (u.M.type === 'boat') { const w = boatSpot(cx, cy); cx = w[0]; cy = w[1]; }
   const v = addVehicle(u.id, cx, cy, { fuel: 0.45 });
-  v.hp = Math.max(8, Math.round(u.M.hp * u.cond)); v.tire = u.tire; v.flat = u.flat; v.broken = u.broken; v.km = u.km; v.dirt = 55;
+  v.hp = Math.max(Math.round(u.M.hp * 0.55), Math.round(u.M.hp * u.cond)); v.tire = Math.max(45, u.tire); v.flat = false; v.broken = false; v.km = u.km; v.dirt = 55;
   addInv('chiave', 1, { vid: v.id, title: 'Chiave ' + u.M.n }, true);
   closePanel(); toast(`${u.M.n} usata è tua. Targa ${v.plate}. ${u.broken ? 'Il motore va sistemato.' : 'Falle un tagliando, mi raccomando.'}`, 'money'); refreshSide();
 }
@@ -4448,7 +4448,7 @@ function streetRace(n) {
   const v = G.vehicles.find(v => !v.lost && v.cx === G.player.cx && v.cy === G.player.cy && ['moto', 'car'].includes(VMODELS[v.model].type));
   minigameTiming({ title: '🏁 I Tornanti, all\'alba', desc: `Contro ${esc(n.first)}. Ogni curva: frena al momento giusto. Mezzo: ${esc(VMODELS[v.model].n)}.`, pins: 5, speed: 1.2 - skill('guida') / 200, zone: 0.14 + skill('guida') / 600 + VMODELS[v.model].grip * 0.04,
     onWin: e => { advance(30); gainSkill('guida', 6); addRep('brigata', 12); earn(200, 'Vinta la corsa'); spreadRumor({ kind: 'gift', text: 'ha battuto la Brigata sui tornanti', mag: 3 }); if (chance(0.2)) offense('guida', 0.8); v.tire = Math.max(0, v.tire - 20); },
-    onFail: () => { advance(30); v.hp -= 30; hurt(rr(5, 15), 'un\'uscita di strada'); v.tire = Math.max(0, v.tire - 25); toast('Al quarto tornante il muretto arriva prima della curva.', 'bad'); offense('guida', 0.5); } });
+    onFail: () => { advance(30); v.hp = Math.max(20, v.hp - 8); hurt(rr(3, 8), 'un\'uscita di strada'); v.tire = Math.max(0, v.tire - 12); toast('Al quarto tornante il muretto arriva prima della curva.', 'bad'); offense('guida', 0.5); } });
 }
 function questoreOptions(n, st) {
   return [
@@ -7641,8 +7641,8 @@ function trafficOnDrive(to) {
 function npcsHereAt(c) { try { return (npcOutdoorCells().get(cid(c.cx, c.cy)) || []); } catch (e) { return []; } }
 function trafficIncident(v, kind) {
   const p = G.player; AU.sfx('crash'); anim.shake = 0.5;
-  const dmg = { incrocio: [10, 22], pedone: [5, 12], tamponamento: [7, 16], sbandata: [6, 14] }[kind] || [6, 14];
-  v.hp = Math.max(0, v.hp - rr(dmg[0], dmg[1])); if (v.hp <= 0) v.broken = true;
+  const dmg = { incrocio: [1, 3], pedone: [1, 2], tamponamento: [1, 3], sbandata: [1, 2] }[kind] || [1, 2];
+  v.hp = Math.max(20, v.hp - rr(dmg[0], dmg[1])); // danno minimo: un veicolo non si rompe mai per un incidente
   const texts = {
     incrocio: 'Un\'auto arriva da destra e non ti vede: schianto all\'incrocio.',
     pedone: 'Un pedone sulle strisce! Inchiodi ma lo prendi di striscio.',
