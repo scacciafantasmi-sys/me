@@ -2357,7 +2357,7 @@ function islandDaily() {
   // veicoli abbandonati lontano da casa per troppi giorni
   for (const v of G.vehicles) { if (v.id === G.player.veh) continue; v.idle = (v.idle || 0) + 1; if (v.idle === 6 && VMODELS[v.model].type !== 'boat') { fine(40, 'Veicolo abbandonato su suolo pubblico: ' + VMODELS[v.model].n); } }
   // posta in casella
-  if (chance(0.35)) G.mailbox.push(pick([{ from: 'ENEL Vetrata', text: `Bolletta luce: ${money(28 + G.player.homeLevel * 12)}.`, bill: 28 + G.player.homeLevel * 12 }, { from: 'Comune di Vetrata', text: 'Censimento della popolazione: la invitiamo a registrare la residenza in Municipio.' }, { from: 'Anonimo', text: 'Una cartolina senza firma con la foto del Faro. Sul retro: «Ore 3».' }, { from: 'Parrocchia', text: 'Raccolta di vestiti per gli sfollati di Partenope.' }, { from: 'Banca Insulare', text: 'ATTENZIONE: nessun operatore le chiederà mai i codici via SMS.' }]));
+  if (chance(0.35)) { const billed = G.home && (G.home.own || G.home.kind === 'pensione'); const mail = [{ from: 'Comune di Vetrata', text: 'Censimento della popolazione: la invitiamo a registrare la residenza in Municipio.' }, { from: 'Anonimo', text: 'Una cartolina senza firma con la foto del Faro. Sul retro: «Ore 3».' }, { from: 'Parrocchia', text: 'Raccolta di vestiti per gli sfollati di Partenope.' }, { from: 'Banca Insulare', text: 'ATTENZIONE: nessun operatore le chiederà mai i codici via SMS.' }]; if (billed) mail.unshift({ from: 'ENEL Vetrata', text: `Bolletta luce: ${money(28 + G.player.homeLevel * 12)}.`, bill: 28 + G.player.homeLevel * 12 }); G.mailbox.push(pick(mail)); }
   spawnShoals(); checkDestiny(); bountiesDaily(); stocksDaily(); try { fuelDaily(); hospDaily(); } catch (e) { }
   try { parkingDaily(); } catch (e) { }
   if (G.grow && G.grow.plots) for (const pl of G.grow.plots) { if (!pl.dead && G.day - (pl.watered || pl.day) > 3) pl.dead = true; }
@@ -3393,6 +3393,7 @@ function setHome(kind) {
   else if (kind === 'casa_anacapri') { const b = W.buildings.find(x => x.home && x.zone === 'anacapri' && !NPCS.some(n => n.home === x.id)) || W.buildings.find(x => x.home && x.zone === 'anacapri'); Object.assign(H, { b: b.id, n: 'Casa della nonna ad Anacapri', rent: 0, fridge: true, own: true }); b.playerHome = true; }
   else if (typeof kind === 'number') { const b = W.buildings[kind]; Object.assign(H, { b: b.id, n: b.n === 'Abitazione' ? 'Casa tua, ' + b.addr : b.n, rent: 0, fridge: true, own: true, kind: 'own' }); b.playerHome = true; }
   G.home = H; G.player.homeLevel = H.own ? 2 : H.rent ? 1 : 0;
+  if (!(H.own || H.kind === 'pensione') && G.flags.resident) { G.flags.resident = false; toast('Trasferendoti qui perdi la residenza: il dormitorio non è un domicilio.', 'warn'); }
 }
 function openHome(b) {
   if (G.home && G.home.b === b.id) {
@@ -3462,8 +3463,10 @@ function sleepHours(h, place) {
     for (let k = 0; k < h; k++) {
       advance(60, { sleep: true, noUI: true }); slept++;
       const out = place === 'out';
-      const cmf = place === 'home' && G.home.own ? 1 + homeComfort() / 120 : 1;
+      const dorm = place === 'home' && G.home.kind === 'dormitorio';
+      const cmf = (place === 'home' && G.home.own ? 1 + homeComfort() / 120 : 1) * (dorm ? 0.7 : 1);
       p.energia = clamp(p.energia + (hasTrait('insonne') ? 7 : 11) * (out ? 0.6 : 1) * cmf, 0, 100); p.stress = Math.max(0, p.stress - (out ? 12 : 30) * cmf); p.health = Math.min(100, p.health + (out ? 0.5 : 1.5) * cmf); p.stamina = maxStamina();
+      if (dorm && chance(0.05)) { p.sick = Math.max(p.sick || 0, 180); msg.push('Ti svegli con la febbre e le ossa rotte: al dormitorio gira di tutto.'); break; }
       if (out) { const amb = ambientTemp(); if (amb < 14) { p.temp -= (14 - amb) * 0.06 / (ITEMS[p.wear].wear.warm || 1); if (p.temp < 35.2) { msg.push('Ti svegli tremando dal freddo.'); break; } } if (WEATHER[G.weather.cur].rain) { p.wet = 100; msg.push('Ti sveglia la pioggia. Sei fradicio.'); break; } if (hauntedHere() > 0.3 && chance(0.2)) { msg.push('Ti svegli di soprassalto: qualcuno sussurrava il tuo nome vicinissimo.'); p.stress += 15; break; } }
       if (place === 'home' && G.home.kind === 'dormitorio' && chance(0.05) && G.cash > 20) { const l = Math.round(G.cash * rr(0.2, 0.5)); G.cash -= l; msg.push(`Ti svegli e ti mancano ${money(l)} dal portafoglio.`); break; }
       if (place === 'home' && G.home.own && !G.home.alarm && chance(0.01)) { const it = G.home.stash.length ? G.home.stash.splice(ri(0, G.home.stash.length - 1), 1)[0] : null; msg.push(`Di notte sono entrati i ladri${it ? ' e si sono presi: ' + ITEMS[it.id].n : ', ma non hanno trovato niente'}. Un allarme servirebbe.`); }
@@ -4618,7 +4621,7 @@ function openMunicipio(b) {
     P.mayor === 'player' ? { t: '🏛️ Ufficio del Sindaco', d: 'Decreti, bilancio, appalti, Giunta', c: 'pri', f: () => { closePanel(); openMayorOffice(); } } : null,
     { t: '🪑 Assisti al Consiglio comunale', d: '1 ora · capisci come tira il vento', f: () => { closePanel(); advance(60); councilSession(); } },
     fines.length ? { t: `🧾 Paga le multe (${money(fineTot)})`, f: () => { if (pay(fineTot, 'Multe', { atCounter: true })) { for (const f of fines) { f.paid = true; if (f.late) { const i = G.record.warrants.findIndex(w => w.type === 'multe'); if (i >= 0) G.record.warrants.splice(i, 1); } } G.island.budget += fineTot; closePanel(); toast('Multe pagate.'); } } } : null,
-    { t: '📋 Anagrafe: registra la residenza', dis: G.flags.resident, d: 'Diventi elettore e cittadino a pieno titolo', f: () => { G.flags.resident = true; G.island.pop++; advance(45); closePanel(); toast('Ora sei residente a Vetrata.', 'money'); } },
+    { t: '📋 Anagrafe: registra la residenza', dis: G.flags.resident || !(G.home && (G.home.own || G.home.kind === 'pensione')), d: G.flags.resident ? 'Sei già residente' : !(G.home && (G.home.own || G.home.kind === 'pensione')) ? 'Serve un\'abitazione o una stanza in pensione (il dormitorio non vale)' : 'Diventi elettore e cittadino a pieno titolo', f: () => { if (!(G.home && (G.home.own || G.home.kind === 'pensione'))) return toast('La residenza si registra solo con un\'abitazione o una stanza in pensione.', 'warn'); G.flags.resident = true; G.island.pop++; advance(45); closePanel(); toast('Ora sei residente a Vetrata.', 'money'); } },
     { t: '⚖️ Iscrizione all\'Albo Forense', d: 'Gli avvocati devono iscriversi per esercitare', dis: hasInv('albo_avv') || !hasAbil('legge'), f: () => { claimAlbo(); } },
     { t: '📄 Modulistica: denunce, querele, contratti', f: () => { closePanel(); openModulistica(); } },
     { t: '🔎 Anagrafe: cerca una persona', d: 'Indirizzo e professione di un abitante', f: () => { closePanel(); anagrafe(); } },
