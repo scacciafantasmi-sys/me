@@ -2554,15 +2554,15 @@ function vehicleStep(v, from, to) {
   }
   // auto e moto
   if (M.heat > 0) {
-    // riscaldamento MOLTO più lento: solo salite lunghe e continue scaldano davvero; in piano/discesa raffredda in fretta
-    if (dh > 0.006) v.temp += dh * 78 * M.heat; else v.temp = Math.max(78, v.temp - 16);
-    v.temp += (WEATHER[G.weather.cur].hot || 0) * 0.15;
-    if (v.temp > 150 && !v.hotWarn) { v.hotWarn = true; toast('🌡️ La lancetta della temperatura sale in rosso. Vai piano in salita o fermati un attimo.', 'warn'); }
-    if (v.temp > 172) { v.temp = 96; G.stats.overheats = (G.stats.overheats || 0) + 1; toast('💨 Il motore si pianta dal caldo: aspetta che si raffreddi e riparti. (Non si è rotto.)', 'warn'); AU.sfx('bad'); return false; }
+    // riscaldamento quasi assente nella guida normale: solo una salita ripidissima e ininterrotta di decine di gradini scalda davvero; in piano/discesa raffredda subito
+    if (dh > 0.008) v.temp += dh * 40 * M.heat; else v.temp = Math.max(78, v.temp - 22);
+    v.temp += (WEATHER[G.weather.cur].hot || 0) * 0.1;
+    if (v.temp > 160 && !v.hotWarn) { v.hotWarn = true; toast('🌡️ La lancetta sale verso il rosso: su questa salita vai piano.', 'warn'); }
+    if (v.temp > 186) { v.temp = 90; G.stats.overheats = (G.stats.overheats || 0) + 1; toast('💨 Il motore si pianta un attimo dal caldo: aspetta che si raffreddi e riparti. (Non si è rotto.)', 'warn'); AU.sfx('bad'); return false; }
     if (v.temp < 120) v.hotWarn = false;
   }
-  if (dh < -0.008) { v.brake = clamp(v.brake + (-dh) * 11, 0, 1.4); if (v.brake > 1.2 && chance(0.04)) { toast('🛑 I freni scaldano: rallenti a fatica. Vai piano in discesa.', 'warn'); v.brake = 0.5; anim.shake = 0.3; AU.sfx('bad'); } } else v.brake = Math.max(0, v.brake - 0.22);
-  if (to.road === RD_DIRT || !to.road) { v.tire = Math.max(0, v.tire - rr(0.2, 0.8)); v.dirt = Math.min(1, v.dirt + (G.weather.wetGround > 0.3 ? 0.08 : 0.03)); if (!v.flat && chance(0.0035 * (1 + (100 - v.tire) / 25))) { v.flat = true; toast('💥 Hai forato! Ti serve una ruota di scorta (cambiala qui) o un meccanico.', 'bad'); return false; } }
+  if (dh < -0.008) { v.brake = clamp(v.brake + (-dh) * 7, 0, 1.4); if (v.brake > 1.3 && chance(0.012)) { toast('🛑 In discesa senti i freni un po\' morbidi: vai piano.', 'warn'); v.brake = 0.8; } } else v.brake = Math.max(0, v.brake - 0.3);
+  if (to.road === RD_DIRT || !to.road) { v.tire = Math.max(0, v.tire - rr(0.06, 0.25)); v.dirt = Math.min(1, v.dirt + (G.weather.wetGround > 0.3 ? 0.08 : 0.03)); if (!v.flat && v.tire < 35 && chance(0.0012 * (1 + (100 - v.tire) / 25))) { v.flat = true; toast('💥 Hai forato! Ti serve una ruota di scorta (cambiala qui) o un meccanico.', 'bad'); return false; } }
   if (v.flat) { toast('Con la gomma a terra non si va da nessuna parte.', 'warn'); return false; }
   if (G.pol.ztl && M.type === 'car' && to.road === RD_COBBLE && to.zone === 'centro' && G.min - (G.flags.lastZtl || -999) > 120) { G.flags.lastZtl = G.min; fine(80, 'Accesso alla ZTL del Centro Storico'); }
   if (G.player.alcol > 55 && chance(0.06)) { toast('Hai bevuto troppo: sbandi e tocchi un cassonetto.', 'bad'); v.hp = Math.max(20, v.hp - 2); offense('guida', 0.5); anim.shake = 0.3; }
@@ -3543,7 +3543,9 @@ function phoneBind(app, sig) {
 function phoneCalls() {
   const list = [
     { t: '🚕 Taxi \'o Biondo', d: money(25) + ' per qualunque destinazione', f: () => { togglePhone(false); openTaxi(); } },
-    { t: '🔧 Soccorso stradale Scogliera', d: money(180) + ' — porta il tuo veicolo al Garage', f: () => { togglePhone(false); towVehicle(); } },
+    { t: '🚑 118 — Pronto soccorso', d: 'Un\'ambulanza ti raggiunge e ti medica sul posto', f: () => { togglePhone(false); callAmbulance(); } },
+    { t: '🔧 Meccanico a domicilio', d: 'Ripara il tuo veicolo dove ti trovi', f: () => { togglePhone(false); callMechanic(); } },
+    { t: '🔧 Soccorso stradale Scogliera', d: money(180) + ' — rimorchia il tuo veicolo al Garage', f: () => { togglePhone(false); towVehicle(); } },
     { t: '🚓 113 — Polizia Insulare', d: 'Segnala o costituisciti', f: () => { togglePhone(false); if (G.wanted.level || G.record.warrants.length) openPanel('🚓 Costituirti?', '<p class="desc">Se ti costituisci, la pena si riduce di un terzo.</p>', [{ t: 'Costituisciti', c: 'pri', f: () => { closePanel(); G.flags.surrender = true; arrestPlayer('Ti sei costituito'); } }, { t: 'Riattacca', f: closePanel }]); else toast('«Polizia Insulare.» Non hai niente da dire. Riattacchi.'); } }];
   for (const n of NPCS) { const st = npcState(n); if (st.met && st.number && st.alive) list.push({ t: '📞 ' + npcName(n), d: (ROLE_LABEL[n.role] || '') + ' · opinione ' + Math.round(st.op), f: () => { togglePhone(false); openDialog(n, true); } }); }
   return list;
@@ -3554,6 +3556,29 @@ function towVehicle() {
   if (!pay(180, 'Soccorso stradale', { atCounter: true })) return;
   const g = W.buildings.find(b => b.type === 'garage'); v.cx = g.cell[0]; v.cy = g.cell[1]; v.fuel = Math.max(v.fuel, 3); if (G.player.veh === v.id) { G.player.veh = null; }
   toast(`Il carro attrezzi porta ${VMODELS[v.model].n} al Garage Scogliera.`); refreshSide();
+}
+function callAmbulance() {
+  const p = G.player; if (G.dead) return;
+  if (p.down) { closePanel(); return rescue(0.95, 'L\'ambulanza arriva a sirene spiegate.'); }
+  if (signalHere() < 10) return toast('📵 Niente campo: il 118 non risponde. Raggiungi un ripetitore o una cabina.', 'warn');
+  const needs = p.bleed > 0 || p.health < 60 || (p.sick || 0) > 0.3;
+  if (!needs) return toast('«Pronto soccorso 118.» Per fortuna stai bene: nessuna emergenza. Riattacchi.');
+  const bill = 160;
+  openPanel('🚑 118 — Pronto soccorso', `<p class="desc">«Resti dov'è, arriviamo.» Pochi minuti e un'ambulanza del 118 ti raggiunge. I sanitari ti medicano sul posto: punti, flebo, una coperta termica.</p><p class="muted">Conto stimato: ${money(bill)}.</p>`, [
+    { t: 'Fatti medicare', c: 'pri', f: () => { closePanel(); advance(40); p.bleed = 0; p.health = Math.min(100, p.health + 45); p.sick = Math.max(0, (p.sick || 0) - 0.6); G.stats.rescued = (G.stats.rescued || 0) + 1; if (!pay(bill, 'Pronto soccorso 118', { atCounter: true, silent: true })) G.debts.push({ to: 'Ambulatorio San Costanzo', amount: bill, due: G.day + 10 }); toast('🚑 Medicato sul posto. Rimettiti in forze.', 'good'); refreshSide(); } },
+    { t: 'Lascia stare', f: closePanel }]);
+}
+function callMechanic() {
+  const v = curVeh() || vehicleHere();
+  if (!v) return toast('Sali su un tuo veicolo (o fermati accanto) per chiamare il meccanico.', 'warn');
+  const M = VMODELS[v.model];
+  if (M.type === 'boat') return toast('Per le barche serve il soccorso in mare: chiamalo dal porto.', 'warn');
+  if (signalHere() < 10) return toast('📵 Niente campo: chiama da un ripetitore o una cabina.', 'warn');
+  const dmg = M.hp - v.hp;
+  const cost = Math.round(120 + dmg * 3.5 + (v.broken ? 150 : 0) + (v.flat ? 60 : 0));
+  openPanel('🔧 Meccanico a domicilio', `<p class="desc">Il Garage Scogliera manda un meccanico col furgone attrezzato. Ti sistema ${esc(M.n)} sul posto: motore, gomme, liquidi.</p><p class="muted">Preventivo: ${money(cost)} — più caro dell'officina, ma non ti muovi da qui.</p>`, [
+    { t: `Accetta (${money(cost)})`, c: 'pri', f: () => { if (!pay(cost, 'Meccanico a domicilio', { atCounter: true })) return; v.hp = M.hp; v.temp = 80; v.broken = false; v.flat = false; v.tire = Math.max(v.tire, 60); if (M.fuel) v.fuel = Math.max(v.fuel, M.fuel * 0.3); advance(60); closePanel(); toast('🔧 Riparata sul posto. Come nuova, quasi.', 'money'); refreshSide(); } },
+    { t: 'No, lascia', f: closePanel }]);
 }
 function renderEdition(phone) {
   const e = G.edition; if (!e) return '<p class="muted">L\'edizione di oggi esce alle 6:00.</p>';
