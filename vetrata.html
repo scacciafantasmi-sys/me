@@ -2332,6 +2332,7 @@ function initIsland(npcInfo) {
 }
 function islandDaily() {
   const I = G.island, P = G.pol;
+  try { buildsDaily(); } catch (e) { }
   I.tension = clamp(I.tension + rr(-4, 5.5) + (I.tension > 70 ? 0.5 : 0) - (P.regional > 0 ? 1 : 0), 5, 100);
   if (I.tension > 82 && chance(0.25)) { I.blockade = G.day + ri(1, 3); addNews({ tag: 'partenope', head: 'Blocco navale: sospesi i collegamenti con Partenope', body: 'Il governo centrale chiude i porti. I commercianti di Vetrata in rivolta.', weight: 5 }); I.tourism = Math.max(0.2, I.tourism - 0.1); if (chance(0.4)) { G.flags.cableCut = G.day + 2; addNews({ tag: 'cronaca', head: 'Tranciato il cavo sottomarino: internet a singhiozzo', body: 'Un\'ancora, dicono. Ma nessuno ci crede.', weight: 3 }); } }
   const prev = I.euro; I.euro = clamp(I.euro * (1 + rr(-0.025, 0.025) + (I.budget < 50000 ? 0.012 : -0.003)), 0.7, 2.4); I.euroTrend = I.euro - prev;
@@ -3318,6 +3319,8 @@ function refreshSide() {
   if (checkCache()) extras.push({ ic: '⛏️', t: 'Terra smossa', s: 'qualcuno ha scavato qui', f: 'digCache()' });
   if (checkFinalSite()) extras.push({ ic: '👁️', t: MYS().finalName, s: 'alle tre di notte', f: 'finalRitual()' });
   if (c.shard) extras.push({ ic: '📼', t: 'Qualcosa luccica tra le pietre', s: 'una scheggia di vetro nero', f: 'findShardHere()' });
+  if (c.construction) extras.push({ ic: '🚧', t: 'Cantiere in corso', s: (() => { const s = (G.builds || []).find(x => x.id === c.construction); return s ? `${BUILDABLES[s.kind] ? BUILDABLES[s.kind].n : 'Edificio'} · pronto il giorno ${s.doneDay}` : 'lavori in corso'; })(), f: `toast('I lavori procedono.')` });
+  else if (!v && canBuildHere(p.cx, p.cy)) extras.push({ ic: '🏗️', t: 'Costruisci qui', s: 'ville, palazzine, condomini, capannoni', f: 'openBuildMenu()' });
   if (trueFinaleAvailable() && c.b.some(id => W.buildings[id] && W.buildings[id].type === 'faro')) extras.push({ ic: '🕳️', t: 'La Sorgente, sotto il Faro', s: 'con tutti i frammenti, alle tre di notte', f: 'trueFinale()' });
   const sh = SHOALS.find(s => s.cx === p.cx && s.cy === p.cy); if (sh && c.water) extras.push({ ic: '🐟', t: 'Banco di pesci: ' + ITEMS[sh.fish].n, s: v && VMODELS[v.model].type === 'boat' ? 'cala le reti' : 'serve una barca e una rete', f: 'fishNet()' });
   for (const veh of G.vehicles) if (!veh.lost && veh.cx === p.cx && veh.cy === p.cy && veh.id !== p.veh) extras.push({ ic: VMODELS[veh.model].type === 'boat' ? '⛵' : '🚗', t: VMODELS[veh.model].n, s: `${veh.plate} · ${Math.round(veh.fuel)} L${veh.flat ? ' · forata' : ''}${veh.broken ? ' · in panne' : ''}`, f: `enterVehicle(G.vehicles.find(x=>x.id===${veh.id}))` });
@@ -3787,7 +3790,7 @@ function openPlace(b) {
   if (b.type === 'casa' || b.type === 'villa') return openHome(b);
   const bizId = P.biz;
   if (bizId && G.biz[bizId] && G.biz[bizId].owner === 'player') return openOwnedBiz(b, bizId);
-  const always = ['faro', 'bunker', 'rifugio', 'distilleria', 'depositi', 'cimitero', 'cuomo', 'municipio', 'casino', 'armeria', 'elettronica', 'concessionario', 'arredamento'];
+  const always = ['faro', 'bunker', 'rifugio', 'distilleria', 'depositi', 'cimitero', 'cuomo', 'municipio', 'casino', 'armeria', 'elettronica', 'concessionario', 'arredamento', 'palazzina', 'condominio', 'capannone'];
   if (!isOpen(b) && !always.includes(b.type) && !b.ruin) return showPlace(b, b.n, `Chiuso. ${!W.subst[b.sub].ok ? 'Il quartiere è senza corrente.' : G.pol.curfew !== null && hourOf() >= G.pol.curfew ? 'Il coprifuoco ha svuotato le strade.' : 'Le serrande sono abbassate. Riprova più tardi.'}`, [{ t: '⏳ Aspetta che apra (1 ora)', f: () => { closePanel(); advance(60); } }]);
   const fn = PLACE_FN[b.type]; if (fn) fn(b); else showPlace(b, b.n, 'Non c\'è molto da fare qui.', []);
 }
@@ -3807,7 +3810,8 @@ const PLACE_FN = {
   garage: b => openGarage(b),
   distributore: b => { const v = vehicleHere(); showPlace(b, b.n, `Benzina a ${money(fuelPrice())}/L (oscilla con la crisi, il blocco navale e le accise comunali). Self-service: scendi, impugna la pistola, paga alla cassa.`, [v && VMODELS[v.model].fuel && VMODELS[v.model].type !== 'boat' ? { t: '⛽ Fai il pieno: ' + VMODELS[v.model].n, f: () => { closePanel(); refuel(v); } } : { t: '⛽ Fai il pieno', d: 'Porta qui un veicolo', dis: true, f: () => { } }, { t: '🛒 Shop della stazione', f: () => openShop(b, b.n, 'Snack, olio motore, liquido refrigerante.', ['acqua', 'panino', 'caffe', 'tanica', 'sigarette', 'gettoni']) }, v ? { t: `🧽 Autolavaggio (${money(12)})`, f: () => { if (pay(12)) { v.dirt = 0; advance(15); closePanel(); toast('Spazzoloni rotanti e schiuma rosa. Lucida come uno specchio.'); } } } : null]); },
   elettronica: b => openElettronica(b), concessionario: b => openConcessionario(b), arredamento: b => openMobilificio(b), armeria: b => openArmeria(b), casino: b => openCasino(b),
-  banca: b => openBank(b), posta: b => openPost(b), tipografia: b => openTipografia(b), gazzetta: b => openGazzetta(b), municipio: b => openMunicipio(b), questura: b => openQuestura(b), ambulatorio: b => openAmbulatorio(b), notaio: b => openNotaio(b), chiesa: b => openChiesa(b), impiego: b => openImpiego(b), pensione: b => openPensione(b), dormitorio: b => openDormitorio(b), ristorante: b => openRistorante(b), faraglione: b => openFaraglione(b), tornanti: b => openTornanti(b), marinas: b => openMarinas(b), mercato_pesce: b => openMercato(b), terminal: b => openTerminal(b), capitaneria: b => openCapitaneria(b), faro: b => openFaro(b), bunker: b => openBunker(b), rifugio: b => openRifugio(b), distilleria: b => openDistilleria(b), depositi: b => openDepositi(b), cimitero: b => openCimitero(b), cuomo: b => openCuomo(b)
+  banca: b => openBank(b), posta: b => openPost(b), tipografia: b => openTipografia(b), gazzetta: b => openGazzetta(b), municipio: b => openMunicipio(b), questura: b => openQuestura(b), ambulatorio: b => openAmbulatorio(b), notaio: b => openNotaio(b), chiesa: b => openChiesa(b), impiego: b => openImpiego(b), pensione: b => openPensione(b), dormitorio: b => openDormitorio(b), ristorante: b => openRistorante(b), faraglione: b => openFaraglione(b), tornanti: b => openTornanti(b), marinas: b => openMarinas(b), mercato_pesce: b => openMercato(b), terminal: b => openTerminal(b), capitaneria: b => openCapitaneria(b), faro: b => openFaro(b), bunker: b => openBunker(b), rifugio: b => openRifugio(b), distilleria: b => openDistilleria(b), depositi: b => openDepositi(b), cimitero: b => openCimitero(b), cuomo: b => openCuomo(b),
+  palazzina: b => openRental(b), condominio: b => openRental(b), capannone: b => openCapannone(b)
 };
 
 /* ---------- Attività da comprare e gestire ---------- */
@@ -4833,7 +4837,7 @@ async function connectAndNew() {
   const info = genNPCs(seed); assignCharacters(seed); genPlayers(seed); assignCharacters(seed); G.npcInfo = info; initIsland(info); initBiz(); initWeather(); initHorrorRuntime();
   G.mystery = initMystery(mulberry32(seed + 9)); G.season = meta.seasons;
   for (const s of STOCKS) { const p0 = rr(8, 40); G.stocks[s.id] = { p: p0, h: [p0], own: 0 }; }
-  spawnShoals(); dailyEdition(); try { setupTraffic(); } catch (e) { } try { placeShards(); } catch (e) { }
+  spawnShoals(); dailyEdition(); try { setupTraffic(); } catch (e) { } try { placeShards(); } catch (e) { } try { rematerializeBuilds(); } catch (e) { }
   creationScreen();
 }
 async function connectAndLoad() {
@@ -4843,7 +4847,7 @@ async function connectAndLoad() {
   await buildWorld(data.seed, prog);
   genNPCs(data.seed); assignCharacters(data.seed); genPlayers(data.seed); assignCharacters(data.seed);
   G = data; initHorrorRuntime(); G.social = G.social || { followers: 0, friends: 0 }; G.feed = G.feed || []; G.pls = G.pls || {}; G.appointments = G.appointments || []; G.lore = G.lore || {}; G.companies = G.companies || []; G.supplyOrders = G.supplyOrders || []; G.ownedHomes = G.ownedHomes || []; G.homeData = G.homeData || {};
-  restoreWorldState(); try { setupTraffic(); } catch (e) { } try { placeShards(); } catch (e) { }
+  restoreWorldState(); try { setupTraffic(); } catch (e) { } try { placeShards(); } catch (e) { } try { rematerializeBuilds(); } catch (e) { }
   if (G.dead || !G.player) { creationScreen(); return; }
   startPlay(false);
 }
@@ -5953,6 +5957,108 @@ function deepHorrorFlavor() {
 }
 
 /* =====================================================================
+   COSTRUZIONE FISICA — ville, palazzine, condomini, capannoni (aziende).
+   Il giocatore e gli altri player possono edificare nuovi edifici che
+   compaiono davvero sulla mappa. Le aziende hanno una sede legale.
+   ===================================================================== */
+const BUILDABLES = {
+  villa: { n: 'Villa', ico: '🏡', w: 5, h: 4, cost: 65000, days: 6, type: 'villa', d: 'Villa con giardino: diventa la tua casa, comfort alto.' },
+  palazzina: { n: 'Palazzina', ico: '🏘️', w: 4, h: 4, cost: 42000, days: 5, type: 'palazzina', rent: 420, d: 'Appartamenti da affittare: piccola rendita settimanale.' },
+  condominio: { n: 'Condominio', ico: '🏢', w: 5, h: 5, cost: 95000, days: 8, type: 'condominio', rent: 1150, d: 'Molti appartamenti: grande rendita settimanale.' },
+  capannone: { n: 'Capannone (azienda)', ico: '🏭', w: 6, h: 4, cost: 52000, days: 5, type: 'capannone', d: 'Sede operativa da assegnare come sede legale a una tua impresa.' }
+};
+try { Object.assign(PLACES, {
+  palazzina: { n: 'Palazzina', ico: '🏘️', col: '#e7d9c2', roof: '#9a6b4a', w: 4, h: 4 },
+  condominio: { n: 'Condominio', ico: '🏢', col: '#d9dde2', roof: '#7a7f88', w: 5, h: 5 },
+  capannone: { n: 'Capannone', ico: '🏭', col: '#c7ccc9', roof: '#5f6a66', w: 6, h: 4 }
+}); } catch (e) { }
+function buildFootprint(cx, cy, w, h) {
+  const x0 = cx * CF, y0 = cy * CF;
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+    if (x < 0 || y < 0 || x >= MW || y >= MH) return null; const i = idx(x, y);
+    if (W.B[i] || W.RD[i]) return null; if (W.H[i] < 0.03) return null; if (W.T[i] === T_CLIFF) return null;
+  }
+  let mn = 9, mx = -9; for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) { const hh = W.H[idx(x, y)]; mn = Math.min(mn, hh); mx = Math.max(mx, hh); }
+  if (mx - mn > 0.08) return null;
+  let road = false; for (let dy = -3; dy <= 3 && !road; dy++) for (let dx = -3; dx <= 3; dx++) { const c = cellAt(cx + dx, cy + dy); if (c && c.road) { road = true; break; } }
+  if (!road) return null;
+  return { x: x0, y: y0, w, h };
+}
+function canBuildHere(cx, cy) { const c = cellAt(cx, cy); if (!c || c.water || c.block || c.b.length || c.construction) return false; return Object.values(BUILDABLES).some(B => buildFootprint(cx, cy, B.w, B.h)); }
+function openBuildMenu() {
+  const cx = G.player.cx, cy = G.player.cy;
+  const opts = Object.entries(BUILDABLES).map(([k, B]) => { const fp = buildFootprint(cx, cy, B.w, B.h); const afford = G.bank + G.cash >= B.cost; return { t: `${B.ico} ${B.n} — ${money(B.cost)}`, d: `${B.d} · cantiere ${B.days} giorni · ${B.w}×${B.h}${!fp ? ' · ✗ spazio insufficiente' : !afford ? ' · ✗ soldi insufficienti' : ''}`, dis: !fp || !afford, f: () => startBuild(k, fp) }; });
+  opts.push({ t: 'Annulla', f: closePanel });
+  openPanel('🏗️ Costruisci un edificio', `<p class="desc">Terreno libero vicino a una strada. Scegli cosa edificare: ci vorranno giorni e soldi, poi l'edificio comparirà qui, tuo.</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
+}
+function startBuild(kind, fp) {
+  const B = BUILDABLES[kind]; if (!fp) fp = buildFootprint(G.player.cx, G.player.cy, B.w, B.h); if (!fp) return toast('Qui non si può costruire.', 'warn');
+  if (!pay(B.cost, 'Cantiere ' + B.n, { atCounter: true })) return;
+  G.builds = G.builds || [];
+  const name = kind === 'capannone' ? 'Capannone ' + G.player.last : kind === 'villa' ? 'Villa ' + G.player.last : B.n + ' ' + G.player.last;
+  G.builds.push({ id: 'bd' + G.day + '_' + Math.floor(Math.random() * 9999), kind, x: fp.x, y: fp.y, w: B.w, h: B.h, cx: G.player.cx, cy: G.player.cy, owner: 'player', start: G.day, doneDay: G.day + B.days, done: false, name, pot: 0 });
+  const c = cellAt(G.player.cx, G.player.cy); if (c) c.construction = G.builds[G.builds.length - 1].id;
+  closePanel(); toast(`🏗️ Cantiere aperto: ${B.n}. Pronto tra ${B.days} giorni.`, 'money');
+  try { addNote(`Cantiere aperto (${B.n}). Pronto il giorno ${G.day + B.days}.`); } catch (e) { }
+  refreshSide();
+}
+function materializeBuild(spec) {
+  const B = BUILDABLES[spec.kind]; if (!B || !W.addBuilding) return null;
+  const b = W.addBuilding(B.type, spec.x, spec.y, spec.w, spec.h, { n: spec.name, villa: (B.type === 'villa'), built: true, kind: spec.kind, builtOwner: spec.owner });
+  b.door = { x: b.x + (b.w >> 1), y: Math.min(MH - 1, b.y + b.h), s: 's' }; b.dx = b.door.x * TS + TS / 2; b.dy = b.door.y * TS + TS / 2;
+  const c = cellAt(b.door.x / CF | 0, b.door.y / CF | 0);
+  if (c) { if (!c.b.includes(b.id)) c.b.push(b.id); b.cell = [c.cx, c.cy]; if (c.water) { c.water = false; c.road = c.road || RD_DOCK; } if (c.block) c.block = false; b.zone = c.zone || 'centro'; }
+  else b.cell = [spec.cx, spec.cy];
+  b.sub = 0; try { b.addr = W.Z(b.zone) ? W.Z(b.zone).n : 'Vetrata'; } catch (e) { b.addr = 'Vetrata'; }
+  spec.bid = b.id; spec.done = true;
+  const cc = cellAt(spec.cx, spec.cy); if (cc && cc.construction === spec.id) cc.construction = null;
+  if (spec.owner === 'player' && B.type === 'villa' && !(G.home && G.home.own && G.home.solar)) { try { setHome(b.id); } catch (e) { } }
+  try { if (STATIC) drawBuildingB(STATIC.getContext('2d'), b); } catch (e) { }
+  fogDirty = true; return b;
+}
+function rematerializeBuilds() { try { G.builds = G.builds || []; for (const s of G.builds) { if (s.done) materializeBuild(s); else { const cc = cellAt(s.cx, s.cy); if (cc) cc.construction = s.id; } } } catch (e) { } }
+function buildsDaily() {
+  G.builds = G.builds || [];
+  for (const s of G.builds) {
+    if (!s.done && G.day >= s.doneDay) { const b = materializeBuild(s); if (b && s.owner === 'player') { toast(`🏗️ «${esc(s.name)}» è pronto!`, 'money'); try { addNews({ tag: 'economia', head: `${G.player.first} ${G.player.last} inaugura ${s.name}`, weight: 1, about: 'player' }); } catch (e) { } } }
+    else if (s.done && s.owner === 'player') { const B = BUILDABLES[s.kind]; if (B && B.rent) s.pot = (s.pot || 0) + Math.round(B.rent / 7); }
+  }
+  try { npcMaybeBuild(); } catch (e) { }
+}
+function npcMaybeBuild() {
+  if (!chance(0.12)) return;
+  const kind = pick(['villa', 'palazzina', 'palazzina', 'condominio']); const B = BUILDABLES[kind];
+  for (let tries = 0; tries < 30; tries++) {
+    const cx = ri(2, GW - 3), cy = ri(2, GH - 3), c = cellAt(cx, cy);
+    if (!c || c.water || c.block || c.b.length || c.construction) continue;
+    const fp = buildFootprint(cx, cy, B.w, B.h); if (!fp) continue;
+    const nm = pick(['Residenza', 'Villa', 'Palazzo', 'Stabile', 'Residence']) + ' ' + pick(SURNAMES);
+    const s = { id: 'bn' + G.day + '_' + Math.floor(Math.random() * 9999), kind, x: fp.x, y: fp.y, w: B.w, h: B.h, cx, cy, owner: 'npc', done: false, doneDay: G.day, name: nm, pot: 0 };
+    G.builds.push(s); materializeBuild(s);
+    if (chance(0.4)) try { addNews({ tag: 'economia', head: `Nuovo edificio a Vetrata: sorge «${nm}»`, weight: 0.5 }); } catch (e) { }
+    break;
+  }
+}
+function buildSpecFor(b) { return (G.builds || []).find(s => s.bid === b.id); }
+function openRental(b) {
+  const s = buildSpecFor(b), pot = s ? (s.pot || 0) : 0, mine = s && s.owner === 'player';
+  showPlace(b, b.n, mine ? `Un tuo stabile con appartamenti in affitto. Affitti maturati: <b>${money(pot)}</b>.` : `Uno stabile di ${esc((s && s.name) || 'qualcuno')}. Non è tuo.`, [
+    mine && pot > 0 ? { t: `💰 Incassa gli affitti (${money(pot)})`, f: () => { earn(pot, 'Affitti ' + b.n, 'bank'); if (s) s.pot = 0; closePanel(); } } : null,
+    mine ? { t: 'ℹ️ Rendita', d: `~${money(BUILDABLES[b.kind].rent)}/settimana`, dis: true, f: () => { } } : { t: '🔔 Suona a un campanello', f: () => { say0(b); } }
+  ].filter(Boolean));
+}
+function say0(b) { toast(pick(['Nessuno risponde al citofono.', 'Una signora si affaccia: «Non compro niente, grazie.»', 'Dentro, una radio accesa. Poi silenzio.'])); }
+function openCapannone(b) {
+  const s = buildSpecFor(b), mine = s && s.owner === 'player';
+  if (!mine) return showPlace(b, b.n, 'Un capannone chiuso. Non è tuo.', []);
+  const comps = (G.companies || []).filter(c => c.owner === 'player');
+  const opts = comps.map(c => ({ t: `🏭 Sede di «${esc(c.name)}»`, d: c.sedeBid === b.id ? 'è già la sede qui' : 'diventa sede legale e operativa (+reputazione, −costi)', dis: c.sedeBid === b.id, f: () => { c.sedeBid = b.id; c.sedeAddr = b.n + ' — ' + (b.addr || 'Vetrata'); c.rep = clamp((c.rep || 20) + 5, 0, 100); closePanel(); toast(`Sede legale di «${c.name}» spostata qui.`, 'money'); } }));
+  if (!comps.length) opts.push({ t: 'Non hai imprese', d: 'Fondane una dall\'app Impresa', dis: true, f: () => { } });
+  showPlace(b, b.n, 'Il tuo capannone. Assegnalo come sede a un\'impresa: presenza fisica, più reputazione e meno costi fissi.', opts);
+}
+function defaultSedeAddr() { try { return pick(STREETS) + ', ' + (1 + ri(0, 60)) + ' — Vetrata'; } catch (e) { return 'Vetrata'; } }
+
+/* =====================================================================
    VETRAGRAM & CHAT — il social del server e i messaggi diretti
    ===================================================================== */
 function openFeed() {
@@ -6246,7 +6352,7 @@ function foundCompanyWizard() {
     [{ t: `✅ Fonda (${money(totalCost)})`, c: 'pri', dis: G.bank + G.cash < totalCost, f: () => {
       const name = ($('#cName').value.trim() || (S.ico + ' ' + S.n + ' ' + G.player.last)).slice(0, 34);
       if (!pay(totalCost, 'Costituzione impresa', { atCounter: true })) return;
-      const c = { id: 'co' + G.day + '_' + Math.floor(Math.random() * 9999), owner: 'player', name, type: d.type, form: d.form, founded: G.day, cash: d.capital, rep: 20, stock: S.stock ? 40 : 100, staff: [], website: 0, sponsored: 0, ledger: [{ day: G.day, type: 'capitale', amount: d.capital, desc: 'Capitale versato' }], taxAccrued: 0, monthRev: 0, monthCost: 0, lossStreak: 0, supplier: 'locale', priceMul: 1, loans: 0 };
+      const c = { id: 'co' + G.day + '_' + Math.floor(Math.random() * 9999), owner: 'player', name, type: d.type, form: d.form, founded: G.day, cash: d.capital, rep: 20, stock: S.stock ? 40 : 100, staff: [], website: 0, sponsored: 0, ledger: [{ day: G.day, type: 'capitale', amount: d.capital, desc: 'Capitale versato' }], taxAccrued: 0, monthRev: 0, monthCost: 0, lossStreak: 0, supplier: 'locale', priceMul: 1, loans: 0, sedeBid: null, sedeAddr: defaultSedeAddr() };
       G.companies = G.companies || []; G.companies.push(c); foundDraft = null;
       G.stats.companies = (G.stats.companies || 0) + 1;
       addNews({ tag: 'economia', head: `Nasce «${name}»: ${G.player.first} ${G.player.last} apre ${S.n.toLowerCase()}`, body: `Forma ${F.sigla}, capitale ${money(d.capital)}.`, weight: 1 });
@@ -6285,7 +6391,8 @@ function openCompany(id) {
       <div><div class="small muted">Reputazione</div><b style="font-size:20px">${Math.round(c.rep)}/100</b></div>
       <div><div class="small muted">Stato</div><b>${health}</b></div>
     </div>
-    <div class="small muted" style="margin-top:6px">Valore stimato: ${money(companyValue(c))}${c.lossStreak > 0 ? ` · <span class="badc">${c.lossStreak} settimane in perdita</span>` : ''}</div></div>
+    <div class="small muted" style="margin-top:6px">🏛️ Sede legale: ${esc(c.sedeBid != null && W.buildings[c.sedeBid] ? W.buildings[c.sedeBid].n + ' (sede operativa tua)' : (c.sedeAddr || '—'))}</div>
+    <div class="small muted" style="margin-top:2px">Valore stimato: ${money(companyValue(c))}${c.lossStreak > 0 ? ` · <span class="badc">${c.lossStreak} settimane in perdita</span>` : ''}</div></div>
     ${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
 }
 function ledger(c, type, amount, desc) { c.ledger.unshift({ day: G.day, t: hhmm(), type, amount: Math.round(amount), desc }); if (c.ledger.length > 60) c.ledger.pop(); }
