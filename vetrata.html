@@ -1933,6 +1933,8 @@ function npcDesire(n) {
   if (sleeping) return { b: n.home, act: 'sleep' };
   // coprifuoco: i cittadini rispettosi restano a casa
   if (G.pol.curfew !== null && (h >= G.pol.curfew || h < 5) && n.ideo.ordine > -0.3 && !n.faction) return { b: n.home };
+  // la Brigata la sera staziona al suo quartier generale: il Bar I Tornanti
+  if (n.faction === 'brigata' && (h >= 19 || h < 3) && hash2(n.id, G.day, 42) < 0.82) { const tb = W.buildings.find(x => x.type === 'tornanti'); if (tb) return { b: tb.id, act: 'leisure' }; }
   const wx = WEATHER[G.weather.cur];
   const k = Math.floor(hash2(n.id, G.day * 24 + Math.floor(h / 3), 9) * (n.hangs.length + 2));
   if (k >= n.hangs.length) return { b: n.home };
@@ -3873,11 +3875,35 @@ function openGarage(b) {
     v ? { t: `🔌 Diagnosi elettronica OBD (${money(40)})`, f: () => { if (pay(40, 'Diagnosi')) { closePanel(); openPanel('🔌 OBD-II', `<div class="card" style="font-family:var(--mono);font-size:18px">VEICOLO ${esc(v.plate)}<br>KM: ${Math.round((v.km || 0) * 0.4 + 18000)}<br>TEMP MAX REG.: ${Math.round(Math.max(v.temp, 95))}°C<br>FRENI: ${v.brake > 0.5 ? 'USURATI' : 'OK'}<br>GOMME: ${Math.round(v.tire)}%<br>ERRORI: ${v.hp < M.hp * 0.6 ? 'P0217 surriscaldamento' : 'nessuno'}</div>`, [{ t: 'OK', c: 'pri', f: closePanel }]); } } } : null,
     v && !v.tracker ? { t: `📍 Antifurto GPS satellitare (${money(350)})`, d: 'Vedi sempre dov\'è il tuo veicolo, ti avvisa se lo toccano.', f: () => { if (pay(350, 'GPS tracker', { atCounter: true })) { v.tracker = true; closePanel(); toast('Antifurto installato.'); } } } : null,
     v && v.km > 300 ? { t: `🔩 Ricambi originali dalla terraferma (${money(480)})`, d: 'Arrivano in 2 giorni: +20% salute massima al motore.', f: () => { if (pay(480, 'Ricambi')) { G.deliveries.push({ id: 'attrezzi', at: G.day + 2, where: 'posta' }); closePanel(); toast('Ordinati da Partenope. Te li montano quando arrivano: ritira il pacco alla Posta.'); } } } : null,
-    { t: '🚗 Veicoli usati in vendita', f: () => { closePanel(); const opts = forSale.map(([id, c]) => ({ t: `${VMODELS[id].n} — ${money(VMODELS[id].price * c)}`, d: `max ${Math.round(VMODELS[id].max * 0.45)} km/h · serbatoio ${VMODELS[id].fuel} L${VMODELS[id].offroad ? ' · 4x4: va anche fuori strada' : ''}`, f: () => buyVehicle(id, VMODELS[id].price * c, b) })); openPanel('🚗 Usato garantito (più o meno)', optList(opts), [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts); } },
+    { t: '🚗 Veicoli usati in vendita', d: 'Prezzi bassi: hanno chilometri e acciacchi', f: () => { closePanel(); openUsedLot(b, forSale); } },
     v && G.vehicles.length ? { t: `💰 Vendi questo veicolo (${money(VMODELS[v.model].price * 0.45)})`, f: () => { earn(VMODELS[v.model].price * 0.45, 'Vendita veicolo', 'bank'); G.vehicles.splice(G.vehicles.indexOf(v), 1); if (G.player.veh === v.id) G.player.veh = null; removeKeys(v.id); closePanel(); } } : null,
     jobOpt('meccanico'), workOpt('meccanico'), bizBuyOpt('garage')]);
 }
 function removeKeys(vid) { G.inv = G.inv.filter(it => !(it.id === 'chiave' && it.d && it.d.vid === vid)); }
+function openUsedLot(b, forSale) {
+  // lotto di usati con condizioni casuali ma stabili nel giorno: piu sono messi male, meno costano
+  const lot = forSale.map(([id], i) => {
+    const M = VMODELS[id];
+    const cond = 0.35 + hash2(i + 3, G.day, 88) * 0.45;       // carrozzeria 35%–80%
+    const tire = Math.round(25 + hash2(i + 5, G.day, 89) * 55); // gomme 25%–80%
+    const broken = hash2(i + 7, G.day, 90) < 0.14;
+    const flat = hash2(i + 9, G.day, 91) < 0.16;
+    const km = Math.round(300 + hash2(i + 11, G.day, 92) * 1600);
+    const price = Math.round(M.price * (0.28 + cond * 0.42) * (broken ? 0.75 : 1)); // sconto forte, ancora di piu se rotto
+    return { id, M, cond, tire, broken, flat, km, price };
+  });
+  const opts = lot.map(u => ({ t: `${u.M.n} — ${money(u.price)}`, d: `carrozzeria ${Math.round(u.cond * 100)}% · gomme ${u.tire}%${u.broken ? ' · ⚠ motore da sistemare' : ''}${u.flat ? ' · 🛞 a terra' : ''} · ~${(u.km * 40 + 18000).toLocaleString('it-IT')} km`, dis: G.bank + G.cash < u.price, f: () => buyUsedVehicle(u, b) }));
+  opts.push({ t: 'Chiudi', c: 'pri', f: closePanel });
+  openPanel('🚗 Usato (prezzi bassi, acciacchi inclusi)', '<p class="desc">Il meccanico ci mette la faccia, non la garanzia. Costano poco perché hanno vissuto: portale a sistemare prima di fidarti.</p>' + optList(opts), [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
+}
+function buyUsedVehicle(u, b) {
+  if (!pay(u.price, 'Usato ' + u.M.n, { atCounter: true })) return;
+  let cx = b.cell[0], cy = b.cell[1]; if (u.M.type === 'boat') { const w = boatSpot(cx, cy); cx = w[0]; cy = w[1]; }
+  const v = addVehicle(u.id, cx, cy, { fuel: 0.45 });
+  v.hp = Math.max(8, Math.round(u.M.hp * u.cond)); v.tire = u.tire; v.flat = u.flat; v.broken = u.broken; v.km = u.km; v.dirt = 55;
+  addInv('chiave', 1, { vid: v.id, title: 'Chiave ' + u.M.n }, true);
+  closePanel(); toast(`${u.M.n} usata è tua. Targa ${v.plate}. ${u.broken ? 'Il motore va sistemato.' : 'Falle un tagliando, mi raccomando.'}`, 'money'); refreshSide();
+}
 function buyVehicle(id, price, b) {
   if (!pay(price, 'Acquisto ' + VMODELS[id].n, { atCounter: true })) return;
   let cx = b.cell[0], cy = b.cell[1];
