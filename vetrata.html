@@ -388,7 +388,7 @@ const ITEMS = {
   sfogliatella: { n: 'Sfogliatella', ico: '🥐', w: 0.2, price: 3, eat: { fame: 20, stress: -5 }, perish: 36 },
   frisella: { n: 'Frisella al pomodoro', ico: '🍅', w: 0.2, price: 4, eat: { fame: 25, sete: -4 }, perish: 60 },
   acqua: { n: "Bottiglia d'acqua", ico: '💧', w: 0.5, price: 1.5, eat: { sete: 45 } },
-  caffe: { n: 'Caffè da asporto', ico: '☕', w: 0.1, price: 1.2, eat: { energia: 16, sete: -3, stress: 2 } },
+  caffe: { n: 'Caffè da asporto', ico: '☕', w: 0.1, price: 1.2, eat: { energia: 16, sete: -3, stress: -3 } },
   granita: { n: 'Granita al limone', ico: '🍧', w: 0.3, price: 3, eat: { sete: 30, temp: -0.5, stress: -3 }, perish: 3 },
   birra: { n: 'Birra Faro', ico: '🍺', w: 0.4, price: 3, eat: { sete: 18, alcol: 16, stress: -8 } },
   limoncello: { n: 'Limoncello', ico: '🍋', w: 0.3, price: 9, eat: { alcol: 28, stress: -12, temp: 0.2 } },
@@ -1675,6 +1675,10 @@ function drawBoard(t, dt) {
   }
   // veicoli del giocatore
   for (const v of G.vehicles) { if (v.id === G.player.veh || v.lost) continue; const [a, b] = toScreen(v.cx * CF + 2.8, v.cy * CF + 2.8); g.font = (fs * 0.75) + 'px serif'; g.fillText(VMODELS[v.model].type === 'boat' ? '⛵' : VMODELS[v.model].type === 'bici' ? '🚲' : VMODELS[v.model].type === 'moto' ? '🛵' : '🚗', a, b); }
+  // traffico ambientale
+  if (G.traffic) for (const car of G.traffic) { const c = CELLS[cid(car.cx, car.cy)]; if (!c || !c.explored) continue; const [a2, b2] = toScreen(car.cx * CF + 2, car.cy * CF + 2); g.fillStyle = 'rgba(0,0,0,.3)'; g.fillRect(a2 - 4, b2 + 2, 9, 3); g.fillStyle = car.col; g.fillRect(a2 - 4, b2 - 3, 9, 6); g.fillStyle = 'rgba(180,210,255,.6)'; g.fillRect(a2 + (car.dir === 0 ? 3 : car.dir === 2 ? -4 : 0), b2 - 2, 1.5, 4); }
+  // semafori e strisce
+  if (view.zoom > 0.7) for (const c of CELLS) { if (!c.explored) continue; if (c.light === undefined && !c.crossing && !c.parking) continue; if (Math.abs(c.cx * CF - view.x) > 60 || Math.abs(c.cy * CF - view.y) > 50) continue; const [a2, b2] = toScreen(c.cx * CF + 2, c.cy * CF + 2); if (c.light) { const ph = lightPhase(c); g.font = (fs * 0.6) + 'px serif'; g.fillText(ph === 'rosso' ? '🔴' : ph === 'giallo' ? '🟡' : '🟢', a2 - cs * 0.3, b2 - cs * 0.3); } else if (c.parking) { g.font = (fs * 0.7) + 'px serif'; g.fillText('🅿️', a2, b2); } else if (c.crossing) { g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 1; for (let i = -2; i <= 2; i++) { g.beginPath(); g.moveTo(a2 + i * 3, b2 - 4); g.lineTo(a2 + i * 3, b2 + 4); g.stroke(); } } }
   // persone all'aperto
   const outdoor = npcOutdoorCells();
   for (const [k, list] of outdoor) {
@@ -2091,15 +2095,18 @@ function needsTick() {
   if (inWater) { p.stamina = Math.max(0, p.stamina - 0.6 * (hasTrait('nuotatore') ? 0.6 : 1)); if (p.stamina <= 0) hurt(1.2, 'annegamento'); }
   else p.stamina = Math.min(maxStamina(), p.stamina + 0.6 * (p.energia < 15 ? 0.5 : 1));
   if (c && ['parco', 'boschi'].includes(c.zone) && curMonth() >= 4 && curMonth() <= 9 && !(p.buffs.repellente > G.min) && !indoors) { p.stress = clamp(p.stress + 0.04, 0, 100); if (chance(0.004)) log('🦟 Le zanzare ti divorano. Un repellente servirebbe.', 'warn'); }
-  let ds = -0.02;
-  if (p.fame < 20 || p.sete < 20) ds += 0.03; if (p.health < 40) ds += 0.05; if (G.wanted.level) ds += 0.04 * G.wanted.level;
-  if (isNight() && c && ['boschi', 'parco', 'cimitero'].includes(c.zone) && !indoors) ds += 0.05;
-  if (hasTrait('fumatore') && G.min - (p.lastSmoke || 0) > 360) { ds += 0.04; if (chance(0.003)) log('🚬 Ti servirebbe una sigaretta.', 'warn'); }
-  if (hasTrait('bevitore') && G.min - (p.lastDrink || 0) > 600) ds += 0.03;
-  if (hasTrait('claustrofobico') && p.inside && ['bunker', 'distilleria'].includes(p.inside)) ds += 0.3;
+  // stress: con i bisogni a posto scende sempre e in fretta; sale solo per cause precise
+  const calm = p.fame > 25 && p.sete > 25 && p.health > 40 && !G.wanted.level;
+  let ds = calm ? -0.22 : -0.08;                       // a bisogni ok: circa −13/ora
+  if (indoors || (c && c.b.some(id => W.buildings[id] && W.buildings[id].playerHome))) ds -= 0.06;
+  if (G.home && G.home.own) { try { ds -= homeComfort() / 400; } catch (e) { } }
+  if (p.fame < 12 || p.sete < 12) ds += 0.04; if (p.health < 30) ds += 0.05; if (G.wanted.level) ds += 0.03 * G.wanted.level;
+  if (isNight() && c && ['boschi', 'parco', 'cimitero'].includes(c.zone) && !indoors) ds += 0.04;
+  if (hasTrait('fumatore') && G.min - (p.lastSmoke || 0) > 360) { ds += 0.03; if (chance(0.003)) log('🚬 Ti servirebbe una sigaretta.', 'warn'); }
+  if (hasTrait('bevitore') && G.min - (p.lastDrink || 0) > 600) ds += 0.02;
+  if (hasTrait('claustrofobico') && p.inside && ['bunker', 'distilleria'].includes(p.inside)) ds += 0.25;
   if (p.trauma > G.day) ds += 0.02;
-  ds *= hasTrait('ansioso') ? 1.4 : hasTrait('freddo') ? 0.6 : 1;
-  if (ds < 0 && p.stress < 12) ds = 0;
+  if (ds > 0) ds *= hasTrait('ansioso') ? 1.3 : hasTrait('freddo') ? 0.5 : 1; // i tratti pesano solo quando lo stress SALE
   p.stress = clamp(p.stress + ds, 0, 100);
   if (p.fame > 40 && p.sete > 40 && p.energia > 20 && p.bleed <= 0 && p.health < 100 && p.temp > 35.5) p.health = Math.min(100, p.health + 0.025);
   if (p.bleed > 0) hurt(p.bleed * 0.15, 'un\'emorragia');
@@ -2339,6 +2346,7 @@ function islandDaily() {
   // posta in casella
   if (chance(0.35)) G.mailbox.push(pick([{ from: 'ENEL Vetrata', text: `Bolletta luce: ${money(28 + G.player.homeLevel * 12)}.`, bill: 28 + G.player.homeLevel * 12 }, { from: 'Comune di Vetrata', text: 'Censimento della popolazione: la invitiamo a registrare la residenza in Municipio.' }, { from: 'Anonimo', text: 'Una cartolina senza firma con la foto del Faro. Sul retro: «Ore 3».' }, { from: 'Parrocchia', text: 'Raccolta di vestiti per gli sfollati di Partenope.' }, { from: 'Banca Insulare', text: 'ATTENZIONE: nessun operatore le chiederà mai i codici via SMS.' }]));
   spawnShoals(); checkDestiny(); bountiesDaily(); stocksDaily(); try { fuelDaily(); hospDaily(); } catch (e) { }
+  try { parkingDaily(); } catch (e) { }
   if (G.grow && G.grow.plots) for (const pl of G.grow.plots) { if (!pl.dead && G.day - (pl.watered || pl.day) > 3) pl.dead = true; }
   try { ludoDaily(); const Ccas = casinoState(); if (dayOfWeek() === 5 && Ccas.tourneyDay !== G.day) { Ccas.tourneyDay = G.day; } Ccas.jackpot += ri(200, 800); } catch (e) { }
 }
@@ -2448,7 +2456,7 @@ function advance(minutes, opts = {}) {
     if (G.dead || G.player.down) break;
   }
   invalidateWhere();
-  try { plTick(minutes); appointmentsTick(); } catch (e) { }
+  try { plTick(minutes); appointmentsTick(); trafficTick(minutes); } catch (e) { }
   if (!opts.noUI) refreshSide();
 }
 function hourlyTick(opts) {
@@ -2510,6 +2518,7 @@ function doStep(to, cost, mode) {
   reveal(p.cx, p.cy, revealRadius());
   advance(cost);
   if (G.dead || G.player.down) return;
+  if (v && !panelOpen()) { try { trafficOnDrive(to); } catch (e) { } if (G.dead || G.player.down || panelOpen()) return; }
   arriveCell(to);
 }
 function vehicleStep(v, from, to) {
@@ -2561,7 +2570,7 @@ function exitVehicle() {
     if (!land) return toast('Nessun approdo qui vicino. Avvicinati alla costa o a un molo.', 'warn');
     p.veh = null; p.cx = land.cx; p.cy = land.cy; reveal(p.cx, p.cy, 3); AU.sfx('splash'); toast('Sbarchi. La barca resta ormeggiata qui accanto.'); refreshSide(); return;
   }
-  p.veh = null; AU.sfx('door'); toast('Scendi. Chiudi a chiave.'); refreshSide();
+  p.veh = null; AU.sfx('door'); toast('Scendi. Chiudi a chiave.'); try { parkingCheck(); } catch (e) { } refreshSide();
 }
 
 /* --- arrivo in una casella --- */
@@ -3276,6 +3285,9 @@ function refreshSide() {
   if (c.subst !== undefined) { const s = W.subst[c.subst]; extras.push({ ic: '⚡', t: s.n, s: s.ok ? 'in funzione' : 'guasta — i tecnici sono al lavoro', f: `inspectSubst(${c.subst})` }); }
   if (c.tower !== undefined) { const t = W.towers[c.tower]; extras.push({ ic: '📡', t: t.n, s: t.ok ? 'trasmette' : 'fuori uso', f: `toast('${t.ok ? 'Il traliccio ronza nel vento.' : 'Cavi tranciati dal temporale. Niente segnale qui intorno.'}')` }); }
   if (c.board) extras.push({ ic: '📌', t: 'Bacheca della Piazzetta', s: `${G.bounties.length} annunci`, f: 'openBounties()' });
+  if (c.light) { const ph = lightPhase(c); extras.push({ ic: ph === 'rosso' ? '🔴' : ph === 'giallo' ? '🟡' : '🟢', t: 'Semaforo', s: ph === 'rosso' ? 'è rosso: fermati' : ph === 'giallo' ? 'giallo' : 'verde: puoi passare', f: `toast('Semaforo ${ph}.')` }); }
+  if (c.crossing && !c.light) extras.push({ ic: '🚸', t: 'Strisce pedonali', s: 'dai la precedenza, se guidi', f: `toast('Attraversamento pedonale.')` });
+  if (c.parking) extras.push({ ic: '🅿️', t: 'Parcheggio', s: 'lascia qui l\'auto, al sicuro', f: `toast('Area di parcheggio: sosta consentita.')` });
   if (c.vending) extras.push({ ic: '🥤', t: 'Distributore automatico', s: 'acqua, snack, caffè — 24h', f: 'useVending()' });
   if (c.bin) extras.push({ ic: '🗑️', t: 'Cassonetto', s: 'frugare costa dignità', f: 'searchBin()' });
   if (checkCache()) extras.push({ ic: '⛏️', t: 'Terra smossa', s: 'qualcuno ha scavato qui', f: 'digCache()' });
@@ -3559,6 +3571,7 @@ function openInventory() {
       if (it.id === 'portatile') acts.push(['Accendi il portatile', () => { closePanel(); usePC(true); }]);
       if (it.id === 'rig_analisi') acts.push(['Usa', () => { closePanel(); openAnalisi(); }]);
       if (it.id === 'fotocamera') acts.push(['Riavvolgi il rullino', () => { rewindFilm(); render(); }]);
+      if (it.id === 'guida_tech') acts.push(['Leggi la guida', () => openTechGuide()]);
       if (it.id === 'gazzetta') acts.push(['Leggi', () => openPanel('📰 Gazzetta', renderEdition(), [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true })]);
       if (it.id === 'foto') acts.push(['Guarda', () => openPanel('🖼️ Fotografia', `<img src="${it.d.img}" style="width:100%;border-radius:6px"><p class="small muted">${esc(it.d.zone)} · ${dateDay(it.d.day)} ${it.d.t}${it.d.anomaly ? ' · <span class="weirdc">c\'è qualcosa che non torna</span>' : ''}${it.d.evidence && it.d.evidence.length ? ' · <span class="warnc">potrebbe essere una prova</span>' : ''}</p>`, [{ t: 'Chiudi', c: 'pri', f: () => { closePanel(); openInventory(); } }])]);
       if (it.id === 'lettera') acts.push(['Leggi', () => openPanel('✉️ ' + esc(it.d.title || 'Lettera'), `<div class="quote">${esc(it.d.text || '')}</div>`, [{ t: 'Chiudi', c: 'pri', f: () => { closePanel(); openInventory(); } }])]);
@@ -4762,7 +4775,7 @@ async function connectAndNew() {
   const info = genNPCs(seed); assignCharacters(seed); genPlayers(seed); assignCharacters(seed); G.npcInfo = info; initIsland(info); initBiz(); initWeather(); initHorrorRuntime();
   G.mystery = initMystery(mulberry32(seed + 9)); G.season = meta.seasons;
   for (const s of STOCKS) { const p0 = rr(8, 40); G.stocks[s.id] = { p: p0, h: [p0], own: 0 }; }
-  spawnShoals(); dailyEdition();
+  spawnShoals(); dailyEdition(); try { setupTraffic(); } catch (e) { }
   creationScreen();
 }
 async function connectAndLoad() {
@@ -4772,7 +4785,7 @@ async function connectAndLoad() {
   await buildWorld(data.seed, prog);
   genNPCs(data.seed); assignCharacters(data.seed); genPlayers(data.seed); assignCharacters(data.seed);
   G = data; initHorrorRuntime(); G.social = G.social || { followers: 0, friends: 0 }; G.feed = G.feed || []; G.pls = G.pls || {}; G.appointments = G.appointments || []; G.lore = G.lore || {}; G.companies = G.companies || []; G.supplyOrders = G.supplyOrders || []; G.ownedHomes = G.ownedHomes || []; G.homeData = G.homeData || {};
-  restoreWorldState();
+  restoreWorldState(); try { setupTraffic(); } catch (e) { }
   if (G.dead || !G.player) { creationScreen(); return; }
   startPlay(false);
 }
@@ -5508,7 +5521,7 @@ const CRAFTS = [
   { out: 'walkie', n: 'Assembla un walkie-talkie', need: { componenti: 1 }, sk: 8, min: 20, train: 'meccanica', d: "Comunicazioni brevi, fuori dalla rete." }
 ];
 function openElettronica(b) {
-  const stock = ['cpu', 'ram', 'gpu', 'ssd', 'mobo', 'alim', 'case_pc', 'componenti', 'scheda_radio', 'antenna_dir', 'modulo_cripto', 'saldatore', 'portatile', 'chiavetta', 'telefono', 'starlink', 'walkie', 'rullino', 'torcia', 'deck', 'sdr_flipper', 'bug_detector', 'valigetta'];
+  const stock = ['cpu', 'ram', 'gpu', 'ssd', 'mobo', 'alim', 'case_pc', 'componenti', 'scheda_radio', 'antenna_dir', 'modulo_cripto', 'saldatore', 'portatile', 'chiavetta', 'telefono', 'starlink', 'walkie', 'rullino', 'torcia', 'deck', 'sdr_flipper', 'bug_detector', 'valigetta', 'guida_tech'];
   openShop(b, b.n, 'ElettroVetrata: scaffali di schede, cavi aggrovigliati, un odore di plastica calda. «I componenti li metti insieme tu al banco, così impari» dice il titolare, Scotto junior.', stock, { sell: it => ITEMS[it.id].comp, sellPrice: it => ITEMS[it.id].price * 0.5, biz: null, onExit: () => { } });
 }
 function openBanco(title) {
@@ -7090,10 +7103,145 @@ function smartChatReply(n, lastText) {
   return null;
 }
 
+/* ===== VETRATA v13: viabilità, traffico, incidenti, parcheggi, guida tech ===== */
+/* =====================================================================
+   VIABILITÀ — semafori, strisce pedonali, parcheggi, traffico di NPC,
+   incidenti e multe. Integrato nel sistema di guida a caselle.
+   ===================================================================== */
+// fase semaforica globale: ciclo di ~40s di gioco (verde/giallo/rosso)
+function lightPhase(cell) {
+  const base = Math.floor(G.min * 3) + ((cell ? (cell.cx * 3 + cell.cy * 7) : 0) % 3) * 13;
+  const t = base % 40;
+  return t < 22 ? 'verde' : t < 27 ? 'giallo' : 'rosso';
+}
+function setupTraffic() {
+  // semafori e strisce agli incroci del Centro e della Marina
+  const RD = { ASPH: 1, COBBLE: 3, PLAZA: 5 };
+  const isRoad = c => c && c.road && c.road !== 4;
+  let lights = 0, cross = 0;
+  for (const c of CELLS) {
+    if (c.light || c.crossing || c.parking) continue;
+    if (!isRoad(c) || !['centro', 'marina', 'anacapri'].includes(c.zone)) continue;
+    const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([dx, dy]) => cellAt(c.cx + dx, c.cy + dy));
+    const roads = nb.filter(isRoad).length;
+    if (roads >= 3 && lights < 10 && W.r() < 0.5) { c.light = true; // incrocio: semaforo + strisce attorno
+      for (const n of nb) if (isRoad(n) && !n.light && W.r() < 0.6) n.crossing = true;
+      lights++;
+    } else if (roads === 2 && cross < 24 && W.r() < 0.06) { c.crossing = true; cross++; }
+  }
+  // parcheggi: un paio di aree vicino a centro e marina
+  G.parkings = [];
+  for (const zn of ['centro', 'marina']) {
+    const z = W.Z(zn); const near = CELLS.filter(c => c.road && c.road !== 4 && c.zone === zn && !c.light && !c.b.length).sort((a, b) => Math.hypot(a.cx - z.x / CF, a.cy - z.y / CF) - Math.hypot(b.cx - z.x / CF, b.cy - z.y / CF));
+    if (near[0]) { near[0].parking = true; G.parkings.push([near[0].cx, near[0].cy]); }
+  }
+  // traffico ambientale: auto fittizie che girano sulle strade
+  G.traffic = [];
+  const roadCells = CELLS.filter(c => (c.road === RD.ASPH || c.road === RD.COBBLE) && ['centro', 'marina', 'anacapri', 'tornanti'].includes(c.zone));
+  for (let k = 0; k < Math.min(18, roadCells.length >> 3); k++) { const c = pick(roadCells); G.traffic.push({ cx: c.cx, cy: c.cy, col: pick(['#b33', '#357', '#573', '#eb3', '#ddd', '#444', '#7a4']), dir: ri(0, 3), acc: 0 }); }
+}
+function trafficTick(minutes) {
+  if (!G.traffic) return;
+  const step = Math.min(minutes, 60);
+  for (const car of G.traffic) {
+    car.acc += step * 1.3;
+    while (car.acc >= 1) { car.acc -= 1;
+      const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+      let moved = false;
+      for (let tryk = 0; tryk < 4; tryk++) {
+        const d = dirs[(car.dir + (tryk === 0 ? 0 : ri(0, 3))) % 4];
+        const n = cellAt(car.cx + d[0], car.cy + d[1]);
+        if (n && n.road && n.road !== 4 && !n.block) { // rispetta il rosso al semaforo
+          if (n.light && lightPhase(n) === 'rosso') { moved = true; break; }
+          car.cx = n.cx; car.cy = n.cy; car.dir = dirs.indexOf(d); moved = true; break;
+        }
+      }
+      if (!moved) car.dir = ri(0, 3);
+    }
+  }
+}
+function trafficNearPlayer() { const p = G.player; return (G.traffic || []).filter(c => Math.max(Math.abs(c.cx - p.cx), Math.abs(c.cy - p.cy)) <= 1); }
+
+// chiamata quando il GIOCATORE in auto/moto entra in una casella
+function trafficOnDrive(to) {
+  const v = curVeh(); if (!v) return; const M = VMODELS[v.model]; if (M.type === 'boat' || M.type === 'bici') return;
+  const fast = G.player.gait >= 2 || M.max > 300;
+  // semaforo rosso
+  if (to.light && lightPhase(to) === 'rosso') {
+    G.stats.redRuns = (G.stats.redRuns || 0) + 1;
+    if (chance(0.7)) { fine(70, 'Passaggio con semaforo rosso'); toast('🔴 Sei passato col rosso: la telecamera ti ha beccato.', 'bad'); offense('guida', 0.3); }
+    if (trafficNearPlayer().length && chance(0.3)) return trafficIncident(v, 'incrocio');
+  } else if (to.light && lightPhase(to) === 'giallo' && fast && chance(0.2)) {
+    toast('🟡 Giallo: acceleri. Rischioso.', 'warn');
+  }
+  // strisce pedonali con pedoni
+  if (to.crossing) {
+    const peds = npcsHereAt(to);
+    if (peds && peds.length) {
+      if (fast && chance(0.5)) { fine(90, 'Mancata precedenza sulle strisce'); offense('guida', 0.5); toast('🚸 Non hai dato la precedenza ai pedoni sulle strisce!', 'bad'); if (chance(0.4)) return trafficIncident(v, 'pedone'); }
+      else { toast('🚸 Rallenti e lasci passare i pedoni.'); advance(1, { noUI: true }); }
+    }
+  }
+  // traffico: tamponi se vai veloce dove c'è coda
+  if (trafficNearPlayer().length >= 2 && fast && chance(0.12)) return trafficIncident(v, 'tamponamento');
+  // incidente per pioggia/alta velocità
+  if (fast && WEATHER[G.weather.cur].wetGround > 0.4 && chance(0.05 - skill('guida') / 2000)) return trafficIncident(v, 'sbandata');
+}
+function npcsHereAt(c) { try { return (npcOutdoorCells().get(cid(c.cx, c.cy)) || []); } catch (e) { return []; } }
+function trafficIncident(v, kind) {
+  const p = G.player; AU.sfx('crash'); anim.shake = 0.5;
+  const dmg = { incrocio: [18, 35], pedone: [8, 18], tamponamento: [12, 28], sbandata: [10, 25] }[kind] || [10, 20];
+  v.hp = Math.max(0, v.hp - rr(dmg[0], dmg[1])); if (v.hp <= 0) v.broken = true;
+  const texts = {
+    incrocio: 'Un\'auto arriva da destra e non ti vede: schianto all\'incrocio.',
+    pedone: 'Un pedone sulle strisce! Inchiodi ma lo prendi di striscio.',
+    tamponamento: 'La coda si ferma di colpo: tamponi l\'auto davanti.',
+    sbandata: 'L\'asfalto bagnato ti tradisce: testacoda contro il guard-rail.'
+  };
+  eventPanel('💥 Incidente', 'vicolo', `${texts[kind]} Carrozzeria: ${Math.round(v.hp / VMODELS[v.model].hp * 100)}%.`, [
+    { t: '📋 Scambia i documenti / constatazione', f: () => { advance(30); if (kind === 'pedone') { offense('investimento', 0.7); hurtNpcNearby(); } else { offense('guida', 0.3); } const other = kind !== 'sbandata'; if (other && chance(0.6)) { toast('L\'altro guidatore ha torto: paga lui i danni.', 'money'); earn(ri(200, 600), 'Rimborso incidente', 'bank'); } else { toast('Constatazione amichevole. I danni te li paghi tu.', 'warn'); } closePanel(); } },
+    { t: '🏃 Scappa (omissione di soccorso)', d: 'Reato grave', f: () => { advance(5); offense(kind === 'pedone' ? 'investimento' : 'guida', 0.9); G.wanted.heat = clamp(G.wanted.heat + 25, 0, 100); updateWantedLevel(); G.record.pending.push({ type: 'resistenza', day: G.day }); toast('Fuga dal luogo dell\'incidente. La Polizia ti cerca.', 'bad'); closePanel(); } }]);
+  hurt(rr(2, 10), 'un incidente stradale');
+  G.stats.crashes = (G.stats.crashes || 0) + 1;
+}
+function hurtNpcNearby() { const c = playerCell(); const peds = npcsHereAt(c); if (peds && peds[0]) { npcState(peds[0]).hospital = G.min + 480; spreadRumor({ kind: 'crime', text: 'ha messo sotto qualcuno in strada', mag: -6 }); } }
+
+// parcheggio: scendere lontano da parcheggio/strada accumula sanzione
+function parkingCheck() {
+  const v = G.vehicles.find(x => !x.lost && x.cx === G.player.cx && x.cy === G.player.cy && VMODELS[x.model].type === 'car');
+  if (!v) return;
+  const c = playerCell();
+  const ok = c.parking || (G.parkings || []).some(([x, y]) => Math.max(Math.abs(x - c.cx), Math.abs(y - c.cy)) <= 1) || !c.road || c.road === 2;
+  if (c.parking) { toast('🅿️ Parcheggiata nel parcheggio: al sicuro.'); return; }
+  if (!ok && (c.road === 3 || c.road === 5 || c.crossing || c.plaza) && c.zone === 'centro') { v.illegalPark = G.day; sendMsg('Polizia Municipale', 'La sua auto è in sosta vietata in Centro. Rischia una multa e la rimozione.', { force: true }); }
+}
+function parkingDaily() {
+  for (const v of G.vehicles) { if (v.lost || v.illegalPark === undefined) continue; const c = cellAt(v.cx, v.cy); if (c && (c.road === 3 || c.road === 5 || c.plaza) && c.zone === 'centro' && v.cx === G.player.cx === false) { if (chance(0.5)) { fine(60, 'Sosta vietata'); if (chance(0.3)) { toast('🚛 Il carro attrezzi ha rimosso la tua auto: è al deposito del Garage.', 'bad'); const g = W.buildings.find(b => b.type === 'garage'); if (g) { v.cx = g.cell[0]; v.cy = g.cell[1]; } } } v.illegalPark = undefined; } }
+}
+
+/* ---------- Guida tecnica vendibile ---------- */
+function openTechGuide() {
+  const rows = CRAFTS.map(cr => `<div class="card" style="margin-bottom:6px"><b>${ITEMS[cr.out] ? ITEMS[cr.out].ico + ' ' + ITEMS[cr.out].n : cr.out}</b> <span class="small muted">— ${cr.train === 'hacking' ? 'Informatica' : 'Meccanica'} ${cr.sk}, ~${cr.min} min</span><div class="small">Serve: ${Object.entries(cr.need).map(([k, q]) => `${ITEMS[k] ? ITEMS[k].ico + ' ' + ITEMS[k].n : k}${q > 1 ? ' ×' + q : ''}`).join(' + ')}</div><div class="small muted">${esc(cr.d || '')}</div></div>`).join('');
+  const devices = `<div class="card"><h4>A cosa servono i dispositivi</h4><div class="small">
+    🖥️ <b>Computer VetrOS</b>: a casa, per social, banca, archivi e analisi delle prove.<br>
+    💻 <b>Portatile</b>: come il PC, ma te lo porti dietro.<br>
+    📡 <b>Scanner di frequenze (SDR)</b>: ascolta onde corte e numbers station (anche il mistero di Canale 0).<br>
+    🧰 <b>Stazione di analisi</b>: pulisce audio corrotti, decifra file, analizza le foto fotogramma per fotogramma.<br>
+    📻 <b>Radio militare</b> e 📟 <b>walkie</b>: comunicazioni fuori dalla rete cellulare.<br>
+    🛰️ <b>Antenna satellitare</b>: internet e telefono anche nei boschi.</div></div>`;
+  const combos = `<div class="card"><h4>Combinazioni consigliate</h4><div class="small">
+    1) Compra <b>scheda madre, CPU, RAM, SSD, alimentatore, case</b> → al banco monti il <b>Computer VetrOS</b>.<br>
+    2) PC + <b>scheda video</b> + <b>modulo di cifratura</b> → <b>Stazione di analisi forense</b>.<br>
+    3) <b>Scheda SDR</b> + <b>antenna direzionale</b> + <b>componenti</b> → <b>Scanner di frequenze</b>.<br>
+    4) <b>Componenti</b> + <b>scheda SDR</b> → <b>radio a onde corte</b> riparata.<br>
+    Ti serve la <b>stazione saldante</b> per montare (tranne il walkie).</div></div>`;
+  openPanel('📘 Guida: Elettronica e Combinazioni', `<p class="desc">Manuale illustrato di ElettroVetrata: tutte le ricette di assemblaggio, cosa fa ogni dispositivo e le combinazioni che funzionano.</p>${combos}${devices}<h4>Ricette complete</h4>${rows}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
+}
+
 // merge tech items & stocks
 try { Object.assign(ITEMS, TECH_ITEMS); } catch(e){}
 try { Object.assign(ITEMS, DRUG_ITEMS); Object.assign(OFFENSES, CRIME_OFFENSES); } catch(e){}
-try { Object.assign(ITEMS, GEAR_ITEMS); ARMI.pistola_illegale.illegal = true; for (const k in ARMI) ITEMS[k] = ARMI[k]; OFFENSES.armi = { n: 'Detenzione illegale di arma', heat: 50, sev: 2.8 }; } catch(e){}
+try { ITEMS.guida_tech = { n: 'Manuale di elettronica ElettroVetrata', ico: '📘', w: 0.3, price: 45, d: "Guida illustrata: ricette di assemblaggio, uso dei dispositivi e combinazioni. Leggilo dallo zaino." }; Object.assign(ITEMS, GEAR_ITEMS); ARMI.pistola_illegale.illegal = true; for (const k in ARMI) ITEMS[k] = ARMI[k]; OFFENSES.armi = { n: 'Detenzione illegale di arma', heat: 50, sev: 2.8 }; } catch(e){}
 if (!STOCKS.some(x=>x.id==='ELV')) STOCKS.push({ id: 'ELV', n: 'ElettroVetrata SpA' });
 
 /* ---------- Ciclo di animazione ---------- */
