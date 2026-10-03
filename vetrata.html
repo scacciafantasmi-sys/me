@@ -176,6 +176,8 @@ input[type=range]{accent-color:var(--orange)}
 .vg-search input{flex:1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:18px;color:#fff;padding:8px 14px;font-size:13px}
 .vn-sel{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#fff;padding:5px 8px;font-size:12px}
 .vn-sel option{background:#17202c}
+.vg-acts{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+.vg-acts .btn{font-size:11px}
 </style>
 </head>
 <body>
@@ -5311,6 +5313,7 @@ function feedPost(n, text, o = {}) {
   G.feed = G.feed || [];
   const by = n ? (n.pl ? n.pl.tag : npcName(n, false)) : (o.by || 'Anonimo');
   G.feed.unshift({ id: 'f' + G.min + Math.random().toString(36).slice(2, 6), nid: n ? n.id : null, by, text, day: G.day, t: hhmm(), likes: ri(0, 30) + (n && n.pl && n.pl.style === 'influencer' ? ri(40, 200) : 0), liked: false, img: o.img || null, me: !!o.me, rep: [] });
+  if (o.me) { try { smartReactPost(G.feed[0]); } catch (e) { } }
   if (G.feed.length > 80) G.feed.pop();
 }
 function feedHourly() {
@@ -5714,12 +5717,13 @@ function renderFeedPanel() {
     const n = p.nid !== null && p.nid !== undefined ? NPCS[p.nid] : null;
     const av = n ? n.look.shirt : '#888';
     const online = n && isPl(n) && plState(n).on;
-    return `<div class="vg-post"><div class="vg-head"><span class="vg-av" style="background:${av}"></span><b>${esc(p.by)}</b>${n && isPl(n) ? `<span class="pltag sm">${plStyle(n).ico}</span>` : ''}${online ? '<span class="vg-on">●</span>' : ''}<span class="muted tiny sp">${dateDay(p.day)} ${p.t}</span></div>${p.img ? `<img class="vg-img" src="${p.img}">` : ''}<div class="vg-body">${esc(p.text)}</div><div class="vg-foot"><button class="vg-like ${p.liked ? 'on' : ''}" data-like="${k}">♥ ${p.likes}</button>${n && !p.me ? `<button class="vg-reply" data-dm="${p.nid}">💬 scrivi</button>` : ''}${p.rep && p.rep.length ? `<div class="vg-reps">${p.rep.map(r => `<div><b>${esc(r.by)}</b> ${esc(r.t)}</div>`).join('')}</div>` : ''}</div></div>`;
+    return `<div class="vg-post"><div class="vg-head"><span class="vg-av" style="background:${av}"></span><b>${esc(p.by)}</b>${n && isPl(n) ? `<span class="pltag sm">${plStyle(n).ico}</span>` : ''}${online ? '<span class="vg-on">●</span>' : ''}<span class="muted tiny sp">${dateDay(p.day)} ${p.t}</span></div>${p.img ? `<img class="vg-img" src="${p.img}">` : ''}<div class="vg-body">${esc(p.text)}</div><div class="vg-foot"><button class="vg-like ${p.liked ? 'on' : ''}" data-like="${k}">♥ ${p.likes}</button>${n && !p.me ? `<button class="vg-reply" data-dm="${p.nid}">💬 scrivi</button>` : ''}${p.rep && p.rep.length ? `<div class="vg-reps">${p.rep.map(r => `<div><b>${esc(r.by)}</b> ${esc(r.t)}</div>`).join('')}</div>` : ''}${p.actions && p.actions.length ? `<div class="vg-acts">${p.actions.map(a => `<button class="btn sm pri" data-fa="${a.key}">${esc(a.t)}</button>`).join(' ')}</div>` : ''}</div></div>`;
   }).join('');
   openPanel('🌐 Vetragram', `<div class="vg-compose"><input id="vgIn" placeholder="A cosa stai pensando, ${esc(G.player.first)}?" maxlength="180"><button class="btn sm pri" id="vgPost">Pubblica</button></div><div class="small muted" style="margin:4px 0">👥 ${G.social.followers || 0} follower · ${(G.feed.filter(p => p.me)).length} tuoi post</div><div class="vg-feed">${posts || '<p class="muted">Ancora niente nel feed. Pubblica qualcosa!</p>'}</div>`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
   $('#vgPost').onclick = () => { const t = $('#vgIn').value.trim(); if (!t) return; feedPost(null, t, { by: G.player.first + ' ' + G.player.last, me: true }); G.stats.posts = (G.stats.posts || 0) + 1; renderFeedPanel(); };
   document.querySelectorAll('[data-like]').forEach(b => b.onclick = () => { const p = G.feed[+b.dataset.like]; p.liked = !p.liked; p.likes += p.liked ? 1 : -1; if (p.nid != null && p.liked) npcState(NPCS[p.nid]).op += 0.5; renderFeedPanel(); });
   document.querySelectorAll('[data-dm]').forEach(b => b.onclick = () => { const n = NPCS[+b.dataset.dm]; npcState(n).met = true; npcState(n).number = true; closePanel(); openChat(n); });
+  document.querySelectorAll('[data-fa]').forEach(b => b.onclick = () => { const fn = FEED_ACTIONS[b.dataset.fa]; if (fn) fn(); });
 }
 function openChat(n) {
   const st = npcState(n); st.chat = st.chat || [];
@@ -5732,8 +5736,9 @@ function online(n) { return isPl(n) ? plState(n).on : !((npcState(n).jailed > G.
 function renderChatLog(n) { const st = npcState(n); const el = $('#chLog'); if (!el) return; el.innerHTML = st.chat.slice(-18).map(m => `<div class="ch-msg ${m.me ? 'me' : ''}">${esc(m.t)}<span class="ch-t">${m.hm}</span></div>`).join(''); el.scrollTop = el.scrollHeight; }
 function chatReply(n) {
   const st = npcState(n); if (!online(n)) { return; }
-  let r;
-  const last = (st.chat[st.chat.length - 1] || {}).t || '';
+  let r; const last = (st.chat[st.chat.length - 1] || {}).t || '';
+  try { r = smartChatReply(n, last); } catch (e) { r = null; }
+  if (r) { st.chat.push({ t: moodPrefix(n) + r, me: false, hm: hhmm() }); st.op += 0.6; renderChatLog(n); return; }
   if (/ciao|salve|ehi|ue|hey/i.test(last)) r = charLine(n, 'greet');
   else if (/\?$/.test(last)) r = chance(0.5) ? charLine(n, 'talk') : pick(['Boh, non saprei.', 'Bella domanda.', 'Dipende.', 'Sì, credo di sì.']);
   else if (/grazie/i.test(last)) r = pick(['Figurati!', 'Di niente.', 'Quando vuoi.']);
@@ -6924,6 +6929,142 @@ function ludoDaily() {
   const p = G.player; if (!p.ludo) return;
   if (p.ludo > 50 && chance(0.2)) { p.stress = Math.min(100, p.stress + 5); if (chance(0.3)) log('Pensi al tavolo verde. Una vocina dice «stavolta recuperi tutto».', 'warn'); }
   p.ludo = Math.max(0, p.ludo - 1.5);
+}
+
+/* ===== VETRATA v12: motore di intenti (scrittura intelligente) ===== */
+/* =====================================================================
+   MOTORE DI INTENTI — capisce davvero cosa scrivi (post, chat) e reagisce
+   con offerte, azioni e risposte pertinenti. Niente LLM: regole in italiano.
+   ===================================================================== */
+const INTENTS = [
+  { id: 'lavoro_cerco', kw: ['cerco lavoro', 'cerco un lavoro', 'cerco impiego', 'disoccupat', 'serve un lavoro', 'assumetemi', 'qualcuno assume', 'offro le mie braccia', 'cerco qualcosa da fare', 'cerco un posto'], not: ['offro lavoro', 'cerco personale', 'assumo'],
+    reply: ['Guarda al Centro per l\'Impiego, ci sono un sacco di posti!', 'Da me cercavano gente la settimana scorsa, prova.', 'Se sai fare qualcosa, qui il lavoro si trova.'],
+    action: { t: '📋 Vedi le offerte di lavoro', key: 'jobs' } },
+  { id: 'lavoro_offro', kw: ['offro lavoro', 'cerco personale', 'assumo', 'cercasi', 'cerco dipendent', 'cerco un dipendente', 'cerco collaborator', 'posizione aperta', 'stiamo assumendo'],
+    reply: ['Io sarei interessato!', 'Quanto pagate?', 'Mandami i dettagli in DM.', 'Io cerco proprio lavoro, scrivimi!'],
+    action: { t: '🏢 Gestisci le tue imprese', key: 'company' } },
+  { id: 'casa', kw: ['cerco casa', 'cerco un appartamento', 'affittasi', 'cerco in affitto', 'vendo casa', 'compro casa', 'cerco un monolocale', 'cerco una stanza', 'cerco villa', 'cerco bilocale'],
+    reply: ['Passa dall\'Agenzia Immobiliare, ne hanno parecchie.', 'Ne so una libera a buon prezzo!', 'Ad Anacapri costa meno, guarda lì.'],
+    action: { t: '🏠 Apri l\'Agenzia Immobiliare', key: 'house' } },
+  { id: 'auto', kw: ['vendo auto', 'compro auto', 'cerco una moto', 'cerco un\'auto', 'cerco macchina', 'vendo la moto', 'cerco uno scooter', 'cerco un mezzo', 'cerco una barca', 'vendo la mia'],
+    reply: ['Al concessionario Tirreno Motori trovi di tutto.', 'Ho una Vesperina che tira ancora bene.', 'Occhio ai km, fatti dare la diagnosi.'],
+    action: { t: '🚗 Apri il Concessionario', key: 'dealer' } },
+  { id: 'amore', kw: ['cerco l\'amore', 'cerco lamore', 'sono single', 'cerco una ragazza', 'cerco un ragazzo', 'cerco l\'anima gemella', 'qualcuno con cui uscire', 'cerco compagnia', 'sto cercando qualcuno', 'cerco una storia'],
+    reply: ['Ci sono io 👀', 'Al Faraglione il sabato si conosce gente.', 'Un tramonto ai Faraglioni non si nega a nessuno 🌅', 'Scrivimi in DM, magari ci piacciamo.'],
+    action: { t: '💘 Chi è single sull\'isola', key: 'dating' } },
+  { id: 'aiuto', kw: ['aiuto', 'mi serve una mano', 'chi mi aiuta', 'sono nei guai', 'ho bisogno di aiuto', 'qualcuno può aiutarmi', 'sono disperato', 'non so come fare'],
+    reply: ['Dimmi dove sei, arrivo.', 'Conta su di me, che succede?', 'Al dormitorio c\'è sempre qualcuno pronto ad aiutare.'],
+    action: null },
+  { id: 'festa', kw: ['si fa festa', 'festa stasera', 'serata', 'party', 'chi viene al faraglione', 'usciamo stasera', 'dove si va stasera', 'voglia di ballare'],
+    reply: ['Io ci sono! 🍻', 'Faraglione o niente!', 'Porto da bere, ci vediamo lì.', 'Finalmente qualcuno che ha voglia di vivere!'],
+    action: null },
+  { id: 'vendo_merce', kw: ['vendo', 'in vendita', 'svendo', 'chi compra', 'cedo', 'baratto'], not: ['vendo casa', 'vendo auto', 'vendo la moto', 'vendo la mia'],
+    reply: ['Quanto chiedi?', 'Interessato, foto?', 'Ne parliamo in DM.', 'Prezzo trattabile?'],
+    action: null },
+  { id: 'scoop', kw: ['scandalo', 'ho visto una cosa', 'ho delle foto', 'ho uno scoop', 'notizia bomba', 'non ci crederete', 'ho le prove'],
+    reply: ['La Gazzetta paga per queste cose, vacci.', 'Racconta racconta 👀', 'Occhio a chi tocchi, su quest\'isola.'],
+    action: { t: '📰 Proponi la storia alla Gazzetta', key: 'gazzetta' } },
+  { id: 'politica', kw: ['votate', 'votatemi', 'mi candido', 'elezioni', 'il sindaco', 'abbasso le tasse', 'programma elettorale', 'per il bene dell\'isola'],
+    reply: ['Hai il mio voto se abbassi le tasse!', 'Tutti promettono, poi niente.', 'Finalmente uno che ci mette la faccia.'],
+    action: { t: '🏛️ Vai al Municipio', key: 'comune' } },
+  { id: 'mistero', kw: ['canale 0', 'canale zero', 'le voci', 'fantasma', 'villa luna', 'cabina', 'onde corte', 'cose strane', 'specchi'],
+    reply: ['Non dovresti parlarne online…', 'Anch\'io ho sentito la cabina squillare 😨', 'Cerca chi ne sa, ma stai attento.', 'Le tre di notte. Lo sai anche tu.'],
+    action: null },
+  { id: 'droga', kw: ['cerco roba', 'avete roba', 'chi spaccia', 'cerco erba', 'cerco fumo', 'serve la roba'],
+    reply: ['⚠️ Occhio che qui legge anche la polizia.', '(il tuo post attira sguardi che non vorresti)'],
+    action: null, shady: true },
+  { id: 'minaccia', kw: ['ti ammazzo', 'ti spacco', 'sei un infame', 'vi odio tutti', 'me la pagherete', 'sei una merda', 'stronzo', 'bastardo'],
+    reply: ['Ma modera i termini…', 'Segnalato.', 'Che modi.'],
+    action: null, bad: true },
+  { id: 'saluto', kw: ['buongiorno a tutti', 'buonasera', 'ciao a tutti', 'come state', 'bella giornata', 'nuovo qui', 'appena arrivato', 'mi presento'],
+    reply: ['Benvenuto su Vetrata! 🌊', 'Ciao! Se ti serve qualcosa chiedi pure.', 'Un altro sbarcato, benvenuto!'],
+    action: null },
+  { id: 'pubblicita', kw: ['venite da', 'vi aspetto', 'sconti', 'offerta speciale', 'nuova apertura', 'inaugurazione', 'promo', 'aperto anche oggi', 'passate a trovarci'],
+    reply: ['Ci farò un salto!', 'Bravo, così si fa impresa.', 'Condiviso! 📣'],
+    action: null, promo: true }
+];
+function detectIntents(text) {
+  const t = (text || '').toLowerCase();
+  const found = [];
+  for (const it of INTENTS) {
+    if (it.not && it.not.some(x => t.includes(x))) continue;
+    if (it.kw.some(k => t.includes(k))) found.push(it);
+  }
+  return found;
+}
+// genera risposte "intelligenti" + azioni per un post del giocatore
+function smartReactPost(p) {
+  const intents = detectIntents(p.text);
+  p.rep = p.rep || []; p.actions = p.actions || [];
+  if (!intents.length) {
+    // nessun intento: qualche like e un commento generico ogni tanto
+    if (chance(0.5)) { const fr = pick(NPCS.filter(n => n.pl)); if (fr) p.rep.push({ by: fr.pl.tag, t: pick(['👏', 'bella', 'vero', 'ahah', '❤️', 'grande']) }); }
+    return;
+  }
+  for (const it of intents) {
+    // 2-3 risposte da persone pertinenti
+    const respN = fittingResponders(it).slice(0, 2 + (chance(0.5) ? 1 : 0));
+    for (const n of respN) p.rep.push({ by: isPl(n) ? n.pl.tag : npcName(n, false), t: pick(it.reply), nid: n.id });
+    if (!respN.length) p.rep.push({ by: 'Un utente', t: pick(it.reply) });
+    if (it.action && !p.actions.some(a => a.key === it.action.key)) p.actions.push(it.action);
+    // effetti reali
+    if (it.id === 'lavoro_offro') { for (const n of respN) { npcState(n).jobWanted = G.day; } }
+    if (it.id === 'amore') { G.social.followers = (G.social.followers || 0) + ri(0, 4); }
+    if (it.promo) { const c = myCompanies()[0]; if (c) { c.rep = clamp(c.rep + 2, 0, 100); } G.social.followers = (G.social.followers || 0) + ri(1, 5); }
+    if (it.shady) { G.wanted.heat = clamp(G.wanted.heat + 8, 0, 100); updateWantedLevel(); G.trace = (G.trace || 0) + 10; }
+    if (it.bad) { G.social.followers = Math.max(0, (G.social.followers || 0) - ri(2, 8)); addRep('polizia', -1); for (const n of NPCS.filter(x => x.pl).slice(0, 3)) npcState(n).op -= 2; }
+    if (it.id === 'saluto') G.social.followers = (G.social.followers || 0) + ri(0, 3);
+  }
+  // una notifica cliccabile se c'è un'azione
+  const act = p.actions[0];
+  if (act) toast('💬 Il tuo post ha smosso qualcosa: guarda i commenti.', 'good');
+}
+function fittingResponders(it) {
+  const online = NPCS.filter(n => n.pl && plState(n).on);
+  const pool = online.length ? online : NPCS.filter(n => n.pl);
+  let f = pool;
+  if (it.id === 'lavoro_offro') f = pool.filter(n => plStyle(n).id === 'novellino' || plStyle(n).id === 'grinder');
+  if (it.id === 'amore') f = pool.filter(n => plStyle(n).id === 'romantico' || npcCar(n).flirt > 0.6);
+  if (it.id === 'festa') f = pool.filter(n => plStyle(n).id === 'festaiolo' || plStyle(n).id === 'caciarone' || plStyle(n).id === 'streamer');
+  if (it.id === 'scoop') f = pool.filter(n => plStyle(n).id === 'reporter');
+  if (it.id === 'mistero') f = pool.filter(n => plStyle(n).id === 'cacciatore' || plStyle(n).id === 'nottambulo');
+  if (it.id === 'aiuto') f = pool.filter(n => plStyle(n).id === 'samaritano');
+  if (it.id === 'politica') f = pool.filter(n => plStyle(n).id === 'politico');
+  if (it.id === 'auto' || it.id === 'vendo_merce') f = pool.filter(n => plStyle(n).id === 'meccanicorp' || plStyle(n).id === 'imprenditore' || plStyle(n).id === 'pilota');
+  if (!f.length) f = pool;
+  return shuffle(f.slice());
+}
+// azioni dei post
+const FEED_ACTIONS = {
+  jobs: () => { closePanel(); jobBoard(Object.values(JOBS), '📋 Offerte di lavoro sull\'isola', 'Hai scritto che cerchi lavoro: ecco tutti i posti aperti.'); },
+  company: () => { closePanel(); openCameraCommercio(); },
+  house: () => { closePanel(); openAgenzia(); },
+  dealer: () => { const b = W.buildings.find(x => x.type === 'concessionario'); if (b) { closePanel(); G.waypoint = { cx: b.cell[0], cy: b.cell[1] }; toast('GPS sul Concessionario Tirreno Motori.'); } },
+  gazzetta: () => { closePanel(); openGazzettaPitch(); },
+  comune: () => { const b = W.buildings.find(x => x.type === 'municipio'); if (b) { closePanel(); G.waypoint = { cx: b.cell[0], cy: b.cell[1] }; toast('GPS sul Municipio.'); } },
+  dating: () => { closePanel(); datingList(); }
+};
+function datingList() {
+  const singles = NPCS.filter(n => npcState(n).alive && !npcState(n).partner && n.age >= 18 && n.age <= 55 && npcCar(n).flirt > 0.4).slice(0, 10);
+  const opts = singles.map(n => ({ t: (isPl(n) ? '🎮 ' + n.pl.tag : '🙂 ' + npcName(n, false)), d: `${n.age} anni · ${npcCar(n).n}${npcState(n).number ? ' · in rubrica' : ''}`, f: () => { closePanel(); npcState(n).met = true; if (npcState(n).number) openChat(n); else openDialog(n); } }));
+  if (!opts.length) opts.push({ t: 'Nessuno disponibile al momento.', dis: true, f: () => {} });
+  opts.push({ t: 'Chiudi', c: 'pri', f: closePanel });
+  openPanel('💘 Cuori solitari di Vetrata', '<p class="desc">Chi è single e di cuore tenero. Conoscili di persona o in chat: con un po\' di stile e le parole giuste…</p>' + optList(opts), [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
+}
+
+/* ---------- Chat: risposte che capiscono il messaggio ---------- */
+function smartChatReply(n, lastText) {
+  const st = npcState(n), t = (lastText || '').toLowerCase();
+  const intents = detectIntents(lastText);
+  // domande dirette tipiche
+  if (/\b(dove (sei|stai|abiti)|dove ti trovo)\b/.test(t)) return pick(['Sono ' + (npcWhere(n) && W.buildings[(npcWhere(n) || {}).b] ? 'verso ' + (W.buildings[npcWhere(n).b].n || 'il centro') : 'in giro per l\'isola') + '.', 'Adesso al lavoro, dopo ci vediamo.']);
+  if (/quanto (costa|vuoi|chiedi|paghi)/.test(t)) return pick(['Facciamo un buon prezzo, dai.', 'Dipende da cosa ti serve.', 'Ne parliamo di persona, meglio.']);
+  if (/(ci vediamo|usciamo|un caffè|un caffe|beviamo|vieni|andiamo)/.test(t)) { st.wantMeet = G.day; return pick(['Volentieri! Dimmi dove e quando.', 'Ci sto. Stasera?', 'Passa a prendermi, dai.']); }
+  if (/(mi presti|un prestito|mi dai.*caprin)/.test(t)) return st.op > 40 ? pick(['Per te, va bene. Ma poi me li ridai.', 'Quanto ti serve?']) : pick(['Eh, ci conosciamo poco.', 'Mi dispiace, sono a secco pure io.']);
+  if (/(ti amo|mi piaci|usciamo insieme|sei bellissim|sei bellissimo)/.test(t)) { if (st.op > 45 && npcCar(n).flirt > 0.3) { st.flirt = (st.flirt || 0) + 1; return pick(['Anche tu non sei male, sai? 😊', 'Piano, mi fai arrossire.', 'Magari è la volta buona…']); } return pick(['Ehm, restiamo amici?', 'Ci conosciamo appena!']); }
+  if (/(scusa|perdonami|chiedo scusa|facciamo pace)/.test(t)) { st.op += 6; return pick(['Acqua passata.', 'Va bene, ci mancherebbe.', 'Sei una brava persona, dai.']); }
+  if (intents.length) { const it = intents[0]; if (it.id === 'lavoro_offro' && (plStyle(n) ? ['novellino', 'grinder'].includes(plStyle(n).id) : true)) return pick(['Interessato! Che lavoro è?', 'Io cerco proprio, dimmi tutto.']); return pick(it.reply); }
+  return null;
 }
 
 // merge tech items & stocks
