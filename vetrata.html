@@ -5381,12 +5381,12 @@ function plTick(minutes) {
     if (s.follow && s.follow <= G.min) { s.follow = 0; if (npcsFollowing().length === 0) toast(`${esc(n.first)} se ne va per i fatti suoi.`); }
     if (s.inB !== null && s.inB !== undefined && s.stay > G.min) continue;
     if (!s.t) { s.t = plPickTarget(n, s); s.inB = null; s.stuck = 0; s.mode = n.pl.veh === 'foot' || chance(0.2) ? 'foot' : n.pl.veh; }
-    const speed = s.mode === 'car' ? 1.6 : s.mode === 'moto' ? 1.9 : 0.4;
+    const speed = s.mode === 'car' ? 1.8 : s.mode === 'moto' ? 2.1 : 0.58;
     s.acc += mins * speed;
     while (s.acc >= 1 && s.t) {
       s.acc -= 1;
       if (s.cx === s.t.cx && s.cy === s.t.cy) {
-        if (s.t.b !== undefined) { s.inB = s.t.b; s.stay = s.t.until || G.min + ri(40, 200); } else { s.inB = null; s.stay = G.min + ri(20, 120); s.idleSpot = true; }
+        if (s.t.b !== undefined) { s.inB = s.t.b; s.stay = s.t.until || G.min + ri(20, 85); } else { s.inB = null; s.stay = G.min + ri(8, 40); s.idleSpot = true; }
         s.t = null; s.acc = 0; break;
       }
       plStep(s);
@@ -5409,11 +5409,25 @@ function feedPost(n, text, o = {}) {
 function feedHourly() {
   if (!G.feed) G.feed = [];
   const online = NPCS.filter(n => n.pl && plState(n).on);
-  for (const n of online) if (chance(0.07)) feedPost(n, chance(0.55) ? plLine(n, 'ooc') : plLine(n, 'rp'));
-  if (chance(0.08)) { const n = pick(NPCS.filter(x => !x.pl && npcState(x).alive)); if (n) feedPost(n, pick([ambientLine(n), smallTalk(n)])); }
-  if (online.length > 1 && chance(0.04)) { const [a, b] = shuffle(online.slice()).slice(0, 2); feedPost(a, pick([`io e @${b.pl.tag} stasera al Faraglione, chi c'è?`, `@${b.pl.tag} mi devi ancora 50 caprini 😤`, `grande scena con @${b.pl.tag} oggi al porto`, `@${b.pl.tag} rivincita sui tornanti?`, `fondata la crew con @${b.pl.tag} 🔥`])); }
+  for (const n of online) if (chance(0.12)) feedPost(n, chance(0.55) ? plLine(n, 'ooc') : plLine(n, 'rp'));
+  if (chance(0.1)) { const n = pick(NPCS.filter(x => !x.pl && npcState(x).alive)); if (n) feedPost(n, pick([ambientLine(n), smallTalk(n)])); }
+  if (online.length > 1 && chance(0.09)) { const [a, b] = shuffle(online.slice()).slice(0, 2); feedPost(a, pick([`io e @${b.pl.tag} stasera al Faraglione, chi c'è?`, `@${b.pl.tag} mi devi ancora 50 caprini 😤`, `grande scena con @${b.pl.tag} oggi al porto`, `@${b.pl.tag} rivincita sui tornanti?`, `fondata la crew con @${b.pl.tag} 🔥`, `@${b.pl.tag} ci vediamo in Piazzetta tra poco`, `bella serata con @${b.pl.tag} e gli altri 🍻`])); }
+  try { plGather(online); } catch (e) { }
   // risposte ai tuoi post
   for (const p of (G.feed || []).filter(p => p.me && p.day >= G.day - 1)) { const add = Math.round(rr(0, 3) + (G.social.followers || 0) * rr(0.005, 0.03)); p.likes += add; G.social.followers = (G.social.followers || 0) + Math.round(add * rr(0, 0.4)); if (chance(0.25)) { const fr = pick(NPCS.filter(n => n.pl && plState(n).on)); if (fr) p.rep.push({ by: fr.pl.tag, t: pick(['🔥🔥', 'ahahah', 'bellissima', 'top 👏', 'chi è quello dietro?', 'quando la prossima?', '❤️', 'grande!']) }); } }
+  // i giocatori vicini a te ogni tanto ti parlano, cosi il mondo sembra vivo
+  try { const near = online.filter(n => { const s = plState(n); return s.follow <= G.min && Math.max(Math.abs(s.cx - G.player.cx), Math.abs(s.cy - G.player.cy)) <= revealRadius() + 1; }); if (near.length && chance(0.5)) { const n = pick(near); toast(`🗣️ ${esc(n.pl.tag)}: «${esc(plLine(n, chance(0.5) ? 'rp' : 'ooc'))}»`); } } catch (e) { }
+}
+// i giocatori online si radunano per una "scena": si incamminano verso uno stesso ritrovo
+function spotName(k) { return ({ plaza: 'in Piazzetta', faraglione: 'al Faraglione', tornanti: 'ai Tornanti', spiaggia: 'in spiaggia', molo: 'al molo', faro: 'al Faro' })[k] || 'in giro'; }
+function plGather(online) {
+  if (!online || online.length < 3 || !chance(0.3)) return;
+  const keys = ['plaza', 'faraglione', 'tornanti', 'spiaggia', 'molo', 'faro'].filter(k => W.spots && W.spots[k]);
+  if (!keys.length) return;
+  const key = pick(keys), sp = W.spots[key], tx = (sp.x / TS / CF) | 0, ty = (sp.y / TS / CF) | 0;
+  const group = shuffle(online.slice()).slice(0, ri(3, 5)); let moved = 0;
+  for (const n of group) { const s = plState(n); if (s.follow > G.min) continue; s.t = { cx: clamp(tx + ri(-1, 1), 0, GW - 1), cy: clamp(ty + ri(-1, 1), 0, GH - 1), spot: key }; s.inB = null; s.stay = 0; s.idleSpot = false; s.stuck = 0; moved++; }
+  if (moved >= 2 && chance(0.6)) feedPost(group[0], pick([`scena aperta ${spotName(key)}, venite 🎭`, `ci troviamo ${spotName(key)}, si fa gruppo`, `raduno ${spotName(key)}! portate i personaggi`, `evento improvvisato ${spotName(key)} 🔥`]));
 }
 
 /* =====================================================================
