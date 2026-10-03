@@ -390,7 +390,7 @@ const ITEMS = {
   sfogliatella: { n: 'Sfogliatella', ico: '🥐', w: 0.2, price: 3, eat: { fame: 20, stress: -5 }, perish: 36 },
   frisella: { n: 'Frisella al pomodoro', ico: '🍅', w: 0.2, price: 4, eat: { fame: 25, sete: -4 }, perish: 60 },
   acqua: { n: "Bottiglia d'acqua", ico: '💧', w: 0.5, price: 1.5, eat: { sete: 45 } },
-  caffe: { n: 'Caffè da asporto', ico: '☕', w: 0.1, price: 1.2, eat: { energia: 16, sete: -3, stress: -3 } },
+  caffe: { n: 'Caffè da asporto', ico: '☕', w: 0.1, price: 1.2, eat: { energia: 16, sete: -3, stress: -6 } },
   granita: { n: 'Granita al limone', ico: '🍧', w: 0.3, price: 3, eat: { sete: 30, temp: -0.5, stress: -3 }, perish: 3 },
   birra: { n: 'Birra Faro', ico: '🍺', w: 0.4, price: 3, eat: { sete: 18, alcol: 16, stress: -8 } },
   limoncello: { n: 'Limoncello', ico: '🍋', w: 0.3, price: 9, eat: { alcol: 28, stress: -12, temp: 0.2 } },
@@ -2023,7 +2023,7 @@ function consume(it) {
     if (I.eat.alcol && hasTrait('astemio')) { toast('Sei astemio. Non bevi.', 'warn'); return false; }
     const e = I.eat;
     for (const k of ['fame', 'sete', 'energia', 'health']) if (e[k]) p[k] = clamp(p[k] + e[k], 0, 100);
-    if (e.stress) p.stress = clamp(p.stress + e.stress, 0, 100);
+    if (e.stress) { const b = p.stress; p.stress = clamp(p.stress + e.stress, 0, 100); const d = Math.round(b - p.stress); if (e.stress < 0 && d > 0) toast(`${I.ico} Ti rilassa un po'. Stress −${d}.`, 'good'); }
     if (e.alcol) { p.alcol = clamp(p.alcol + e.alcol * (hasTrait('bevitore') ? 0.6 : 1), 0, 150); p.lastDrink = G.min; G.stats.drinks = (G.stats.drinks || 0) + 1; }
     if (e.temp) p.temp += e.temp;
     if (it.id === 'sigarette') { p.lastSmoke = G.min; G.stats.cigs = (G.stats.cigs || 0) + 1; }
@@ -2609,14 +2609,15 @@ function waitTime(min, label) { advance(min); if (label) log(label); }
 function sitRest() {
   const p = G.player; const c = playerCell(); p.sitting = true;
   const sea = c.coast && !c.water;
-  advance(20); p.stamina = maxStamina(); p.stress = Math.max(0, p.stress - (sea ? 6 : c.bench ? 4 : 2)); p.energia = Math.min(100, p.energia + 1);
-  log(sea ? 'Ti siedi su uno scoglio a guardare il mare. Il rumore della risacca ti svuota la testa.' : c.bench ? 'Ti siedi su una panchina. Passano vecchi, cani, motorini.' : 'Ti siedi per terra a riprendere fiato.');
+  const b = p.stress; advance(20); p.stamina = maxStamina(); p.stress = Math.max(0, p.stress - (sea ? 16 : c.bench ? 12 : 7)); p.energia = Math.min(100, p.energia + 1);
+  const d = Math.round(b - p.stress);
+  log((sea ? 'Ti siedi su uno scoglio a guardare il mare. Il rumore della risacca ti svuota la testa.' : c.bench ? 'Ti siedi su una panchina. Passano vecchi, cani, motorini.' : 'Ti siedi per terra a riprendere fiato.') + (d > 0 ? ` (Stress −${d})` : ''));
 }
 function meditate() {
   const p = G.player, h = hourOf(), golden = (h > 5.5 && h < 8) || (h > 17.5 && h < 20.5);
-  advance(30); p.stress = Math.max(0, p.stress - (golden ? 28 : 14)); p.energia = Math.min(100, p.energia + 4);
-  G.stats.yoga = (G.stats.yoga || 0) + 1;
-  toast(golden ? 'Il sole basso sul mare. Saluto al sole, respiro lento. Per mezz\'ora non esiste altro.' : 'Yoga sulla sabbia. Le spalle si sciolgono.', 'money');
+  const b = p.stress; advance(30); p.stress = Math.max(0, p.stress - (golden ? 34 : 22)); p.energia = Math.min(100, p.energia + 4);
+  G.stats.yoga = (G.stats.yoga || 0) + 1; const d = Math.round(b - p.stress);
+  toast((golden ? 'Il sole basso sul mare. Saluto al sole, respiro lento. Per mezz\'ora non esiste altro.' : 'Yoga e respiro lento. Le spalle si sciolgono.') + (d > 0 ? ` Stress −${d}.` : ''), 'money');
 }
 function thermalSpring() { const p = G.player; advance(60); p.stress = Math.max(0, p.stress - 30); p.health = Math.min(100, p.health + 12); p.temp = 37; p.wet = 100; toast('♨️ Acqua calda che sa di zolfo, tra le rocce. I muscoli si sciolgono.', 'money'); G.flags.springFound = true; }
 function useVending() {
@@ -3323,7 +3324,7 @@ function refreshSide() {
       <button class="act" onclick="takePhoto()" ${hasInv('fotocamera') ? '' : 'disabled'}><span>📷</span>Foto${G.film.loaded ? ' (' + G.film.loaded + ')' : ''}</button>
       <button class="act" onclick="toggleTorch()" ${hasInv('torcia') ? '' : 'disabled'}><span>🔦</span>${p.torch ? 'Spegni' : 'Torcia'}</button>
       ${v ? `<button class="act" onclick="exitVehicle()"><span>🚪</span>Scendi</button>` : `<button class="act" onclick="sleepOutside()"><span>😴</span>Dormi qui</button>`}
-      ${c.zone === 'spiaggia' && !c.water ? '<button class="act" onclick="meditate()"><span>🧘</span>Yoga</button>' : ''}
+      ${!v && !c.water ? '<button class="act" onclick="meditate()"><span>🧘</span>Yoga</button>' : ''}
       ${(c.plaza || c.zone === 'marina') && hasInv('chitarra') ? '<button class="act" onclick="busk()"><span>🎸</span>Suona</button>' : ''}
       ${!c.water && c.coast && hasInv('canna') ? '<button class="act" onclick="rodFishing()"><span>🎣</span>Pesca</button>' : ''}
       ${c.water && !v && ITEMS[p.wear].wear.dive ? '<button class="act" onclick="dive()"><span>🤿</span>Immergiti</button>' : ''}
@@ -3435,7 +3436,7 @@ function sleepHours(h, place) {
       advance(60, { sleep: true, noUI: true }); slept++;
       const out = place === 'out';
       const cmf = place === 'home' && G.home.own ? 1 + homeComfort() / 120 : 1;
-      p.energia = clamp(p.energia + (hasTrait('insonne') ? 7 : 11) * (out ? 0.6 : 1) * cmf, 0, 100); p.stress = Math.max(0, p.stress - (out ? 1 : 3) * cmf); p.health = Math.min(100, p.health + (out ? 0.5 : 1.5) * cmf); p.stamina = maxStamina();
+      p.energia = clamp(p.energia + (hasTrait('insonne') ? 7 : 11) * (out ? 0.6 : 1) * cmf, 0, 100); p.stress = Math.max(0, p.stress - (out ? 2.5 : 5) * cmf); p.health = Math.min(100, p.health + (out ? 0.5 : 1.5) * cmf); p.stamina = maxStamina();
       if (out) { const amb = ambientTemp(); if (amb < 14) { p.temp -= (14 - amb) * 0.06 / (ITEMS[p.wear].wear.warm || 1); if (p.temp < 35.2) { msg.push('Ti svegli tremando dal freddo.'); break; } } if (WEATHER[G.weather.cur].rain) { p.wet = 100; msg.push('Ti sveglia la pioggia. Sei fradicio.'); break; } if (hauntedHere() > 0.3 && chance(0.2)) { msg.push('Ti svegli di soprassalto: qualcuno sussurrava il tuo nome vicinissimo.'); p.stress += 15; break; } }
       if (place === 'home' && G.home.kind === 'dormitorio' && chance(0.05) && G.cash > 20) { const l = Math.round(G.cash * rr(0.2, 0.5)); G.cash -= l; msg.push(`Ti svegli e ti mancano ${money(l)} dal portafoglio.`); break; }
       if (place === 'home' && G.home.own && !G.home.alarm && chance(0.01)) { const it = G.home.stash.length ? G.home.stash.splice(ri(0, G.home.stash.length - 1), 1)[0] : null; msg.push(`Di notte sono entrati i ladri${it ? ' e si sono presi: ' + ITEMS[it.id].n : ', ma non hanno trovato niente'}. Un allarme servirebbe.`); }
