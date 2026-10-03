@@ -1948,6 +1948,7 @@ function npcWhere(n) {
   if (n.pl) { const w = plWhere(n); if (!w) return null; if (w.b !== undefined && w.b !== null) return { b: w.b, act: 'leisure' }; return { cx: w.cx, cy: w.cy }; }
   const st = npcState(n);
   if (!st.alive || st.gone || (st.jailed && st.jailed > G.day)) return null;
+  if (st.follow) { if (st.follow > G.min) return { cx: G.player.cx, cy: G.player.cy }; st.follow = 0; toast(`${esc(n.first)} se ne va per i fatti suoi. «Alla prossima!»`); }
   if (st.hospital && st.hospital > G.min) { const b = W.buildings.find(x => x.type === 'ambulatorio'); return { b: b.id }; }
   if (st.meetAt && st.meetAt.until > G.min) return { b: st.meetAt.b };
   const d = npcDesire(n); if (d.none) return null;
@@ -3640,7 +3641,8 @@ function openDialog(n, byPhone) {
   if (!byPhone && st.met && st.op > 5) opts.push({ t: '🎭 Proponi di fare qualcosa insieme', d: 'Caffè, cena, passeggiata, giro…', f: () => { closePanel(); proposeActivity(n); } });
   if (!byPhone && st.met && st.op > 12) opts.push({ t: '📅 Dai un appuntamento', f: () => { closePanel(); makeAppointment(n); } });
   if (st.op > 10 && !st.number) opts.push({ t: '📱 Chiedi il numero', f: () => { if (st.op > 20 || chance(0.5) || G.flags.cards) { st.number = true; st.met = true; toast('📇 Hai salvato il numero di ' + esc(n.first) + '.'); say(n, 'Segnati il numero. Ma non chiamarmi alle tre di notte.'); } else say(n, 'Ci conosciamo da troppo poco.'); refreshDlg(n); } });
-  if (st.op > 35 && st.number && (!G.social.crew || !G.social.crew.members.includes(n.id))) opts.push({ t: '🐺 Invitalo nella tua crew', f: () => crewInvite(n) });
+  if (st.op > 35 && st.number && (!G.social.crew || !G.social.crew.members.includes(n.id))) opts.push({ t: '🐺 Invitalo nella tua crew', d: G.social.crew && G.social.crew.name ? 'Entra ne «' + esc(G.social.crew.name) + '»' : 'Fonda la tua crew con lui', f: () => crewInvite(n) });
+  else if (!byPhone && st.met && st.op <= 35 && (!G.social.crew || !G.social.crew.members.includes(n.id))) opts.push({ t: '🐺 Crea/allarga la crew', d: `Serve amicizia (opinione 35+${st.number ? '' : ' e il suo numero'}). Ora: ${Math.round(st.op)}/35.`, dis: true, f: () => { } });
   if (st.op > 45 && npcCar(n).flirt > 0.25 && !st.partner) opts.push({ t: '💗 Prova a provarci', d: 'Col carattere giusto, e un bel look…', f: () => { say(n, npcFlirt(n)); refreshDlg(n); } });
   for (const w of jobOffersFrom(n)) opts.push(w);
   if (G.pol.candidate) opts.push({ t: '🗳️ Chiedi il voto e una firma', d: G.pol.playerList.n, f: () => askVote(n, st) });
@@ -5464,6 +5466,7 @@ function doActivity(n, a) {
   if (a.cost && !pay(a.cost, a.n, { atCounter: true })) return;
   closePanel();
   if (a.special === 'gara') { streetRaceWith(n); return; }
+  if (a.id === 'passeggiata') { return startCompanionWalk(n, a); }
   const liked = a.int && n.ints && n.ints.includes(a.int);
   const disliked = a.int && n.hates === a.int;
   advance(a.min, { noUI: true });
@@ -5485,6 +5488,17 @@ function doActivity(n, a) {
     { t: '💬 Continua a parlare', f: () => { closePanel(); openDialog(n); } },
     { t: '✓ Va bene così', c: 'pri', f: closePanel }]);
   if (st.op >= 30 && !st.friendNoticed) { st.friendNoticed = true; toast(`🤝 ${esc(n.first)} ora è tuo amico.`, 'good'); if (isPl(n)) G.social.friends = (G.social.friends || 0) + 1; }
+}
+// passeggiata: l'altro ti accompagna davvero sulla mappa per un po', poi se ne va
+function startCompanionWalk(n, a) {
+  const st = npcState(n); const liked = a.int && n.ints && n.ints.includes(a.int);
+  const dur = (a.min || 55) + ri(10, 40); // ti segue per circa un'ora e mezza
+  if (isPl(n)) { const s = plState(n); s.on = true; s.follow = G.min + dur; s.cx = G.player.cx; s.cy = G.player.cy; s.inB = null; }
+  else { st.follow = G.min + dur; }
+  st.op += (liked ? 7 : 5) * npcMood(n)[1]; st.lastAct = G.day; st.actsDone = (st.actsDone || 0) + 1; G.stats.activities = (G.stats.activities || 0) + 1;
+  if (st.op >= 30 && !st.friendNoticed) { st.friendNoticed = true; if (isPl(n)) G.social.friends = (G.social.friends || 0) + 1; }
+  eventPanel('🚶 In passeggiata', placeArt(playerCell().b.length ? W.buildings[playerCell().b[0]] : { type: 'plaza' }), `${pick(a.txt)}<br><br>${esc(n.first)} ti cammina a fianco. Vai dove vuoi: ti accompagna per un po', poi tornerà ai fatti suoi. ${hearts(st.op)}`, [{ t: 'Andiamo', c: 'pri', f: closePanel }]);
+  toast(`🚶 ${esc(n.first)} ti accompagna in passeggiata.`, 'good'); refreshSide();
 }
 function streetRaceWith(n) {
   const v = G.vehicles.find(v => !v.lost && v.cx === G.player.cx && v.cy === G.player.cy && ['moto', 'car'].includes(VMODELS[v.model].type)) || curVeh();
