@@ -1451,10 +1451,16 @@ function buildCells() {
   // distributori automatici di acqua e cibo, sparsi dove passa gente
   { let vend = 0; const vendMax = 26; for (const c of shuffle(CELLS.slice(), W.r)) { if (vend >= vendMax) break; if (c.vending || c.booth !== undefined || c.water || c.block) continue; const onStreet = c.road && c.road !== RD_DOCK; const nearBiz = c.b.some(id => W.buildings[id] && !['casa', 'villa'].includes(W.buildings[id].type)); if ((onStreet && W.r() < 0.05) || (nearBiz && W.r() < 0.4) || (['terminal', 'ambulatorio', 'municipio', 'questura', 'impiego', 'pensione', 'dormitorio', 'marinas', 'capitaneria', 'faro', 'tornanti'].some(t => c.b.some(id => W.buildings[id] && W.buildings[id].type === t)))) { c.vending = true; vend++; } } }
   // sportelli bancomat (ATM) aperti 24h, sparsi dove la banca non arriva
-  { const prefTypes = ['banca', 'posta', 'terminal', 'alimentari', 'farmacia', 'edicola', 'pensione', 'marinas', 'municipio', 'tornanti', 'faraglione']; let atm = 0; const atmMax = 16;
-    // uno attaccato a ogni banca e a ogni posta, sempre
-    for (const bld of W.buildings) { if (!bld.cell || atm >= atmMax) continue; if (bld.type !== 'banca' && bld.type !== 'posta') continue; const near = CELLS.filter(c => c.b.some(id => W.buildings[id] === bld) && !c.atm && !c.water && !c.block); const c = near.find(c => c.road) || near[0]; if (c) { c.atm = true; atm++; } }
-    for (const c of shuffle(CELLS.slice(), W.r)) { if (atm >= atmMax) break; if (c.atm || c.vending || c.booth !== undefined || c.water || c.block) continue; const onStreet = c.road && c.road !== RD_DOCK; const nearPref = prefTypes.some(t => c.b.some(id => W.buildings[id] && W.buildings[id].type === t)); if (nearPref || (onStreet && c.plaza && W.r() < 0.4) || (onStreet && W.r() < 0.02)) { c.atm = true; atm++; } } }
+  { const prefTypes = ['banca', 'posta', 'terminal', 'alimentari', 'farmacia', 'edicola', 'pensione', 'marinas', 'municipio', 'tornanti', 'faraglione']; let atm = 0; const atmMax = 18;
+    const freeIcon = cc => cc && !cc.water && !cc.block && !cc.atm && !cc.vending && cc.booth === undefined && !cc.b.some(id => { const B = W.buildings[id]; return B && B.type !== 'casa' && B.type !== 'villa'; });
+    // cella pedonale (strada/piazza) libera attorno a un edificio, cosi il 🏧 si vede sulla strada e non sparisce sotto il palazzo
+    const sideCell = bld => { if (!bld.cell) return null; const [bx, by] = bld.cell; let best = null; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue; const cc = cellAt(bx + dx, by + dy); if (freeIcon(cc) && cc.road) return cc; if (freeIcon(cc) && !best) best = cc; } return best; };
+    // uno alla banca, uno alla posta, sempre
+    for (const bld of W.buildings) { if (!bld.cell || atm >= atmMax) continue; if (bld.type !== 'banca' && bld.type !== 'posta') continue; const c = sideCell(bld) || CELLS.find(c => c.b.some(id => W.buildings[id] === bld) && !c.atm && !c.water && !c.block); if (c) { c.atm = true; atm++; } }
+    // gli altri su strada/piazza vicino ai luoghi di passaggio
+    const prefBld = W.buildings.filter(b => b.cell && prefTypes.includes(b.type));
+    for (const bld of shuffle(prefBld.slice(), W.r)) { if (atm >= atmMax) break; const c = sideCell(bld); if (c) { c.atm = true; atm++; } }
+    for (const c of shuffle(CELLS.slice(), W.r)) { if (atm >= atmMax) break; if (!freeIcon(c)) continue; const onStreet = c.road && c.road !== RD_DOCK; if ((onStreet && c.plaza) || (onStreet && W.r() < 0.015)) { c.atm = true; atm++; } } }
   const cz = W.Z('centro'); const pc = cellAt(Math.round(cz.plaza.cx / CF), Math.round(cz.plaza.cy / CF)); if (pc) { pc.board = true; pc.plaza = true; pc.bench = true; }
 }
 function cellTitle(c) {
@@ -1679,6 +1685,8 @@ function drawBoard(t, dt) {
     else if (c.spring) { g.fillText('♨️', a, b + Math.sin(t * 2) * 1.5); }
     else if (c.vending) g.fillText('🥤', a, b);
     else if (c.atm) g.fillText('🏧', a, b);
+    // il bancomat sta spesso sul muro di una banca/negozio: mostralo come targhetta d'angolo cosi non sparisce sotto l'icona del palazzo
+    if (c.atm && mp && mp.type !== 'casa' && mp.type !== 'villa') { g.font = (fs * 0.7) + 'px serif'; g.fillText('🏧', a - fs * 0.7, b + fs * 0.6); g.font = fs + 'px serif'; }
     if (G.home && W.buildings[G.home.b] && W.buildings[G.home.b].cell && W.buildings[G.home.b].cell[0] === cx && W.buildings[G.home.b].cell[1] === cy) { g.font = (fs * 0.7) + 'px serif'; g.fillText('🏠', a + fs * 0.7, b - fs * 0.6); g.font = fs + 'px serif'; }
   }
   // veicoli del giocatore
