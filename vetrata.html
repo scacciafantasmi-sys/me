@@ -1450,6 +1450,11 @@ function buildCells() {
   for (const c of CELLS) { if (c.road === RD_COBBLE || c.road === RD_PLAZA) { if (W.r() < 0.12) c.bin = true; if (W.r() < 0.1) c.bench = true; } if (c.road === RD_PLAZA && !c.bench) c.bench = true; }
   // distributori automatici di acqua e cibo, sparsi dove passa gente
   { let vend = 0; const vendMax = 26; for (const c of shuffle(CELLS.slice(), W.r)) { if (vend >= vendMax) break; if (c.vending || c.booth !== undefined || c.water || c.block) continue; const onStreet = c.road && c.road !== RD_DOCK; const nearBiz = c.b.some(id => W.buildings[id] && !['casa', 'villa'].includes(W.buildings[id].type)); if ((onStreet && W.r() < 0.05) || (nearBiz && W.r() < 0.4) || (['terminal', 'ambulatorio', 'municipio', 'questura', 'impiego', 'pensione', 'dormitorio', 'marinas', 'capitaneria', 'faro', 'tornanti'].some(t => c.b.some(id => W.buildings[id] && W.buildings[id].type === t)))) { c.vending = true; vend++; } } }
+  // sportelli bancomat (ATM) aperti 24h, sparsi dove la banca non arriva
+  { const prefTypes = ['banca', 'posta', 'terminal', 'alimentari', 'farmacia', 'edicola', 'pensione', 'marinas', 'municipio', 'tornanti', 'faraglione']; let atm = 0; const atmMax = 16;
+    // uno attaccato a ogni banca e a ogni posta, sempre
+    for (const bld of W.buildings) { if (!bld.cell || atm >= atmMax) continue; if (bld.type !== 'banca' && bld.type !== 'posta') continue; const near = CELLS.filter(c => c.b.some(id => W.buildings[id] === bld) && !c.atm && !c.water && !c.block); const c = near.find(c => c.road) || near[0]; if (c) { c.atm = true; atm++; } }
+    for (const c of shuffle(CELLS.slice(), W.r)) { if (atm >= atmMax) break; if (c.atm || c.vending || c.booth !== undefined || c.water || c.block) continue; const onStreet = c.road && c.road !== RD_DOCK; const nearPref = prefTypes.some(t => c.b.some(id => W.buildings[id] && W.buildings[id].type === t)); if (nearPref || (onStreet && c.plaza && W.r() < 0.4) || (onStreet && W.r() < 0.02)) { c.atm = true; atm++; } } }
   const cz = W.Z('centro'); const pc = cellAt(Math.round(cz.plaza.cx / CF), Math.round(cz.plaza.cy / CF)); if (pc) { pc.board = true; pc.plaza = true; pc.bench = true; }
 }
 function cellTitle(c) {
@@ -1673,6 +1678,7 @@ function drawBoard(t, dt) {
     else if (c.tv !== undefined) g.fillText('📺', a, b);
     else if (c.spring) { g.fillText('♨️', a, b + Math.sin(t * 2) * 1.5); }
     else if (c.vending) g.fillText('🥤', a, b);
+    else if (c.atm) g.fillText('🏧', a, b);
     if (G.home && W.buildings[G.home.b] && W.buildings[G.home.b].cell && W.buildings[G.home.b].cell[0] === cx && W.buildings[G.home.b].cell[1] === cy) { g.font = (fs * 0.7) + 'px serif'; g.fillText('🏠', a + fs * 0.7, b - fs * 0.6); g.font = fs + 'px serif'; }
   }
   // veicoli del giocatore
@@ -2628,6 +2634,16 @@ function useVending() {
   if (chance(0.04)) { toast('Il distributore si mangia la moneta e non dà niente. Ci dai un calcio.', 'bad'); G.player.stress = Math.min(100, G.player.stress + 2); return; }
   render();
 }
+function useATM() {
+  const unpaid = G.fines.filter(f => !f.paid);
+  const opts = [
+    { t: '⬆️ Preleva contanti', dis: G.bank < 1, f: () => askAmount('Prelievo', G.bank, a => { G.bank -= a; G.cash += a; logTx(-a, 'Prelievo al bancomat'); AU.sfx('coin'); toast(`Prelevati ${money(a)}.`, 'money'); if (!G.flags.twofa && chance(0.02)) { const l = Math.min(G.bank, ri(60, 240)); if (l > 0) { G.bank -= l; logTx(-l, 'Prelievo sconosciuto (skimmer)'); toast('Giorni dopo noti un prelievo che non hai fatto: uno skimmer sullo sportello. La banca apre una pratica.', 'bad'); } } refreshSide(); }) },
+    { t: '⬇️ Versa contanti', dis: G.cash < 1, f: () => askAmount('Versamento', G.cash, a => { G.cash -= a; G.bank += a; logTx(a, 'Versamento al bancomat'); AU.sfx('coin'); toast(`Versati ${money(a)} sul conto.`, 'money'); refreshSide(); }) },
+    unpaid.length ? { t: `🧾 Paga le multe (${unpaid.length})`, d: `Totale ${money(unpaid.reduce((s, f) => s + f.amount, 0))}`, f: () => { let paid = 0; for (const f of unpaid.slice()) { if (G.bank >= f.amount) { G.bank -= f.amount; f.paid = true; G.island.budget += f.amount; logTx(-f.amount, 'Multa'); if (f.late) { const i = G.record.warrants.findIndex(w => w.type === 'multe'); if (i >= 0) G.record.warrants.splice(i, 1); } paid++; } } toast(paid ? `Pagate ${paid} multe.` : 'Saldo insufficiente.', paid ? 'money' : 'bad'); closePanel(); refreshSide(); } } : null
+  ].filter(Boolean);
+  openPanel('🏧 Sportello bancomat', `<p class="desc">Uno sportello automatico della Banca Insulare, aperto a ogni ora. Conto: <b>${money(G.bank)}</b> · Contanti: ${money(G.cash)}.${G.flags.twofa ? ' <span class="good">🔐 2FA attiva.</span>' : ' <span class="muted">Attiva la 2FA in banca per proteggerti dagli skimmer.</span>'}</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]);
+  bindOpts(opts);
+}
 function searchBin() {
   const c = playerCell(); if (c.binDay === G.day) return toast('Già frugato oggi.'); c.binDay = G.day; advance(5); G.player.stress = Math.min(100, G.player.stress + 1);
   const r = Math.random();
@@ -3292,6 +3308,7 @@ function refreshSide() {
   if (c.crossing && !c.light) extras.push({ ic: '🚸', t: 'Strisce pedonali', s: 'dai la precedenza, se guidi', f: `toast('Attraversamento pedonale.')` });
   if (c.parking) extras.push({ ic: '🅿️', t: 'Parcheggio', s: 'lascia qui l\'auto, al sicuro', f: `toast('Area di parcheggio: sosta consentita.')` });
   if (c.vending) extras.push({ ic: '🥤', t: 'Distributore automatico', s: 'acqua, snack, caffè — 24h', f: 'useVending()' });
+  if (c.atm) extras.push({ ic: '🏧', t: 'Sportello bancomat', s: 'preleva o versa contanti — 24h', f: 'useATM()' });
   if (c.bin) extras.push({ ic: '🗑️', t: 'Cassonetto', s: 'frugare costa dignità', f: 'searchBin()' });
   if (checkCache()) extras.push({ ic: '⛏️', t: 'Terra smossa', s: 'qualcuno ha scavato qui', f: 'digCache()' });
   if (checkFinalSite()) extras.push({ ic: '👁️', t: MYS().finalName, s: 'alle tre di notte', f: 'finalRitual()' });
