@@ -5406,7 +5406,7 @@ function npcsFollowing() { return NPCS.filter(n => { const s = n.pl ? plState(n)
 function feedPost(n, text, o = {}) {
   G.feed = G.feed || [];
   const by = n ? (n.pl ? n.pl.tag : npcName(n, false)) : (o.by || 'Anonimo');
-  G.feed.unshift({ id: 'f' + G.min + Math.random().toString(36).slice(2, 6), nid: n ? n.id : null, by, text, day: G.day, t: hhmm(), likes: ri(0, 30) + (n && n.pl && n.pl.style === 'influencer' ? ri(40, 200) : 0), liked: false, img: o.img || null, me: !!o.me, rep: [] });
+  G.feed.unshift({ id: 'f' + G.min + Math.random().toString(36).slice(2, 6), nid: n ? n.id : null, by, text, day: G.day, t: hhmm(), likes: ri(0, 30) + (n && n.pl && n.pl.style === 'influencer' ? ri(40, 200) : 0), liked: false, img: o.img || null, me: !!o.me, rep: [], topic: o.topic || null });
   if (o.me) { try { smartReactPost(G.feed[0]); } catch (e) { } }
   if (G.feed.length > 80) G.feed.pop();
 }
@@ -5415,6 +5415,8 @@ function feedHourly() {
   const online = NPCS.filter(n => n.pl && plState(n).on);
   for (const n of online) if (chance(0.12)) feedPost(n, chance(0.55) ? plLine(n, 'ooc') : plLine(n, 'rp'));
   if (chance(0.1)) { const n = pick(NPCS.filter(x => !x.pl && npcState(x).alive)); if (n) feedPost(n, pick([ambientLine(n), smallTalk(n)])); }
+  // post concreti (annunci) con un argomento preciso, cosi il DM poi ha senso
+  if (online.length && chance(0.22)) { const n = pick(online); if (!npcState(n).offer || G.day - npcState(n).offer.day > 3) npcOfferPost(n); }
   if (online.length > 1 && chance(0.09)) { const [a, b] = shuffle(online.slice()).slice(0, 2); feedPost(a, pick([`io e @${b.pl.tag} stasera al Faraglione, chi c'è?`, `@${b.pl.tag} mi devi ancora 50 caprini 😤`, `grande scena con @${b.pl.tag} oggi al porto`, `@${b.pl.tag} rivincita sui tornanti?`, `fondata la crew con @${b.pl.tag} 🔥`, `@${b.pl.tag} ci vediamo in Piazzetta tra poco`, `bella serata con @${b.pl.tag} e gli altri 🍻`])); }
   try { plGather(online); } catch (e) { }
   // risposte ai tuoi post
@@ -5962,16 +5964,17 @@ function renderFeedPanel() {
     const n = p.nid !== null && p.nid !== undefined ? NPCS[p.nid] : null;
     const av = n ? n.look.shirt : '#888';
     const online = n && isPl(n) && plState(n).on;
-    return `<div class="vg-post"><div class="vg-head"><span class="vg-av" style="background:${av}"></span><b>${esc(p.by)}</b>${n && isPl(n) ? `<span class="pltag sm">${plStyle(n).ico}</span>` : ''}${online ? '<span class="vg-on">●</span>' : ''}<span class="muted tiny sp">${dateDay(p.day)} ${p.t}</span></div>${p.img ? `<img class="vg-img" src="${p.img}">` : ''}<div class="vg-body">${esc(p.text)}</div><div class="vg-foot"><button class="vg-like ${p.liked ? 'on' : ''}" data-like="${k}">♥ ${p.likes}</button>${n && !p.me ? `<button class="vg-reply" data-dm="${p.nid}">💬 scrivi</button>` : ''}${p.rep && p.rep.length ? `<div class="vg-reps">${p.rep.map(r => `<div><b>${esc(r.by)}</b> ${esc(r.t)}</div>`).join('')}</div>` : ''}${p.actions && p.actions.length ? `<div class="vg-acts">${p.actions.map(a => `<button class="btn sm pri" data-fa="${a.key}">${esc(a.t)}</button>`).join(' ')}</div>` : ''}</div></div>`;
+    return `<div class="vg-post"><div class="vg-head"><span class="vg-av" style="background:${av}"></span><b>${esc(p.by)}</b>${n && isPl(n) ? `<span class="pltag sm">${plStyle(n).ico}</span>` : ''}${online ? '<span class="vg-on">●</span>' : ''}<span class="muted tiny sp">${dateDay(p.day)} ${p.t}</span></div>${p.img ? `<img class="vg-img" src="${p.img}">` : ''}<div class="vg-body">${esc(p.text)}</div><div class="vg-foot"><button class="vg-like ${p.liked ? 'on' : ''}" data-like="${k}">♥ ${p.likes}</button>${n && !p.me ? `<button class="vg-reply" data-dm="${p.nid}" data-dmpost="${k}">💬 scrivi${p.topic ? ' sull\'annuncio' : ''}</button>` : ''}${p.rep && p.rep.length ? `<div class="vg-reps">${p.rep.map(r => `<div><b>${esc(r.by)}</b> ${esc(r.t)}</div>`).join('')}</div>` : ''}${p.actions && p.actions.length ? `<div class="vg-acts">${p.actions.map(a => `<button class="btn sm pri" data-fa="${a.key}">${esc(a.t)}</button>`).join(' ')}</div>` : ''}</div></div>`;
   }).join('');
   openPanel('🌐 Vetragram', `<div class="vg-compose"><input id="vgIn" placeholder="A cosa stai pensando, ${esc(G.player.first)}?" maxlength="180"><button class="btn sm pri" id="vgPost">Pubblica</button></div><div class="small muted" style="margin:4px 0">👥 ${G.social.followers || 0} follower · ${(G.feed.filter(p => p.me)).length} tuoi post</div><div class="vg-feed">${posts || '<p class="muted">Ancora niente nel feed. Pubblica qualcosa!</p>'}</div>`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
   $('#vgPost').onclick = () => { const t = $('#vgIn').value.trim(); if (!t) return; feedPost(null, t, { by: G.player.first + ' ' + G.player.last, me: true }); G.stats.posts = (G.stats.posts || 0) + 1; renderFeedPanel(); };
   document.querySelectorAll('[data-like]').forEach(b => b.onclick = () => { const p = G.feed[+b.dataset.like]; p.liked = !p.liked; p.likes += p.liked ? 1 : -1; if (p.nid != null && p.liked) npcState(NPCS[p.nid]).op += 0.5; renderFeedPanel(); });
-  document.querySelectorAll('[data-dm]').forEach(b => b.onclick = () => { const n = NPCS[+b.dataset.dm]; npcState(n).met = true; npcState(n).number = true; closePanel(); openChat(n); });
+  document.querySelectorAll('[data-dm]').forEach(b => b.onclick = () => { const p = G.feed[+b.dataset.dmpost]; const n = NPCS[+b.dataset.dm]; npcState(n).met = true; npcState(n).number = true; closePanel(); openChat(n, p && p.topic ? p.topic : null); });
   document.querySelectorAll('[data-fa]').forEach(b => b.onclick = () => { const fn = FEED_ACTIONS[b.dataset.fa]; if (fn) fn(); });
 }
-function openChat(n) {
+function openChat(n, topic) {
   const st = npcState(n); st.chat = st.chat || [];
+  st.activeTopic = topic || st.offer || null;
   const msgs = st.chat.slice(-18).map(m => `<div class="ch-msg ${m.me ? 'me' : ''}">${esc(m.t)}<span class="ch-t">${m.hm}</span></div>`).join('');
   openPanel('💬 ' + esc(isPl(n) ? n.pl.tag : n.first), `<div class="ch-log" id="chLog">${msgs || '<p class="muted small" style="text-align:center">Scrivi il primo messaggio.</p>'}</div><div class="vg-compose"><input id="chIn" placeholder="Messaggio…" maxlength="160"><button class="btn sm pri" id="chSend">▶</button></div><div class="small muted">${online(n) ? '<span class="good">🟢 online</span>' : '⚫ offline — risponderà più tardi'} · ${tierOf(st.op)[1]}</div>`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
   const send = () => { const t = $('#chIn').value.trim(); if (!t) return; st.chat.push({ t, me: true, hm: hhmm() }); $('#chIn').value = ''; st.op += 0.5; advance(1, { noUI: true }); renderChatLog(n); setTimeout(() => chatReply(n), 500); };
@@ -7297,10 +7300,43 @@ function datingList() {
   openPanel('💘 Cuori solitari di Vetrata', '<p class="desc">Chi è single e di cuore tenero. Conoscili di persona o in chat: con un po\' di stile e le parole giuste…</p>' + optList(opts), [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
 }
 
+/* ---------- Annunci concreti: i post hanno un argomento e il DM lo segue ---------- */
+const NPC_OFFERS = [
+  { kind: 'vendo', items: [['vespina', "una Vespa '98 restaurata", 900], ['scooter', 'uno scooter che va una meraviglia', 600], ['bici', 'una bici da corsa', 120], ['gozzo', 'il gozzo di mio zio, motore ok', 2200], ['chitarra', 'una chitarra classica', 140], ['fotocamera', 'una reflex a pellicola', 260], ['frigo', 'un frigo quasi nuovo', 160], ['tv_crt', 'un vecchio televisore a tubo catodico (non guardatelo alle tre…)', 40]],
+    post: o => pick([`Vendo ${o.label} a ${money(o.price)}. Ancora in ottimo stato, scrivetemi in DM 📩`, `${o.label.charAt(0).toUpperCase() + o.label.slice(1)} in vendita, ${money(o.price)} trattabili. DM aperti!`, `Chi vuole ${o.label}? La cedo a ${money(o.price)}. Scrivetemi qui.`]),
+    reply: o => pick([`Sì, ${o.label}! È ancora disponibile. ${money(o.price)}, tratto poco. La vuoi vedere?`, `Ciao! Per ${o.label} faccio ${money(o.price)}. Quando passi a darci un'occhiata?`, `Ancora qui, sì. ${money(o.price)} e te la porti via. Dove ci vediamo?`]) },
+  { kind: 'cerco_lavoro', post: () => pick(['Cerco lavoro serio sull\'isola, sono sveglio e affidabile. Qualcuno assume? 🙏', 'Disponibile da subito per qualsiasi lavoro onesto. Scrivetemi in DM!', 'Buone braccia e buona volontà cercano impiego. Fatemi sapere.']),
+    reply: () => pick(['Sì, cerco proprio lavoro! So fare un po\' di tutto. Hai qualcosa per me?', 'Magari! Che tipo di lavoro offri? Sono disponibile subito.', 'Grazie che mi scrivi. Dimmi pure, di che si tratta?']) },
+  { kind: 'affitto', post: () => pick(['Affitto una stanza in centro, prezzo onesto. DM 🏠', 'Si libera una camera da me, cerco persona tranquilla. Scrivetemi.', 'Monolocale disponibile vicino alla Piazzetta, interessati in DM.']),
+    reply: () => pick(['La stanza è ancora libera, sì! Vuoi passare a vederla?', 'Per l\'affitto facciamo un prezzo giusto, tranquillo. Quando vieni?', 'Disponibile da questa settimana. Ti va di dare un\'occhiata?']) },
+  { kind: 'evento', post: () => pick(['Stasera si fa festa al Faraglione, venite tutti! 🎉', 'Organizzo una serata ai Tornanti, chi c\'è?', 'Grigliata in spiaggia stasera, portate da bere 🍻']),
+    reply: () => pick(['Sì, la festa è confermata! Ti aspetto, mi raccomando.', 'Vieni stasera! Più siamo meglio è.', 'Certo che si fa! Passa quando vuoi.']) },
+  { kind: 'cerco_barca', post: () => pick(['Cerco un passaggio in barca per i Faraglioni domani, pago il carburante.', 'Qualcuno mi porta a pescare al largo? Divido il pescato.']),
+    reply: () => pick(['Sì! Ti porto volentieri. Ci mettiamo d\'accordo sull\'orario?', 'Per la barca nessun problema, dimmi quando.']) }
+];
+function npcOfferPost(n) {
+  const O = pick(NPC_OFFERS); const topic = { kind: O.kind, day: G.day };
+  if (O.items) { const [item, label, price] = pick(O.items); topic.item = item; topic.label = label; topic.price = price; }
+  npcState(n).offer = topic;
+  feedPost(n, O.post(topic), { topic });
+}
+function offerReplyFor(topic) { const O = NPC_OFFERS.find(x => x.kind === (topic || {}).kind); return O ? O.reply(topic) : null; }
+
 /* ---------- Chat: risposte che capiscono il messaggio ---------- */
 function smartChatReply(n, lastText) {
   const st = npcState(n), t = (lastText || '').toLowerCase();
   const intents = detectIntents(lastText);
+  // se stai scrivendo per un annuncio che ha pubblicato, l'NPC parla di QUELLO
+  const offer = (st.activeTopic && G.day - (st.activeTopic.day || G.day) <= 10 ? st.activeTopic : null) || (st.offer && G.day - st.offer.day <= 7 ? st.offer : null);
+  if (offer) {
+    const relevant = st.chat.filter(m => m.me).length <= 1 || /ciao|salve|ehi|ue|info|ancora|disponib|interess|quanto|prezzo|costa|vespa|scooter|moto|bici|barca|gozzo|chitarra|frigo|tv|casa|stanza|camera|affitt|lavoro|assum|festa|serata|vedere|dove|quando|la prendo|lo prendo|compro|la vuoi|ci sto/i.test(t);
+    const buying = /(la prendo|lo prendo|la compro|lo compro|ci sto|va bene|affare fatto|quando ci vediamo|dove ci vediamo|ci vediamo|vengo a vederl)/i.test(t);
+    if (relevant) {
+      let r = offerReplyFor(offer) || null;
+      if (buying) { st.dealClosing = G.day; r = pick(['Perfetto! Allora ci vediamo e chiudiamo. Portati i contanti 😉', 'Affare fatto! Passa quando vuoi, ti aspetto.', 'Benissimo. Ti scrivo dove trovarmi.']); }
+      if (r) return r;
+    }
+  }
   // domande dirette tipiche
   if (/\b(dove (sei|stai|abiti)|dove ti trovo)\b/.test(t)) return pick(['Sono ' + (npcWhere(n) && W.buildings[(npcWhere(n) || {}).b] ? 'verso ' + (W.buildings[npcWhere(n).b].n || 'il centro') : 'in giro per l\'isola') + '.', 'Adesso al lavoro, dopo ci vediamo.']);
   if (/quanto (costa|vuoi|chiedi|paghi)/.test(t)) return pick(['Facciamo un buon prezzo, dai.', 'Dipende da cosa ti serve.', 'Ne parliamo di persona, meglio.']);
