@@ -1467,6 +1467,7 @@ function buildCells() {
 function mapPin(g, x, y, r, col, draw) { g.save(); g.globalAlpha = 0.7; g.beginPath(); g.arc(x, y, r, 0, 7); g.fillStyle = 'rgba(13,23,38,.5)'; g.fill(); g.strokeStyle = col; g.lineWidth = Math.max(0.8, r * 0.09); g.stroke(); g.fillStyle = col; g.textAlign = 'center'; g.textBaseline = 'middle'; draw(g, x, y, r); g.restore(); }
 function pinEuro(g, x, y, r) { g.font = 'bold ' + (r * 1.15) + 'px sans-serif'; g.fillText('€', x, y + r * 0.06); }
 function pinTent(g, x, y, r) { g.lineWidth = Math.max(1, r * 0.15); g.beginPath(); g.moveTo(x, y - r * 0.5); g.lineTo(x - r * 0.56, y + r * 0.44); g.lineTo(x + r * 0.56, y + r * 0.44); g.closePath(); g.stroke(); g.beginPath(); g.moveTo(x, y - r * 0.5); g.lineTo(x, y + r * 0.44); g.stroke(); }
+function pinCross(g, x, y, r) { g.fillStyle = '#fff'; const t = r * 0.4, l = r * 1.05; g.fillRect(x - t / 2, y - l / 2, t, l); g.fillRect(x - l / 2, y - t / 2, l, t); }
 function cellTitle(c) {
   if (!c) return '';
   const z = c.zone ? W.zones.find(z => z.id === c.zone).n : null;
@@ -1684,6 +1685,7 @@ function drawBoard(t, dt) {
     const [a, b] = toScreen(cx * CF + 2, cy * CF + 2);
     const mp = mainPlace(c);
     if (mp && mp.type === 'dormitorio') { mapPin(g, a, b, fs * 0.72, '#a6c08a', pinTent); } // centro rifugiati: marcatore vettoriale (tenda), sempre visibile
+    else if (mp && (mp.type === 'farmacia' || mp.type === 'ambulatorio')) { mapPin(g, a, b, fs * 0.72, '#4f8a5b', pinCross); } // farmacia/ambulatorio: croce verde, visibile su ogni dispositivo
     else if (mp && mp.type !== 'casa' && mp.type !== 'villa') { g.fillStyle = 'rgba(13,23,38,.55)'; g.beginPath(); g.arc(a, b, fs * 0.72, 0, 7); g.fill(); g.fillText(PLACES[mp.type].ico, a, b + 1); }
     else if (c.booth !== undefined) g.fillText('☎️', a, b);
     else if (c.tv !== undefined) g.fillText('📺', a, b);
@@ -2329,7 +2331,7 @@ function bizWeekly() {
 /* ---------- Isola, Partenope, politica ---------- */
 function initIsland(npcInfo) {
   G.island = { pop: 2140, unemployment: 0.27, crime: 38, tension: 52, euro: 1.12, euroTrend: 0, tourism: 0.7, budget: 180000, morale: 45, blockade: -1, history: [] };
-  G.pol = { mayor: 'npc', mayorNpc: npcInfo.mayor, mayorParty: npcInfo.mayorParty, questore: npcInfo.questore, magistrato: NPCS.find(n => n.role === 'magistrato').id, tax: 0.14, subsidy: 6, curfew: null, ztl: false, nightClose: null, approval: 41, nextElection: 12, seats: { vl: 4, ri: 2, of: 3, lm: 2 }, playerList: null, signatures: [], candidate: false, campaign: { funds: 0, posters: [], rallies: 0, debate: 0, dirty: 0 }, giunta: [], appalti: [], term: 0, results: null, regional: 0 };
+  G.pol = { mayor: 'npc', mayorNpc: npcInfo.mayor, mayorParty: npcInfo.mayorParty, questore: npcInfo.questore, magistrato: NPCS.find(n => n.role === 'magistrato').id, tax: 0.14, subsidy: 6, curfew: null, ztl: false, nightClose: null, approval: 41, nextElection: 365, playerVote: null, seats: { vl: 4, ri: 2, of: 3, lm: 2 }, playerList: null, signatures: [], candidate: false, campaign: { funds: 0, posters: [], rallies: 0, debate: 0, dirty: 0 }, giunta: [], appalti: [], term: 0, results: null, regional: 0 };
   G.pol.seats[G.pol.mayorParty] += 1;
 }
 function islandDaily() {
@@ -2397,6 +2399,8 @@ function voteShares() {
     }
     tot[best]++;
   }
+  // il voto del giocatore (se residente e ha votato): il suo voto + un piccolo traino dei suoi follower
+  if (G.flags.resident && P.playerVote && tot[P.playerVote] !== undefined) tot[P.playerVote] += 1 + Math.round((G.social.followers || 0) / 150);
   const s = Object.values(tot).reduce((a, b) => a + b, 0) || 1;
   return Object.fromEntries(Object.entries(tot).map(([k, v]) => [k, v / s]));
 }
@@ -2420,7 +2424,7 @@ function runElection() {
     if (P.candidate) { toast(`🗳️ ${P.playerList.n}: ${pct(sh.player || 0)}, ${seats.player || 0} seggi.`, sh.player > 0.2 ? 'money' : 'warn'); if (seats.player) G.flags.consigliere = true; }
     if (prev === 'player') toast('Non sei più Sindaco.', 'bad');
   }
-  P.nextElection = G.day + 21; P.candidate = false; P.signatures = []; P.campaign = { funds: 0, posters: [], rallies: 0, debate: 0, dirty: P.campaign.dirty };
+  P.nextElection = G.day + 365; P.candidate = false; P.playerVote = null; P.signatures = []; P.campaign = { funds: 0, posters: [], rallies: 0, debate: 0, dirty: P.campaign.dirty };
   setTimeout(() => openElectionResults(), 300);
 }
 
@@ -2467,7 +2471,7 @@ function advance(minutes, opts = {}) {
     const nd = Math.floor((G.min - 360) / 1440);
     if (nd !== prevD) { dailyEdition(); }
     const day = Math.floor(G.min / 1440);
-    if (day !== G.day) { G.day = day; islandDaily(); if (dayOfWeek() === 1) { bizWeekly(); try { companiesWeekly(); } catch (e) { } } }
+    if (day !== G.day) { G.day = day; islandDaily(); if (dayOfWeek() === 1) { bizWeekly(); try { companiesWeekly(); } catch (e) { } try { npcGovernWeekly(); } catch (e) { } } }
     if (G.dead || G.player.down) break;
   }
   invalidateWhere();
@@ -3509,7 +3513,7 @@ function phoneBody(app, sig) {
     case 'news': return renderEdition(true);
     case 'meteo': return `<p>${WEATHER[G.weather.cur].ico} <b>${WEATHER[G.weather.cur].n}</b>, ${Math.round(ambientTemp())}°C</p><p class="small">${forecastText()}</p><p class="small">Traghetti per Partenope: ${ferryOK() ? '<span class="good">regolari</span>' : '<span class="badc">sospesi</span>'}</p><p class="small">Mare: ${['calmo', 'poco mosso', 'mosso', 'agitato', 'grosso'][Math.min(4, Math.floor(WEATHER[G.weather.cur].sea * 5))]} · Visibilità in mare: ${WEATHER[G.weather.cur].fog > 0.5 ? 'scarsa' : 'buona'}</p><p class="small muted">Alba ${fmtH(sunState().rise)} · Tramonto ${fmtH(sunState().set)} · Luna ${['nuova', 'crescente', 'piena', 'calante'][Math.floor((G.day % 29.5) / 7.4)]}</p>`;
     case 'jobs': return `${G.job.id ? `<p>Lavori come <b>${JOBS[G.job.id].n}</b>.<br>Turno: ${G.job.onDuty ? 'in corso' : 'non in servizio'} · Richiami: ${G.job.warnings}/3 · Ore lavorate: ${Math.round(G.job.hours || 0)}</p><button class="btn sm bad" id="quitJ">Licenziati</button>` : '<p class="muted">Disoccupato. Prova al Centro per l\'Impiego, o chiedi ai titolari.</p>'}<h4>Incarichi</h4>${G.missions.map((m, k) => `<div class="msg"><b>${esc(m.title)}</b><br>${esc(m.desc)}<br><span class="small muted">${esc(m.steps[m.si] ? m.steps[m.si].text : '')}</span> <button class="btn sm" data-wp="${k}">GPS</button> <button class="btn sm" data-ab="${k}">Abbandona</button></div>`).join('') || '<p class="muted small">Nessuno.</p>'}`;
-    case 'comune': if (sig < 10) return noSig; return `<p><b>Libero Comune di Vetrata</b></p><p class="small">Sindaco: ${G.pol.mayor === 'player' ? 'TU' : G.pol.mayor ? esc(npcName(NPCS[G.pol.mayorNpc])) + ' (' + partyName(G.pol.mayorParty) + ')' : 'vacante'}<br>Consenso: ${Math.round(G.pol.approval)}%<br>Elezioni: il ${dateDay(G.pol.nextElection)} (tra ${G.pol.nextElection - G.day} giorni)<br>Tasse commerciali ${pct(G.pol.tax)} · Sussidio ${money(G.pol.subsidy)}/g</p><p class="small">Abitanti ${G.island.pop.toLocaleString('it-IT')} · Disoccupazione ${pct(G.island.unemployment)} · Criminalità ${Math.round(G.island.crime)}/100<br>Cambio 1 € = ${G.island.euro.toFixed(2)} ℭ · Tensione con Partenope ${Math.round(G.island.tension)}/100</p><button class="btn sm" id="denuncia">📝 Denuncia online</button>`;
+    case 'comune': if (sig < 10) return noSig; return `<p><b>Libero Comune di Vetrata</b></p><p class="small">Sindaco: ${G.pol.mayor === 'player' ? 'TU' : G.pol.mayor ? esc(npcName(NPCS[G.pol.mayorNpc])) + ' (' + partyName(G.pol.mayorParty) + ')' : 'vacante'}<br>Consenso: ${Math.round(G.pol.approval)}%<br>Elezioni: il ${dateDay(G.pol.nextElection)} (tra ${G.pol.nextElection - G.day} giorni)<br>Tasse commerciali ${pct(G.pol.tax)} · Sussidio ${money(G.pol.subsidy)}/g</p><p class="small">Abitanti ${G.island.pop.toLocaleString('it-IT')} · Disoccupazione ${pct(G.island.unemployment)} · Criminalità ${Math.round(G.island.crime)}/100<br>Cambio 1 € = ${G.island.euro.toFixed(2)} ℭ · Tensione con Partenope ${Math.round(G.island.tension)}/100</p><button class="btn sm" id="elezioni">🗳️ Elezioni e programmi</button> <button class="btn sm" id="denuncia">📝 Denuncia online</button>`;
     case 'borsa': if (sig < 10) return noSig; return `<p class="small muted">Borsa Insulare di Vetrata. Commissione 1%.</p>${STOCKS.map(s => { const st = G.stocks[s.id], h = st.h; const ch = h.length > 1 ? (h[h.length - 1] / h[h.length - 2] - 1) : 0; return `<div class="msg"><b>${s.id}</b> ${esc(s.n)}<br>${money(st.p)} <span class="${ch >= 0 ? 'good' : 'badc'}">${ch >= 0 ? '▲' : '▼'} ${(ch * 100).toFixed(1)}%</span> · possiedi ${st.own}<br><button class="btn sm" data-buy="${s.id}">Compra 10</button> <button class="btn sm" data-sell="${s.id}" ${st.own ? '' : 'disabled'}>Vendi tutto</button></div>`; }).join('')}`;
     case 'call': if (sig < 10) return noSig + '<p class="small">Le cabine telefoniche funzionano a gettoni anche senza campo.</p>'; return optList(phoneCalls().map(c => ({ t: c.t, d: c.d })));
     case 'me': return charSheet();
@@ -3529,6 +3533,7 @@ function phoneBind(app, sig) {
   if (app === 'bank') { document.querySelectorAll('[data-debt]').forEach(b => b.onclick = () => { const d = G.debts[+b.dataset.debt]; if (G.bank >= d.amount) { G.bank -= d.amount; d.paid = true; logTx(-d.amount, d.to); if (/Carannante/.test(d.to)) { G.flags.clanPaid = true; G.player.clanDebt = 0; addRep('carannante', 10); } toast('Debito saldato.'); renderPhone(); } else toast('Saldo insufficiente.', 'bad'); }); document.querySelectorAll('[data-fine]').forEach(b => b.onclick = () => { const f = G.fines[+b.dataset.fine]; if (G.bank >= f.amount) { G.bank -= f.amount; f.paid = true; G.island.budget += f.amount; logTx(-f.amount, 'Multa'); if (f.late) { const i = G.record.warrants.findIndex(w => w.type === 'multe'); if (i >= 0) G.record.warrants.splice(i, 1); } toast('Multa pagata.'); renderPhone(); } else toast('Saldo insufficiente.', 'bad'); }); }
   if (app === 'jobs') { if ($('#quitJ')) $('#quitJ').onclick = () => { quitJob(); renderPhone(); }; document.querySelectorAll('[data-wp]').forEach(b => b.onclick = () => { const m = G.missions[+b.dataset.wp], st = m.steps[m.si]; G.waypoint = { cx: st.cx, cy: st.cy }; toast('GPS impostato.'); }); document.querySelectorAll('[data-ab]').forEach(b => b.onclick = () => { abandonMission(G.missions[+b.dataset.ab]); renderPhone(); }); }
   if (app === 'comune' && $('#denuncia')) $('#denuncia').onclick = () => { toast('Denuncia inviata al portale della Polizia Insulare. Riceverai un protocollo.'); addRep('polizia', 1); };
+  if (app === 'comune' && $('#elezioni')) $('#elezioni').onclick = () => { togglePhone(false); openElections(); };
   if (app === 'borsa') { document.querySelectorAll('[data-buy]').forEach(b => b.onclick = () => { const st = G.stocks[b.dataset.buy]; const c = st.p * 10 * 1.01; if (G.bank + G.cash >= c) { const fromBank = Math.min(G.bank, c); G.bank -= fromBank; G.cash -= (c - fromBank); st.own += 10; st.cost = (st.cost || 0) + c; logTx(-c, 'Acquisto ' + b.dataset.buy); AU.sfx('coin'); renderPhone(); } else toast(`Ti servono ${money(c)} per 10 azioni. Disponibile: ${money(G.bank + G.cash)} (conto + contanti).`, 'bad'); }); document.querySelectorAll('[data-sell]').forEach(b => b.onclick = () => { const st = G.stocks[b.dataset.sell]; const v = st.p * st.own * 0.99; G.bank += v; logTx(v, 'Vendita ' + b.dataset.sell); st.own = 0; st.cost = 0; G.stats.trades = (G.stats.trades || 0) + 1; AU.sfx('coin'); renderPhone(); }); }
   if (app === 'call' && sig >= 10) bindOpts(phoneCalls());
   if (app === 'music') bindOpts([{ f: () => { AU.init(); AU.radioOn = true; AU.radioStation = 0; renderPhone(); } }, { f: () => { AU.init(); AU.radioOn = true; AU.radioStation = 1; renderPhone(); } }, { f: () => { AU.radioOn = false; renderPhone(); } }]);
@@ -4643,7 +4648,8 @@ function openMunicipio(b) {
   const P = G.pol, mayor = P.mayor === 'player' ? 'tu' : P.mayor ? npcName(NPCS[P.mayorNpc]) + ' (' + partyName(P.mayorParty) + ')' : 'vacante';
   const fines = G.fines.filter(f => !f.paid), fineTot = fines.reduce((s, f) => s + f.amount, 0);
   showPlace(b, b.n, `Scalone di marmo, ritratti di sindaci in cornici dorate (metà sono Vitale). Sindaco: <b>${esc(mayor)}</b> · Consenso ${Math.round(P.approval)}% · Prossime elezioni: ${dateDay(P.nextElection)} (tra ${P.nextElection - G.day} giorni).`, [
-    { t: '🗳️ Ufficio elettorale', d: P.candidate ? `Sei candidato con ${esc(P.playerList.n)}. Firme: ${P.signatures.length}/12` : 'Fonda una lista e candidati', f: () => { closePanel(); openElectoral(); } },
+    { t: '🗳️ Elezioni e programmi', d: `Vedi i programmi e vota · si vota il ${dateDay(P.nextElection)}`, f: () => { closePanel(); openElections(); } },
+    { t: '📋 Ufficio elettorale: candidati', d: P.candidate ? `Sei candidato con ${esc(P.playerList.n)}. Firme: ${P.signatures.length}/12` : 'Fonda una lista e candidati', f: () => { closePanel(); openElectoral(); } },
     P.mayor === 'player' ? { t: '🏛️ Ufficio del Sindaco', d: 'Decreti, bilancio, appalti, Giunta', c: 'pri', f: () => { closePanel(); openMayorOffice(); } } : null,
     { t: '🪑 Assisti al Consiglio comunale', d: '1 ora · capisci come tira il vento', f: () => { closePanel(); advance(60); councilSession(); } },
     fines.length ? { t: `🧾 Paga le multe (${money(fineTot)})`, f: () => { if (pay(fineTot, 'Multe', { atCounter: true })) { for (const f of fines) { f.paid = true; if (f.late) { const i = G.record.warrants.findIndex(w => w.type === 'multe'); if (i >= 0) G.record.warrants.splice(i, 1); } } G.island.budget += fineTot; closePanel(); toast('Multe pagate.'); } } } : null,
@@ -4669,6 +4675,15 @@ function councilSession() {
 }
 
 /* ---------- Ufficio elettorale e campagna ---------- */
+function ideoSummary(id) { const i = id === 'player' ? (G.pol.playerList ? G.pol.playerList.ideo : { indip: 0, ordine: 0, mercato: 0 }) : partyIdeo(id); return [i.indip > 0.3 ? 'indipendentista' : i.indip < -0.3 ? 'ritorno all\'Italia' : 'equilibrio con Partenope', i.ordine > 0.3 ? 'legge e ordine' : i.ordine < -0.3 ? 'libertà e diritti' : 'ordine moderato', i.mercato > 0.3 ? 'mercato e impresa' : i.mercato < -0.3 ? 'sussidi e pubblico' : 'economia mista'].join(' · '); }
+function openElections() {
+  const P = G.pol, sh = voteShares(), days = P.nextElection - G.day, windowOpen = days <= 30 && days >= 0;
+  const parties = PARTIES.map(p => p.id); if (P.candidate && P.playerList) parties.push('player');
+  const cards = parties.sort((a, b) => (sh[b] || 0) - (sh[a] || 0)).map(id => { const nm = partyName(id); const prog = id === 'player' ? (P.playerList.program || 'La tua lista civica: le tue idee per Vetrata.') : PARTIES.find(x => x.id === id).d; const poll = Math.round((sh[id] || 0) * 100); const voted = P.playerVote === id; return `<div class="card" style="margin-bottom:8px;border-left:4px solid ${partyCol(id)}"><h4>${esc(nm)} ${voted ? '<span class="good">✓ il tuo voto</span>' : ''}</h4><div class="small">${esc(prog)}</div><div class="tiny muted" style="margin-top:3px">${esc(ideoSummary(id))}</div><div class="small" style="margin-top:4px">Nei sondaggi: <b>${poll}%</b></div>${windowOpen && !P.playerVote && G.flags.resident ? `<button class="btn sm pri" data-vote="${id}" style="margin-top:5px">🗳️ Vota ${esc(nm)}</button>` : ''}</div>`; }).join('');
+  const head = `<p class="desc">Elezioni comunali di Vetrata. ${days > 0 ? `Si vota tra <b>${days}</b> giorni (${dateDay(P.nextElection)}).` : 'Oggi si vota!'} Sindaco uscente: ${P.mayor === 'player' ? '<b>tu</b>' : P.mayor ? esc(npcName(NPCS[P.mayorNpc])) + ' (' + partyName(P.mayorParty) + ')' : 'vacante'}.</p>${!G.flags.resident ? '<p class="small warnc">Per votare devi essere residente: registrati in Municipio (serve un\'abitazione o una pensione).</p>' : !windowOpen ? '<p class="small muted">Le urne aprono nell\'ultimo mese prima del voto.</p>' : P.playerVote ? '<p class="small good">Hai già votato per questa tornata. Lo spoglio sarà il giorno del voto.</p>' : '<p class="small">Scegli la lista. Si vota una volta sola.</p>'}`;
+  openPanel('🗳️ Elezioni e programmi', head + cards, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
+  document.querySelectorAll('[data-vote]').forEach(btn => btn.onclick = () => { P.playerVote = btn.dataset.vote; toast(`🗳️ Hai votato ${partyName(P.playerVote)}. Scrutinio il ${dateDay(P.nextElection)}.`, 'money'); AU.sfx('ok'); openElections(); });
+}
 function openElectoral() {
   const P = G.pol;
   if (!P.playerList) {
@@ -4737,12 +4752,48 @@ function openMayorOffice() {
     </div>`;
   openPanel('🏛️ Ufficio del Sindaco', html, [
     { t: 'Firma i decreti', c: 'pri', f: () => { const nt = +$('#mTax').value / 100, ns = +$('#mSub').value, nc = $('#mCur').value === '' ? null : +$('#mCur').value, nz = $('#mZtl').checked, nn = $('#mNight').value === '' ? null : +$('#mNight').value, nfuel = +($('#mFuel') ? $('#mFuel').value : (P.fuelTax||0)); const changes = []; if (nfuel !== (P.fuelTax || 0)) { changes.push(nfuel > (P.fuelTax || 0) ? 'accisa carburante +' + nfuel + '%' : 'accisa carburante abbassata'); G.island.tension = clamp(G.island.tension + (nfuel > (P.fuelTax || 0) ? 2 : -1), 0, 100); P.fuelTax = nfuel; } if (nt !== P.tax) { changes.push(`tasse al ${pct(nt)}`); P.approval += (P.tax - nt) * 40; P.tax = nt; } if (ns !== P.subsidy) { changes.push(`sussidio a ${money(ns)}`); P.approval += (ns - P.subsidy) * 0.3; P.subsidy = ns; } if (nc !== P.curfew) { changes.push(nc === null ? 'coprifuoco revocato' : `coprifuoco dalle ${nc}:00`); P.curfew = nc; for (const n of NPCS) npcState(n).op += (nc === null ? 1 : -1) * (n.age < 35 ? 2 : -1) * (n.ideo.ordine > 0.3 ? -1 : 1); } if (nz !== P.ztl) { changes.push(nz ? 'ZTL in Centro' : 'ZTL abolita'); P.ztl = nz; } if (nn !== P.nightClose) { changes.push(nn === null ? 'locali liberi' : `locali chiusi alle ${nn}:00`); P.nightClose = nn; } closePanel(); if (changes.length) { addNews({ tag: 'politica', head: 'Il Sindaco firma: ' + changes.join(', '), body: 'Reazioni contrastanti in Piazzetta.', weight: 4, about: 'player' }); toast('📜 Decreti firmati.', 'money'); } } },
+    { t: '📣 Iniziative e grandi opere', d: 'Sagre, sicurezza, sanità, lavoro, cultura: decidi la vita dell\'isola', c: 'pri', f: () => { closePanel(); openInitiatives(); } },
     { t: '🏗️ Appalti pubblici', f: () => { closePanel(); openAppalti(); } },
     { t: '👥 Nomina la Giunta', f: () => { closePanel(); openGiunta(); } },
     { t: '👮 Rapporti con il Questore', f: () => { closePanel(); questoreRelations(); } },
     { t: '⛴️ Missione a Partenope (Regione)', d: 'Prendi il traghetto dal Terminal e vai al Palazzo della Regione', f: () => { closePanel(); const t = W.buildings.find(b => b.type === 'terminal'); G.waypoint = { cx: t.cell[0], cy: t.cell[1] }; toast('GPS sul Terminal traghetti.'); } },
     { t: 'Chiudi', f: closePanel }], { wide: true });
   $('#mTax').oninput = e => $('#mTaxV').textContent = e.target.value + '%'; $('#mSub').oninput = e => $('#mSubV').textContent = money(+e.target.value) + '/g'; if ($('#mFuel')) $('#mFuel').oninput = e => $('#mFuelV').textContent = '+' + e.target.value + '%';
+}
+// grandi iniziative del Sindaco: tra un'elezione e l'altra (ora annuali) la politica muove davvero l'isola
+const MAYOR_INITIATIVES = [
+  { id: 'sagra', t: '🎉 Festa patronale e sagra', cost: 8000, d: 'Turismo e consenso su, criminalità giù per un po\'', apply: () => { G.island.tourism = Math.min(1.6, G.island.tourism + 0.15); G.island.crime = Math.max(0, G.island.crime - 4); G.pol.approval += 6; } },
+  { id: 'sicurezza', t: '🚓 Campagna sicurezza', cost: 6000, d: 'Criminalità giù; piace a chi vuole ordine', apply: () => { G.island.crime = Math.max(0, G.island.crime - 12); G.pol.approval += 3; for (const n of NPCS) npcState(n).op += n.ideo.ordine > 0.3 ? 1 : n.ideo.ordine < -0.3 ? -1 : 0; } },
+  { id: 'sanita', t: '🏥 Potenziamento della sanità', cost: 10000, d: 'Ospedale migliore, consenso su', apply: () => { try { G.hosp.equip = Math.min(4, (G.hosp.equip || 1) + 1); G.hosp.load = Math.max(0, G.hosp.load - 15); } catch (e) { } G.pol.approval += 5; } },
+  { id: 'lavoro', t: '🎓 Formazione e lavoro', cost: 9000, d: 'Disoccupazione giù, consenso su', apply: () => { G.island.unemployment = Math.max(0.05, G.island.unemployment - 0.05); G.pol.approval += 4; } },
+  { id: 'spiagge', t: '🌊 Pulizia di spiagge e moli', cost: 5000, d: 'Turismo su, isola più bella', apply: () => { G.island.tourism = Math.min(1.6, G.island.tourism + 0.09); G.pol.approval += 3; } },
+  { id: 'cultura', t: '🎭 Fondi a cultura e Vetrai', cost: 7000, d: 'Identità e turismo; piace ai nostalgici', apply: () => { G.island.tourism = Math.min(1.6, G.island.tourism + 0.07); G.pol.approval += 3; for (const n of NPCS) if (n.ideo.indip > 0.3) npcState(n).op += 1; } }
+];
+function openInitiatives() {
+  const P = G.pol;
+  const opts = MAYOR_INITIATIVES.map(I => ({ t: `${I.t} — ${money(I.cost)}`, d: `${I.d}${P.initCd && P.initCd[I.id] > G.day ? ' · già fatta di recente' : ''}`, dis: (P.initCd && P.initCd[I.id] > G.day) || G.island.budget < I.cost, f: () => { G.island.budget -= I.cost; I.apply(); P.initCd = P.initCd || {}; P.initCd[I.id] = G.day + 30; P.approval = clamp(P.approval, 0, 100); closePanel(); addNews({ tag: 'politica', head: 'Il Sindaco vara: ' + I.t.replace(/^\S+\s/, ''), body: 'Una scelta che si farà sentire sull\'isola.', weight: 3, about: 'player' }); toast('📜 Iniziativa avviata.', 'money'); } }));
+  opts.push({ t: 'Chiudi', c: 'pri', f: () => { closePanel(); openMayorOffice(); } });
+  openPanel('📣 Iniziative e grandi opere', `<p class="desc">Tra un'elezione e l'altra, è qui che decidi davvero la vita di Vetrata. Bilancio comunale: <b>${money(G.island.budget)}</b>.</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
+}
+// il Sindaco NPC (o un giocatore del server che ha vinto) governa davvero: ogni settimana muove le politiche verso la sua linea
+function npcGovernWeekly() {
+  const P = G.pol, I = G.island; if (P.mayor !== 'npc' || !P.mayorParty) return;
+  const party = P.mayorParty; const acts = [];
+  if (party === 'of') { // ordine e faro
+    if (I.crime > 35 && P.curfew === null && chance(0.5)) { P.curfew = 23; acts.push('coprifuoco dalle 23'); }
+    I.crime = Math.max(0, I.crime - 6); if (chance(0.4) && !P.ztl) { P.ztl = true; acts.push('ZTL in Centro'); }
+  } else if (party === 'lm') { // lista del mare: sussidi, lavoro
+    if (P.subsidy < 12) { P.subsidy = Math.min(14, P.subsidy + 3); acts.push('sussidio alzato'); }
+    I.unemployment = Math.max(0.05, I.unemployment - 0.02); if (P.curfew !== null && chance(0.5)) { P.curfew = null; acts.push('coprifuoco revocato'); }
+  } else if (party === 'ri') { // ritorno: distende con Partenope
+    I.tension = Math.max(5, I.tension - 5); if (P.tax < 0.2 && chance(0.4)) { P.tax = Math.min(0.22, P.tax + 0.02); acts.push('tasse ritoccate'); }
+  } else if (party === 'vl') { // vetrata libera: identità, turismo
+    I.tourism = Math.min(1.6, I.tourism + 0.04); if (P.tax > 0.1 && chance(0.4)) { P.tax = Math.max(0.1, P.tax - 0.02); acts.push('tasse abbassate'); }
+  }
+  // ogni tanto una grande opera del Sindaco NPC
+  if (chance(0.3) && I.budget > 9000) { const I2 = pick(MAYOR_INITIATIVES); if (!(P.initCd && P.initCd[I2.id] > G.day)) { I.budget -= I2.cost; I2.apply(); P.initCd = P.initCd || {}; P.initCd[I2.id] = G.day + 30; acts.push(I2.t.replace(/^\S+\s/, '').toLowerCase()); } }
+  P.approval = clamp(P.approval + rr(-2, 3), 0, 100);
+  if (acts.length && chance(0.8)) { const m = NPCS[P.mayorNpc]; addNews({ tag: 'politica', head: `Il Sindaco ${m ? m.last : ''} (${partyName(party)}): ${acts.join(', ')}`, body: 'Il governo dell\'isola va avanti tra un\'elezione e l\'altra.', weight: 2 }); }
 }
 function openAppalti() {
   const P = G.pol;
