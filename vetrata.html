@@ -1446,6 +1446,8 @@ function buildCells() {
   const t2 = pickCell(c => !c.water && !c.road && !c.b.length && c.zone === 'scogli' && c.coast && !c.block); if (t2) t2.spring = true;
   // bacheche, cassonetti, panchine
   for (const c of CELLS) { if (c.road === RD_COBBLE || c.road === RD_PLAZA) { if (W.r() < 0.12) c.bin = true; if (W.r() < 0.1) c.bench = true; } if (c.road === RD_PLAZA && !c.bench) c.bench = true; }
+  // distributori automatici di acqua e cibo, sparsi dove passa gente
+  { let vend = 0; const vendMax = 26; for (const c of shuffle(CELLS.slice(), W.r)) { if (vend >= vendMax) break; if (c.vending || c.booth !== undefined || c.water || c.block) continue; const onStreet = c.road && c.road !== RD_DOCK; const nearBiz = c.b.some(id => W.buildings[id] && !['casa', 'villa'].includes(W.buildings[id].type)); if ((onStreet && W.r() < 0.05) || (nearBiz && W.r() < 0.4) || (['terminal', 'ambulatorio', 'municipio', 'questura', 'impiego', 'pensione', 'dormitorio', 'marinas', 'capitaneria', 'faro', 'tornanti'].some(t => c.b.some(id => W.buildings[id] && W.buildings[id].type === t)))) { c.vending = true; vend++; } } }
   const cz = W.Z('centro'); const pc = cellAt(Math.round(cz.plaza.cx / CF), Math.round(cz.plaza.cy / CF)); if (pc) { pc.board = true; pc.plaza = true; pc.bench = true; }
 }
 function cellTitle(c) {
@@ -1668,6 +1670,7 @@ function drawBoard(t, dt) {
     else if (c.booth !== undefined) g.fillText('☎️', a, b);
     else if (c.tv !== undefined) g.fillText('📺', a, b);
     else if (c.spring) { g.fillText('♨️', a, b + Math.sin(t * 2) * 1.5); }
+    else if (c.vending) g.fillText('🥤', a, b);
     if (G.home && W.buildings[G.home.b] && W.buildings[G.home.b].cell && W.buildings[G.home.b].cell[0] === cx && W.buildings[G.home.b].cell[1] === cy) { g.font = (fs * 0.7) + 'px serif'; g.fillText('🏠', a + fs * 0.7, b - fs * 0.6); g.font = fs + 'px serif'; }
   }
   // veicoli del giocatore
@@ -2605,6 +2608,14 @@ function meditate() {
   toast(golden ? 'Il sole basso sul mare. Saluto al sole, respiro lento. Per mezz\'ora non esiste altro.' : 'Yoga sulla sabbia. Le spalle si sciolgono.', 'money');
 }
 function thermalSpring() { const p = G.player; advance(60); p.stress = Math.max(0, p.stress - 30); p.health = Math.min(100, p.health + 12); p.temp = 37; p.wet = 100; toast('♨️ Acqua calda che sa di zolfo, tra le rocce. I muscoli si sciolgono.', 'money'); G.flags.springFound = true; }
+function useVending() {
+  const items = [['acqua', 'Acqua', 1.5], ['caffe', 'Caffè', 1.2], ['granita', 'Granita', 3], ['panino', 'Panino', 6], ['sfogliatella', 'Sfogliatella', 3], ['frisella', 'Frisella', 4], ['birra', 'Birra', 3], ['sigarette', 'Sigarette', 6]];
+  const mul = 1 + Math.max(0, (G.island.euro - 1.12)) * 0.3;
+  const opts = items.map(([id, n, base]) => { const pr = Math.max(1, Math.round(base * mul * 10) / 10); return { t: `${ITEMS[id].ico} ${n} — ${money(pr)}`, dis: G.cash + G.bank < pr, f: () => { if (pay(pr, 'Distributore', { atCounter: true })) { addInv(id, 1); AU.sfx('coin'); toast(`${ITEMS[id].ico} ${n}: tonfo nel vano. ${chance(0.06) ? 'Esce anche un doppione, fortuna!' : ''}`); if (chance(0.06)) addInv(id, 1); render(); } } }; });
+  const render = () => { openPanel('🥤 Distributore automatico', `<p class="desc">Luci al neon, ronzio del compressore. Pagamento in contanti o col telefono. Acqua e cibo a ogni ora.${mul > 1.1 ? ' <span class="warnc">I prezzi sono saliti con la crisi.</span>' : ''}</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts); };
+  if (chance(0.04)) { toast('Il distributore si mangia la moneta e non dà niente. Ci dai un calcio.', 'bad'); G.player.stress = Math.min(100, G.player.stress + 2); return; }
+  render();
+}
 function searchBin() {
   const c = playerCell(); if (c.binDay === G.day) return toast('Già frugato oggi.'); c.binDay = G.day; advance(5); G.player.stress = Math.min(100, G.player.stress + 1);
   const r = Math.random();
@@ -3265,6 +3276,7 @@ function refreshSide() {
   if (c.subst !== undefined) { const s = W.subst[c.subst]; extras.push({ ic: '⚡', t: s.n, s: s.ok ? 'in funzione' : 'guasta — i tecnici sono al lavoro', f: `inspectSubst(${c.subst})` }); }
   if (c.tower !== undefined) { const t = W.towers[c.tower]; extras.push({ ic: '📡', t: t.n, s: t.ok ? 'trasmette' : 'fuori uso', f: `toast('${t.ok ? 'Il traliccio ronza nel vento.' : 'Cavi tranciati dal temporale. Niente segnale qui intorno.'}')` }); }
   if (c.board) extras.push({ ic: '📌', t: 'Bacheca della Piazzetta', s: `${G.bounties.length} annunci`, f: 'openBounties()' });
+  if (c.vending) extras.push({ ic: '🥤', t: 'Distributore automatico', s: 'acqua, snack, caffè — 24h', f: 'useVending()' });
   if (c.bin) extras.push({ ic: '🗑️', t: 'Cassonetto', s: 'frugare costa dignità', f: 'searchBin()' });
   if (checkCache()) extras.push({ ic: '⛏️', t: 'Terra smossa', s: 'qualcuno ha scavato qui', f: 'digCache()' });
   if (checkFinalSite()) extras.push({ ic: '👁️', t: MYS().finalName, s: 'alle tre di notte', f: 'finalRitual()' });
@@ -3941,13 +3953,24 @@ function openAmbulatorio(b) {
     (G.player.addiction || 0) > 10 ? { t: `🩹 Disintossicazione (${money(rehabCost())})`, d: 'Dipendenza al ' + Math.round(G.player.addiction) + '%: liberatene', f: () => { closePanel(); openRehab(); } } : null,
     jobOpt('medico'), workOpt('medico')]));
 }
+function shelterCount() { const base = Math.round(3 + (G.island.unemployment || 0.2) * 20 + (G.island.tension || 50) / 15); return clamp(base + ri(-2, 3), 2, 30); }
+function shelterSleep() {
+  const p = G.player;
+  openPanel('🛏️ Rifugio della parrocchia', `<p class="desc">Il salone sul retro: file di brande, coperte grigie, il respiro di chi non ha un altro posto dove andare. Il parroco non chiede niente. ${(G.home && G.home.own) ? 'Tu una casa ce l\'hai: lascia il posto a chi non ce l\'ha, se puoi.' : 'Stanotte, almeno, hai un tetto.'}</p>`, [
+    { t: '😴 Dormi al rifugio (fino al mattino)', c: 'pri', f: () => { closePanel(); const h = clamp(13 - hourOf() + (hourOf() < 7 ? 0 : 24), 4, 9); fadeTo(() => { for (let k = 0; k < h; k++) { advance(60, { sleep: true, noUI: true }); p.energia = clamp(p.energia + 8, 0, 100); p.stress = Math.max(0, p.stress - 2); p.health = Math.min(100, p.health + 0.8); p.fame = Math.min(100, p.fame + 2); if (G.dead) break; } toast('Hai dormito al rifugio. Non è casa, ma è caldo.'); if (!G.dead) { saveGame(); } refreshSide(); }, 700); } },
+    { t: '🤝 Lascia un\'offerta e vai', dis: G.cash < 5, f: () => { G.cash -= 10; spreadRumor({ kind: 'gift', text: 'sostiene il rifugio della parrocchia', mag: 2 }); closePanel(); toast('Dieci caprini nella cassetta. Il parroco annuisce.'); } },
+    { t: 'Esci', f: closePanel }]);
+}
 function openChiesa(b) {
   const p = G.player, sunday = dayOfWeek() === 0 && hourOf() > 9 && hourOf() < 12;
-  showPlace(b, b.n, `Penombra, incenso, un ex voto a forma di barca${b.zone === 'centro' ? ' e una lapide: «Ai 41 della Santa Lucia»' : ''}. ${sunday ? 'È in corso la messa: mezza isola è qui.' : ''}`, [
+  showPlace(b, b.n, `Penombra, incenso, un ex voto a forma di barca${b.zone === 'centro' ? ' e una lapide: «Ai 41 della Santa Lucia»' : ''}. ${sunday ? 'È in corso la messa: mezza isola è qui.' : ''} <span class="small muted">Sul retro, il rifugio della parrocchia: ${shelterCount()} brande occupate stanotte.</span>`, [
     { t: '🕯️ Accendi un cero e prega', d: 'Stress −', f: () => { p.stress = Math.max(0, p.stress - (hasTrait('devoto') ? 25 : 10)); advance(15); closePanel(); toast('Il silenzio ti fa bene.'); } },
     { t: '💶 Offerta per i poveri', d: 'L\'isola lo viene a sapere.', f: () => askAmount('Offerta', G.cash, a => { G.cash -= a; spreadRumor({ kind: 'gift', text: `ha dato ${money(a)} ai poveri della parrocchia`, mag: Math.min(10, a / 50) }); for (const n of NPCS) if (n.pers.pious > 0.6) npcState(n).op += Math.min(6, a / 100); }) },
     sunday ? { t: '⛪ Ascolta la messa', d: 'Conosci gente, e la gente conosce te.', f: () => { advance(60); p.stress = Math.max(0, p.stress - 12); for (const n of NPCS.filter(x => x.pers.pious > 0.6).slice(0, 6)) { npcState(n).met = true; npcState(n).op += 2; } closePanel(); toast('Strette di mano sul sagrato.'); } } : null,
-    { t: '📖 Consulta i registri parrocchiali', d: '1 ora', f: () => { advance(60); const M = MYS(); addNote('Registri parrocchiali: mancano le pagine dell\'autunno del ' + { santalucia: '1974', specchio: '1983', vetrai: '1891' }[M.id] + '. Qualcuno le ha tagliate col rasoio.'); toast('Mancano delle pagine. Tagliate col rasoio.', 'weird'); closePanel(); } }]);
+    { t: '🛏️ Rifugio parrocchiale: chiedi un posto letto', d: G.home && G.home.own ? 'Hai casa tua, ma qui nessuno ti chiude la porta' : 'Una branda, una coperta, un pasto caldo. Gratis.', f: () => { closePanel(); shelterSleep(); } },
+    { t: '🤲 Fai volontariato al rifugio (2 ore)', d: 'Aiuti chi non ha niente: reputazione +', f: () => { advance(120); p.stress = Math.max(0, p.stress - 6); addRep('polizia', 1); G.island.tension = clamp(G.island.tension - 1, 0, 100); for (const n of NPCS.filter(x => x.role === 'sfollato').slice(0, 6)) npcState(n).op += 3; spreadRumor({ kind: 'gift', text: 'aiuta al rifugio della parrocchia', mag: 3 }); G.stats.volunteer = (G.stats.volunteer || 0) + 1; closePanel(); toast('Servi minestra e ascolti storie. Esci più leggero.', 'good'); } },
+    { t: '🍲 Mensa dei poveri', d: 'Un pasto caldo offerto dalla parrocchia', f: () => { p.fame = Math.min(100, p.fame + 45); p.sete = Math.min(100, p.sete + 15); advance(30); closePanel(); toast('Pasta e fagioli, pane, una parola buona. Grazie, padre.'); } },
+        { t: '📖 Consulta i registri parrocchiali', d: '1 ora', f: () => { advance(60); const M = MYS(); addNote('Registri parrocchiali: mancano le pagine dell\'autunno del ' + { santalucia: '1974', specchio: '1983', vetrai: '1891' }[M.id] + '. Qualcuno le ha tagliate col rasoio.'); toast('Mancano delle pagine. Tagliate col rasoio.', 'weird'); closePanel(); } }]);
 }
 function openImpiego(b) {
   showPlace(b, b.n, `Un monitor con le offerte, metà spente. Disoccupazione sull'isola: ${pct(G.island.unemployment)}. Sulla bacheca, ${Object.keys(JOBS).length} mestieri in tutta l'isola. ${G.pol.subsidy ? `Sussidio di disoccupazione: ${money(G.pol.subsidy)}/giorno.` : ''} Corsi di formazione nella stanza accanto.`, [
