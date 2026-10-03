@@ -2554,11 +2554,12 @@ function vehicleStep(v, from, to) {
   }
   // auto e moto
   if (M.heat > 0) {
-    if (dh > 0.004) v.temp += dh * 340 * M.heat; else v.temp = Math.max(78, v.temp - 9);
-    v.temp += (WEATHER[G.weather.cur].hot || 0) * 0.2;
-    if (v.temp > 130 && !v.hotWarn) { v.hotWarn = true; toast('🌡️ La lancetta della temperatura sale in rosso. Fermati un attimo a farlo raffreddare.', 'warn'); }
-    if (v.temp > 152) { v.temp = 104; G.stats.overheats = (G.stats.overheats || 0) + 1; toast('💨 Il motore si pianta dal caldo: aspetta che si raffreddi e riparti. (Non si è rotto.)', 'warn'); AU.sfx('bad'); return false; }
-    if (v.temp < 100) v.hotWarn = false;
+    // riscaldamento MOLTO più lento: solo salite lunghe e continue scaldano davvero; in piano/discesa raffredda in fretta
+    if (dh > 0.006) v.temp += dh * 78 * M.heat; else v.temp = Math.max(78, v.temp - 16);
+    v.temp += (WEATHER[G.weather.cur].hot || 0) * 0.15;
+    if (v.temp > 150 && !v.hotWarn) { v.hotWarn = true; toast('🌡️ La lancetta della temperatura sale in rosso. Vai piano in salita o fermati un attimo.', 'warn'); }
+    if (v.temp > 172) { v.temp = 96; G.stats.overheats = (G.stats.overheats || 0) + 1; toast('💨 Il motore si pianta dal caldo: aspetta che si raffreddi e riparti. (Non si è rotto.)', 'warn'); AU.sfx('bad'); return false; }
+    if (v.temp < 120) v.hotWarn = false;
   }
   if (dh < -0.008) { v.brake = clamp(v.brake + (-dh) * 11, 0, 1.4); if (v.brake > 1.2 && chance(0.04)) { toast('🛑 I freni scaldano: rallenti a fatica. Vai piano in discesa.', 'warn'); v.brake = 0.5; anim.shake = 0.3; AU.sfx('bad'); } } else v.brake = Math.max(0, v.brake - 0.22);
   if (to.road === RD_DIRT || !to.road) { v.tire = Math.max(0, v.tire - rr(0.2, 0.8)); v.dirt = Math.min(1, v.dirt + (G.weather.wetGround > 0.3 ? 0.08 : 0.03)); if (!v.flat && chance(0.0035 * (1 + (100 - v.tire) / 25))) { v.flat = true; toast('💥 Hai forato! Ti serve una ruota di scorta (cambiala qui) o un meccanico.', 'bad'); return false; } }
@@ -4292,8 +4293,11 @@ function clockIn() {
 function clockOut(silent) {
   const J = JOBS[G.job.id]; if (!G.job.onDuty) return;
   const hrs = (G.min - G.job.start) / 60; G.job.onDuty = false; G.job.hours = (G.job.hours || 0) + hrs; G.stats.workHours = (G.stats.workHours || 0) + hrs;
-  const pay = Math.round(J.pay * hrs * (1 + (G.job.rank || 0) * 0.15) * (1 + skill(J.sk) / 400));
-  if (pay > 0) { earn(pay, `Paga: ${Math.round(hrs * 10) / 10} ore come ${J.n.toLowerCase()}`, 'bank'); G.job.earned = (G.job.earned || 0) + pay; }
+  // sei pagato solo per il lavoro che fai davvero: ogni "turno di attività" (minigioco) vale fino a ~1,5 ore di paga. Timbrare e stare fermi non frutta nulla.
+  const tasks = G.job.tasks || 0; const paidHrs = Math.min(hrs, tasks * 1.5);
+  const pay = Math.round(J.pay * paidHrs * (1 + (G.job.rank || 0) * 0.15) * (1 + skill(J.sk) / 400));
+  if (pay > 0) { earn(pay, `Paga: ${Math.round(paidHrs * 10) / 10} ore lavorate come ${J.n.toLowerCase()}`, 'bank'); G.job.earned = (G.job.earned || 0) + pay; }
+  else if (hrs > 0.5 && !silent) toast('Hai timbrato ma non hai lavorato: niente paga. Usa «🛠️ Lavora» sul posto per fare il tuo turno.', 'warn');
   G.missions = G.missions.filter(m => !m.job); syncMarkers();
   if (G.job.hours > 40 * ((G.job.rank || 0) + 1) && (G.job.rank || 0) < 3) { G.job.rank = (G.job.rank || 0) + 1; toast(`📈 Promozione! ${['', 'Esperto', 'Capo turno', 'Responsabile'][G.job.rank]}: la paga sale.`, 'money'); }
   if (!silent) toast('⏱️ Hai timbrato l\'uscita.');
