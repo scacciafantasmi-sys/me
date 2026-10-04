@@ -3854,8 +3854,17 @@ function askVote(n, st) {
   st.voteAsked = G.day;
   const dIdeo = Math.abs(L.ideo.indip - n.ideo.indip) + Math.abs(L.ideo.ordine - n.ideo.ordine) + Math.abs(L.ideo.mercato - n.ideo.mercato);
   gainSkill('eloquenza', 0.6); advance(8, { noUI: true });
-  if (chance(clamp(0.55 - dIdeo * 0.18 + st.op / 120 + skill('eloquenza') / 250, 0.03, 0.95))) { if (!P.signatures.includes(n.id)) P.signatures.push(n.id); st.op += 2; n.party = 'player'; say(n, pick(['Va bene, hai la mia firma. E il mio voto.', 'Mi hai convinto. Vediamo cosa sai fare.', 'Firmo. Ma se tradisci, ti vengo a cercare.'])); }
+  if (chance(clamp(0.55 - dIdeo * 0.18 + st.op / 120 + skill('eloquenza') / 250, 0.03, 0.95))) { if (!P.signatures.includes(n.id)) P.signatures.push(n.id); st.op += 2; n.party = 'player'; say(n, pick(['Va bene, hai la mia firma. E il mio voto.', 'Mi hai convinto. Vediamo cosa sai fare.', 'Firmo. Ma se tradisci, ti vengo a cercare.'])); officializeParty(); }
   else say(n, dIdeo > 1.8 ? 'Le tue idee sono l\'opposto delle mie.' : pick(['Ci devo pensare.', 'Tutti promettono. Poi?', 'Io voto ' + partyName(n.party || PARTIES[0].id) + ' da sempre.']));
+}
+function officializeParty() {
+  const P = G.pol, L = P.playerList;
+  if (!L || P.candidate || P.signatures.length < 12) return false;
+  P.candidate = true;
+  try { centerMsg('PARTITO UFFICIALE', `${L.n} è in corsa`, 3500); } catch (e) { }
+  toast(`🎉 «${L.n}» è un partito ufficiale: 12 firme raccolte. Ora partecipa a elezioni, dibattiti e vita politica.`, 'money');
+  addNews({ tag: 'politica', head: `«${L.n}» è ufficiale: la lista di ${G.player.first} ${G.player.last} è in corsa`, body: 'Raccolte le 12 firme necessarie. Il partito partecipa alle elezioni, ai dibattiti e alla vita politica dell\'isola.', weight: 4, about: 'player' });
+  return true;
 }
 function fightNpc(n) {
   const st = npcState(n);
@@ -4864,10 +4873,11 @@ function openElectoral() {
       [{ t: 'Fonda la lista', c: 'pri', f: () => { P.playerList = { n: $('#plN').value.trim() || 'Lista civica', col: $('#plC').value, ideo: { indip: -(+$('#plI').value) / 100, ordine: -(+$('#plO').value) / 100, mercato: -(+$('#plM').value) / 100 } }; closePanel(); toast(`Hai fondato «${esc(P.playerList.n)}». Ora raccogli le firme.`, 'money'); addNews({ tag: 'politica', head: `Nasce «${P.playerList.n}», la lista di ${G.player.first} ${G.player.last}`, body: 'Un nuovo nome nella politica dell\'isola.', weight: 2, about: 'player' }); openElectoral(); } }, { t: 'Annulla', f: closePanel }]);
     return;
   }
+  officializeParty();
   const L = P.playerList, sh = P.candidate ? voteShares() : null;
   openPanel('🗳️ ' + esc(L.n), `<div class="row"><span style="display:inline-block;width:18px;height:18px;border-radius:4px;background:${L.col}"></span><b>${esc(L.n)}</b><span class="muted small">indipendenza ${Math.round(L.ideo.indip * 100)} · ordine ${Math.round(L.ideo.ordine * 100)} · mercato ${Math.round(L.ideo.mercato * 100)}</span></div>
-    <div class="card" style="margin-top:8px"><div>Firme raccolte: <b>${P.signatures.length}</b>/12 · Candidatura: ${P.candidate ? '<b class="good">depositata</b>' : 'non ancora'}</div><div class="small">Fondi: ${money(P.campaign.funds)} · Manifesti attaccati: ${P.campaign.posters.length} · Comizi: ${P.campaign.rallies} · Dibattiti vinti: ${P.campaign.debate}</div>${sh ? `<div class="small" style="margin-top:6px">📊 Sondaggio Gazzetta: ${Object.entries(sh).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span style="color:${partyCol(k)}">${esc(partyName(k))} ${pct(v)}</span>`).join(' · ')}</div>` : ''}</div>`, [
-    !P.candidate ? { t: `Deposita la candidatura (${money(500)})`, c: 'pri', dis: P.signatures.length < 12, d: P.signatures.length < 12 ? `Servono 12 firme (${P.signatures.length}/12): chiedile parlando con la gente` : 'Hai le firme: deposita e apri la campagna', f: () => { if (pay(500, 'Deposito candidatura', { atCounter: true })) { P.candidate = true; closePanel(); toast('Candidatura depositata. Campagna aperta!', 'money'); addNews({ tag: 'politica', head: `${G.player.first} ${G.player.last} si candida a Sindaco`, body: `Con la lista ${L.n}.`, weight: 3, about: 'player' }); } } } : null,
+    <div class="card" style="margin-top:8px"><div>Firme raccolte: <b>${P.signatures.length}</b>/12 · Stato: ${P.candidate ? '<b class="good">partito ufficiale, in corsa</b>' : '<b class="warnc">in raccolta firme</b>'}</div><div class="small">Fondi: ${money(P.campaign.funds)} · Manifesti attaccati: ${P.campaign.posters.length} · Comizi: ${P.campaign.rallies} · Dibattiti vinti: ${P.campaign.debate}</div>${sh ? `<div class="small" style="margin-top:6px">📊 Sondaggio Gazzetta: ${Object.entries(sh).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span style="color:${partyCol(k)}">${esc(partyName(k))} ${pct(v)}</span>`).join(' · ')}</div>` : ''}</div>`, [
+    !P.candidate ? { t: `✍️ Raccogli le firme (${P.signatures.length}/12)`, dis: true, d: 'Parla con la gente e chiedi le firme: a quota 12 il partito diventa ufficiale e partecipa a tutto, da solo.', f: () => { } } : null,
     P.candidate ? { t: '💰 Raccolta fondi (cena elettorale)', d: 'Eloquenza · 3 ore', f: () => { closePanel(); advance(180); const a = Math.round(500 + skill('eloquenza') * 40 + avgOpinion() * 30 + rr(0, 1500)); P.campaign.funds += Math.max(200, a); gainSkill('eloquenza', 3); toast(`La cena porta ${money(Math.max(200, a))} di donazioni.`, 'money'); } } : null,
     P.candidate ? { t: '🌐 Crowdfunding online', d: 'Piccole donazioni dai cittadini', f: () => { closePanel(); if (signalHere() < 10) return toast('Serve il segnale.', 'warn'); const a = Math.round(Math.max(0, avgOpinion() + 20) * 25 + rr(50, 400)); P.campaign.funds += a; toast(`Il crowdfunding raccoglie ${money(a)}.`, 'money'); } } : null,
     { t: 'Chiudi', f: closePanel }]);
