@@ -3679,7 +3679,8 @@ function openDialog(n, byPhone) {
   const moodTxt = st.op > 50 ? 'Ti sorride come a un amico.' : st.op > 15 ? 'È cordiale.' : st.op > -15 ? 'Ti guarda con curiosità prudente.' : st.op > -50 ? 'Ti guarda storto.' : 'Ti odia, e non lo nasconde.';
   const opts = [];
   if (!st.met) opts.push({ t: '🤝 Presentati', f: () => { st.met = true; const ok = chance(0.5 + skill('eloquenza') / 200); st.op += ok ? 4 : 1; gainSkill('eloquenza', 0.5); say(n, `${moodPrefix(n)}${n.first} ${n.last}${n.nick ? ', ma tutti mi chiamano ' + n.nick : ''}. ${ok ? 'Piacere.' : 'Mh.'}`); advance(2, { noUI: true }); refreshDlg(n); } });
-  opts.push({ t: '💬 Chiacchiera', f: () => { advance(5, { noUI: true }); if (st.chatDay !== G.day) { st.op += chance(0.4 + skill('eloquenza') / 200) ? 2 : 1; gainSkill('eloquenza', 0.3); } st.chatDay = G.day; say(n, moodPrefix(n) + (chance(0.5) ? charLine(n, 'talk') : ambientLine(n))); } });
+  opts.push({ t: '💬 Chiacchiera', f: () => { advance(5, { noUI: true }); if (st.chatDay !== G.day) { st.op += chance(0.4 + skill('eloquenza') / 200) ? 2 : 1; gainSkill('eloquenza', 0.3); } st.chatDay = G.day; const ctx = npcContextRemark(n); say(n, moodPrefix(n) + (ctx && chance(0.6) ? ctx : chance(0.5) ? charLine(n, 'talk') : ambientLine(n))); } });
+  if (st.met) opts.push({ t: '🗞️ «Che si dice di nuovo?»', d: 'Come reagisce a quello che succede sull\'isola', f: () => { advance(3, { noUI: true }); say(n, moodPrefix(n) + (npcContextRemark(n) || gossip(n))); refreshDlg(n); } });
   if (st.met) {
     // parlare dei suoi interessi
     opts.push({ t: '🎯 Parla dei suoi interessi', d: st.likesKnown && st.likesKnown.length ? 'Gli piace: ' + st.likesKnown.map(k => INTERESSI[k].n).join(', ') : 'Scopri cosa lo appassiona', f: () => { closePanel(); topicMenu(n); } });
@@ -6256,7 +6257,7 @@ function chatReply(n) {
   else if (/\?$/.test(last)) r = chance(0.5) ? charLine(n, 'talk') : pick(['Boh, non saprei.', 'Bella domanda.', 'Dipende.', 'Sì, credo di sì.']);
   else if (/grazie/i.test(last)) r = pick(['Figurati!', 'Di niente.', 'Quando vuoi.']);
   else if (/vediamo|usciamo|beviamo|festa|caffè|caffe/i.test(last)) r = pick(['Ci sto! Dimmi dove.', 'Volentieri, passa quando vuoi.', 'Stasera? Per me va bene.']);
-  else r = chance(0.4) ? charLine(n, 'talk') : (isPl(n) ? plLine(n, 'rp') : pick(['Eh già.', 'Capito.', 'Hai ragione.', ambientLine(n)]));
+  else { const ctx = npcContextRemark(n); r = ctx && chance(0.5) ? ctx : chance(0.4) ? charLine(n, 'talk') : (isPl(n) ? plLine(n, 'rp') : pick(['Eh già.', 'Capito.', 'Hai ragione.', ambientLine(n)])); }
   st.chat.push({ t: moodPrefix(n) + r, me: false, hm: hhmm() });
   st.op += 0.5; renderChatLog(n);
 }
@@ -7644,6 +7645,25 @@ function npcOfferPost(n) {
 function offerReplyFor(topic) { const O = NPC_OFFERS.find(x => x.kind === (topic || {}).kind); return O ? O.reply(topic) : null; }
 
 /* ---------- Chat: risposte che capiscono il messaggio ---------- */
+function npcContextRemark(n) {
+  const st = npcState(n), p = G.player, out = [];
+  if (G.wanted.level >= 2) out.push(pick(['Guarda che ti cercano, lo sai? Gira voce.', 'Io non ti ho visto, chiaro? Hai la Polizia alle costole.', 'Sei caldo, amico. Attento a dove ti fai vedere.']));
+  else if (G.record.warrants && G.record.warrants.length) out.push(pick(['Ho sentito che hai una pendenza aperta. Sistemala.', 'C\'è il tuo nome su una lista, in Questura. Occhio.']));
+  if ((p.fame || 0) > 85) out.push(pick(['Ti si vede in giro, eh? Sei uno che conta, ormai.', 'Mezza isola parla di te. Nel bene, per adesso.']));
+  else if ((p.fame || 0) < 25) out.push(pick(['Non ti conosce ancora nessuno, qui. Fatti vedere di più.', 'Sei nuovo, si capisce. Ci vuole tempo, su quest\'isola.']));
+  const bigNews = (G.news || []).find(nw => nw.day >= G.day - 1 && (nw.weight || 0) >= 3 && nw.head);
+  if (bigNews) out.push(pick(['Hai letto la Gazzetta? «' + bigNews.head + '». Che storia.', 'Se ne parla tutti: ' + bigNews.head.toLowerCase() + '. Tu che dici?']));
+  const wx = WEATHER[G.weather.cur];
+  if (wx.storm) out.push(pick(['Con \'sto temporale non si combina niente. Meglio al chiuso.', 'Senti che tuoni. Nottataccia.']));
+  else if (wx.fog > 0.5) out.push('Con questa nebbia non si vede un\'acca. Non mi piace.');
+  if ((G.events || []).some(e => e.kind === 'meeting' && !e.done)) out.push(pick(['Gira gente strana, di notte, da queste parti. Fatti i fatti tuoi.', 'C\'è movimento stanotte. Non so se mi piace.']));
+  if (G.pol.curfew !== null && hourOf() >= G.pol.curfew - 1) out.push('Tra poco scatta il coprifuoco. Non farti beccare in giro.');
+  if (G.social.crew && G.social.crew.members && G.social.crew.members.includes(n.id)) out.push(pick(['Per la crew ci sono sempre. Dimmi che serve.', 'Noi della crew ci copriamo le spalle, no?']));
+  if (st.partner) out.push(pick(['Pensavo a noi due, oggi. 😊', 'Mi mancavi, lo sai?']));
+  if (isNight() && chance(0.5)) out.push(pick(['A quest\'ora in giro solo noi e i gatti.', 'La notte, qui, è un\'altra isola.']));
+  if (isPl(n) && chance(0.5)) out.push(plLine(n, chance(0.5) ? 'rp' : 'ooc'));
+  return out.length ? pick(out) : null;
+}
 function smartChatReply(n, lastText) {
   const st = npcState(n), t = (lastText || '').toLowerCase();
   const intents = detectIntents(lastText);
