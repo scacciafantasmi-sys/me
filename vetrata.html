@@ -4603,7 +4603,7 @@ function doJobTask(jobId, owner) {
     case 'vendita': return minigameSales(s => { advance(60); gainSkill(sk, 1 + s); done(s * (J.pay ? 18 : 30), 'Provvigione'); });
     case 'cassa': return minigameCassa(s => { advance(60); gainSkill(sk, 1 + s / 3); done(s * 2, 'Cassa senza errori'); });
     case 'pratiche': return minigamePratiche(J, s => { advance(90); gainSkill(sk, 1 + s / 3); done(s * 2, 'Premio di produttività'); });
-    case 'tech': return minigameTech(J, s => { advance(90); gainSkill('hacking', 2 + s); done(s * 8, 'Intervento tecnico'); });
+    case 'tech': if (id === 'tecnico_comune') return pcComune(J, done); return minigameTech(J, s => { advance(90); gainSkill('hacking', 2 + s); done(s * 8, 'Intervento tecnico'); });
     case 'pulizie': return minigameClick(n => { advance(90); gainSkill(sk, 1); done(Math.round(n * 1.5), 'Lavoro fatto bene'); }, { title: (fl.ic || '🧽') + ' ' + J.n, desc: fl.desc || 'Clicca le macchie, lascia stare il resto. 20 secondi.', good: fl.good || '#7a5c3a', bad: fl.bad || '#cfe3ef', bg: fl.bg || ['#d9d4c7', '#cfc8b8'], goodLabel: fl.goodLabel || 'macchie' });
     case 'carico': return minigameTiming({ title: (fl.ic || '📦') + ' ' + J.n, desc: fl.desc || 'Solleva, porta, appoggia. Tieni il ritmo, non sbilanciarti.', pins: fl.pins || 4, speed: fl.speed || 1, zone: 0.22 + skill('atletica') / 400, onWin: e => { advance(120); G.player.stamina = Math.max(0, G.player.stamina - 40); gainSkill('atletica', 3); done(12 - e * 3, 'Premio di produzione'); }, onFail: () => { advance(60); hurt(5, 'un carico sul piede'); toast('Ti scivola tutto. Il capo urla.', 'bad'); } });
     case 'artigiano': return minigameTiming({ title: (fl.ic || '🛠️') + ' ' + J.n, desc: fl.desc || 'Lavoro di precisione: ogni colpo al momento giusto.', pins: fl.pins || 5, speed: (fl.speed || 1.05) - skill(sk) / 250, zone: 0.16 + (fl.zoneAdj || 0) + skill(sk) / 500, tremor: G.player.stress / 200, onWin: e => { advance(120); gainSkill(sk, 4); done(25 - e * 6, 'Lavoro a regola d\'arte'); }, onFail: () => { advance(90); toast('Pezzo rovinato. Si ricomincia.', 'bad'); } });
@@ -4686,6 +4686,52 @@ function writeArticle(title, shot) {
     { t: '🏛️ Attacca il Sindaco', d: 'Effetto politico: consenso del Sindaco −', f: () => finish(1.2, -2) }];
   const finish = (mul, kind) => { closePanel(); advance(90); const pay = Math.round((40 + skill('indagine') * 0.5 + (shot ? 25 : 0)) * mul); earn(pay, 'Articolo pubblicato', 'bank'); gainSkill('indagine', 3); gainSkill('eloquenza', 1); addNews({ tag: 'cronaca', head: kind === -1 ? title.toUpperCase() + '!' : title, body: `Di ${G.player.first} ${G.player.last}.`, weight: 2.2 + (shot ? 0.5 : 0) + (kind === -2 ? 1 : 0), by: 'player', about: 'player' }); if (kind === -2 && G.pol.mayor === 'npc') G.pol.approval -= 3; if (kind === -1 && chance(0.3)) { sendMsg('Avv. Galano', 'Il mio cliente si è riconosciuto nel tuo articolo. Querela in arrivo.'); G.debts.push({ to: 'Spese legali', amount: 300, due: G.day + 10 }); } };
   openPanel('✍️ Scrivi l\'articolo', `<p class="desc">«${esc(title)}». Il direttore ti guarda da sopra gli occhiali: «Che taglio gli diamo?»</p>${optList(opts)}`, [], { noClose: true }); bindOpts(opts);
+}
+/* ===== Tecnico informatico del Comune: desktop VetrOS (stile Aero) con ticket di assistenza ===== */
+const PC_TICKETS = [
+  ['Il gestionale dell\'Anagrafe non si apre', ['Riavvia il servizio dell\'Anagrafe', 'Formatta la postazione', 'Stacca la rete del Comune']],
+  ['Stampante dell\'Ufficio Tributi offline', ['Ripristina la coda di stampa', 'Compra una stampante nuova', 'Lascia perdere']],
+  ['Il Sindaco ha dimenticato la password', ['Reset con verifica d\'identità', 'Gliela indovini a tentativi', 'Scrivigliela su un post-it']],
+  ['Casella del Comune invasa da phishing', ['Attiva il filtro antispam e avvisa gli uffici', 'Rispondi al mittente', 'Clicca il link per capire']],
+  ['PC lentissimo all\'Ufficio Tecnico', ['Pulisci avvii automatici e disco', 'Butti il PC dalla finestra', 'Alzi la risoluzione']],
+  ['Il backup notturno è fallito', ['Rilancia il backup e controlla lo spazio', 'Disattivi i backup', 'Aspetti il prossimo mese']],
+  ['Ransomware su una postazione dell\'URP', ['Isola dalla rete e bonifica', 'Paghi il riscatto col bilancio', 'Spegni tutto il Municipio']],
+  ['Il sito del Comune è irraggiungibile', ['Riavvia il web server', 'Cancelli il sito', 'Non fai niente, tornerà']],
+  ['Richiesta GDPR: cancellare i dati di un cittadino', ['Verifica identità ed esegui con log', 'Cancelli l\'intero database', 'Rifiuti e basta']],
+  ['Il badge d\'ingresso di un dipendente non funziona', ['Riprogrammi il badge', 'Cambi la serratura a tutti', 'Gli dici di entrare dalla finestra']],
+  ['Monitor che sfarfalla al Protocollo', ['Cambi cavo e porta video', 'Compri subito un monitor nuovo', 'Gli dai un pugno']],
+  ['Scanner dei documenti inceppato', ['Rimuovi l\'inceppamento e pulisci i rulli', 'Spingi la carta a forza', 'Scansioni col telefono']],
+  ['Un fascicolo è stato cancellato per errore', ['Ripristini dal backup', 'Lo riscrivi a memoria', 'Dai la colpa all\'utente']],
+  ['Il centralino VoIP non squilla più', ['Controlli la configurazione SIP', 'Urli più forte nei corridoi', 'Stacchi tutti i telefoni']],
+  ['Allerta: aggiornamento di sicurezza critico', ['Pianifichi l\'update fuori orario', 'Non aggiorni mai', 'Aggiorni in piena ora di punta']],
+  ['Toner finito ogni settimana, costi alle stelle', ['Imposti stampa in bianco e nero di default', 'Compri cento toner', 'Vieti tutte le stampe']],
+  ['Il PC dell\'URP non legge la firma digitale', ['Installi il driver della smart card', 'Fai firmare a mano', 'Salti la firma']],
+  ['Richiesta d\'accesso agli atti online', ['Pubblichi in Amministrazione Trasparente', 'Ignori la richiesta', 'Chiedi una mazzetta']],
+  ['Wi-Fi assente in Sala Consiliare', ['Aggiungi un access point', 'Alzi il volume del router', 'Chiami Partenope']],
+  ['La PEC del Comune rimbalza tutto', ['Verifichi la casella e lo spazio', 'Cambi indirizzo ogni giorno', 'Disattivi la PEC']]
+];
+function pcComune(J, done) {
+  const N = 6; const pool = shuffle(PC_TICKETS.slice()).slice(0, N);
+  let k = 0, score = 0;
+  const bar = `<div style="display:flex;justify-content:space-between;align-items:center;height:30px;padding:0 10px;background:linear-gradient(180deg,rgba(255,255,255,.25),rgba(255,255,255,.05));border-top:1px solid rgba(255,255,255,.4);position:absolute;left:0;right:0;bottom:0;font:12px Segoe UI,system-ui,sans-serif;color:#eaf4ff">
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#9fe3ff,#1c6fb8);box-shadow:0 0 6px #4ab6ff"></span> VetrOS</span><span>${hhmm()}</span></div>`;
+  const render = () => {
+    if (k >= N) { advance(90); gainSkill('hacking', 2 + score); done(score * 9 + 6, 'Interventi IT al Comune'); if (score >= 5) spreadRumor({ kind: 'gift', text: 'tiene in piedi i computer del Comune', mag: 2 }); toast(`🖥️ Turno chiuso: ${score}/${N} ticket risolti bene.`, score >= 4 ? 'money' : 'warn'); return; }
+    const [q, a] = pool[k]; const opts = shuffle(a.map((t, i) => ({ t, ok: i === 0 })));
+    const body = `<div style="position:relative;height:330px;border-radius:10px;overflow:hidden;background:linear-gradient(135deg,#17547f,#2f86bf 60%,#56a7d6);font-family:Segoe UI,system-ui,sans-serif">
+      <div style="position:absolute;top:14px;left:14px;right:14px;background:rgba(240,248,255,.92);border:1px solid rgba(255,255,255,.7);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);overflow:hidden">
+        <div style="height:30px;background:linear-gradient(180deg,#eaf4ff,#bcd9f2);border-bottom:1px solid #9fc2e0;display:flex;align-items:center;justify-content:space-between;padding:0 10px;color:#1b3a57;font-weight:600;font-size:13px"><span>🖥️ VetrOS · Centro Assistenza Comunale</span><span style="display:flex;gap:6px"><span style="width:12px;height:12px;border-radius:3px;background:#c0c7cf"></span><span style="width:12px;height:12px;border-radius:3px;background:#c0c7cf"></span><span style="width:12px;height:12px;border-radius:3px;background:#e06a5a"></span></span></div>
+        <div style="padding:14px;color:#13314a">
+          <div style="font-size:12px;color:#5a7a92">Ticket ${k + 1}/${N} · priorità ${pick(['alta', 'media', 'normale'])} · risolti ${score}</div>
+          <div style="font-size:16px;font-weight:700;margin:6px 0 12px">🎫 ${esc(q)}</div>
+          <div id="pcOpts" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+      </div>${bar}</div>`;
+    openPanel('🖥️ ' + esc(J.n), body, [{ t: 'Rimanda il turno', f: () => { if (k > 0) { advance(60); gainSkill('hacking', 1 + score); done(score * 9, 'Interventi IT (parziale)'); } closePanel(); } }], { noClose: true, wide: true });
+    const box = $('#pcOpts');
+    opts.forEach(o => { const btn = document.createElement('button'); btn.className = 'btn sm'; btn.style.cssText = 'text-align:left;background:linear-gradient(180deg,#fbfdff,#e6f0fa);color:#13314a;border:1px solid #a9cbe6'; btn.textContent = o.t; btn.onclick = () => { if (o.ok) { score++; AU.sfx('ok'); } else AU.sfx('bad'); k++; render(); }; box.appendChild(btn); });
+  };
+  render();
 }
 /* ===== Turno di Polizia: hub di attività vere ===== */
 function policeShift(J, done) {
