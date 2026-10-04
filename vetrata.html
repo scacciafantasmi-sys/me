@@ -3696,7 +3696,7 @@ function phoneCalls() {
     { t: '🔧 Meccanico a domicilio', d: 'Ripara il tuo veicolo dove ti trovi', f: () => { togglePhone(false); callMechanic(); } },
     { t: '🔧 Soccorso stradale Scogliera', d: money(180) + ' — rimorchia il tuo veicolo al Garage', f: () => { togglePhone(false); towVehicle(); } },
     { t: '🚓 113 — Polizia Insulare', d: 'Segnala o costituisciti', f: () => { togglePhone(false); if (G.wanted.level || G.record.warrants.length) openPanel('🚓 Costituirti?', '<p class="desc">Se ti costituisci, la pena si riduce di un terzo.</p>', [{ t: 'Costituisciti', c: 'pri', f: () => { closePanel(); G.flags.surrender = true; arrestPlayer('Ti sei costituito'); } }, { t: 'Riattacca', f: closePanel }]); else toast('«Polizia Insulare.» Non hai niente da dire. Riattacchi.'); } }];
-  for (const n of NPCS) { const st = npcState(n); if (st.met && st.number && st.alive) list.push({ t: '📞 ' + npcName(n), d: (ROLE_LABEL[n.role] || '') + ' · opinione ' + Math.round(st.op), f: () => { togglePhone(false); openDialog(n, true); } }); }
+  for (const n of NPCS) { const st = npcState(n); if (st.met && st.number && st.alive) list.push({ t: '📞 ' + npcName(n), d: (ROLE_LABEL[n.role] || '') + ' · opinione ' + Math.round(st.op), f: () => { togglePhone(false); openChat(n); } }); }
   return list;
 }
 function towVehicle() {
@@ -7940,6 +7940,25 @@ function npcContextRemark(n) {
   if (isPl(n) && chance(0.5)) out.push(plLine(n, chance(0.5) ? 'rp' : 'ooc'));
   return out.length ? pick(out) : null;
 }
+function converse(n, t) {
+  const pl = isPl(n), S = arr => pick(arr);
+  const moodAnswer = () => { const m = npcMood(n)[0]; return S({ 'di ottimo umore': ['Alla grande, oggi gira tutto bene!', 'Benissimo, non mi lamento.', 'Una giornata di quelle giuste 😊'], nervoso: ['Giornata storta, te lo dico.', 'Insomma, oggi non è aria.', 'Potrebbe andare meglio, sinceramente.'], stanco: ['Stanco morto, ho dormito poco.', 'Tiro avanti a caffè.', 'Sono a pezzi, ma ci sono.'], malinconico: ['Così così… giornata un po\' grigia.', 'Eh, si va avanti. Tu piuttosto?', 'Non benissimo, ma passa.'] }[m] || ['Tutto a posto, dai.', 'Non c\'è male.', 'Si tira avanti.']); };
+  if (/\b(ciao ciao|a dopo|a presto|ci sentiamo|arrivederci|buonanotte|devo (andare|scappare)|ti saluto|ci becchiamo)\b/.test(t)) return pl ? plLine(n, 'ooc') : charLine(n, 'bye');
+  if (/\b(come (stai|va|butta|te la passi|vanno le cose)|tutto (bene|a posto|ok)\?|che si dice|che mi racconti)\b/.test(t) || /^come stai\b/.test(t)) return moodAnswer() + (chance(0.5) ? ' Tu come stai?' : '');
+  if (t.length < 28 && /\b(bene|benissimo|alla grande|tutto ok|tutto bene|non c'è male|non ce male|così così|cosi cosi|insomma|male|di merda|uno schifo|stanco|stanca)\b/.test(t)) return /male|schifo|merda|stanc/.test(t) ? S(['Mi dispiace, dai che passa.', 'Eh, capita. Se ti serve ci sono.', 'Su, tieni duro.']) : S(['Bene, mi fa piacere!', 'Alla grande allora 😊', 'Contento per te.']);
+  if (/\b(grazie|ti ringrazio|troppo gentile|sei un grande|sei il migliore|gentilissimo)\b/.test(t)) return S(['Figurati!', 'Di niente, ci mancherebbe.', 'Quando vuoi 😊', 'Dovere.']);
+  if (/\b(ciao|salve|ehi|ue|uè|hey|buongiorno|buonasera|bella|ueh)\b/.test(t)) return pl ? plLine(n, 'ooc') : (moodPrefix(n) + charLine(n, 'greet'));
+  if (/\b(come ti chiami|chi sei|il tuo nome|come fai di nome)\b/.test(t)) return pl ? `Sono ${n.pl.tag}, piacere.` : `${n.first} ${n.last}. E tu?`;
+  if (/\bquanti anni hai\b/.test(t)) return `${n.age}. Perché, li dimostro? 😄`;
+  if (/\b(che lavoro fai|di cosa ti occupi|che fai nella vita|che mestiere|lavori\?)\b/.test(t)) { const r = ('' + (roleLabel(n) || (pl ? 'gioco e basta' : 'un po\' di tutto'))).toLowerCase(); return S([`Faccio ${r}.`, `${r.charAt(0).toUpperCase() + r.slice(1)}. E tu di che ti occupi?`]); }
+  if (/\b(dove (sei|stai|abiti|vivi)|dove ti trovo|di dove sei)\b/.test(t)) { const b = npcWhere(n) && W.buildings[(npcWhere(n) || {}).b]; return S([b ? 'Adesso sto verso ' + (b.n || 'il centro') + '.' : 'In giro per l\'isola.', 'Qui a Vetrata, dove se no 😄']); }
+  if (/\b(che tempo fa|piove|fa caldo|fa freddo|c'è il sole|com'è il tempo)\b/.test(t)) { const w = WEATHER[G.weather.cur].n.toLowerCase(); return S([`Oggi ${w}, guarda fuori 😄`, `${w.charAt(0).toUpperCase() + w.slice(1)}, come sempre su quest'isola.`]); }
+  if (/(ahah|haha|lol|ahahah|😂|🤣|ahaha)/.test(t)) return S(['😂', 'Ahahah già', 'Esatto 😄', 'Troppo vero']);
+  if (/^\s*(ok|okay|va bene|certo|perfetto|sì|si|esatto|d'accordo|come no|ci sto|dai|tranquillo)\s*[.!]*$/.test(t)) return S(['👍', 'Perfetto.', 'Allora siamo d\'accordo.', 'Bene così.']);
+  if (/^\s*(no|no grazie|non mi va|lascia|non posso|magari no)\s*[.!]*$/.test(t)) return S(['Come vuoi.', 'Nessun problema.', 'Va bene lo stesso.']);
+  if (/\?\s*$/.test(t)) return pl ? plLine(n, 'rp') : S(['Bella domanda… dipende.', 'Mmm, non saprei di preciso.', 'Secondo me sì, ma non ci giurerei.', charLine(n, 'talk')]);
+  return null;
+}
 function smartChatReply(n, lastText) {
   const st = npcState(n), t = (lastText || '').toLowerCase();
   const intents = detectIntents(lastText);
@@ -7954,6 +7973,8 @@ function smartChatReply(n, lastText) {
       if (r) return r;
     }
   }
+  // comprensione del testo libero: saluti, come stai, nome, lavoro, meteo, risate, sì/no, domande…
+  try { const cv = converse(n, t); if (cv) return cv; } catch (e) { }
   // domande dirette tipiche
   if (/\b(dove (sei|stai|abiti)|dove ti trovo)\b/.test(t)) return pick(['Sono ' + (npcWhere(n) && W.buildings[(npcWhere(n) || {}).b] ? 'verso ' + (W.buildings[npcWhere(n).b].n || 'il centro') : 'in giro per l\'isola') + '.', 'Adesso al lavoro, dopo ci vediamo.']);
   if (/quanto (costa|vuoi|chiedi|paghi)/.test(t)) return pick(['Facciamo un buon prezzo, dai.', 'Dipende da cosa ti serve.', 'Ne parliamo di persona, meglio.']);
