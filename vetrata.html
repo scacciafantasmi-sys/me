@@ -807,6 +807,8 @@ const JOB_LIST = [
   ['spazzino', 'istituzioni', 'Operatore ecologico', 'municipio', 11, 5, 13, 'pulizie', 'atletica', null, 'L isola pulita la tieni tu. All alba, mentre dormono tutti.'],
   ['giardiniere_comune', 'campagna', 'Giardiniere comunale', 'municipio', 10, 7, 15, 'limoni', 'atletica', null, 'Aiuole, palme, la villa comunale. All aria aperta.'],
   ['traghettatore', 'trasporti', 'Marinaio del traghetto', 'terminal', 13, 5, 21, 'charter', 'nautica', 'nautica:20', 'Avanti e indietro da Partenope, finche il mare permette.'],
+  ['camionista', 'trasporti', 'Camionista', 'terminal', 17, 6, 18, 'camion', 'guida', 'guida:25', 'Carica le merci dal traghetto di Partenope, le porti a Vetrata e le scarichi. Occhio al peso e ai tornanti.'],
+  ['ladro', 'notte', 'Ladro', null, 0, 20, 29, 'furto', 'furtivita', null, 'Nessuno stipendio: solo quello che riesci a rubare senza farti beccare. È un reato, e la Polizia Insulare non scherza.'],
   ['custode_museo', 'media', 'Custode del piccolo museo', 'municipio', 9, 9, 18, 'guida', 'eloquenza', null, 'Quattro vetri soffiati e la storia dell isola da raccontare.'],
   ['assistente_borsa', 'istituzioni', 'Operatore di Banca', 'banca', 16, 8, 15, 'cassa', 'eloquenza', 'eloquenza:25', 'Bonifici, cambi, consigli sui caprini.']
 ];
@@ -2149,7 +2151,7 @@ const OFFENSES = { aggressione: { n: 'Aggressione in una rissa', heat: 30, sev: 
 function offense(type, witnessed = 0.6) {
   const O = OFFENSES[type]; G.record.pending.push({ type, day: G.day });
   if (chance(witnessed)) { G.wanted.heat = clamp(G.wanted.heat + O.heat, 0, 100); updateWantedLevel(); toast(`🚓 Qualcuno ha chiamato la Polizia Insulare: ${O.n.toLowerCase()}.`, 'bad'); }
-  spreadRumor({ kind: 'crime', text: ({ aggressione: 'ha fatto a botte', guida: 'guida come un pazzo', coprifuoco: 'se ne frega del coprifuoco', resistenza: 'ha fatto a botte con la polizia', investimento: 'ha investito qualcuno', multe: 'non paga le multe', molestie: 'fa casino di notte', spaccio: 'gira brutta gente intorno a lui', detenzione: 'ha roba che non dovrebbe', coltivazione: 'coltiva qualcosa nei boschi', produzione: 'ha le mani in cose storte', hacking: 'smanetta con cose illegali', ricettazione: 'compra roba rubata' }[type] || 'ne combina di tutti i colori'), mag: -O.sev * 5 });
+  spreadRumor({ kind: 'crime', text: ({ aggressione: 'ha fatto a botte', guida: 'guida come un pazzo', coprifuoco: 'se ne frega del coprifuoco', resistenza: 'ha fatto a botte con la polizia', investimento: 'ha investito qualcuno', multe: 'non paga le multe', molestie: 'fa casino di notte', spaccio: 'gira brutta gente intorno a lui', detenzione: 'ha roba che non dovrebbe', coltivazione: 'coltiva qualcosa nei boschi', produzione: 'ha le mani in cose storte', hacking: 'smanetta con cose illegali', ricettazione: 'compra roba rubata', furto: 'ha le mani lunghe', scasso: 'è entrato in casa di qualcuno', armi: 'gira armato' }[type] || 'ne combina di tutti i colori'), mag: -(O ? O.sev : 1) * 5 });
 }
 function updateWantedLevel() { const h = G.wanted.heat; G.wanted.level = h >= 70 ? 3 : h >= 35 ? 2 : h > 1 ? 1 : 0; }
 function policeCheck(c) {
@@ -4623,6 +4625,8 @@ function doJobTask(jobId, owner) {
     case 'polizia': return policeShift(J, done);
     case 'avvocato': return trialShift(J, done);
     case 'grafica': return designStudio(J, done);
+    case 'camion': return truckRun(J, done);
+    case 'furto': return thiefRun(J, done);
     case 'musica': if (J.id === 'musicista') return busk(); return minigameRhythm(score => { advance(60); gainSkill(sk, 2 + score / 10); done(Math.round(score * 1.5), 'Applausi e mance'); });
     case 'pesca': return toast('Pescatore: esci in barca, cala le reti sui banchi e vendi al Mercato del Pesce.');
     default: if (!G.missions.some(m => m.job)) jobAssign(); else toast('Hai già un incarico in corso: guarda il GPS.');
@@ -4994,6 +4998,78 @@ function designStudio(J, done) {
   axis('', 'Che soggetto metti al centro?', DESIGN_SOGG, 'sogg', () =>
     axis('', 'Quale palette di colori?', DESIGN_PAL_LBL, 'pal', () =>
       axis('', 'Quale slogan abbini?', DESIGN_SLOG, 'slog', finish)));
+}
+/* ===== Camionista: carico merci al porto, viaggio, scarico a Vetrata ===== */
+const TRUCK_CARGO = [
+  ['Casse di limoni', 3, 40], ['Bancali d\'acqua', 4, 30], ['Mobili usati', 5, 70],
+  ['Elettrodomestici', 4, 90], ['Sacchi di cemento', 5, 50], ['Casse di vino e liquori', 2, 60],
+  ['Ricambi auto', 3, 80], ['Medicinali per la farmacia', 1, 120], ['Giornali e carta', 2, 25]
+];
+function truckRun(J, done) {
+  const CAP = 11; let load = [];
+  const totW = () => load.reduce((a, i) => a + TRUCK_CARGO[i][1], 0);
+  const totV = () => load.reduce((a, i) => a + TRUCK_CARGO[i][2], 0);
+  const loadScreen = () => {
+    const opts = TRUCK_CARGO.map((c, i) => ({ t: (load.includes(i) ? '✅ ' : '⬜ ') + c[0], d: `${c[1]} q · valore ${money(c[2])}`, f: () => { if (load.includes(i)) load = load.filter(x => x !== i); else { if (totW() + c[1] > CAP) { AU.sfx('bad'); toast('Non c\'entra: il camion è al limite di carico.', 'warn'); return; } load.push(i); } AU.sfx('click'); loadScreen(); } }));
+    openPanel('🚚 ' + esc(J.n) + ' — carico', `<p class="desc">Il traghetto da Partenope ha appena scaricato. Riempi il camion senza superare il peso massimo (${CAP} quintali).</p><p class="small">Caricato: <b>${totW()}/${CAP} q</b> · valore a bordo <b>${money(totV())}</b></p>${optList(opts)}`, [{ t: '🚦 Parti per Vetrata', c: 'pri', d: !load.length, f: depart }]); bindOpts(opts);
+  };
+  function depart() {
+    if (!load.length) { toast('Carica qualcosa, prima di partire.', 'warn'); return; }
+    closePanel(); advance(60);
+    let v = totV(), msg = 'Viaggio tranquillo sui tornanti fino a Vetrata.';
+    if (!check('guida', 32 + totW() * 2)) { const lost = pick(load); v -= Math.round(TRUCK_CARGO[lost][2] * 0.6); load = load.filter(x => x !== lost); msg = 'Su un tornante un bancale si ribalta: parte del carico è andata rovinata.'; AU.sfx('crash'); }
+    else gainSkill('guida', 2);
+    setTimeout(() => unload(Math.max(0, v), msg), 40);
+  }
+  const unload = (v, msg) => {
+    openPanel('🚚 Scarico a Vetrata', `<p class="desc">${esc(msg)}</p><p class="small muted">Arrivato al deposito: ora c'è da scaricare tutto a mano.</p>`, [{ t: '📦 Scarica e consegna', c: 'pri', f: () => { advance(60); const pay = Math.round(v * 0.25) + 6; gainSkill('atletica', 1); G.player.stamina = Math.max(0, G.player.stamina - 25); done(pay, 'Trasporto merci Partenope–Vetrata'); if (v >= 320) spreadRumor({ kind: 'gift', text: 'è un camionista affidabile', mag: 2 }); toast(`🚚 Consegna completata: ${money(pay)}.`, v > 0 ? 'money' : 'warn'); closePanel(); } }]);
+  };
+  loadScreen();
+}
+/* ===== Ladro: colpi furtivi, bottino sporco, forte rischio ===== */
+const THIEF_TARGETS = [
+  { n: 'Una bancarella al mercato', diff: 20, loot: [40, 120], scasso: false },
+  { n: 'Lo scooter lasciato in piazza', diff: 32, loot: [80, 220], scasso: false, veh: true },
+  { n: 'Un appartamento in centro', diff: 46, loot: [150, 400], scasso: true },
+  { n: 'Una villa a Sant\'Elia', diff: 66, loot: [400, 1000], scasso: true, rich: true }
+];
+function thiefRun(J, done) {
+  const lvl = t => ['facile', 'media', 'alta', 'molto alta'][Math.min(3, Math.floor(t.diff / 20))];
+  const choose = () => {
+    const opts = THIEF_TARGETS.map(t => ({ t: '🎯 ' + t.n, d: `rischio ${lvl(t)} · bottino ${money(t.loot[0])}–${money(t.loot[1])}`, f: () => attempt(t) }));
+    openPanel('🦝 ' + esc(J.n), `<p class="desc">Giro di perlustrazione nel buio. Cosa provi a colpire?</p><p class="small muted">Ogni colpo è un reato: se ti vedono parte la Polizia Insulare, e il bottino è contante sporco da riciclare.</p>${optList(opts)}`, [{ t: 'Niente di buono stanotte', c: 'pri', f: closePanel }]); bindOpts(opts);
+  };
+  const attempt = (t) => {
+    const o = [
+      { t: '🕯️ Studia i movimenti ed entra con calma', d: 'Più lento, meno rischioso', f: () => resolve(t, 'calmo') },
+      { t: '⚡ Forza in fretta e arraffa', d: 'Veloce ma rischioso', f: () => resolve(t, 'rapido') },
+      t.veh ? { t: '🔑 Mettilo in moto e fila via', d: 'Furto del mezzo', f: () => resolve(t, 'veh') } : null
+    ].filter(Boolean);
+    openPanel('🦝 ' + esc(t.n), `<p class="desc">Ci sei davanti. Il cuore martella. Come procedi?</p>${optList(o)}`, [{ t: 'Lascia stare e allontanati', c: 'pri', f: choose }]); bindOpts(o);
+  };
+  const resolve = (t, m) => {
+    closePanel(); advance(40);
+    const diffAdj = m === 'rapido' ? 10 : m === 'calmo' ? -8 : 0;
+    const seen = m === 'calmo' ? 0.22 : m === 'rapido' ? 0.6 : 0.5;
+    const crime = t.scasso ? 'scasso' : 'furto';
+    if (check('furtivita', t.diff + diffAdj)) {
+      let loot = ri(t.loot[0], t.loot[1]); if (m === 'calmo') loot = Math.round(loot * 1.1);
+      G.player.dirtyCash = (G.player.dirtyCash || 0) + loot; gainSkill('furtivita', 3 + t.diff / 20);
+      offense(crime, seen * 0.5); done(0, '');
+      toast(`🦝 Colpo riuscito: ${money(loot)} (sporchi). Riciclali il prima possibile.`, 'money');
+      if (t.rich) spreadRumor({ kind: 'crime', text: 'gira attorno alle ville di Sant\'Elia', mag: -4 });
+    } else {
+      gainSkill('furtivita', 1);
+      const caught = chance(seen + t.diff / 200 - skill('atletica') / 300);
+      if (caught) {
+        offense(crime, 1);
+        if (chance(0.5)) { G.record.pending.push({ type: crime, day: G.day }); arrestPlayer('Sorpreso durante un furto'); return; }
+        hurt(rr(4, 12), 'una fuga precipitosa'); toast('Ti scoprono! Scappi per un pelo, ma ti hanno visto in faccia.', 'bad');
+      } else { offense(crime, 0.4); toast('Qualcosa va storto: molli tutto e sparisci nel buio.', 'warn'); }
+    }
+    setTimeout(() => { if (!G.dead && !(G.player && G.player.down)) choose(); }, 50);
+  };
+  choose();
 }
 function policeCall(k, m) {
   const T = { rissa: ['Due ubriachi si picchiano davanti al bar.', 'Separali e identificali', 'Ammanettali entrambi'], lite: ['Due vicini urlano per un posto auto.', 'Media con calma', 'Multa tutti e due'], incidente: ['Una Cinquino contro un\'Ape. Nessun ferito, tanta rabbia.', 'Fai il rilievo e i verbali', 'Chiama i carri attrezzi e vai'], furto: ['Uno scooter sparito. Il proprietario piange.', 'Raccogli testimonianze', 'Batti la zona'], coprifuoco: ['Quattro ragazzi in spiaggia con una cassa bluetooth.', 'Rimandali a casa con un avvertimento', 'Multali tutti'], barca: ['Un gozzo vuoto sbatte contro il molo.', 'Ormeggialo e cerca il proprietario', 'Rimorchialo in Capitaneria'] }[k];
@@ -7025,7 +7101,9 @@ const CRIME_OFFENSES = {
   coltivazione: { n: 'Coltivazione illecita', heat: 25, sev: 1.6 },
   produzione: { n: 'Produzione e taglio di droga', heat: 45, sev: 2.6 },
   hacking: { n: 'Accesso abusivo a sistema informatico', heat: 35, sev: 2 },
-  ricettazione: { n: 'Ricettazione', heat: 20, sev: 1 }
+  ricettazione: { n: 'Ricettazione', heat: 20, sev: 1 },
+  furto: { n: 'Furto', heat: 30, sev: 1.8 },
+  scasso: { n: 'Furto con scasso', heat: 42, sev: 2.4 }
 };
 
 function hasContraband() { return G.inv.some(it => ITEMS[it.id] && ITEMS[it.id].illegal); }
