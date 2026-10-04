@@ -756,7 +756,7 @@ const JOB_LIST = [
   ['speaker', 'media', 'Speaker di Radio Vetrata', 'gazzetta', 14, 6, 12, 'musica', 'eloquenza', 'eloquenza:25', 'Buongiorno Vetrata! Meteo, traghetti, canzoni.'],
   ['strillone', 'media', 'Fattorino della Gazzetta', 'gazzetta', 7, 5, 10, 'consegne', 'atletica', null, 'Il giornale nelle cassette all\'alba.'],
   ['tipografo', 'media', 'Tipografo', 'tipografia', 12, 8, 18, 'artigiano', 'fotografia', null, 'Torchi, manifesti elettorali, camera oscura.'],
-  ['grafico', 'media', 'Grafico', 'tipografia', 13, 9, 18, 'pratiche', 'fotografia', 'hacking:15', 'Manifesti, etichette di limoncello, volantini.'],
+  ['grafico', 'media', 'Grafico', 'tipografia', 13, 9, 18, 'grafica', 'fotografia', 'hacking:15', 'Manifesti, etichette di limoncello, volantini: componi e impagina tu.'],
   ['musicista', 'notte', 'Musicista di strada', null, 0, 0, 24, 'musica', 'musica', null, 'Una chitarra in piazza. Mance se sei bravo.'],
   ['guida_turistica', 'media', 'Guida turistica', 'terminal', 13, 9, 18, 'guida', 'eloquenza', null, 'I miliardari, gli attori, le leggende. E Canale 0, se te lo chiedono.'],
   ['fotografo_matrimoni', 'media', 'Fotografo di cerimonie', 'chiesa', 15, 10, 19, 'giornalismo', 'fotografia', 'fotocamera', 'I pochi matrimoni rimasti, i molti funerali.'],
@@ -4622,6 +4622,7 @@ function doJobTask(jobId, owner) {
     case 'guida': return minigameGuida(J, s => { advance(90); gainSkill('eloquenza', 1 + s); done(s * 12, J.id === 'guida_turistica' ? 'Mance dei turisti' : 'Bonus'); if (J.id === 'guida_turistica') G.island.tourism = Math.min(1.5, G.island.tourism + 0.004 * s); });
     case 'polizia': return policeShift(J, done);
     case 'avvocato': return trialShift(J, done);
+    case 'grafica': return designStudio(J, done);
     case 'musica': if (J.id === 'musicista') return busk(); return minigameRhythm(score => { advance(60); gainSkill(sk, 2 + score / 10); done(Math.round(score * 1.5), 'Applausi e mance'); });
     case 'pesca': return toast('Pescatore: esci in barca, cala le reti sui banchi e vendi al Mercato del Pesce.');
     default: if (!G.missions.some(m => m.job)) jobAssign(); else toast('Hai già un incarico in corso: guarda il GPS.');
@@ -4932,6 +4933,67 @@ function trialShift(J, done) {
     openPanel('⚖️ ' + esc(J.n), `<p class="desc">${penale ? 'Un nuovo processo penale' : 'Una nuova causa civile'}. Assisti <b>${esc(cs.cliente)}</b>.</p><div class="quote">${esc(cs.riass)}</div><p class="small muted">Come imposti lo studio del caso?</p>${optList(o)}`, [], { noClose: true }); bindOpts(o);
   };
   studio();
+}
+/* ===== Grafico in tipografia: componi e impagina un elaborato ===== */
+const DESIGN_BRIEFS = [
+  { brief: 'Manifesto per la Sagra del Limone di Vetrata', titolo: 'SAGRA DEL LIMONE', sogg: 'limone', pal: 'agrumi', slog: 'festa' },
+  { brief: 'Etichetta per il limoncello della Distilleria', titolo: 'Limoncello di Vetrata', sogg: 'bottiglia', pal: 'agrumi', slog: 'artigianale' },
+  { brief: 'Volantino per un comizio in piazza', titolo: 'VOTA IL CAMBIAMENTO', sogg: 'megafono', pal: 'civico', slog: 'voto' },
+  { brief: 'Insegna per la pescheria del mercato', titolo: 'Pescheria del Molo', sogg: 'pesce', pal: 'mare', slog: 'fresco' },
+  { brief: 'Cartello per l\'agenzia immobiliare', titolo: 'Case a Vetrata', sogg: 'casa', pal: 'civico', slog: 'casa' },
+  { brief: 'Locandina per un concerto serale al faro', titolo: 'NOTTE AL FARO', sogg: 'megafono', pal: 'notte', slog: 'festa' }
+];
+const DESIGN_SOGG = { limone: '🍋 Un limone stilizzato', bottiglia: '🍾 Una bottiglia', megafono: '📣 Un megafono', pesce: '🐟 Un pesce', casa: '🏠 Una casa' };
+const DESIGN_PAL = { agrumi: ['#f6d743', '#e8902d'], mare: ['#2a7fb8', '#0f3b5c'], civico: ['#c0392b', '#2c3e70'], notte: ['#241a3a', '#0d0820'], pastello: ['#f3d9e3', '#cfe3ef'] };
+const DESIGN_PAL_LBL = { agrumi: '🟡 Giallo agrume', mare: '🔵 Blu del mare', civico: '🔴 Rosso e blu civico', notte: '🟣 Viola notte', pastello: '🌸 Pastello tenue' };
+const DESIGN_SLOG = { festa: 'Tre giorni di musica e sapori', artigianale: 'Fatto a mano, come una volta', voto: 'Il tuo voto conta davvero', fresco: 'Pescato stamattina', casa: 'La casa che cercavi', generico: 'Qualcosa per tutti, più o meno' };
+function drawDesign(cv, brief, sogg, pal, slog) {
+  const g = cv.getContext('2d'), W = cv.width, H = cv.height;
+  const cols = DESIGN_PAL[pal] || ['#888', '#444'];
+  const grad = g.createLinearGradient(0, 0, 0, H); grad.addColorStop(0, cols[0]); grad.addColorStop(1, cols[1]);
+  g.fillStyle = grad; g.fillRect(0, 0, W, H);
+  g.fillStyle = 'rgba(255,255,255,.1)'; g.fillRect(10, 10, W - 20, H - 20);
+  const cx = W / 2, cy = H * 0.42, r = Math.min(W, H) * 0.17;
+  g.save(); g.translate(cx, cy);
+  if (sogg === 'limone') { g.fillStyle = '#f7e14a'; g.beginPath(); g.ellipse(0, 0, r, r * 0.78, 0, 0, 7); g.fill(); g.fillStyle = '#5a8a3a'; g.fillRect(-r * 0.1, -r, r * 0.2, r * 0.35); }
+  else if (sogg === 'bottiglia') { g.fillStyle = '#2e6b3a'; g.fillRect(-r * 0.35, -r, r * 0.7, r * 2); g.fillRect(-r * 0.12, -r * 1.4, r * 0.24, r * 0.5); g.fillStyle = '#f3efe0'; g.fillRect(-r * 0.35, -r * 0.1, r * 0.7, r * 0.8); }
+  else if (sogg === 'megafono') { g.fillStyle = '#e8e2d2'; g.beginPath(); g.moveTo(-r, -r * 0.5); g.lineTo(r * 0.1, -r * 0.9); g.lineTo(r * 0.1, r * 0.9); g.lineTo(-r, r * 0.5); g.closePath(); g.fill(); g.fillStyle = '#c0392b'; g.fillRect(-r * 1.2, -r * 0.4, r * 0.3, r * 0.8); }
+  else if (sogg === 'pesce') { g.fillStyle = '#cfe6f5'; g.beginPath(); g.ellipse(0, 0, r, r * 0.55, 0, 0, 7); g.fill(); g.beginPath(); g.moveTo(r * 0.8, 0); g.lineTo(r * 1.4, -r * 0.5); g.lineTo(r * 1.4, r * 0.5); g.closePath(); g.fill(); g.fillStyle = '#123'; g.beginPath(); g.arc(-r * 0.5, -r * 0.1, r * 0.08, 0, 7); g.fill(); }
+  else if (sogg === 'casa') { g.fillStyle = '#e8d8b8'; g.fillRect(-r * 0.7, -r * 0.2, r * 1.4, r * 1.1); g.fillStyle = '#9c3b2e'; g.beginPath(); g.moveTo(-r * 0.9, -r * 0.2); g.lineTo(0, -r); g.lineTo(r * 0.9, -r * 0.2); g.closePath(); g.fill(); g.fillStyle = '#5a3a20'; g.fillRect(-r * 0.15, r * 0.3, r * 0.3, r * 0.6); }
+  g.restore();
+  g.textAlign = 'center'; g.fillStyle = '#fff'; g.shadowColor = 'rgba(0,0,0,.5)'; g.shadowBlur = 6;
+  g.font = 'bold ' + Math.round(W * 0.085) + 'px Georgia,serif'; g.fillText(brief.titolo, cx, H * 0.72, W - 24);
+  g.font = Math.round(W * 0.05) + 'px system-ui,sans-serif'; g.shadowBlur = 3; g.fillText(DESIGN_SLOG[slog] || '', cx, H * 0.84, W - 30);
+  g.shadowBlur = 0;
+}
+function designStudio(J, done) {
+  const brief = pick(DESIGN_BRIEFS);
+  let sogg = null, pal = null, slog = null;
+  const axis = (label, title, pool, keyName, next) => {
+    const o = shuffle(Object.keys(pool).slice()).slice(0, 4);
+    if (!o.includes(brief[keyName])) { o[0] = brief[keyName]; }
+    const opts = shuffle(o).map(k => ({ t: pool[k], f: () => { if (keyName === 'sogg') sogg = k; else if (keyName === 'pal') pal = k; else slog = k; AU.sfx('click'); next(); } }));
+    openPanel('🎨 ' + esc(J.n), `<p class="desc">Commissione: <b>${esc(brief.brief)}</b></p><p class="small muted">${esc(title)}</p>${optList(opts)}`, [], { noClose: true }); bindOpts(opts);
+  };
+  const finish = () => {
+    let score = 0; if (sogg === brief.sogg) score++; if (pal === brief.pal) score++; if (slog === brief.slog) score++;
+    advance(90); gainSkill('fotografia', 2 + score); const pay = 10 + score * 9;
+    done(pay, 'Elaborato grafico consegnato');
+    const body = `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">
+      <canvas id="dsCv" width="220" height="300" style="border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.4);background:#222"></canvas>
+      <div style="flex:1;min-width:160px">
+        <p class="desc">La bozza è pronta per la stampa.</p>
+        <p class="small">Coerenza col brief: <b>${score}/3</b>.</p>
+        <p class="small muted">${score === 3 ? 'Il cliente è entusiasta: lavoro impeccabile.' : score === 2 ? 'Buono, con qualche scelta discutibile.' : score === 1 ? 'Il cliente storce il naso: rifarsi l\'occhio.' : 'Il cliente non si riconosce per niente in questo.'}</p>
+        <p class="small muted">Compenso: <b>${money(pay)}</b></p>
+      </div></div>`;
+    openPanel('🎨 Bozza finale', body, [{ t: 'Consegna e chiudi', c: 'pri', f: closePanel }]);
+    const cv = $('#dsCv'); if (cv) drawDesign(cv, brief, sogg, pal, slog);
+    if (score === 3) spreadRumor({ kind: 'gift', text: 'ha un bell\'occhio per la grafica', mag: 2 });
+  };
+  axis('', 'Che soggetto metti al centro?', DESIGN_SOGG, 'sogg', () =>
+    axis('', 'Quale palette di colori?', DESIGN_PAL_LBL, 'pal', () =>
+      axis('', 'Quale slogan abbini?', DESIGN_SLOG, 'slog', finish)));
 }
 function policeCall(k, m) {
   const T = { rissa: ['Due ubriachi si picchiano davanti al bar.', 'Separali e identificali', 'Ammanettali entrambi'], lite: ['Due vicini urlano per un posto auto.', 'Media con calma', 'Multa tutti e due'], incidente: ['Una Cinquino contro un\'Ape. Nessun ferito, tanta rabbia.', 'Fai il rilievo e i verbali', 'Chiama i carri attrezzi e vai'], furto: ['Uno scooter sparito. Il proprietario piange.', 'Raccogli testimonianze', 'Batti la zona'], coprifuoco: ['Quattro ragazzi in spiaggia con una cassa bluetooth.', 'Rimandali a casa con un avvertimento', 'Multali tutti'], barca: ['Un gozzo vuoto sbatte contro il molo.', 'Ormeggialo e cerca il proprietario', 'Rimorchialo in Capitaneria'] }[k];
