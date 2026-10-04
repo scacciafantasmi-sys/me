@@ -4619,6 +4619,7 @@ function doJobTask(jobId, owner) {
       if (found >= 10) { spreadRumor({ kind: 'gift', text: 'ha retto una notte intera alla Distilleria', mag: 3 }); try { if (!G.flags.distNight) { G.flags.distNight = true; discoverLore('canale0'); } } catch (e) { } }
     });
     case 'guida': return minigameGuida(J, s => { advance(90); gainSkill('eloquenza', 1 + s); done(s * 12, J.id === 'guida_turistica' ? 'Mance dei turisti' : 'Bonus'); if (J.id === 'guida_turistica') G.island.tourism = Math.min(1.5, G.island.tourism + 0.004 * s); });
+    case 'polizia': return policeShift(J, done);
     case 'musica': if (J.id === 'musicista') return busk(); return minigameRhythm(score => { advance(60); gainSkill(sk, 2 + score / 10); done(Math.round(score * 1.5), 'Applausi e mance'); });
     case 'pesca': return toast('Pescatore: esci in barca, cala le reti sui banchi e vendi al Mercato del Pesce.');
     default: if (!G.missions.some(m => m.job)) jobAssign(); else toast('Hai già un incarico in corso: guarda il GPS.');
@@ -4685,6 +4686,61 @@ function writeArticle(title, shot) {
     { t: '🏛️ Attacca il Sindaco', d: 'Effetto politico: consenso del Sindaco −', f: () => finish(1.2, -2) }];
   const finish = (mul, kind) => { closePanel(); advance(90); const pay = Math.round((40 + skill('indagine') * 0.5 + (shot ? 25 : 0)) * mul); earn(pay, 'Articolo pubblicato', 'bank'); gainSkill('indagine', 3); gainSkill('eloquenza', 1); addNews({ tag: 'cronaca', head: kind === -1 ? title.toUpperCase() + '!' : title, body: `Di ${G.player.first} ${G.player.last}.`, weight: 2.2 + (shot ? 0.5 : 0) + (kind === -2 ? 1 : 0), by: 'player', about: 'player' }); if (kind === -2 && G.pol.mayor === 'npc') G.pol.approval -= 3; if (kind === -1 && chance(0.3)) { sendMsg('Avv. Galano', 'Il mio cliente si è riconosciuto nel tuo articolo. Querela in arrivo.'); G.debts.push({ to: 'Spese legali', amount: 300, due: G.day + 10 }); } };
   openPanel('✍️ Scrivi l\'articolo', `<p class="desc">«${esc(title)}». Il direttore ti guarda da sopra gli occhiali: «Che taglio gli diamo?»</p>${optList(opts)}`, [], { noClose: true }); bindOpts(opts);
+}
+/* ===== Turno di Polizia: hub di attività vere ===== */
+function policeShift(J, done) {
+  const arrestSomeone = (days, why) => { const bad = NPCS.filter(n => npcState(n).alive && !n.pl && !n.police && (n.faction === 'carannante' || n.faction === 'brigata' || n.addict)); const n = pick(bad.length ? bad : NPCS.filter(x => !x.pl)); if (n) { npcState(n).jailed = G.day + days; npcState(n).op -= 20; } G.island.crime = Math.max(0, (G.island.crime || 20) - 1.5); return n; };
+  const hub = () => {
+    const opts = [
+      { t: '🚧 Posto di blocco', d: 'Ferma e controlla i veicoli', f: () => roadblock() },
+      { t: '🅿️ Multe alle auto in sosta vietata', d: 'Giro coi verbali', f: () => tickets() },
+      { t: '🚶 Pattuglia a piedi', d: 'Individua chi ha qualcosa da nascondere', f: () => patrol() },
+      { t: '🕵️ Appostamento', d: 'Aspetta e osserva: qualcosa si muove', f: () => stakeout() },
+      { t: '🌲 Pattuglia nei boschi con la Forestale', d: 'Piantagioni, bracconieri, rifugi', f: () => forest() },
+      { t: '⚖️ Rispondi a una chiamata della centrale', d: 'Rissa, lite, furto…', f: () => { closePanel(); const k = pick(['rissa', 'lite', 'furto', 'coprifuoco']); policeCall(k, {}); } },
+      { t: '🚪 Rientra in pattuglia (chiudi)', c: 'pri', f: closePanel }
+    ];
+    openPanel('👮 ' + esc(J.n) + ' — servizio', `<p class="desc">Centrale operativa. Scegli cosa fare, agente. ${(G.player.health < 40 ? '<span class="badc">Sei malconcio: valuta di rientrare.</span>' : '')}</p>${optList(opts)}`, [{ t: 'Fine turno', f: closePanel }]); bindOpts(opts);
+  };
+  const back = () => setTimeout(hub, 40);
+  function roadblock() {
+    advance(20); const N = 4; let k = 0, caught = 0;
+    const cars = Array.from({ length: N }, () => { const r = Math.random(); return r < 0.25 ? 'ubriaco' : r < 0.45 ? 'senza_patente' : r < 0.6 ? 'contrabbando' : 'regolare'; });
+    const step = () => {
+      if (k >= N) { const pay = 12 + caught * 14; done(pay, 'Posto di blocco'); gainSkill('indagine', 1 + caught); addRep('polizia', caught); if (caught) toast(`🚧 ${caught} verbali/ferma. +${money(pay)}.`, 'money'); else toast('Tutti in regola, stavolta.'); return back(); }
+      const v = cars[k]; const names = { ubriaco: 'Guida incerta, odore di vino.', senza_patente: 'Nervoso, non trova i documenti.', contrabbando: 'Qualcosa sotto il sedile.', regolare: 'Documenti in ordine, educato.' };
+      const o = [
+        { t: '🔎 Controlla a fondo', f: () => { if (v !== 'regolare') { caught++; const fine2 = { ubriaco: 150, senza_patente: 120, contrabbando: 300 }[v]; toast(`Beccato: ${v.replace('_', ' ')}. Verbale da ${money(fine2)}.`, 'money'); if (v === 'contrabbando' && chance(0.6)) arrestSomeone(ri(4, 10), 'contrabbando'); } else { toast('Pulito. Il cittadino brontola per l\'attesa.', 'warn'); } k++; step(); } },
+        { t: '👋 Lascia passare', f: () => { if (v !== 'regolare') toast('Hai lasciato andare un furbo. Capita.', 'warn'); k++; step(); } }
+      ];
+      openPanel('🚧 Posto di blocco', `<p class="desc">Veicolo ${k + 1}/${N}. ${names[v]}</p>${optList(o)}`, [], { noClose: true }); bindOpts(o);
+    };
+    step();
+  }
+  function tickets() {
+    closePanel();
+    minigameClick(n => { advance(60); const pay = 8 + n * 3; done(pay, 'Multe per sosta vietata'); addRep('polizia', Math.floor(n / 3)); G.island.budget = (G.island.budget || 0) + n * 40; toast(`🅿️ ${n} verbali elevati.`, n ? 'money' : 'warn'); back(); },
+      { title: '🅿️ Multe per sosta vietata', desc: 'Clicca le auto in sosta vietata (rosse), lascia stare quelle in regola (blu). 20 secondi.', good: '#c0392b', bad: '#2c6fb5', bg: ['#555', '#4a4a4a'], goodLabel: 'verbali' });
+  }
+  function patrol() {
+    advance(25); const people = shuffle(['regolare', 'regolare', 'sospetto', 'regolare']);
+    const o = people.map((v, i) => ({ t: `🧍 Persona ${i + 1} — ${v === 'sospetto' ? 'guarda altrove, cammina veloce, tiene le mani in tasca' : pick(['chiacchiera al bar', 'porta la spesa', 'aspetta l\'autobus', 'fuma tranquillo'])}`, f: () => { closePanel(); if (v === 'sospetto') { if (check('indagine', 40)) { const n = arrestSomeone(ri(3, 8), 'perquisizione'); done(30, 'Pattuglia: fermo riuscito'); gainSkill('indagine', 3); addRep('polizia', 4); toast('Perquisito: aveva della roba. Fermo e in gabbio.', 'money'); } else { done(8, 'Pattuglia'); toast('Lo fermi ma è pulito: proteste e una brutta figura.', 'warn'); } } else { done(5, 'Pattuglia'); toast('Era un cittadino qualunque. Ti scusi.', 'warn'); } back(); } }));
+    openPanel('🚶 Pattuglia a piedi', `<p class="desc">Quattro persone nella piazza. Chi controlli?</p>${optList(o)}`, [{ t: 'Nessuno, prosegui', f: () => { done(4, 'Pattuglia tranquilla'); back(); } }]); bindOpts(o);
+  }
+  function stakeout() {
+    advance(60);
+    if (chance(0.55)) { const o = [{ t: '🚔 Intervieni subito', f: () => { closePanel(); if (check('atletica', 45)) { arrestSomeone(ri(5, 12), 'spaccio'); done(40, 'Appostamento: blitz riuscito'); addRep('polizia', 6); gainSkill('indagine', 3); toast('Blitz! Arresto in flagranza.', 'money'); } else { done(10, 'Appostamento'); hurt(rr(3, 9), 'un inseguimento finito male'); toast('Ti sfugge e ti fai male inseguendolo.', 'bad'); } back(); } }, { t: '📸 Fotografa e aspetta rinforzi', f: () => { closePanel(); done(25, 'Appostamento: prove raccolte'); gainSkill('indagine', 4); if (hasInv('fotocamera')) toast('Foto nitide: prove solide per il magistrato.', 'money'); else toast('Buone prove, peccato per la macchina fotografica.'); back(); } }];
+      openPanel('🕵️ Appostamento', '<p class="desc">Dietro un cassonetto, al buio. Uno scambio sospetto a venti metri: mani, una busta, sguardano in giro.</p>' + optList(o), [], { noClose: true }); bindOpts(o);
+    } else { done(8, 'Appostamento (nulla di fatto)'); toast('Due ore nel buio. Niente. Succede.'); back(); }
+  }
+  function forest() {
+    advance(90); closePanel();
+    if (chance(0.5)) { const plots = (G.grow && G.grow.plots) ? G.grow.plots.filter(pl => pl.cx != null && !pl.dead) : [];
+      const o = [{ t: '🔥 Sequestra ed estirpa', f: () => { closePanel(); done(35, 'Pattuglia boschi: piantagione sequestrata'); addRep('polizia', 5); gainSkill('indagine', 2); if (plots.length) { G.grow.plots.splice(G.grow.plots.indexOf(pick(plots)), 1); } G.island.crime = Math.max(0, G.island.crime - 2); toast('🌲 Piantagione clandestina sequestrata con la Forestale.', 'money'); back(); } }, { t: '🚶 Segui le tracce del coltivatore', f: () => { closePanel(); if (check('atletica', 45)) { arrestSomeone(ri(6, 14), 'coltivazione'); done(45, 'Pattuglia boschi: arresto'); addRep('polizia', 7); toast('Sorpreso sul posto: in manette.', 'money'); } else { done(12, 'Pattuglia boschi'); toast('Spariti tra gli alberi. Solo la piantagione resta.', 'warn'); } back(); } }];
+      openPanel('🌲 Con la Forestale', '<p class="desc">Tra i castagni, filari verdi che non c\'entrano niente coi boschi: una piantagione. Odore dolciastro nell\'aria.</p>' + optList(o), [], { noClose: true }); bindOpts(o);
+    } else { done(14, 'Pattuglia boschi'); gainSkill('atletica', 1); toast('🌲 Sentieri battuti, un rifugio controllato. Tutto calmo.'); back(); }
+  }
+  hub();
 }
 function policeCall(k, m) {
   const T = { rissa: ['Due ubriachi si picchiano davanti al bar.', 'Separali e identificali', 'Ammanettali entrambi'], lite: ['Due vicini urlano per un posto auto.', 'Media con calma', 'Multa tutti e due'], incidente: ['Una Cinquino contro un\'Ape. Nessun ferito, tanta rabbia.', 'Fai il rilievo e i verbali', 'Chiama i carri attrezzi e vai'], furto: ['Uno scooter sparito. Il proprietario piange.', 'Raccogli testimonianze', 'Batti la zona'], coprifuoco: ['Quattro ragazzi in spiaggia con una cassa bluetooth.', 'Rimandali a casa con un avvertimento', 'Multali tutti'], barca: ['Un gozzo vuoto sbatte contro il molo.', 'Ormeggialo e cerca il proprietario', 'Rimorchialo in Capitaneria'] }[k];
