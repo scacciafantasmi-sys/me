@@ -4267,9 +4267,23 @@ function openPartenope() { discoverLore('partenope');
     { t: '🏛️ Palazzo della Regione', d: G.pol.mayor === 'player' ? 'Tratta i fondi per Vetrata' : 'Solo il Sindaco viene ricevuto', dis: G.pol.mayor !== 'player', f: () => { closePanel(); regionTalks(); } },
     { t: '🚶 Gira per i quartieri', d: t > 70 ? 'Pericoloso: la città è in fiamme' : 'Il polso della terraferma', f: () => { closePanel(); advance(120); if (chance(t / 200)) { hurt(rr(8, 20), 'gli scontri a Partenope'); eventPanel('🔥 Partenope', 'strada', 'Ti ritrovi in mezzo a una carica: lacrimogeni, vetrine in frantumi, gente che corre. Scappi in un portone con gli occhi che bruciano.', [{ t: 'Torna al porto', f: () => { closePanel(); openPartenope(); } }]); } else { addNote('Partenope: ' + pick(['code ai bancomat, saracinesche abbassate, scritte sui muri: «NÉ ROMA NÉ NESSUNO».', 'un uomo in Piazza del Plebiscito distribuisce volantini: «Vetrata ci ha traditi».', 'i prezzi del pane sono raddoppiati in un mese.'])); G.island.tension = clamp(G.island.tension - 1, 0, 100); openPartenope(); } } },
     G.flags.vicoVetrai ? { t: '👁️ Vico dei Vetrai', d: 'La cabina delle chiamate', f: () => { closePanel(); advance(60); eventPanel('👁️ Vico dei Vetrai', 'horror', 'Un vicolo cieco, una cabina SIP con la cornetta appesa che dondola. Il filo è tagliato. Eppure, quando ti avvicini, la sento respirare.', [{ t: 'Prendi la cornetta', f: () => { G.player.stress = Math.min(100, G.player.stress + 15); addInv('reperto', 1, { title: 'Cornetta della cabina di Vico dei Vetrai' }); G.legacy.points += 5; result('Dentro la cornetta, al posto del microfono, c\'è un frammento di specchio. Lo tieni.', 'weird'); } }, { t: 'Scappa', f: () => { closePanel(); openPartenope(); } }]); } } : null,
+    { t: '🕶️ Mercato nero del Pallonetto', d: 'Ferri senza matricola, niente domande · reato grave', f: () => { closePanel(); openBlackMarketPartenope(); } },
     { t: '⛴️ Torna a Vetrata', c: 'pri', f: () => { closePanel(); returnFromPartenope(); } }];
   openPanel('🌋 Partenope', `<canvas class="evimg" id="ptArt" width="760" height="130"></canvas><p class="desc">La grande città sulla terraferma. ${t > 75 ? 'Fumo all\'orizzonte, sirene, blindati agli incroci: l\'Italia è a un passo dalla guerra civile.' : t > 50 ? 'Scioperi, cortei, una tensione che si taglia col coltello.' : 'Una calma strana, come prima di un temporale.'}</p>${optList(opts)}`, [], { noClose: true });
   sceneArt($('#ptArt'), 'porto'); bindOpts(opts);
+}
+function openBlackMarketPartenope() {
+  const stock = [['coltello', 25], ['pistola_illegale', 3000], ['fucile_mozzato', 1900]];
+  const o = stock.map(([id, pr]) => { const A = ITEMS[id]; return { t: `${A.ico} ${A.n} — ${money(pr)}`, d: id === 'coltello' ? 'difesa personale · legale' : 'arma clandestina: detenzione = reato grave', dis: id === 'coltello' && hasInv('coltello'), f: () => {
+    if (id === 'coltello' && hasInv('coltello')) return toast('Ne hai già uno.');
+    if ((G.player.dirtyCash || 0) >= pr) { G.player.dirtyCash -= pr; } else if (!pay(pr, 'Mercato nero (Partenope)', { atCounter: true })) return;
+    addInv(id);
+    if (id !== 'coltello') { G.wanted.heat = clamp(G.wanted.heat + 8, 0, 100); updateWantedLevel(); G.flags.smuggling = (G.flags.smuggling || 0) + 1; }
+    toast(id === 'coltello' ? '🔪 Coltello comprato.' : `${A.n}: ora devi riportarla a Vetrata senza farti beccare alla dogana del porto.`, 'warn'); openBlackMarketPartenope();
+  } }; });
+  o.push({ t: 'Lascia stare', f: () => { closePanel(); openPartenope(); } });
+  openPanel('🕶️ Mercato nero del Pallonetto', `<p class="desc">Un sottoscala, una coperta per terra, i ferri schierati in fila. «Paghi pure in contante sporco. Ma a Vetrata, al porto, c'è la dogana: sono fatti tuoi.»</p>${optList(o)}`, [{ t: 'Indietro', c: 'pri', f: () => { closePanel(); openPartenope(); } }], { wide: true });
+  bindOpts(o);
 }
 function returnFromPartenope() {
   advance(120); G.player.inside = null;
@@ -6092,7 +6106,8 @@ function nightEvent(c, wild) {
   if (k === 'agguato') return eventPanel('🌑 Brutti incontri', 'vicolo', `${hhmm()}. Tre sagome escono da un vicolo buio. «Bella serata per una passeggiata. Hai da accendere? E il portafoglio?»`, [
     { t: '💶 Dai quello che hai in contanti', f: () => { const loss = Math.min(G.cash, Math.round(50 + Math.random() * 150)); G.cash -= loss; p.stress = clamp(p.stress + 15, 0, 100); result(`Ti alleggeriscono di ${money(loss)} e spariscono. Poteva andare peggio.`, 'bad'); } },
     { t: '🏃 Scappa', d: 'Fiato', f: () => { if (check('atletica', 40)) { advance(6); result('Corri come il vento. Li semini tra i vicoli.'); } else { const loss = Math.min(G.cash, 200); G.cash -= loss; hurt(rr(6, 16), 'uno scippo violento'); result('Ti prendono. Perdi i contanti e qualche livido.', 'bad'); } } },
-    { t: '🥊 Affrontali', d: 'Pericoloso', req: () => skill('atletica') > 40, f: () => { if (check('atletica', 60)) { gainSkill('atletica', 3); result('Non se l\'aspettavano. Scappano loro, stavolta.'); } else { hurt(rr(12, 28), 'un pestaggio'); G.cash = 0; result('Erano in tre. Ti svegli all\'alba, dolorante e senza contanti.', 'bad'); } } }]);
+    { t: '🥊 Affrontali', d: 'Pericoloso', req: () => skill('atletica') > 40, f: () => { if (check('atletica', 60)) { gainSkill('atletica', 3); result('Non se l\'aspettavano. Scappano loro, stavolta.'); } else { hurt(rr(12, 28), 'un pestaggio'); G.cash = 0; result('Erano in tre. Ti svegli all\'alba, dolorante e senza contanti.', 'bad'); } } },
+    hasInv('coltello') ? { t: '🔪 Tira fuori il coltello', d: 'Li spaventi, ma brandirlo è reato', f: () => { offense('armi', 0.3); if (chance(0.68 + skill('atletica') / 220)) result('La lama luccica al buio. Ci ripensano e si dileguano nei vicoli. Il cuore ti martella.', 'warn'); else { hurt(rr(6, 16), 'una colluttazione'); const loss = Math.min(G.cash, 150); G.cash -= loss; result('Uno di loro ha un ferro più lungo del tuo. Te la cavi con tagli, lividi e meno contanti.', 'bad'); } } } : null].filter(Boolean));
   if (k === 'freddo') { p.temp -= 2.5; p.stress = clamp(p.stress + 6, 0, 100); return eventPanel('🥶 Il freddo della notte', 'bosco', `${hhmm()}. La nebbia notturna ti entra nelle ossa. Battono i denti. ${ITEMS[p.wear].wear.warm < 2 ? 'Quello che indossi non basta.' : ''}`, [{ t: 'Stringi i denti e cammina', c: 'pri', f: () => { closePanel(); } }, { t: '🔥 Cerca riparo e accendi un fuoco', d: 'serve tempo', f: () => { advance(30); p.temp += 3; result('Trovi una rientranza nella roccia e accendi due rami. Meglio.'); } }]); }
   // buio
   p.stress = clamp(p.stress + 8, 0, 100); return eventPanel('🌑 Buio pesto', 'vicolo', `${hhmm()}. Qui non c\'è un lampione che funzioni. ${p.torch ? 'Per fortuna hai la torcia.' : 'Procedi a tentoni, una mano sul muro.'}`, [{ t: 'Prosegui con prudenza', c: 'pri', f: () => { if (!p.torch && chance(0.3)) { hurt(rr(2, 6), 'un gradino nel buio'); } closePanel(); } }]);
@@ -6522,13 +6537,13 @@ function openColtivazione() {
       const cov = pl.cover == null ? null : Math.round(pl.cover * 100);
       const here = pl.cx == null || (pl.cx === G.player.cx && pl.cy === G.player.cy);
       const state = pl.dead ? '<span class="badc">seccata</span>' : ready ? '<span class="good">pronta da raccogliere</span>' : `in crescita (${age}/${DRUGS.erba.growDays} giorni)${pl.watered === G.day ? ' · annaffiata' : ''}`;
-      const btn = ready && !pl.dead ? (here ? `<button class="btn sm pri" data-harv="${k}">✂️ Raccogli</button>` : `<button class="btn sm" data-gps="${k}">📍 GPS</button>`) : pl.dead ? `<button class="btn sm" data-rip="${k}">🗑️ Estirpa</button>` : (here ? `<button class="btn sm" data-water="${k}" ${pl.watered === G.day ? 'disabled' : ''}>💧 Annaffia</button>` : `<button class="btn sm" data-gps="${k}">📍 GPS</button>`);
+      const btn = ready && !pl.dead ? (here ? `<button class="btn sm pri" data-harv="${k}">✂️ Raccogli</button>` : `<button class="btn sm" data-gps="${k}">📍 GPS</button>`) : pl.dead ? `<button class="btn sm" data-rip="${k}">🗑️ Estirpa</button>` : (here ? `<button class="btn sm" data-water="${k}" ${pl.watered === G.day || !hasInv('acqua') ? 'disabled' : ''}>💧 Annaffia${pl.watered === G.day ? '' : hasInv('acqua') ? '' : ' (serve acqua)'}</button>` : `<button class="btn sm" data-gps="${k}">📍 GPS</button>`);
       return `<div class="msg">🪴 ${pl.zone ? esc(pl.zone) : 'Pianta'} #${k + 1}${cov != null ? ` <span class="muted tiny">copertura ${cov}%</span>` : ''} — ${state}${here ? '' : ' <span class="muted tiny">(non sei qui)</span>'}<div class="row" style="margin-top:4px">${btn}</div></div>`;
     }).join('');
     const canHere = canPlantHere();
     $('#growBody').innerHTML = `<p class="small">Piante: ${G.grow.plots.length}. Puoi piantare <b>ovunque</b>: più il posto è nascosto e lontano da occhi indiscreti, meno rischi che te la trovino. Al chiuso, in una tua base (capannone, rudere, casa), la copertura è quasi totale. Raccogli, essicca, lavora in dosi, poi spaccia di notte.</p>${rows || '<p class="muted">Nessuna pianta.</p>'}<div style="margin-top:8px"><button class="btn sm" id="plant" ${!hasInv('seme_erba') || !canHere ? 'disabled' : ''}>🌱 Pianta qui${hasInv('seme_erba') ? (canHere ? ' · ' + plantCoverLabel() : ' · non qui') : ' (niente semi)'}</button> ${hasInv('erba_verde') ? `<button class="btn sm pri" id="dry">🌾 Essicca e lavora il raccolto (${countInv('erba_verde')})</button>` : ''}</div>`;
     if ($('#plant')) $('#plant').onclick = () => { plantSeedHere(); render(); };
-    document.querySelectorAll('[data-water]').forEach(b => b.onclick = () => { const pl = G.grow.plots[+b.dataset.water]; pl.watered = G.day; pl.wateredCount = (pl.wateredCount || 0) + 1; advance(10); render(); });
+    document.querySelectorAll('[data-water]').forEach(b => b.onclick = () => { if (!hasInv('acqua')) return toast('Ti serve una bottiglia d\'acqua per annaffiare.', 'warn'); removeInv('acqua', 1); const pl = G.grow.plots[+b.dataset.water]; pl.watered = G.day; pl.wateredCount = (pl.wateredCount || 0) + 1; advance(10); toast('💧 Pianta annaffiata con una bottiglia d\'acqua.'); render(); });
     document.querySelectorAll('[data-rip]').forEach(b => b.onclick = () => { G.grow.plots.splice(+b.dataset.rip, 1); render(); });
     document.querySelectorAll('[data-gps]').forEach(b => b.onclick = () => { const pl = G.grow.plots[+b.dataset.gps]; if (pl.cx != null) { G.waypoint = { cx: pl.cx, cy: pl.cy }; toast('📍 GPS impostato sulla piantagione.'); } });
     document.querySelectorAll('[data-harv]').forEach(b => b.onclick = () => { const k = +b.dataset.harv; const pl = G.grow.plots[k]; const yield0 = 2 + ((pl.wateredCount || 0) > 2 ? 1 : 0) + ri(0, 2); G.grow.plots.splice(k, 1); harvestGame(yield0, render); });
@@ -7362,8 +7377,10 @@ const GEAR_ITEMS = {
 const ARMI = {
   fucile_caccia: { n: 'Fucile da caccia', ico: '🔫', w: 3.5, price: 1200, legal: true, porto: 'caccia', intim: 3, d: "Da caccia e tiro. Con porto d'armi è legale; altrove no." },
   pistola_sport: { n: 'Pistola sportiva', ico: '🔫', w: 1, price: 2000, legal: true, porto: 'sport', intim: 4, d: "Tiro a segno. Richiede porto d'armi sportivo." },
-  pistola_illegale: { n: 'Pistola clandestina', ico: '🔫', w: 1, price: 3500, legal: false, heat: 50, intim: 5, d: "Matricola abrasa, nessun documento. Detenerla è un reato grave." }
+  pistola_illegale: { n: 'Pistola clandestina', ico: '🔫', w: 1, price: 3500, legal: false, heat: 50, intim: 5, d: "Matricola abrasa, nessun documento. Detenerla è un reato grave." },
+  fucile_mozzato: { n: 'Fucile a canne mozze', ico: '🔫', w: 2.5, price: 2200, legal: false, heat: 55, intim: 5, d: "Canne segate, niente matricola. Intimidazione pura da strada. Reato grave." }
 };
+const COLTELLO = { n: 'Coltello a serramanico', ico: '🔪', w: 0.3, price: 40, intim: 2, weapon: true, d: "Per difesa personale. Comprarlo in armeria è legale e non serve il porto d'armi; ma tirarlo fuori o usarlo è un altro paio di maniche." };
 function hasPorto(kind) { return (G.player.porto || []).includes(kind); }
 function isArmed() { return G.inv.some(it => ARMI[it.id]); }
 function hasIllegalGear() { return G.inv.some(it => (ITEMS[it.id] && ITEMS[it.id].illegal) || ARMI[it.id] && !ARMI[it.id].legal || (ARMI[it.id] && ARMI[it.id].legal && !hasPorto(ARMI[it.id].porto))); }
@@ -7374,6 +7391,7 @@ function openArmeria(b) {
     { t: '📄 Richiedi il porto d\'armi (caccia)', d: hasPorto('caccia') ? 'già rilasciato' : money(600) + ' · serve fedina pulita e certificato', dis: hasPorto('caccia') || G.record.convictions.length, f: () => { if (!hasInv('certificato')) return toast('Serve il certificato medico (Ambulatorio).'); if (pay(600, 'Porto d\'armi caccia', { atCounter: true })) { G.player.porto = G.player.porto || []; G.player.porto.push('caccia'); removeInv('certificato'); closePanel(); toast('🎯 Porto d\'armi per uso venatorio rilasciato.', 'money'); } } },
     { t: '📄 Richiedi il porto d\'armi (sportivo)', d: hasPorto('sport') ? 'già rilasciato' : money(1200), dis: hasPorto('sport') || G.record.convictions.length, f: () => { if (pay(1200, 'Porto d\'armi sport', { atCounter: true })) { G.player.porto = G.player.porto || []; G.player.porto.push('sport'); closePanel(); toast('🎯 Porto d\'armi sportivo rilasciato.', 'money'); } } },
     ...Object.entries(ARMI).filter(([id, A]) => A.legal).map(([id, A]) => ({ t: `${A.ico} ${A.n} — ${money(A.price)}`, d: `${esc(A.d)}`, dis: !hasPorto(A.porto), f: () => { if (!hasPorto(A.porto)) return toast('Serve il porto d\'armi adatto.', 'warn'); if (pay(A.price, A.n, { atCounter: true })) { addInv(id); closePanel(); toast(`${A.n} acquistata e registrata.`, 'money'); } } })),
+    { t: `🔪 ${COLTELLO.n} — ${money(COLTELLO.price)}`, d: 'Per difesa personale · non serve il porto d\'armi', dis: hasInv('coltello'), f: () => { if (hasInv('coltello')) return toast('Ne hai già uno.'); if (pay(COLTELLO.price, COLTELLO.n, { atCounter: true })) { addInv('coltello'); closePanel(); toast('🔪 Coltello a serramanico. «Per difesa, mi raccomando. Non per fare lo sbruffone.»', 'money'); } } },
     { t: '🔧 Manutenzione e pulizia armi', d: money(60), dis: !isArmed(), f: () => { if (pay(60)) { advance(30); gainSkill('indagine', 1); closePanel(); toast('Armi pulite e in ordine.'); } } },
     jobOpt('armaiolo'), workOpt('armaiolo')
   ];
@@ -7955,7 +7973,7 @@ function openTechGuide() {
 // merge tech items & stocks
 try { Object.assign(ITEMS, TECH_ITEMS); } catch(e){}
 try { Object.assign(ITEMS, DRUG_ITEMS); Object.assign(OFFENSES, CRIME_OFFENSES); } catch(e){}
-try { ITEMS.guida_tech = { n: 'Manuale di elettronica ElettroVetrata', ico: '📘', w: 0.3, price: 45, d: "Guida illustrata: ricette di assemblaggio, uso dei dispositivi e combinazioni. Leggilo dallo zaino." }; Object.assign(ITEMS, GEAR_ITEMS); ARMI.pistola_illegale.illegal = true; for (const k in ARMI) ITEMS[k] = ARMI[k]; OFFENSES.armi = { n: 'Detenzione illegale di arma', heat: 50, sev: 2.8 }; } catch(e){}
+try { ITEMS.guida_tech = { n: 'Manuale di elettronica ElettroVetrata', ico: '📘', w: 0.3, price: 45, d: "Guida illustrata: ricette di assemblaggio, uso dei dispositivi e combinazioni. Leggilo dallo zaino." }; Object.assign(ITEMS, GEAR_ITEMS); ARMI.pistola_illegale.illegal = true; ARMI.fucile_mozzato.illegal = true; for (const k in ARMI) ITEMS[k] = ARMI[k]; ITEMS.coltello = COLTELLO; OFFENSES.armi = { n: 'Detenzione illegale di arma', heat: 50, sev: 2.8 }; } catch(e){}
 if (!STOCKS.some(x=>x.id==='ELV')) STOCKS.push({ id: 'ELV', n: 'ElettroVetrata SpA' });
 
 /* ---------- Ciclo di animazione ---------- */
