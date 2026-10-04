@@ -2339,7 +2339,7 @@ function bizWeekly() {
 /* ---------- Isola, Partenope, politica ---------- */
 function initIsland(npcInfo) {
   G.island = { pop: 2140, unemployment: 0.27, crime: 38, tension: 52, euro: 1.12, euroTrend: 0, tourism: 0.7, budget: 180000, morale: 45, blockade: -1, history: [] };
-  G.pol = { mayor: 'npc', mayorNpc: npcInfo.mayor, mayorParty: npcInfo.mayorParty, questore: npcInfo.questore, magistrato: NPCS.find(n => n.role === 'magistrato').id, tax: 0.14, subsidy: 6, curfew: null, ztl: false, nightClose: null, approval: 41, nextElection: 365, playerVote: null, seats: { vl: 4, ri: 2, of: 3, lm: 2 }, playerList: null, signatures: [], candidate: false, campaign: { funds: 0, posters: [], rallies: 0, debate: 0, dirty: 0 }, giunta: [], appalti: [], term: 0, results: null, regional: 0 };
+  G.pol = { mayor: 'npc', mayorNpc: npcInfo.mayor, mayorParty: npcInfo.mayorParty, questore: npcInfo.questore, magistrato: NPCS.find(n => n.role === 'magistrato').id, tax: 0.14, subsidy: 6, curfew: null, ztl: false, nightClose: null, approval: 41, nextElection: 365, playerVote: null, seats: { vl: 4, ri: 2, of: 3, lm: 2 }, playerList: null, signatures: [], candidate: false, campaign: { funds: 0, posters: [], rallies: 0, debate: 0, dirty: 0 }, giunta: [], appalti: [], term: 0, results: null, regional: 0, swing: {}, endorsements: [], spotUntil: 0 };
   G.pol.seats[G.pol.mayorParty] += 1;
 }
 function islandDaily() {
@@ -2374,6 +2374,7 @@ function islandDaily() {
   try { parkingDaily(); } catch (e) { }
   if (G.grow && G.grow.plots) for (const pl of G.grow.plots) { if (!pl.dead && G.day - (pl.watered || pl.day) > 3) pl.dead = true; }
   try { growRaidCheck(); } catch (e) { }
+  try { pollsDaily(); } catch (e) { }
   try { ludoDaily(); const Ccas = casinoState(); if (dayOfWeek() === 5 && Ccas.tourneyDay !== G.day) { Ccas.tourneyDay = G.day; } Ccas.jackpot += ri(200, 800); } catch (e) { }
 }
 function npcMayorActs() {
@@ -2403,6 +2404,9 @@ function voteShares() {
       if (k === P.mayorParty && P.mayor !== 'player') u += (P.approval - 45) / 40;
       if (k === 'player') u += st.op / 45 + P.campaign.rallies * 0.08 + P.campaign.debate * 0.3 + Math.min(P.campaign.posters.length, 25) * 0.025 + (P.mayor === 'player' ? (P.approval - 45) / 40 : 0) + (st.met ? 0.2 : -0.3) + P.campaign.funds / 40000 + (G.flags.canale0 ? 0.6 : 0) + (P.signatures.includes(n.id) ? 0.6 : 0);
       if (k === 'of') u += (G.island.crime - 45) / 50; if (k === 'lm') u += (G.island.unemployment - 0.25) * 4; if (k === 'ri') u += (G.island.tension - 50) / 60 + (G.island.euro - 1.1); if (k === 'vl') u += (1.2 - G.island.euro);
+      u += (P.swing && P.swing[k] || 0);
+      if (k === 'player' && P.spotUntil > G.day) u += 0.5;
+      if (k === 'player') for (const e of (P.endorsements || [])) if (e.faction && n.faction === e.faction) u += 0.7;
       u += (hash2(n.id, G.day, 77) - 0.5) * 0.8;
       if (u > bu) { bu = u; best = k; }
     }
@@ -2412,6 +2416,16 @@ function voteShares() {
   if (G.flags.resident && P.playerVote && tot[P.playerVote] !== undefined) tot[P.playerVote] += 1 + Math.round((G.social.followers || 0) / 150);
   const s = Object.values(tot).reduce((a, b) => a + b, 0) || 1;
   return Object.fromEntries(Object.entries(tot).map(([k, v]) => [k, v / s]));
+}
+function pollsDaily() {
+  const P = G.pol; P.swing = P.swing || {};
+  const keys = PARTIES.map(p => p.id).concat('player');
+  for (const k of keys) { let sw = P.swing[k] || 0; sw = sw * 0.78 + (Math.random() - 0.5) * 0.55; P.swing[k] = clamp(sw, -1.3, 1.3); }
+  // reazioni agli umori dell'isola: chi governa paga malcontento, l'opposizione ne approfitta
+  const gov = P.mayor === 'player' ? 'player' : P.mayorParty;
+  if (gov && (G.island.crime > 60 || G.island.unemployment > 0.35 || G.island.tension > 70)) P.swing[gov] = clamp((P.swing[gov] || 0) - 0.2, -1.3, 1.3);
+  // una notizia politica di peso ieri scuote i sondaggi
+  if ((G.news || []).some(nw => nw.tag === 'politica' && nw.day === G.day - 1 && (nw.weight || 0) >= 3)) { const r = pick(keys); P.swing[r] = clamp((P.swing[r] || 0) + (Math.random() - 0.5) * 1.2, -1.3, 1.3); }
 }
 function runElection() {
   const P = G.pol, sh = voteShares(), seats = Object.fromEntries(Object.keys(sh).map(k => [k, 0]));
@@ -4933,11 +4947,28 @@ function openElectoral() {
   officializeParty();
   const L = P.playerList, sh = P.candidate ? voteShares() : null;
   openPanel('🗳️ ' + esc(L.n), `<div class="row"><span style="display:inline-block;width:18px;height:18px;border-radius:4px;background:${L.col}"></span><b>${esc(L.n)}</b><span class="muted small">indipendenza ${Math.round(L.ideo.indip * 100)} · ordine ${Math.round(L.ideo.ordine * 100)} · mercato ${Math.round(L.ideo.mercato * 100)}</span></div>
-    <div class="card" style="margin-top:8px"><div>Firme raccolte: <b>${P.signatures.length}</b>/12 · Stato: ${P.candidate ? '<b class="good">partito ufficiale, in corsa</b>' : '<b class="warnc">in raccolta firme</b>'}</div><div class="small">Fondi: ${money(P.campaign.funds)} · Manifesti attaccati: ${P.campaign.posters.length} · Comizi: ${P.campaign.rallies} · Dibattiti vinti: ${P.campaign.debate}</div>${sh ? `<div class="small" style="margin-top:6px">📊 Sondaggio Gazzetta: ${Object.entries(sh).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span style="color:${partyCol(k)}">${esc(partyName(k))} ${pct(v)}</span>`).join(' · ')}</div>` : ''}</div>`, [
+    <div class="card" style="margin-top:8px"><div>Firme raccolte: <b>${P.signatures.length}</b>/12 · Stato: ${P.candidate ? '<b class="good">partito ufficiale, in corsa</b>' : '<b class="warnc">in raccolta firme</b>'}</div><div class="small">Fondi: ${money(P.campaign.funds)} · Manifesti attaccati: ${P.campaign.posters.length} · Comizi: ${P.campaign.rallies} · Dibattiti vinti: ${P.campaign.debate}</div>${sh ? `<div class="small" style="margin-top:6px">📊 Sondaggio Gazzetta: ${Object.entries(sh).sort((a, b) => b[1] - a[1]).map(([k, v]) => { const sw = P.swing && P.swing[k] || 0; const ar = sw > 0.2 ? ' <span class="good">▲</span>' : sw < -0.2 ? ' <span class="badc">▼</span>' : ''; return `<span style="color:${partyCol(k)}">${esc(partyName(k))} ${pct(v)}${ar}</span>`; }).join(' · ')}</div>${(P.endorsements || []).length ? `<div class="tiny muted">Appoggi: ${P.endorsements.map(e => esc(e.faction)).join(', ')}${P.spotUntil > G.day ? ' · 📺 spot in onda' : ''}</div>` : (P.spotUntil > G.day ? '<div class="tiny muted">📺 spot in onda</div>' : '')}` : ''}</div>`, [
     !P.candidate ? { t: `✍️ Raccogli le firme (${P.signatures.length}/12)`, dis: true, d: 'Parla con la gente e chiedi le firme: a quota 12 il partito diventa ufficiale e partecipa a tutto, da solo.', f: () => { } } : null,
     P.candidate ? { t: '💰 Raccolta fondi (cena elettorale)', d: 'Eloquenza · 3 ore', f: () => { closePanel(); advance(180); const a = Math.round(500 + skill('eloquenza') * 40 + avgOpinion() * 30 + rr(0, 1500)); P.campaign.funds += Math.max(200, a); gainSkill('eloquenza', 3); toast(`La cena porta ${money(Math.max(200, a))} di donazioni.`, 'money'); } } : null,
     P.candidate ? { t: '🌐 Crowdfunding online', d: 'Piccole donazioni dai cittadini', f: () => { closePanel(); if (signalHere() < 10) return toast('Serve il segnale.', 'warn'); const a = Math.round(Math.max(0, avgOpinion() + 20) * 25 + rr(50, 400)); P.campaign.funds += a; toast(`Il crowdfunding raccoglie ${money(a)}.`, 'money'); } } : null,
+    P.candidate ? { t: `📺 Compra uno spot TV/radio (${money(3000)})`, d: P.spotUntil > G.day ? 'Spot in onda: traino nei sondaggi' : 'Una settimana di spot: spinge i sondaggi', dis: P.campaign.funds < 3000 && G.bank + G.cash < 3000, f: () => { const fromF = Math.min(P.campaign.funds, 3000); if (fromF < 3000 && !pay(3000 - fromF, 'Spot elettorale', { atCounter: true })) return; P.campaign.funds -= fromF; P.spotUntil = G.day + 6; P.swing.player = clamp((P.swing.player || 0) + 0.3, -1.3, 1.3); closePanel(); toast('📺 Il tuo spot gira su Radio Vetrata e Canale locale. Per una settimana.', 'money'); addNews({ tag: 'politica', head: `Campagna: lo spot di «${esc(L.n)}» invade radio e tv`, body: 'Gli avversari gridano allo strapotere mediatico.', weight: 2, about: 'player' }); } } : null,
+    P.candidate ? { t: '🤝 Cerca un endorsement', d: 'Convinci una fazione/notabile a sostenerti (Eloquenza)', f: () => { closePanel(); seekEndorsement(); } } : null,
     { t: 'Chiudi', f: closePanel }]);
+}
+function seekEndorsement() {
+  const P = G.pol;
+  const factions = [['carannante', 'i Carannante'], ['brigata', 'la Brigata dei Tornanti'], ['vitale', 'i Vitale']];
+  const avail = factions.filter(([f]) => !(P.endorsements || []).some(e => e.faction === f));
+  if (!avail.length) return toast('Hai già incassato tutti gli appoggi che contano.', 'warn');
+  const [f, name] = pick(avail);
+  advance(60);
+  if (check('eloquenza', 45) || (G.rep[f] || 0) > 30) {
+    P.endorsements = P.endorsements || []; P.endorsements.push({ faction: f, day: G.day });
+    P.swing.player = clamp((P.swing.player || 0) + 0.25, -1.3, 1.3); try { addRep(f, 5); } catch (e) { }
+    toast(`🤝 ${name} ti appoggia pubblicamente. I loro voti pesano.`, 'money');
+    addNews({ tag: 'politica', head: `${name}: appoggio ufficiale a «${esc(P.playerList.n)}»`, body: 'Un endorsement che fa discutere l\'isola.', weight: 3, about: 'player' });
+    if (f === 'carannante') { G.flags.scandalRisk = (G.flags.scandalRisk || 0) + 1; }
+  } else toast(`${name} ti ascolta ma non si sbilancia. «Vediamo come va.»`, 'warn');
 }
 function rally() {
   const P = G.pol; if (!P.candidate) return toast('Prima candidati in Municipio.', 'warn');
@@ -4956,15 +4987,47 @@ function rally() {
   openPanel('📣 Comizio', `<canvas class="evimg" id="rlyA" width="760" height="120"></canvas><p class="desc">Sali sulla panchina${hasInv('megafono') ? ' con il megafono' : ''}. Davanti a te circa ${crowd} persone.</p><div id="rlyR" class="quote"></div><div id="rlyB"></div>`, [], { noClose: true });
   sceneArt($('#rlyA'), 'piazza'); step();
 }
+function hotLabel(t) { return { sicurezza: 'la sicurezza', lavoro: 'il lavoro', partenope: 'Partenope', caprino: 'il caprino', mistero: 'Canale 0' }[t] || t; }
+function rebuttalLine(rival, gain) {
+  if (gain >= 2) return pick(['Belle parole, ma i fatti?', 'Lo diciamo da anni anche noi.', 'Vedremo se manterrà le promesse.']);
+  if (gain <= 0) return pick(['Ecco, l\'ho sempre detto: non ha un piano.', 'Questa è demagogia pura.', 'I cittadini meritano di meglio.']);
+  return pick(['Interessante, ma incompleto.', 'Servono i numeri, non gli slogan.', 'Parole, parole, parole.']);
+}
 function startDebate() {
   const P = G.pol; P.campaign.debateDay = G.day;
-  const rivals = PARTIES.map(p => p.n);
-  const qs = [['Cosa farà per i giovani che lasciano l\'isola?', [['Lavoro vero: cantieri e porto turistico', 2], ['Sussidi a tutti', 1], ['Chi vuole andarsene vada', 0]]], ['Il coprifuoco va mantenuto?', [['Solo dove serve, con più agenti di quartiere', 2], ['Coprifuoco per tutti, sempre', 1], ['Non so, vedremo', 0]]], ['E i rapporti con Partenope, in piena crisi?', [['Dialogo, ma Vetrata decide da sola', 2], ['Chiudiamo il porto', 0], ['Torniamo con l\'Italia subito', 1]]]];
-  let k = 0, sc = 0;
+  const rivals = PARTIES.slice();
+  const hotTopic = (() => { const c = [['sicurezza', G.island.crime / 100], ['lavoro', G.island.unemployment * 2.2], ['partenope', G.island.tension / 100], ['caprino', Math.abs(G.island.euro - 1)]]; c.sort((a, b) => b[1] - a[1]); return c[0][0]; })();
+  const POOL = [
+    { q: 'Cosa farà per i giovani che lasciano l\'isola?', topic: 'lavoro', a: [['Lavoro vero: cantieri, porto turistico, incentivi a chi assume', 2], ['Sussidi a pioggia per tutti', 1], ['Chi vuole andarsene, se ne vada', -1]] },
+    { q: 'Il coprifuoco va mantenuto?', topic: 'sicurezza', a: [['Solo dove serve, con più agenti di quartiere', 2], ['Coprifuoco totale, tutte le notti', 1], ['Aboliamolo e speriamo bene', 0]] },
+    { q: 'I rapporti con Partenope, in piena crisi?', topic: 'partenope', a: [['Dialogo, ma Vetrata decide da sola', 2], ['Chiudiamo il porto e su un muro', -1], ['Torniamo con l\'Italia domani mattina', 1]] },
+    { q: 'Il caprino perde valore: come difendere i risparmi?', topic: 'caprino', a: [['Riserva isolana e conti indicizzati', 2], ['Stampiamo più caprini', -1], ['Si torni all\'euro e sia quel che sia', 1]] },
+    { q: 'Troppe tasse sulle piccole attività. Che fa?', topic: 'lavoro', a: [['Taglio mirato per chi apre e assume', 2], ['Le tasse restano: servono i servizi', 1], ['Zero tasse per tutti', 0]] },
+    { q: 'Si parla di Canale 0 e delle cabine che squillano. Lei che dice?', topic: 'mistero', a: [['Apriremo gli archivi: i cittadini hanno diritto alla verità', 2], ['Sono fandonie, non me ne occupo', 0], ['È tutto sotto controllo, fidatevi', -1]] },
+    { q: 'La criminalità spaventa i commercianti. La ricetta?', topic: 'sicurezza', a: [['Illuminazione, telecamere e presidi, non solo manette', 2], ['Pugno di ferro e galera', 1], ['È colpa della crisi, non si può fare niente', -1]] }
+  ];
+  const qs = shuffle(POOL.slice()).slice(0, 5);
+  let k = 0, sc = 0, gaffes = 0;
   const ask = () => {
-    if (k >= qs.length) { closePanel(); advance(90); const win = sc + (check('eloquenza', 50) ? 1 : 0) >= 5; if (win) { P.campaign.debate++; spreadRumor({ kind: 'gift', text: 'ha stravinto il dibattito in tv', mag: 4 }); addNews({ tag: 'politica', head: `Dibattito: ${G.player.first} ${G.player.last} mette all'angolo i rivali`, body: 'Telefoni bollenti in redazione.', weight: 3, about: 'player' }); } toast(win ? '🎙️ Hai vinto il dibattito!' : '🎙️ Dibattito pari, senza colpi di scena.', win ? 'money' : 'warn'); gainSkill('eloquenza', 4); return; }
-    const [q, a] = qs[k]; const opts = shuffle(a.slice()).map(([t, v]) => ({ t, f: () => { sc += v; k++; ask(); } }));
-    openPanel('🎙️ Dibattito in diretta', `<p class="small muted">In studio: ${rivals.map(esc).join(', ')} e tu. Moderatore: il direttore della Gazzetta.</p><div class="quote">${esc(q)}</div>${optList(opts)}`, [], { noClose: true }); bindOpts(opts);
+    if (k >= qs.length) {
+      closePanel(); advance(90); const total = sc + (check('eloquenza', 50) ? 1 : 0);
+      const win = total >= 7 && gaffes === 0, ok = total >= 4 && gaffes <= 1;
+      if (win) { P.campaign.debate += 2; P.swing.player = clamp((P.swing.player || 0) + 0.6, -1.3, 1.3); spreadRumor({ kind: 'gift', text: 'ha stravinto il dibattito in tv', mag: 5 }); addNews({ tag: 'politica', head: `Dibattito: ${G.player.first} ${G.player.last} domina e incassa consensi`, body: 'Telefoni bollenti in redazione.', weight: 4, about: 'player' }); }
+      else if (ok) { P.campaign.debate += 1; P.swing.player = clamp((P.swing.player || 0) + 0.2, -1.3, 1.3); addNews({ tag: 'politica', head: 'Dibattito combattuto, nessun vincitore netto', body: 'Ognuno canta vittoria.', weight: 2 }); }
+      else { P.swing.player = clamp((P.swing.player || 0) - 0.4, -1.3, 1.3); if (gaffes) addNews({ tag: 'politica', head: `Gaffe in diretta: ${G.player.first} ${G.player.last} nella bufera`, body: 'La frase che non doveva dire gira su Vetragram.', weight: 3, about: 'player' }); spreadRumor({ kind: 'crime', text: 'ha fatto una figuraccia in tv', mag: 3 }); }
+      toast(win ? '🎙️ Hai dominato il dibattito!' : ok ? '🎙️ Dibattito combattuto.' : '🎙️ Dibattito da dimenticare.', win || ok ? 'money' : 'bad'); gainSkill('eloquenza', 4 + total / 3); return;
+    }
+    const Q = qs[k], rival = pick(rivals);
+    const opts = shuffle(Q.a.slice()).map(([t, v]) => ({ t, f: () => {
+      let gain = v; if (Q.topic === hotTopic && v >= 2) gain += 1;
+      const tremor = (G.player.stress || 0) > 60 && v <= 0 && chance(0.4);
+      if (v <= -1 || tremor) { gaffes++; gain -= 1; }
+      sc += gain;
+      const reaction = gain >= 3 ? '👏👏👏 Applausi scroscianti.' : gain >= 2 ? '👏 La platea approva.' : gain >= 1 ? '🤝 Qualche cenno di consenso.' : gain === 0 ? '😐 Freddezza in studio.' : '😬 Mormorii, qualche fischio.';
+      AU.sfx(gain >= 2 ? 'ok' : 'bad'); $('#dbR').innerHTML = `${reaction}<br><span class="muted small">${esc(rival.n)}: «${esc(rebuttalLine(rival, gain))}»</span>`;
+      k++; setTimeout(ask, 1100);
+    } }));
+    openPanel('🎙️ Dibattito in diretta', `<p class="small muted">In studio: ${rivals.map(r => esc(r.n)).join(', ')} e tu. Tema caldo stasera: <b>${hotLabel(hotTopic)}</b>. Moderatore: il direttore della Gazzetta.</p><div class="quote">${esc(Q.q)}</div><div id="dbR" class="small" style="min-height:34px"></div>${optList(opts)}`, [], { noClose: true }); bindOpts(opts);
   };
   ask();
 }
