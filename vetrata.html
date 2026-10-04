@@ -2238,7 +2238,7 @@ function dailyEdition() {
   gen.push({ tag: 'meteo', head: 'Le previsioni', body: forecastText(), weight: 0.3 });
   const forSale = Object.entries(G.biz).filter(([k, b]) => b.forSale);
   if (forSale.length) gen.push({ tag: 'annunci', head: 'Cedesi attività', body: forSale.map(([k, b]) => `${BIZ[k].n}: ${money(b.price)}`).join(' · '), weight: 0.4 });
-  if (G.bounties.length) gen.push({ tag: 'annunci', head: 'Bacheca della Piazzetta', body: G.bounties.map(b => b.text).join(' · '), weight: 0.3 });
+  if (G.bounties.length) gen.push({ tag: 'annunci', head: '📌 Commissioni della Piazzetta', body: G.bounties.map(b => b.text).join(' · ') + ' — portale a chi le ha chieste per la ricompensa.', weight: 1.1 });
   const all = [...yesterday, ...gen].sort((a, b) => b.weight - a.weight);
   G.edition = { day: G.day, date: dateStr(), items: all.slice(0, 8) };
   for (const n of yesterday) n.edition = G.day;
@@ -2464,16 +2464,41 @@ function checkDestiny() {
   G.player.fates = G.player.fates || [];
   for (const d of DESTINIES) { if (G.player.fates.includes(d.id)) continue; let ok = false; try { ok = d.check(); } catch (e) { } if (ok) { G.player.fates.push(d.id); G.legacy.points += d.pts; centerMsg('UN DESTINO SI COMPIE', d.n + ' — ' + d.d, 5000); AU.sfx('ok'); log(`✨ Destino: <b>${esc(d.n)}</b>. ${esc(d.d)}`, 'good'); } }
 }
+const BOUNTY_POOL = [
+  { item: 'limoni', q: 3, place: 'municipio', reward: 130, by: 'Il Comune', txt: 'cerca 3 cassette di limoni per il limoncello della festa patronale' },
+  { item: 'ricciola', q: 1, place: 'ristorante', reward: 120, by: 'Il Ristorante', txt: 'cerca una ricciola fresca per il menù di stasera' },
+  { item: 'polpo', q: 2, place: 'ristorante', reward: 90, by: 'Il Ristorante', txt: 'cerca due polpi per l\'insalata del giorno' },
+  { item: 'sfogliatella', q: 5, place: 'pensione', reward: 55, by: 'La Pensione', txt: 'cerca 5 sfogliatelle per la colazione degli ospiti' },
+  { item: 'panino', q: 4, place: 'tornanti', reward: 50, by: 'Il Bar I Tornanti', txt: 'cerca 4 panini per i motociclisti affamati' },
+  { item: 'frisella', q: 4, place: 'faraglione', reward: 55, by: 'Il Faraglione', txt: 'cerca friselle per l\'aperitivo sulla spiaggia' },
+  { item: 'bende', q: 3, place: 'dormitorio', reward: 70, by: 'Il Dormitorio', txt: 'cerca bende per l\'infermeria degli sfollati' },
+  { item: 'kit_medico', q: 1, place: 'ambulatorio', reward: 100, by: 'L\'Ambulatorio', txt: 'cerca un kit di pronto soccorso di scorta' },
+  { item: 'acqua', q: 6, place: 'dormitorio', reward: 45, by: 'Il Dormitorio', txt: 'cerca casse d\'acqua per gli sfollati' },
+  { item: 'rullino', q: 2, place: 'gazzetta', reward: 70, by: 'La Gazzetta', txt: 'cerca rullini per i suoi fotoreporter' },
+  { item: 'orata', q: 2, place: 'pensione', reward: 70, by: 'La Pensione', txt: 'cerca due orate per la cena dei clienti' },
+  { item: 'birra', q: 6, place: 'faraglione', reward: 55, by: 'Il Faraglione', txt: 'cerca birre fresche per il weekend' }
+];
+function bountyPlaceName(type) { const b = W.buildings.find(x => x.type === type); return b ? (b.n || (PLACES[type] ? PLACES[type].n : 'un locale')) : (PLACES[type] ? PLACES[type].n : 'un locale'); }
 function bountiesDaily() {
-  G.bounties = G.bounties.filter(b => b.until > G.day);
-  if (G.bounties.length < 3 && chance(0.5)) {
-    const kinds = [
-      () => ({ kind: 'cat', text: 'Smarrito gatto rosso «Scirocco», zona ' + pick(['Anacapri', 'Marina', 'Centro']) + '. Ricompensa 40 ℭ.', reward: 40, zone: pick(['anacapri', 'marina', 'centro']) }),
-      () => ({ kind: 'fish', text: 'Cercasi ricciola fresca per un matrimonio. Pago 90 ℭ. Chiedere al Ristorante.', reward: 90, item: 'ricciola' }),
-      () => ({ kind: 'info', text: 'Chi ha visto chi ha rubato la bici del parroco? Ricompensa 30 ℭ.', reward: 30, zone: 'centro' }),
-      () => ({ kind: 'limoni', text: 'Cercasi 3 cassette di limoni per il limoncello di Natale. 60 ℭ.', reward: 60, item: 'limoni', q: 3 })
-    ];
-    const b = pick(kinds)(); b.id = 'b' + G.day + ri(0, 999); b.until = G.day + 5; G.bounties.push(b);
+  G.bounties = (G.bounties || []).filter(b => b.until > G.day);
+  // gli NPC del server ogni tanto completano le commissioni aperte: l'isola è viva
+  for (const b of G.bounties.slice()) {
+    if (b.item && !b.doneBy && G.day - (b.born || b.until - 5) >= 2 && chance(0.18)) {
+      b.doneBy = pick(NPCS.filter(n => npcState(n).alive && !n.pl)) || null; const who = b.doneBy ? npcName(b.doneBy, false) : 'un volontario';
+      G.bounties.splice(G.bounties.indexOf(b), 1);
+      try { addNews({ tag: 'annunci', head: `Commissione evasa: ${who} ha consegnato ${b.item ? ITEMS[b.item].n.toLowerCase() : 'la merce'} ${b.place ? 'al ' + bountyPlaceName(b.place) : ''}`.trim(), body: 'La bacheca della Piazzetta si aggiorna di continuo.', weight: 0.6 }); } catch (e) { }
+      if (npcState(G.player) && false) { }
+      toast(`📌 ${who} ha completato una commissione della bacheca prima di te.`, 'warn');
+    }
+  }
+  if (G.bounties.length < 4 && chance(0.7)) {
+    let b;
+    if (chance(0.78)) { const p = pick(BOUNTY_POOL); b = { kind: 'consegna', item: p.item, q: p.q, place: p.place, reward: p.reward, text: `${p.by} ${p.txt}. Consegna ${p.q} ${ITEMS[p.item].n.toLowerCase()} al ${bountyPlaceName(p.place)}. ${money(p.reward)}.` }; }
+    else b = pick([
+      () => ({ kind: 'cat', text: 'Smarrito gatto rosso «Scirocco», zona ' + pick(['Anacapri', 'Marina', 'Centro']) + '. Ricompensa ' + money(40) + '.', reward: 40, zone: pick(['anacapri', 'marina', 'centro']) }),
+      () => ({ kind: 'info', text: 'Chi ha visto chi ha rubato la bici del parroco? Ricompensa ' + money(40) + '.', reward: 40, zone: 'centro' })
+    ])();
+    b.id = 'b' + G.day + ri(0, 999); b.until = G.day + 6; b.born = G.day; if (!G.bounties.some(x => x.item === b.item && x.place === b.place && b.item)) G.bounties.push(b);
   }
 }
 const STOCKS = [{ id: 'VFA', n: 'Vetrata Faro Carburanti' }, { id: 'CUO', n: 'Cuomo Costruzioni' }, { id: 'BIV', n: 'Banca Insulare' }, { id: 'TRG', n: 'Traghetti del Golfo' }, { id: 'LIM', n: 'Limoncello Arcucci' }];
@@ -3535,7 +3560,7 @@ function openBounties() {
   const list = G.bounties;
   openPanel('📌 Bacheca della Piazzetta', `<p class="desc">Fogli fissati con le puntine, sovrapposti, alcuni scoloriti dal sole.</p>${list.length ? list.map(b => `<div class="card" style="margin-bottom:6px">${esc(b.text)}<div class="small muted">scade il ${dateDay(b.until)}</div>${b.item && hasInv(b.item, b.q || 1) ? `<button class="btn sm pri" onclick="fulfillBounty('${b.id}')">Consegna</button>` : ''}</div>`).join('') : '<p class="muted">Nessun annuncio oggi.</p>'}<div class="card"><h4>Affiggi un annuncio</h4><p class="small">«Offro i miei servizi» — qualcuno potrebbe chiamarti per lavoretti (${money(5)}).</p><button class="btn sm" onclick="postAd()">Affiggi</button></div>`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]);
 }
-function fulfillBounty(id) { const b = G.bounties.find(x => x.id === id); if (!b) return; removeInv(b.item, b.q || 1); earn(b.reward, 'Annuncio in bacheca'); G.bounties.splice(G.bounties.indexOf(b), 1); spreadRumor({ kind: 'gift', text: 'risolve i problemi della gente', mag: 2 }); closePanel(); }
+function fulfillBounty(id) { const b = G.bounties.find(x => x.id === id); if (!b) return; if (b.item && !hasInv(b.item, b.q || 1)) return toast('Non hai ' + (b.q || 1) + '× ' + ITEMS[b.item].n + '.', 'warn'); if (b.item) removeInv(b.item, b.q || 1); earn(b.reward, 'Commissione' + (b.place ? ' · ' + bountyPlaceName(b.place) : '')); G.bounties.splice(G.bounties.indexOf(b), 1); G.stats.commissioni = (G.stats.commissioni || 0) + 1; spreadRumor({ kind: 'gift', text: 'risolve i problemi della gente', mag: 2 }); try { addNews({ tag: 'annunci', head: `${G.player.first} ${G.player.last} completa una commissione${b.place ? ' per il ' + bountyPlaceName(b.place) : ''}`, body: 'La gente dell\'isola ringrazia.', weight: 0.8, about: 'player' }); } catch (e) { } toast(`📦 Commissione completata: +${money(b.reward)}. Grazie di cuore.`, 'money'); try { closePanel(); } catch (e) { } refreshSide(); }
 function postAd() { if (!pay(5)) return; G.flags.ad = G.day + 7; closePanel(); toast('Annuncio affisso. Il telefono potrebbe squillare.'); }
 
 /* ---------- Casa ---------- */
@@ -3973,6 +3998,7 @@ function showPlace(b, title, desc, opts, buttons) {
   opts = opts.filter(Boolean);
   const here = Object.values(JOBS).filter(J => J.place && placeMatches(J, b) && J.id !== G.job.id);
   if (here.length && b.type !== 'impiego') opts.push({ t: `💼 Lavori qui (${here.length})`, d: here.slice(0, 4).map(J => J.n).join(', ') + (here.length > 4 ? '…' : ''), f: () => { closePanel(); jobBoard(here, '💼 Lavorare qui: ' + esc(b.n), 'Chiedi al titolare. Se hai i requisiti, cominci al prossimo turno.'); } });
+  for (const bt of (G.bounties || [])) { if (bt.item && bt.place === b.type && hasInv(bt.item, bt.q || 1)) opts.unshift({ t: `📦 Consegna commissione: ${bt.q || 1}× ${ITEMS[bt.item].n} (${money(bt.reward)})`, d: 'Richiesta dalla bacheca della Piazzetta', f: () => { closePanel(); fulfillBounty(bt.id); } }); }
   if (G.job.id && G.job.onDuty && placeMatches(JOBS[G.job.id], b) && !opts.some(o => o && /Lavora/.test(o.t))) opts.push({ t: '🛠️ Lavora (' + esc(JOBS[G.job.id].n) + ')', d: 'Il minigioco del tuo mestiere', f: () => { closePanel(); doJobTask(); } });
   if (G.job.id && placeMatches(JOBS[G.job.id], b) && !opts.some(o => o && /Timbra/.test(o.t))) opts.push(G.job.onDuty ? { t: '⏱️ Timbra l\'uscita', f: () => { closePanel(); clockOut(); } } : { t: '⏱️ Timbra l\'entrata', f: () => { closePanel(); clockIn(); } });
   const inside = npcsInBuilding(b.id);
