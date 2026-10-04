@@ -6113,15 +6113,23 @@ function buildFootprint(cx, cy, w, h) {
   return { x: x0, y: y0, w, h };
 }
 function canBuildHere(cx, cy) { const c = cellAt(cx, cy); if (!c || c.water || c.block || c.b.length || c.construction) return false; return Object.values(BUILDABLES).some(B => buildFootprint(cx, cy, B.w, B.h)); }
+function buildDiscount() {
+  let my = []; try { my = myCompanies(); } catch (e) { my = (G.companies || []).filter(c => c.owner === 'player' && !c.closed); }
+  if (my.some(c => c.type === 'edilizia')) return { mul: 0.6, label: 'un\'impresa edile', ico: '🏗️' };
+  if (my.length) return { mul: 0.85, label: 'un\'azienda tua', ico: '🏢' };
+  return { mul: 1, label: 'privato', ico: '👤' };
+}
+function buildCost(B) { return Math.round(B.cost * buildDiscount().mul); }
 function openBuildMenu() {
-  const cx = G.player.cx, cy = G.player.cy;
-  const opts = Object.entries(BUILDABLES).map(([k, B]) => { const fp = buildFootprint(cx, cy, B.w, B.h); const afford = G.bank + G.cash >= B.cost; return { t: `${B.ico} ${B.n} — ${money(B.cost)}`, d: `${B.d} · cantiere ${B.days} giorni · ${B.w}×${B.h}${!fp ? ' · ✗ spazio insufficiente' : !afford ? ' · ✗ soldi insufficienti' : ''}`, dis: !fp || !afford, f: () => startBuild(k, fp) }; });
+  const cx = G.player.cx, cy = G.player.cy; const disc = buildDiscount(); const off = Math.round((1 - disc.mul) * 100);
+  const opts = Object.entries(BUILDABLES).map(([k, B]) => { const fp = buildFootprint(cx, cy, B.w, B.h); const cost = buildCost(B); const afford = G.bank + G.cash >= cost; return { t: `${B.ico} ${B.n} — ${money(cost)}${off ? ` (−${off}%)` : ''}`, d: `${B.d} · cantiere ${B.days} giorni · ${B.w}×${B.h}${!fp ? ' · ✗ spazio insufficiente' : !afford ? ' · ✗ soldi insufficienti' : ''}`, dis: !fp || !afford, f: () => startBuild(k, fp) }; });
   opts.push({ t: 'Annulla', f: closePanel });
-  openPanel('🏗️ Costruisci un edificio', `<p class="desc">Terreno libero vicino a una strada. Scegli cosa edificare: ci vorranno giorni e soldi, poi l'edificio comparirà qui, tuo.</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
+  const discLine = off ? `<p class="small good">${disc.ico} Sconto del ${off}% sui costi di costruzione: hai ${disc.label}.</p>` : `<p class="small muted">👤 Da privato paghi il prezzo pieno. Con una tua azienda il cantiere costa meno, e con un'impresa edile (settore Edilizia) molto meno.</p>`;
+  openPanel('🏗️ Costruisci un edificio', `<p class="desc">Terreno libero vicino a una strada. Scegli cosa edificare: ci vorranno giorni e soldi, poi l'edificio comparirà qui, tuo.</p>${discLine}${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
 }
 function startBuild(kind, fp) {
   const B = BUILDABLES[kind]; if (!fp) fp = buildFootprint(G.player.cx, G.player.cy, B.w, B.h); if (!fp) return toast('Qui non si può costruire.', 'warn');
-  if (!pay(B.cost, 'Cantiere ' + B.n, { atCounter: true })) return;
+  if (!pay(buildCost(B), 'Cantiere ' + B.n, { atCounter: true })) return;
   G.builds = G.builds || [];
   const name = kind === 'capannone' ? 'Capannone ' + G.player.last : kind === 'villa' ? 'Villa ' + G.player.last : B.n + ' ' + G.player.last;
   G.builds.push({ id: 'bd' + G.day + '_' + Math.floor(Math.random() * 9999), kind, x: fp.x, y: fp.y, w: B.w, h: B.h, cx: G.player.cx, cy: G.player.cy, owner: 'player', start: G.day, doneDay: G.day + B.days, done: false, name, pot: 0 });
