@@ -2365,6 +2365,7 @@ function islandDaily() {
   spawnShoals(); checkDestiny(); bountiesDaily(); stocksDaily(); try { fuelDaily(); hospDaily(); } catch (e) { }
   try { parkingDaily(); } catch (e) { }
   if (G.grow && G.grow.plots) for (const pl of G.grow.plots) { if (!pl.dead && G.day - (pl.watered || pl.day) > 3) pl.dead = true; }
+  try { growRaidCheck(); } catch (e) { }
   try { ludoDaily(); const Ccas = casinoState(); if (dayOfWeek() === 5 && Ccas.tourneyDay !== G.day) { Ccas.tourneyDay = G.day; } Ccas.jackpot += ri(200, 800); } catch (e) { }
 }
 function npcMayorActs() {
@@ -3339,6 +3340,9 @@ function refreshSide() {
   if (c.construction) extras.push({ ic: '🚧', t: 'Cantiere in corso', s: (() => { const s = (G.builds || []).find(x => x.id === c.construction); return s ? `${BUILDABLES[s.kind] ? BUILDABLES[s.kind].n : 'Edificio'} · pronto il giorno ${s.doneDay}` : 'lavori in corso'; })(), f: `toast('I lavori procedono.')` });
   else if (!v && canBuildHere(p.cx, p.cy)) extras.push({ ic: '🏗️', t: 'Costruisci qui', s: 'ville, palazzine, condomini, capannoni', f: 'openBuildMenu()' });
   if (trueFinaleAvailable() && c.b.some(id => W.buildings[id] && W.buildings[id].type === 'faro')) extras.push({ ic: '🕳️', t: 'La Sorgente, sotto il Faro', s: 'con tutti i frammenti, alle tre di notte', f: 'trueFinale()' });
+  const plotsHere = (G.grow && G.grow.plots) ? G.grow.plots.filter(pl => pl.cx === p.cx && pl.cy === p.cy) : [];
+  if (plotsHere.length) extras.push({ ic: '🌿', t: 'Le tue piante', s: `${plotsHere.length} ${plotsHere.length === 1 ? 'pianta' : 'piante'} qui — controlla e raccogli`, f: 'openColtivazione()' });
+  else if (hasInv('seme_erba') && canPlantHere(p.cx, p.cy)) extras.push({ ic: '🌱', t: 'Pianta un seme qui', s: plantCoverLabel(), f: 'plantSeedHere()' });
   const sh = SHOALS.find(s => s.cx === p.cx && s.cy === p.cy); if (sh && c.water) extras.push({ ic: '🐟', t: 'Banco di pesci: ' + ITEMS[sh.fish].n, s: v && VMODELS[v.model].type === 'boat' ? 'cala le reti' : 'serve una barca e una rete', f: 'fishNet()' });
   for (const veh of G.vehicles) if (!veh.lost && veh.cx === p.cx && veh.cy === p.cy && veh.id !== p.veh) extras.push({ ic: VMODELS[veh.model].type === 'boat' ? '⛵' : '🚗', t: VMODELS[veh.model].n, s: `${veh.plate} · ${Math.round(veh.fuel)} L${veh.flat ? ' · forata' : ''}${veh.broken ? ' · in panne' : ''}`, f: `enterVehicle(G.vehicles.find(x=>x.id===${veh.id}))` });
   if (!v) { const adjBoat = G.vehicles.find(vv => !vv.lost && VMODELS[vv.model].type === 'boat' && Math.max(Math.abs(vv.cx - p.cx), Math.abs(vv.cy - p.cy)) === 1); if (adjBoat) extras.push({ ic: '⛵', t: 'Sali sulla tua barca: ' + VMODELS[adjBoat.model].n, s: 'ormeggiata qui accanto', f: `enterVehicle(G.vehicles.find(x=>x.id===${adjBoat.id}))` }); }
@@ -6332,23 +6336,76 @@ function hasContraband() { return G.inv.some(it => ITEMS[it.id] && ITEMS[it.id].
 function contrabandHeat() { return G.inv.filter(it => ITEMS[it.id] && ITEMS[it.id].illegal).reduce((s, it) => s + (ITEMS[it.id].heat || 15) * (it.q || 1), 0); }
 
 /* ---------- Coltivazione: solo in una base tua, astratta ---------- */
+function plantCover(cx, cy) {
+  const c = cellAt(cx, cy); if (!c) return 0.3;
+  const inB = (c.b || []).some(id => { const b = W.buildings[id]; return b && (b.type === 'capannone' || b.ruin || (G.home && G.home.b === id) || b.builtOwner === 'player'); });
+  if (inB) return 0.95; // una tua base al chiuso: copertura quasi totale
+  let cover = 0.28;
+  const z = c.zone || '';
+  cover += ({ boschi: 0.42, parco: 0.34, cimitero: 0.4, montagna: 0.36, scogli: 0.3, campagna: 0.26, anacapri: 0.18 }[z] || 0);
+  if (['centro', 'marina', 'piazzetta', 'porto'].includes(z)) cover -= 0.18;
+  let open = 0, tot = 0;
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const cc = cellAt(cx + dx, cy + dy); if (!cc) continue; tot++; if (!cc.road && !(cc.b && cc.b.length)) open++; }
+  cover += (open / Math.max(1, tot)) * 0.28;
+  return clamp(cover, 0.06, 0.9);
+}
+function plantCoverLabel(cx = G.player.cx, cy = G.player.cy) { const v = plantCover(cx, cy); return `copertura ${v >= 0.9 ? 'massima (al chiuso)' : v >= 0.65 ? 'alta' : v >= 0.4 ? 'media' : 'bassa, troppi occhi'} · ${Math.round(v * 100)}%`; }
+function canPlantHere(cx = G.player.cx, cy = G.player.cy) {
+  const c = cellAt(cx, cy); if (!c) return false;
+  if (c.water || c.block || c.construction || c.road) return false;
+  if (c.b && c.b.length) return c.b.some(id => { const b = W.buildings[id]; return b && (b.type === 'capannone' || b.ruin || (G.home && G.home.b === id) || b.builtOwner === 'player'); });
+  return true;
+}
+function plantSeedHere() {
+  if (!hasInv('seme_erba')) return toast('Non hai semi da piantare.', 'warn');
+  if (!canPlantHere()) return toast('Qui non puoi piantare: scegli un terreno libero, lontano dalla strada, o una tua base al chiuso.', 'warn');
+  G.grow = G.grow || { plots: [] };
+  if (G.grow.plots.length >= 12) return toast('Hai troppe piante in giro: raccogli prima, o rischi grosso.', 'warn');
+  const c = playerCell(); const cover = plantCover(c.cx, c.cy);
+  removeInv('seme_erba', 1);
+  G.grow.plots.push({ day: G.day, watered: G.day, cx: c.cx, cy: c.cy, zone: cellTitle(c), cover });
+  advance(20);
+  toast(`🌱 Seme piantato (${plantCoverLabel(c.cx, c.cy)}). Annaffia e torna fra ${DRUGS.erba.growDays} giorni.`, 'warn');
+  refreshSide();
+}
+function growRaidCheck() {
+  if (!G.grow || !G.grow.plots || !G.grow.plots.length) return;
+  const n = G.grow.plots.length;
+  for (let i = G.grow.plots.length - 1; i >= 0; i--) {
+    const pl = G.grow.plots[i]; if (pl.dead) continue;
+    const cover = pl.cover == null ? 0.6 : pl.cover;
+    let risk = Math.pow(1 - cover, 1.7) * 0.14 * (1 + (n - 1) * 0.2);
+    if (G.island && G.island.crime > 55) risk *= 1.3;
+    if (chance(risk)) {
+      G.grow.plots.splice(i, 1);
+      offense('coltivazione', 0.85);
+      try { addTrace(10); } catch (e) { }
+      toast(`🚔 La Forestale ha scoperto e sequestrato una piantagione a ${pl.zone || 'un tuo terreno'}.`, 'bad');
+      try { addNews({ tag: 'cronaca', head: 'Sequestrata una piantagione a ' + (pl.zone || 'Vetrata'), body: 'La Polizia Insulare indaga sui responsabili.', weight: 2 }); } catch (e) { }
+    }
+  }
+}
 function openColtivazione() {
-  if (!G.flags.ownDistilleria) return toast('Ti serve una base nascosta (compra il rudere della Distilleria).', 'warn');
   G.grow = G.grow || { plots: [] };
   const render = () => {
     const rows = G.grow.plots.map((pl, k) => {
       const age = G.day - pl.day, ready = age >= DRUGS.erba.growDays;
+      const cov = pl.cover == null ? null : Math.round(pl.cover * 100);
+      const here = pl.cx == null || (pl.cx === G.player.cx && pl.cy === G.player.cy);
       const state = pl.dead ? '<span class="badc">seccata</span>' : ready ? '<span class="good">pronta da raccogliere</span>' : `in crescita (${age}/${DRUGS.erba.growDays} giorni)${pl.watered === G.day ? ' · annaffiata' : ''}`;
-      return `<div class="msg">🪴 Pianta #${k + 1} — ${state}<div class="row" style="margin-top:4px">${ready && !pl.dead ? `<button class="btn sm pri" data-harv="${k}">✂️ Raccogli</button>` : pl.dead ? `<button class="btn sm" data-rip="${k}">🗑️ Estirpa</button>` : `<button class="btn sm" data-water="${k}" ${pl.watered === G.day ? 'disabled' : ''}>💧 Annaffia</button>`}</div></div>`;
+      const btn = ready && !pl.dead ? (here ? `<button class="btn sm pri" data-harv="${k}">✂️ Raccogli</button>` : `<button class="btn sm" data-gps="${k}">📍 GPS</button>`) : pl.dead ? `<button class="btn sm" data-rip="${k}">🗑️ Estirpa</button>` : (here ? `<button class="btn sm" data-water="${k}" ${pl.watered === G.day ? 'disabled' : ''}>💧 Annaffia</button>` : `<button class="btn sm" data-gps="${k}">📍 GPS</button>`);
+      return `<div class="msg">🪴 ${pl.zone ? esc(pl.zone) : 'Pianta'} #${k + 1}${cov != null ? ` <span class="muted tiny">copertura ${cov}%</span>` : ''} — ${state}${here ? '' : ' <span class="muted tiny">(non sei qui)</span>'}<div class="row" style="margin-top:4px">${btn}</div></div>`;
     }).join('');
-    $('#growBody').innerHTML = `<p class="small">Piante: ${G.grow.plots.length}/6. Più ne tieni, più la Brigata e la Polizia ci fanno caso. Raccogli, essicca, lavora in dosi, poi spaccia di notte.</p>${rows || '<p class="muted">Nessuna pianta. Pianta un seme.</p>'}<div style="margin-top:8px"><button class="btn sm" id="plant" ${!hasInv('seme_erba') || G.grow.plots.length >= 6 ? 'disabled' : ''}>🌱 Pianta un seme${hasInv('seme_erba') ? '' : ' (non ne hai)'}</button> ${hasInv('erba_verde') ? `<button class="btn sm pri" id="dry">🌾 Essicca e lavora il raccolto (${countInv('erba_verde')})</button>` : ''}</div>`;
-    if ($('#plant')) $('#plant').onclick = () => { removeInv('seme_erba', 1); G.grow.plots.push({ day: G.day, watered: G.day }); advance(20); render(); };
-    document.querySelectorAll('[data-water]').forEach(b => b.onclick = () => { G.grow.plots[+b.dataset.water].watered = G.day; advance(10); render(); });
+    const canHere = canPlantHere();
+    $('#growBody').innerHTML = `<p class="small">Piante: ${G.grow.plots.length}. Puoi piantare <b>ovunque</b>: più il posto è nascosto e lontano da occhi indiscreti, meno rischi che te la trovino. Al chiuso, in una tua base (capannone, rudere, casa), la copertura è quasi totale. Raccogli, essicca, lavora in dosi, poi spaccia di notte.</p>${rows || '<p class="muted">Nessuna pianta.</p>'}<div style="margin-top:8px"><button class="btn sm" id="plant" ${!hasInv('seme_erba') || !canHere ? 'disabled' : ''}>🌱 Pianta qui${hasInv('seme_erba') ? (canHere ? ' · ' + plantCoverLabel() : ' · non qui') : ' (niente semi)'}</button> ${hasInv('erba_verde') ? `<button class="btn sm pri" id="dry">🌾 Essicca e lavora il raccolto (${countInv('erba_verde')})</button>` : ''}</div>`;
+    if ($('#plant')) $('#plant').onclick = () => { plantSeedHere(); render(); };
+    document.querySelectorAll('[data-water]').forEach(b => b.onclick = () => { const pl = G.grow.plots[+b.dataset.water]; pl.watered = G.day; pl.wateredCount = (pl.wateredCount || 0) + 1; advance(10); render(); });
     document.querySelectorAll('[data-rip]').forEach(b => b.onclick = () => { G.grow.plots.splice(+b.dataset.rip, 1); render(); });
-    document.querySelectorAll('[data-harv]').forEach(b => b.onclick = () => { const k = +b.dataset.harv; const pl = G.grow.plots[k]; const yield0 = 2 + (pl.wateredCount || 0 > 2 ? 1 : 0) + ri(0, 2); G.grow.plots.splice(k, 1); harvestGame(yield0, render); });
+    document.querySelectorAll('[data-gps]').forEach(b => b.onclick = () => { const pl = G.grow.plots[+b.dataset.gps]; if (pl.cx != null) { G.waypoint = { cx: pl.cx, cy: pl.cy }; toast('📍 GPS impostato sulla piantagione.'); } });
+    document.querySelectorAll('[data-harv]').forEach(b => b.onclick = () => { const k = +b.dataset.harv; const pl = G.grow.plots[k]; const yield0 = 2 + ((pl.wateredCount || 0) > 2 ? 1 : 0) + ri(0, 2); G.grow.plots.splice(k, 1); harvestGame(yield0, render); });
     if ($('#dry')) $('#dry').onclick = () => { closePanel(); processDrug('erba'); };
   };
-  openPanel('🌿 La serra nascosta', '<div id="growBody"></div>', [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
+  openPanel('🌿 Le tue coltivazioni', '<div id="growBody"></div>', [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
   render();
 }
 function harvestGame(yield0, back) {
