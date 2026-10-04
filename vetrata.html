@@ -6030,16 +6030,24 @@ function sellCarMenu(b) {
 /* ---------- La notte nelle zone sconosciute è pericolosa ---------- */
 function nightDanger(c) {
   if (!isNight()) return false;
-  if (G.flags.lastNightEv && G.min - G.flags.lastNightEv < 50) return false;
   const wild = ['boschi', 'parco', 'cimitero', 'scogli', 'monte', 'villaluna'].includes(c.zone);
-  const unknown = !c.explored || (c.exploredNight === undefined);
+  const cd = wild ? 28 : 50; // nei boschi le cose capitano più spesso
+  if (G.flags.lastNightEv && G.min - G.flags.lastNightEv < cd) return false;
   const lit = c.b.some(id => isOpen(W.buildings[id])) || c.plaza;
   if (!wild && lit) return false;
-  let p = wild ? 0.14 : 0.05;
+  // quanto sei isolato: pochi edifici intorno = fuori dai centri abitati
+  let near = 0; for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) { const cc = cellAt(c.cx + dx, c.cy + dy); if (cc && cc.b && cc.b.length) near++; }
+  const remote = near < 3;
+  const hh = hourOf(), deepNight = hh >= 1 && hh < 5;
+  let p = wild ? 0.26 : 0.05;
+  if (wild && remote) p += 0.12;     // lontano da ogni casa
+  if (wild && deepNight) p += 0.09;  // nel cuore della notte
   if (!G.player.torch && !curVeh()) p += 0.06;
-  if (curVeh()) p *= 0.4;
-  if (hasTrait('sensitivo')) p += 0.03;
-  p *= (1 + G.horror.dread * 0.5);
+  if (curVeh()) p *= 0.5;
+  if (hasTrait('sensitivo')) p += 0.05;
+  if (wild && !npcsHere().length) p += 0.04; // nessuno intorno
+  p *= (1 + G.horror.dread * 0.6);
+  if (G.flags.dog) p *= 0.75;
   if (!chance(p)) return false;
   G.flags.lastNightEv = G.min; c.exploredNight = 1;
   nightEvent(c, wild);
@@ -6047,10 +6055,28 @@ function nightDanger(c) {
 }
 function nightEvent(c, wild) {
   const kinds = [];
-  if (wild) kinds.push('presenza', 'smarrito', 'sagoma', 'bestia', 'richiamo');
+  const horrorOn = !G.flags.horrorEnd;
+  if (wild) { kinds.push('presenza', 'smarrito', 'sagoma', 'bestia', 'richiamo'); if (horrorOn) { kinds.push('ombra_nera', 'tv_bosco', 'numeri', 'immobile', 'mimo'); const hh = hourOf(); if (hh >= 1 && hh < 5) kinds.push('ombra_nera', 'immobile', 'mimo'); } }
   kinds.push('agguato', 'buio', 'freddo');
-  const k = pick(kinds), p = G.player;
+  const k = pick(kinds), p = G.player, H = G.horror;
   const stop = () => stopTravel();
+  const pushShadow = (n = 1) => { try { for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, d = rr(4, 9); H.shadows.push({ x: anim.tok.x + Math.cos(a) * d, y: anim.tok.y + Math.sin(a) * d, a: 0, t: rr(30, 70) }); } } catch (e) { } };
+  if (k === 'ombra_nera') { pushShadow(2); H.glitch = Math.max(H.glitch || 0, 0.6); return eventPanel('🕳️ L\'ombra nera', 'horror', `${hhmm()}. In mezzo al sentiero, una figura nera e immobile. Alta, sottile, senza volto. Non proietta ombra: è l'ombra. Ti sbarra la strada.`, [
+    { t: '🔦 Puntale addosso la luce', req: () => hasInv('torcia'), f: () => { p.torch = true; p.stress = clamp(p.stress + 22, 0, 100); if (chance(0.5)) result('Nel fascio di luce non c\'è niente. Ma il sentiero, davanti, è cambiato.', 'weird'); else { pushShadow(2); hurt(rr(2, 7), 'un gelo improvviso'); p.temp -= 1.5; result('La luce la attraversa. Lei non si sposta. Fai un passo indietro e scappi.', 'bad'); } } },
+    { t: '🙆 Aggirala nel bosco', f: () => { advance(25); p.stress = clamp(p.stress + 15, 0, 100); p.stamina = Math.max(0, p.stamina - 15); result('Ti allarghi tra i rovi per non passarle accanto. Quando torni sul sentiero, non c\'è più. Hai perso tempo e fiato.', 'warn'); } },
+    { t: '🚶 Passale attraverso', d: 'Follia', f: () => { p.stress = clamp(p.stress + 40, 0, 100); hurt(rr(8, 20), 'qualcosa di gelido che ti attraversa'); p.temp -= 2.5; hallucinate(); if (chance(0.3)) { addInv('reperto', 1); result('Per un istante sei altrove: acqua nera, quarantuno mani. Poi il sentiero, e qualcosa in tasca che prima non c\'era.', 'bad'); } else result('La attraversi. È come immergersi nel ghiaccio. Dall\'altra parte, vomiti e tremi.', 'bad'); } }]); }
+  if (k === 'tv_bosco') { H.glitch = Math.max(H.glitch || 0, 0.5); return eventPanel('📺 Una luce azzurra tra gli alberi', 'horror', `${hhmm()}. Tra i tronchi, il bagliore azzurro di un televisore acceso. Non c'è una presa di corrente per chilometri. Trasmette statica, e dentro la statica, una forma.`, [
+    { t: '📺 Avvicinati e guarda', f: () => { p.stress = clamp(p.stress + 25, 0, 100); if (!G.flags.tvBosco) { G.flags.tvBosco = true; addNote('Nei boschi, di notte, un televisore acceso senza corrente. Canale 0 trasmette anche qui.'); } if (chance(0.4)) { discoverLore('canale0'); result('Per un attimo, nella neve del tubo, il volto del Sindaco che pronuncia il tuo nome. Poi buio. La TV non c\'è più.', 'weird'); } else { pushShadow(1); hurt(rr(2, 6), 'un ronzio che ti entra in testa'); result('Lo schermo esplode di luce bianca. Quando riapri gli occhi sei a terra, e sanguini dal naso.', 'bad'); } } },
+    { t: '🙈 Non guardare lo schermo e vai', f: () => { advance(6); p.stress = clamp(p.stress + 8, 0, 100); result('Tieni gli occhi sul sentiero e acceleri. Il bagliore si spegne quando giri la curva.'); } }]); }
+  if (k === 'numeri') return eventPanel('📻 Numeri nel buio', 'horror', `${hhmm()}. Da nessuna parte e da ogni parte, una voce piatta recita numeri: «…quattro… uno… quattro… uno…». Si ripete, identica.`, [
+    { t: '✍️ Annota la sequenza', f: () => { gainSkill('indagine', 2); if (!G.flags.numeriNote) { G.flags.numeriNote = true; discoverLore('numbers'); addNote('Numeri sentiti nel bosco di notte: 41, 41. Coordinate? Un conto alla rovescia?'); } p.stress = clamp(p.stress + 10, 0, 100); result('Scrivi i numeri al buio, a tentoni. La voce tace appena finisci.', 'weird'); } },
+    { t: '🏃 Coprila: canta a voce alta e vai', f: () => { advance(5); result('Canti una canzone a squarciagola per coprire la voce. Funziona. Quasi.'); } }]);
+  if (k === 'immobile') { pushShadow(1); return eventPanel('🧍 Qualcuno, fermo', 'horror', `${hhmm()}. Al limite di dove arriva la vista, una persona in piedi. Immobile. Rivolta verso di te. Non si muove, non respira, non è un albero.`, [
+    { t: '👋 Chiamala', f: () => { p.stress = clamp(p.stress + 20, 0, 100); if (chance(0.5)) { pushShadow(2); result('Non risponde. Sbatti le palpebre: è dieci passi più vicina. Sbatti ancora: è sparita.', 'bad'); } else result('Silenzio. Quando accendi la luce, è solo un palo con un cappotto appeso. Forse.', 'weird'); } },
+    { t: '🔙 Torna indietro piano', f: () => { advance(12); p.stress = clamp(p.stress + 10, 0, 100); result('Cammini all\'indietro senza perderla di vista finché un albero non te la nasconde. Poi corri.', 'warn'); } }]); }
+  if (k === 'mimo') return eventPanel('👣 L\'eco sbagliata', 'horror', `${hhmm()}. I tuoi passi hanno un'eco. Ti fermi: l'eco fa un passo in più. Da qualche parte, qualcosa impara a camminare come te.`, [
+    { t: '🗣️ Di\' qualcosa ad alta voce', f: () => { p.stress = clamp(p.stress + 22, 0, 100); if (chance(0.5)) { pushShadow(1); result(`Dal buio, la tua stessa voce ti risponde: «${esc(p.first)}… sono qui.» Ma tu non hai detto il tuo nome.`, 'bad'); } else result('Solo silenzio. Ma per il resto della notte controlli sempre alle spalle.', 'weird'); } },
+    { t: '🤫 Zitto, e muoviti a passi irregolari', f: () => { advance(8); gainSkill('furtivita', 1); result('Cammini a scatti, senza ritmo. L\'eco si confonde, inciampa, si perde.'); } }]);
   if (k === 'presenza') return eventPanel('👁️ Qualcosa, nel buio', 'horror', `${hhmm()}. Senti dei passi dietro di te. Ti fermi: si fermano. Il cuore in gola. ${hasInv('torcia') && p.torch ? 'La torcia illumina solo tronchi e nebbia.' : 'Non hai nemmeno una luce.'}`, [
     { t: '🔦 Illumina di scatto', d: 'Coraggio', f: () => { if (check('atletica', 30) || hasInv('torcia') && p.torch) { p.stress = clamp(p.stress + 10, 0, 100); result('Non c\'è nessuno. Solo il bosco, e il tuo fiato. Riprendi la strada.', 'warn'); } else { p.stress = clamp(p.stress + 30, 0, 100); hallucinate(); result('Per un istante, una sagoma. Poi niente. Corri via col cuore a mille.', 'bad'); } } },
     { t: '🏃 Via di corsa', f: () => { p.stamina = Math.max(0, p.stamina - 30); p.stress = clamp(p.stress + 18, 0, 100); advance(10); result('Corri senza voltarti finché non vedi una luce. Il respiro brucia.', 'warn'); } }]);
