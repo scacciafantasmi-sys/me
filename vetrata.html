@@ -788,6 +788,7 @@ const JOB_LIST = [
   ['vigilante_notte', 'sicurezza', 'Vigilante notturno delle ville', 'villa', 13, 22, 30, 'sorveglianza', 'indagine', null, 'Ronde a Sant\'Elia. Villa Luna è la peggiore.'],
   ['buttafuori', 'sicurezza', 'Buttafuori', 'faraglione', 14, 22, 28, 'sorveglianza', 'atletica', 'atletica:35', 'Decidi tu chi entra al Faraglione.'],
   ['videosorveglianza', 'sicurezza', 'Operatore videosorveglianza', 'questura', 12, 0, 24, 'sorveglianza', 'hacking', 'hacking:20', 'Monitor delle telecamere cittadine. Certe ombre non sono persone.'],
+  ['guardiano_distilleria', 'sicurezza', 'Guardiano notturno della Distilleria', 'distilleria', 28, 22, 30, 'telecamere', 'indagine', null, 'Dieci telecamere, una notte sola, e qualcosa negli schermi che non dovrebbe esserci. Paga alta, rischi la pelle (o quasi).'],
   // notte e spettacolo
   ['dj', 'notte', 'DJ del Faraglione', 'faraglione', 18, 22, 28, 'musica', 'musica', 'musica:30', 'La pista è tua fino all\'alba.'],
   ['pr', 'notte', 'PR del Faraglione', 'faraglione', 0, 18, 26, 'vendita', 'eloquenza', null, 'A provvigione: porti gente, ti pagano.'],
@@ -4608,6 +4609,15 @@ function doJobTask(jobId, owner) {
     case 'artigiano': return minigameTiming({ title: (fl.ic || '🛠️') + ' ' + J.n, desc: fl.desc || 'Lavoro di precisione: ogni colpo al momento giusto.', pins: fl.pins || 5, speed: (fl.speed || 1.05) - skill(sk) / 250, zone: 0.16 + (fl.zoneAdj || 0) + skill(sk) / 500, tremor: G.player.stress / 200, onWin: e => { advance(120); gainSkill(sk, 4); done(25 - e * 6, 'Lavoro a regola d\'arte'); }, onFail: () => { advance(90); toast('Pezzo rovinato. Si ricomincia.', 'bad'); } });
     case 'limoni': return minigameLemons(n => { advance(120); gainSkill('atletica', 1); done(n * 3, 'Raccolto'); if (n > 8) addInv('limoni', 1); });
     case 'sorveglianza': return minigameSorveglianza(J, s => { advance(120); gainSkill(sk, 1 + s / 2); done(s * 4, 'Turno senza incidenti'); });
+    case 'telecamere': return minigameTelecamere(J, (found, survived) => {
+      advance(240); gainSkill('indagine', 2 + found / 2);
+      const crew = (typeof npcsFollowing === 'function' ? npcsFollowing() : []).filter(x => x.id !== undefined);
+      let pay = Math.round(found * 5 + (found >= 10 ? 60 : 0));
+      if (crew.length) { const share = Math.round(pay * 0.35 / crew.length); pay -= share * crew.length; for (const m of crew) { try { npcState(m).op += 3; } catch (e) { } } try { addRep('brigata', 2); } catch (e) { } }
+      if (!survived) toast('Hai mollato la postazione prima dell\'alba: niente premio pieno.', 'warn');
+      done(pay, 'Turno di guardia alla Distilleria' + (crew.length ? ' (quota divisa con la crew)' : ''));
+      if (found >= 10) { spreadRumor({ kind: 'gift', text: 'ha retto una notte intera alla Distilleria', mag: 3 }); try { if (!G.flags.distNight) { G.flags.distNight = true; discoverLore('canale0'); } } catch (e) { } }
+    });
     case 'guida': return minigameGuida(J, s => { advance(90); gainSkill('eloquenza', 1 + s); done(s * 12, J.id === 'guida_turistica' ? 'Mance dei turisti' : 'Bonus'); if (J.id === 'guida_turistica') G.island.tourism = Math.min(1.5, G.island.tourism + 0.004 * s); });
     case 'musica': if (J.id === 'musicista') return busk(); return minigameRhythm(score => { advance(60); gainSkill(sk, 2 + score / 10); done(Math.round(score * 1.5), 'Applausi e mance'); });
     case 'pesca': return toast('Pescatore: esci in barca, cala le reti sui banchi e vendi al Mercato del Pesce.');
@@ -4842,6 +4852,83 @@ function minigameClick(cb, o) {
     g.restore();
     if (t <= 0) { done = true; closePanel(); cb(n); return; } requestAnimationFrame(loop);
   };
+  requestAnimationFrame(loop);
+}
+/* ===== Guardiano notturno della Distilleria: banco telecamere + anomalie (analog horror) ===== */
+function minigameTelecamere(J, cb) {
+  const p = G.player;
+  const armed = ['pistola_illegale', 'pistola_sport', 'fucile_caccia', 'coltello', 'fucile_mozzato'].some(x => hasInv(x));
+  const crew = (typeof npcsFollowing === 'function' ? npcsFollowing() : []);
+  const crewN = crew.length;
+  const need = 10; const skillBonus = skill('indagine') / 200;
+  let found = 0, missed = 0, done = false, over = false, jump = 0, flick = 0;
+  const CAMS = 6, GW2 = 3, cw = 196, ch = 116, gap = 10, W2 = GW2 * cw + (GW2 + 1) * gap, H2 = 2 * ch + 3 * gap;
+  let anomaly = null; // {cam, kind, t, life}
+  const KINDS = ['figura', 'volto', 'ombra', 'scritta', 'occhio'];
+  try { AU.init(); AU.set('static', 0.06, 0.4); } catch (e) { }
+  openPanel('📹 ' + esc(J.n), `<p class="desc">Monitor della sala guardia. Quando su una telecamera compare <b>un'anomalia</b>, cliccala per segnalarla${armed ? ' (sei armato: la scacci)' : ''}. Servono <b>${need}</b> anomalie per chiudere il turno.${crewN ? ' La tua crew (' + crewN + ') ti copre le spalle.' : ''}<br><span class="small muted">Se ne lasci passare troppe, la salute ne risente.</span></p>
+    <canvas id="tcC" width="${W2}" height="${H2}" class="mgc" style="width:100%;background:#05060a"></canvas>
+    <p class="small" style="text-align:center">Anomalie segnalate: <b id="tcN">0</b>/${need} · mancate: <b id="tcM">0</b> · ❤️ <b id="tcH">${Math.round(p.health)}</b></p>`, [{ t: '🚪 Abbandona la postazione', c: 'bad', f: () => { over = true; done = true; try { AU.set('static', 0, 0.3); } catch (e) { } closePanel(); cb(found, false); } }], { noClose: true });
+  const c = $('#tcC'), g = c.getContext('2d');
+  const camRect = i => { const col = i % GW2, row = (i / GW2) | 0; return [gap + col * (cw + gap), gap + row * (ch + gap), cw, ch]; };
+  c.onclick = e => {
+    if (done || !anomaly) return; const r = c.getBoundingClientRect(), x = (e.clientX - r.left) * W2 / r.width, y = (e.clientY - r.top) * H2 / r.height;
+    const [cx, cy, cwx, chx] = camRect(anomaly.cam);
+    if (x >= cx && x <= cx + cwx && y >= cy && y <= cy + chx) { found++; $('#tcN').textContent = found; try { AU.sfx('ok'); } catch (e) { } flick = 0.3; anomaly = null; if (found >= need) finish(true); }
+    else { try { AU.sfx('bad'); } catch (e) { } }
+  };
+  function hurtMiss() {
+    missed++; $('#tcM').textContent = missed;
+    let dmg = armed ? rr(2, 5) : rr(5, 11); dmg = Math.max(1, dmg - crewN * 2);
+    p.health = Math.max(5, p.health - dmg); $('#tcH').textContent = Math.round(p.health);
+    try { G.horror.glitch = Math.max(G.horror.glitch || 0, 0.6); p.stress = Math.min(100, (p.stress || 0) + 6); } catch (e) { }
+    flick = 0.6; try { AU.sfx('heart'); } catch (e) { }
+    if (chance(armed ? 0.12 : 0.3 - crewN * 0.05)) { jump = 1; anim.shake = 0.6; try { AU.sfx('crash'); } catch (e) { } }
+    if (p.health <= 6) finish(false);
+  }
+  function finish(ok) { if (done) return; done = true; over = true; try { AU.set('static', 0, 0.4); } catch (e) { } closePanel(); cb(found, ok); }
+  let last = performance.now(), spawnT = rr(1, 2.5);
+  const loop = now => {
+    if (done || !$('#tcC')) return; const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    // spawn / expire anomaly
+    if (!anomaly) { spawnT -= dt; if (spawnT <= 0) { anomaly = { cam: ri(0, CAMS - 1), kind: pick(KINDS), t: 0, life: rr(2.2, 3.6) + skillBonus * 2 }; try { AU.beep(90 + Math.random() * 40, 0.25, 'sawtooth', 0.05); } catch (e) { } } }
+    else { anomaly.t += dt; if (anomaly.t >= anomaly.life) { anomaly = null; spawnT = rr(0.8, 2.2); hurtMiss(); } }
+    if (flick > 0) flick -= dt; if (jump > 0) jump -= dt * 1.4;
+    // draw feeds
+    g.fillStyle = '#05060a'; g.fillRect(0, 0, W2, H2);
+    for (let i = 0; i < CAMS; i++) {
+      const [x, y, w, h] = camRect(i); g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
+      g.fillStyle = '#0b0f14'; g.fillRect(x, y, w, h);
+      for (let k = 0; k < 40; k++) { g.fillStyle = `rgba(${120 + Math.random() * 60|0},${130 + Math.random() * 60|0},${140 + Math.random() * 60|0},${Math.random() * 0.12})`; g.fillRect(x + Math.random() * w, y + Math.random() * h, 2, 2); }
+      // stanze buie (sagome arredi)
+      g.fillStyle = 'rgba(40,46,54,.6)'; g.fillRect(x + 10, y + h - 26, w - 20, 16);
+      g.strokeStyle = 'rgba(90,120,100,.25)'; for (let sy = y + 6; sy < y + h; sy += 4) { g.beginPath(); g.moveTo(x, sy); g.lineTo(x + w, sy); g.stroke(); }
+      if (anomaly && anomaly.cam === i) drawAnomaly(g, anomaly.kind, x, y, w, h, anomaly.t);
+      // etichetta
+      g.fillStyle = 'rgba(180,230,190,.7)'; g.font = '10px monospace'; g.fillText('CAM ' + (i + 1) + (i === 0 ? ' · DISTILLERIA' : ''), x + 6, y + 13); g.fillText(hhmm(), x + w - 42, y + h - 6);
+      g.strokeStyle = anomaly && anomaly.cam === i ? 'rgba(220,60,50,.5)' : 'rgba(60,80,70,.4)'; g.lineWidth = 2; g.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      g.restore();
+    }
+    if (flick > 0) { g.fillStyle = `rgba(10,0,0,${flick * 0.5})`; g.fillRect(0, 0, W2, H2); }
+    if (jump > 0) drawJumpscareTC(g, W2, H2, jump);
+    requestAnimationFrame(loop);
+  };
+  function drawAnomaly(g, kind, x, y, w, h, t) {
+    const cx = x + w * (0.3 + 0.4 * ((Math.sin(t * 1.3) + 1) / 2)), by = y + h * 0.78, fl = (Math.sin(t * 9) > 0.3 ? 1 : 0.5);
+    g.save(); g.globalAlpha = 0.6 + fl * 0.35;
+    if (kind === 'figura') { g.fillStyle = '#000'; g.beginPath(); g.ellipse(cx, by - 14, 7, 22, 0, 0, 7); g.fill(); g.beginPath(); g.arc(cx, by - 34, 7, 0, 7); g.fill(); }
+    else if (kind === 'ombra') { g.fillStyle = 'rgba(0,0,0,.85)'; g.beginPath(); g.ellipse(cx, by - 10, 16, 20, 0, 0, 7); g.fill(); }
+    else if (kind === 'volto') { g.fillStyle = 'rgba(230,224,208,.85)'; g.beginPath(); g.ellipse(cx, y + h * 0.42, 15, 20, 0, 0, 7); g.fill(); g.fillStyle = '#000'; g.fillRect(cx - 8, y + h * 0.38, 5, 4); g.fillRect(cx + 3, y + h * 0.38, 5, 4); g.fillRect(cx - 5, y + h * 0.5, 10, 2); }
+    else if (kind === 'occhio') { g.fillStyle = '#eee'; g.beginPath(); g.ellipse(cx, y + h * 0.45, 14, 8, 0, 0, 7); g.fill(); g.fillStyle = '#7a1414'; g.beginPath(); g.arc(cx, y + h * 0.45, 5, 0, 7); g.fill(); g.fillStyle = '#000'; g.beginPath(); g.arc(cx, y + h * 0.45, 2.5, 0, 7); g.fill(); }
+    else { g.fillStyle = 'rgba(190,20,20,.9)'; g.font = 'bold 26px VT323, monospace'; g.textAlign = 'center'; g.fillText(pick(['41', 'TI VEDO', 'ESCI', 'CANALE 0']), x + w / 2, y + h / 2); g.textAlign = 'left'; }
+    g.restore();
+  }
+  function drawJumpscareTC(g, W2, H2, j) {
+    g.fillStyle = `rgba(0,0,0,${Math.min(1, j)})`; g.fillRect(0, 0, W2, H2);
+    for (let k = 0; k < 1200; k++) { g.fillStyle = `rgba(255,255,255,${Math.random() * 0.25})`; g.fillRect(Math.random() * W2, Math.random() * H2, 2, 2); }
+    const fx = W2 / 2, fy = H2 / 2; g.fillStyle = 'rgba(235,228,212,' + Math.min(1, j) + ')'; g.beginPath(); g.ellipse(fx, fy, 70, 95, 0, 0, 7); g.fill();
+    g.fillStyle = '#000'; g.beginPath(); g.ellipse(fx - 26, fy - 12, 11, 16, 0, 0, 7); g.ellipse(fx + 26, fy - 12, 11, 16, 0, 0, 7); g.fill(); g.fillRect(fx - 30, fy + 34, 60, 10);
+  }
   requestAnimationFrame(loop);
 }
 function minigameCassa(cb) {
