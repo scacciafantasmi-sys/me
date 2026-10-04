@@ -3310,23 +3310,29 @@ function takePhoto(subject) {
   const evidence = [];
   for (const ev of G.events) if (ev.kind === 'meeting' && ev.active) { const b = W.buildings[ev.b]; if (b.cell && Math.abs(b.cell[0] - pc.cx) <= 1 && Math.abs(b.cell[1] - pc.cy) <= 1) evidence.push(ev.id); }
   let anomaly = null;
-  const nearSite = site && site.cell && Math.abs(site.cell[0] - pc.cx) <= 1 && Math.abs(site.cell[1] - pc.cy) <= 1;
-  if (m.step === 4 && nearSite && isNight()) anomaly = { kind: 'clue', text: mysteryText(MYS().photo) };
-  else if (hauntedHere() > 0.2 && chance(0.35 * (hasTrait('sensitivo') ? 1.6 : 1) + skill('fotografia') / 400)) anomaly = { kind: pick(['figure', 'face', 'writing']), text: pick(['TORNA A CASA', 'TI VEDIAMO', '41', 'NON CAMBIARE CANALE', 'SOTTO IL FARO']) };
+  const loreTypes = ['rifugio', 'distilleria', 'bunker', 'depositi', 'faro'];
+  // prossimità generosa: i ruderi sono grandi, basta essere entro 3 caselle dalla loro porta
+  const siteNear = site && site.cell && Math.max(Math.abs(site.cell[0] - pc.cx), Math.abs(site.cell[1] - pc.cy)) <= 3;
+  if (m.step === 4 && siteNear && isNight()) anomaly = { kind: 'clue', text: mysteryText(MYS().photo) };
+  else if (hauntedHere() > 0.2 && chance(0.4 * (hasTrait('sensitivo') ? 1.6 : 1) + skill('fotografia') / 300)) anomaly = { kind: pick(['figure', 'face', 'writing']), text: pick(['TORNA A CASA', 'TI VEDIAMO', '41', 'NON CAMBIARE CANALE', 'SOTTO IL FARO']) };
   // "foto intelligenti": una foto è vendibile solo se cattura qualcosa di notevole
   const tags = [];
   try {
-    const nearCell = pred => { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const cc = cellAt(pc.cx + dx, pc.cy + dy); if (cc && pred(cc)) return true; } return false; };
-    if (G.horror && G.horror.shadows && anim.tok && G.horror.shadows.some(sd => Math.hypot(sd.x - anim.tok.x, sd.y - anim.tok.y) < 24)) tags.push('ombra');
+    const nearCell = (pred, r = 2) => { for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { const cc = cellAt(pc.cx + dx, pc.cy + dy); if (cc && pred(cc)) return true; } return false; };
+    if (G.horror && G.horror.shadows && anim.tok && G.horror.shadows.some(sd => Math.hypot(sd.x - anim.tok.x, sd.y - anim.tok.y) < 44)) tags.push('ombra');
     if (nearCell(cc => cc.tv !== undefined)) tags.push('tv');
     if (nearCell(cc => cc.shard)) tags.push('scaglia');
-    if (G.horror && G.horror.ringing !== null) { const bb = W.booths[G.horror.ringing]; if (bb && Math.abs((bb.x / TS / CF | 0) - pc.cx) <= 1 && Math.abs((bb.y / TS / CF | 0) - pc.cy) <= 1) tags.push('onde'); }
+    if (G.horror && G.horror.ringing !== null) { const bb = W.booths[G.horror.ringing]; if (bb && Math.abs((bb.x / TS / CF | 0) - pc.cx) <= 2 && Math.abs((bb.y / TS / CF | 0) - pc.cy) <= 2) tags.push('onde'); }
+    // un rudere/rifugio fotografato da vicino è già una notizia
+    if (nearCell(cc => cc.b && cc.b.some(id => { const b = W.buildings[id]; return b && (loreTypes.includes(b.type) || b.n === 'Villa Luna'); }), 2)) tags.push('luogo');
+    // una presenza avvertita di notte dove l'isola fa paura
+    if (!tags.length && !anomaly && isNight() && hauntedHere() > 0.4 && chance(0.6 + (hasTrait('sensitivo') ? 0.25 : 0))) tags.push('presenza');
   } catch (e) { }
-  const notable = !!(anomaly || evidence.length || tags.length || subject === 'alba' || subject === 'tramonto');
   G.film.shots.push({ day: G.day, t: hhmm(), zone: cellTitle(pc), raw: c.toDataURL('image/jpeg', 0.6), subjects: npcsHere().map(n => ({ id: n.id })), evidence, anomaly, tags, subject: subject || null });
   gainSkill('fotografia', 0.6); advance(2);
   board.classList.add('flash'); setTimeout(() => board.classList.remove('flash'), 400);
-  toast(`📷 Clic. ${G.film.loaded} pose rimaste.${evidence.length ? ' <span class="warnc">Hai inquadrato qualcosa di grosso.</span>' : tags.length ? ' <span class="warnc">Hai catturato qualcosa di strano…</span>' : ''}`);
+  const hint = evidence.length ? ' <span class="warnc">Hai inquadrato qualcosa di grosso.</span>' : anomaly ? ' <span class="weirdc">Nel mirino qualcosa non quadra… sviluppa il rullino.</span>' : tags.length ? ' <span class="warnc">Hai catturato qualcosa di strano…</span>' : '';
+  toast(`📷 Clic. ${G.film.loaded} pose rimaste.${hint}`);
   if (evidence.length) for (const id of evidence) { const e = G.events.find(x => x.id === id); if (e) e.shot = true; }
   if (!G.film.loaded) { addInv('rullino_esposto', 1, { shots: G.film.shots }, true); G.film.shots = []; toast('Rullino finito: portalo alla Tipografia Lauro per lo sviluppo.'); }
 }
@@ -4119,6 +4125,8 @@ function photoValue(d) {
   if (tags.includes('scaglia')) return { val: 150, kind: '🔮 Scheggia di vetro nero', ev: [], sellable: true };
   if (tags.includes('onde')) return { val: 135, kind: '📻 La cabina che squilla nella notte', ev: [], sellable: true };
   if (tags.includes('tv')) return { val: 120, kind: '📺 Canale 0 ripreso dal vivo', ev: [], sellable: true };
+  if (tags.includes('luogo')) return { val: 110, kind: '🏚️ Il rudere che tutti evitano', ev: [], sellable: true };
+  if (tags.includes('presenza')) return { val: 95, kind: '👁️ Una presenza nel buio', ev: [], sellable: true };
   if (d.subject === 'alba' || d.subject === 'tramonto') return { val: 60, kind: '🌅 Cartolina dai Faraglioni', ev: [], sellable: true };
   return { val: 0, kind: '🖼️ Foto d\'ambiente — niente di notevole', ev: [], sellable: false };
 }
@@ -4142,7 +4150,7 @@ function publishPhoto(x) {
     spreadRumor({ kind: 'gift', text: 'ha sbattuto in prima pagina i potenti', mag: 6 });
     if (e.npcs.some(id => NPCS[id].faction === 'carannante')) { sendMsg('Numero sconosciuto', 'Le foto. Brutta idea. Molto brutta idea.', { force: true }); G.flags.clanPressure = (G.flags.clanPressure || 0) + 1; }
   } else if (x.it.d.anomaly) addNews({ tag: 'cronaca', head: 'Ombre a ' + x.it.d.zone + ': «Nella foto c\'è qualcuno che non c\'era»', body: 'Il nostro fotografo giura di non aver ritoccato nulla.', weight: 3, by: 'player' });
-  else if ((x.it.d.tags || []).length) { const tg = x.it.d.tags[0]; const head = { ombra: 'Un\'ombra senza corpo fotografata a ' + x.it.d.zone, scaglia: 'Una scheggia di vetro nero che «non riflette»: il reperto di ' + x.it.d.zone, onde: 'La cabina di ' + x.it.d.zone + ' squilla da sola: la foto che fa discutere', tv: 'Canale 0 esiste: il fermo immagine scattato a ' + x.it.d.zone }[tg] || 'Qualcosa di strano a ' + x.it.d.zone; addNews({ tag: 'cronaca', head, body: 'Le immagini di ' + G.player.first + ' ' + G.player.last + ' dividono l\'isola tra scettici e creduloni.', weight: 3, by: 'player' }); }
+  else if ((x.it.d.tags || []).length) { const tg = x.it.d.tags[0]; const head = { ombra: 'Un\'ombra senza corpo fotografata a ' + x.it.d.zone, scaglia: 'Una scheggia di vetro nero che «non riflette»: il reperto di ' + x.it.d.zone, onde: 'La cabina di ' + x.it.d.zone + ' squilla da sola: la foto che fa discutere', tv: 'Canale 0 esiste: il fermo immagine scattato a ' + x.it.d.zone, luogo: 'Dentro il rudere di ' + x.it.d.zone + ': le immagini che l\'isola non vuole vedere', presenza: 'Qualcosa, nel buio di ' + x.it.d.zone + ': la foto che nessuno sa spiegare' }[tg] || 'Qualcosa di strano a ' + x.it.d.zone; addNews({ tag: 'cronaca', head, body: 'Le immagini di ' + G.player.first + ' ' + G.player.last + ' dividono l\'isola tra scettici e creduloni.', weight: 3, by: 'player' }); }
   else addNews({ tag: 'cronaca', head: 'Vetrata, cartoline dalla crisi', body: 'Un reportage fotografico.', weight: 1.2, by: 'player' });
   gainSkill('fotografia', 2);
 }
