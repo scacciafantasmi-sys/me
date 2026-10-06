@@ -3454,9 +3454,15 @@ function endingChoice() {
 
 /* ---------- Stato e ambiente ---------- */
 function initHorrorRuntime() { G.horror = { flicker: 0, ringing: null, ringUntil: 0, mysteryCall: false, tvOn: null, shadows: [], dread: 0, glitch: 0 }; }
+// i centri abitati sono rifugi: le ombre e l'horror non entrano nel Centro Storico (né negli altri paesi)
+const HORROR_SAFE = ['centro', 'anacapri', 'marina', 'santelia'];
+const INHABITED_ZONES = ['centro', 'anacapri', 'marina', 'santelia', 'spiaggia'];
+function horrorSafeHere(c) { c = c || playerCell(); return !!(c && HORROR_SAFE.includes(c.zone)); }
 function hauntedHere() {
   const c = playerCell(); if (!c || G.flags.horrorEnd) return 0;
-  let h = { cimitero: 1, boschi: 0.7, parco: 0.5, scogli: 0.6, villaluna: 0.6, faro: 0.4 }[c.zone] || 0;
+  if (horrorSafeHere(c)) return 0; // nel Centro Storico e negli altri paesi non c'è nulla di strano
+  let h = { cimitero: 1, boschi: 0.7, parco: 0.5, scogli: 0.6, villaluna: 0.6, faro: 0.4, monte: 0.45 }[c.zone];
+  if (h === undefined) h = INHABITED_ZONES.includes(c.zone) ? 0 : 0.32; // campagna aperta: inquieta di notte
   if (!isNight()) h *= 0.15;
   if (hasTrait('sensitivo')) h *= 1.5;
   if (npcsHere().length) h *= 0.3;
@@ -3466,6 +3472,8 @@ function hauntedHere() {
 function horrorMinute() {
   const H = G.horror; if (!H) return;
   const hh = hauntedHere();
+  // nei centri abitati le ombre non possono entrare: svaniscono in fretta e il dread cala subito
+  if (horrorSafeHere()) { H.dread = lerp(H.dread, 0, 0.3); H.glitch = Math.max(0, (H.glitch || 0) - 0.3); for (let k = H.shadows.length - 1; k >= 0; k--) { H.shadows[k].a -= 0.34; if (H.shadows[k].a <= 0) H.shadows.splice(k, 1); } return; }
   H.dread = lerp(H.dread, hh, 0.05);
   for (let k = H.shadows.length - 1; k >= 0; k--) { const s = H.shadows[k]; s.t--; if (s.t <= 0) s.a -= 0.2; else s.a = Math.min(0.85, s.a + 0.15); if (s.a <= 0) H.shadows.splice(k, 1); }
   if (G.player.stress > 85 && chance(0.004)) hallucinate();
@@ -3516,7 +3524,7 @@ function voiceEvent() {
       { t: 'Allontanati in silenzio', f: () => { p.stress = Math.min(100, p.stress + 4); closePanel(); } }]);
   }
 }
-function hallucinate() { const H = G.horror; H.glitch = 1; for (let k = 0; k < 3; k++) { const a = Math.random() * 6.28; H.shadows.push({ x: anim.tok.x + Math.cos(a) * rr(5, 9), y: anim.tok.y + Math.sin(a) * rr(5, 9), a: 0, t: rr(20, 50) }); } toast('Lo stress ti gioca brutti scherzi. Respira.', 'weird'); }
+function hallucinate() { if (horrorSafeHere()) { toast('Respiri. Tra la gente del paese, i brutti pensieri svaniscono.'); return; } const H = G.horror; H.glitch = 1; for (let k = 0; k < 3; k++) { const a = Math.random() * 6.28; H.shadows.push({ x: anim.tok.x + Math.cos(a) * rr(5, 9), y: anim.tok.y + Math.sin(a) * rr(5, 9), a: 0, t: rr(20, 50) }); } toast('Lo stress ti gioca brutti scherzi. Respira.', 'weird'); }
 function checkCache() { const m = G.mystery; return m.step >= 2 && !m.cacheFound && G.player.cx === (m.cache.x / CF | 0) && G.player.cy === (m.cache.y / CF | 0); }
 function finalSiteCell() {
   const M = MYS(); let b;
@@ -6964,8 +6972,11 @@ function sellCarMenu(b) {
 /* ---------- La notte nelle zone sconosciute è pericolosa ---------- */
 function nightDanger(c) {
   if (!isNight()) return false;
-  const wild = ['boschi', 'parco', 'cimitero', 'scogli', 'monte', 'villaluna'].includes(c.zone);
-  const cd = wild ? 28 : 50; // nei boschi le cose capitano più spesso
+  if (horrorSafeHere(c)) return false; // nel Centro Storico e negli altri paesi non succede nulla di strano
+  const namedWild = ['boschi', 'parco', 'cimitero', 'scogli', 'monte', 'villaluna'].includes(c.zone);
+  const openCountry = !INHABITED_ZONES.includes(c.zone) && !namedWild; // campagna aperta tra le zone
+  const wild = namedWild || openCountry;
+  const cd = wild ? 28 : 50; // nei boschi e in campagna le cose capitano più spesso
   if (G.flags.lastNightEv && G.min - G.flags.lastNightEv < cd) return false;
   const lit = c.b.some(id => isOpen(W.buildings[id])) || c.plaza;
   if (!wild && lit) return false;
