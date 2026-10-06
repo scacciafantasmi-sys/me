@@ -6761,7 +6761,7 @@ function appointmentsTick() {
   if (!G.appointments) return;
   for (const ap of G.appointments) {
     if (ap.done) continue; const n = NPCS[ap.nid]; const st = npcState(n);
-    if (G.min >= ap.at && G.min < ap.at + 120) { st.meetAt = { b: ap.b, until: ap.at + 120, from: ap.at }; if (isPl(n)) { plState(n).on = true; plState(n).inB = ap.b; plState(n).meet = { b: ap.b, until: ap.at + 120 }; } const c = playerCell(); const here = ap.b ? c.b.includes(ap.b) : c.plaza; if (here && !ap.greeted) { ap.greeted = true; toast(`${esc(n.first)} ti stava aspettando ${ap.pn}.`, 'good'); st.op += 5; } }
+    if (G.min >= ap.at && G.min < ap.at + 120) { st.meetAt = { b: ap.b, until: ap.at + 120, from: ap.at }; if (isPl(n)) { plState(n).on = true; plState(n).inB = ap.b; plState(n).meet = { b: ap.b, until: ap.at + 120 }; } const c = playerCell(); const here = ap.b ? c.b.includes(ap.b) : c.plaza; if (here && !ap.greeted) { ap.greeted = true; toast(`${esc(n.first)} ti stava aspettando ${ap.pn}.`, 'good'); st.op += 5; if (ap.deal) { try { if (deliverOffer(n, ap.deal)) ap.done = true; } catch (e) { } } } }
     if (G.min >= ap.at + 120) { ap.done = true; if (!ap.greeted) { st.op -= 10; sendMsg(npcName(n, false), pick(['Ti ho aspettato. Non sei venuto.', 'Niente appuntamento, eh? Grazie tante.', 'Ho aspettato un\'ora. Complimenti.']), { force: true }); } }
   }
   G.appointments = G.appointments.filter(ap => !ap.done);
@@ -7645,9 +7645,10 @@ function openChat(n, topic) {
   const st = npcState(n); st.chat = st.chat || [];
   st.activeTopic = topic || st.offer || null;
   const msgs = st.chat.slice(-18).map(m => `<div class="ch-msg ${m.me ? 'me' : ''}">${esc(m.t)}<span class="ch-t">${m.hm}</span></div>`).join('');
-  openPanel('💬 ' + esc(isPl(n) ? n.pl.tag : n.first), `<div class="ch-log" id="chLog">${msgs || '<p class="muted small" style="text-align:center">Scrivi il primo messaggio.</p>'}</div><div class="vg-compose"><input id="chIn" placeholder="Messaggio…" maxlength="160"><button class="btn sm pri" id="chSend">▶</button></div><div class="small muted">${online(n) ? '<span class="good">🟢 online</span>' : '⚫ offline — risponderà più tardi'} · ${tierOf(st.op)[1]}</div>`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
-  const send = () => { const t = $('#chIn').value.trim(); if (!t) return; st.chat.push({ t, me: true, hm: hhmm() }); $('#chIn').value = ''; st.op += 0.5; advance(1, { noUI: true }); renderChatLog(n); setTimeout(() => chatReply(n), 500); };
+  openPanel('💬 ' + esc(isPl(n) ? n.pl.tag : n.first), `<div class="ch-log" id="chLog">${msgs || '<p class="muted small" style="text-align:center">Scrivi il primo messaggio.</p>'}</div><div id="chActs" class="ch-acts" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0"></div><div class="vg-compose"><input id="chIn" placeholder="Messaggio…" maxlength="160"><button class="btn sm pri" id="chSend">▶</button></div><div class="small muted">${online(n) ? '<span class="good">🟢 online</span>' : '⚫ offline — risponderà più tardi'} · ${tierOf(st.op)[1]} · <span class="muted">scrivi cosa vuoi: compro, ci vediamo, cerco lavoro, mi aiuti…</span></div>`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true });
+  const send = () => { const t = $('#chIn').value.trim(); if (!t) return; st.chat.push({ t, me: true, hm: hhmm() }); $('#chIn').value = ''; st.op += 0.5; advance(1, { noUI: true }); renderChatLog(n); renderChatActions(n); setTimeout(() => chatReply(n), 500); };
   $('#chSend').onclick = send; $('#chIn').onkeydown = e => { if (e.key === 'Enter') send(); }; $('#chIn').focus();
+  renderChatActions(n);
 }
 function online(n) { return isPl(n) ? plState(n).on : !((npcState(n).jailed > G.day) || !npcDesire(n) || npcDesire(n).act === 'sleep'); }
 function renderChatLog(n) { const st = npcState(n); const el = $('#chLog'); if (!el) return; el.innerHTML = st.chat.slice(-18).map(m => `<div class="ch-msg ${m.me ? 'me' : ''}">${esc(m.t)}<span class="ch-t">${m.hm}</span></div>`).join(''); el.scrollTop = el.scrollHeight; }
@@ -7655,14 +7656,14 @@ function chatReply(n) {
   const st = npcState(n); if (!online(n)) { return; }
   let r; const last = (st.chat[st.chat.length - 1] || {}).t || '';
   try { r = smartChatReply(n, last); } catch (e) { r = null; }
-  if (r) { st.chat.push({ t: moodPrefix(n) + r, me: false, hm: hhmm() }); st.op += 0.6; renderChatLog(n); return; }
+  if (r) { st.chat.push({ t: moodPrefix(n) + r, me: false, hm: hhmm() }); st.op += 0.6; renderChatLog(n); renderChatActions(n); return; }
   if (/ciao|salve|ehi|ue|hey/i.test(last)) r = charLine(n, 'greet');
   else if (/\?$/.test(last)) r = chance(0.5) ? charLine(n, 'talk') : pick(['Boh, non saprei.', 'Bella domanda.', 'Dipende.', 'Sì, credo di sì.']);
   else if (/grazie/i.test(last)) r = pick(['Figurati!', 'Di niente.', 'Quando vuoi.']);
   else if (/vediamo|usciamo|beviamo|festa|caffè|caffe/i.test(last)) r = pick(['Ci sto! Dimmi dove.', 'Volentieri, passa quando vuoi.', 'Stasera? Per me va bene.']);
   else { const ctx = npcContextRemark(n); r = ctx && chance(0.5) ? ctx : chance(0.4) ? charLine(n, 'talk') : (isPl(n) ? plLine(n, 'rp') : pick(['Eh già.', 'Capito.', 'Hai ragione.', ambientLine(n)])); }
   st.chat.push({ t: moodPrefix(n) + r, me: false, hm: hhmm() });
-  st.op += 0.5; renderChatLog(n);
+  st.op += 0.5; renderChatLog(n); renderChatActions(n);
 }
 function chatInbox() {
   // elenco delle conversazioni (rubrica + chi ti ha scritto)
@@ -9145,6 +9146,77 @@ function npcOfferPost(n) {
   feedPost(n, O.post(topic), { topic });
 }
 function offerReplyFor(topic) { const O = NPC_OFFERS.find(x => x.kind === (topic || {}).kind); return O ? O.reply(topic) : null; }
+
+/* ---------- #47: le chat producono AZIONI e TASK VERE (incontri, affari, commissioni) ---------- */
+const OFFER_VEHICLE = { vespina: 'vesperina', scooter: 'vesperina', vesperina: 'vesperina', bici: 'bici', gozzo: 'gozzo', ape: 'ape' };
+function npcGuessCell(n) {
+  try { const w = npcWhere(n); if (w) { if (w.cx != null) return [w.cx, w.cy]; if (w.b != null && W.buildings[w.b] && W.buildings[w.b].cell) return W.buildings[w.b].cell.slice(); } } catch (e) { }
+  const hb = (n.home != null) ? W.buildings[n.home] : null; if (hb && hb.cell) return hb.cell.slice();
+  return [G.player.cx, G.player.cy];
+}
+function setMeetWaypoint(n) { const c = npcGuessCell(n); G.waypoint = { cx: c[0], cy: c[1] }; return c; }
+// consegna concreta dell'oggetto/servizio pattuito su un annuncio
+function deliverOffer(n, topic) {
+  if (!n || !topic) return false; const st = npcState(n); const price = Math.round(topic.price || 0);
+  if (price > 0 && G.cash + G.bank < price) { toast(`Ti servono ${money(price)} per concludere con ${esc(n.first)}. Torna quando li hai.`, 'warn'); return false; }
+  if (price > 0 && !pay(price, topic.label ? 'Acquisto: ' + topic.label : 'Affare con ' + n.first)) return false;
+  const c = npcGuessCell(n);
+  if (topic.kind === 'vendo' && topic.item) {
+    const vm = OFFER_VEHICLE[topic.item];
+    if (vm && VMODELS[vm]) { const spot = VMODELS[vm].type === 'boat' ? boatSpot(c[0], c[1]) : [G.player.cx, G.player.cy]; const v = addVehicle(vm, spot[0], spot[1], { fuel: 0.6 }); addInv('chiave', 1, { vid: v.id, title: 'Chiave ' + VMODELS[vm].n }, true); toast(`🤝 Affare fatto! ${esc(n.first)} ti consegna ${esc(topic.label || VMODELS[vm].n)}. È tua, chiavi in tasca.`, 'money'); }
+    else if (ITEMS[topic.item]) { addInv(topic.item, 1); toast(`🤝 Affare fatto! Hai preso ${esc(ITEMS[topic.item].n)} da ${esc(n.first)}.`, 'money'); }
+    else { addInv('lettera', 1, { title: topic.label || 'Oggetto acquistato', text: 'Ricevuta dell\'affare concluso con ' + n.first + ' ' + n.last + '.' }, true); toast(`🤝 Affare fatto con ${esc(n.first)}.`, 'money'); }
+  } else if (topic.kind === 'affitto') { G.notes.unshift({ day: G.day, t: hhmm(), text: `Accordo d'affitto con ${n.first} ${n.last}: una stanza a Vetrata.` }); toast(`🤝 Mano nella mano: hai una stanza da ${esc(n.first)}.`, 'money'); }
+  else if (topic.kind === 'evento') { G.player.stress = Math.max(0, (G.player.stress || 0) - 10); G.social.followers = (G.social.followers || 0) + ri(1, 5); toast(`🎉 Serata con ${esc(n.first)}: ti sei divertito.`, 'good'); }
+  else if (topic.kind === 'cerco_barca') { gainSkill('nautica', 2); toast(`⛵ Bella uscita in barca con ${esc(n.first)}.`, 'good'); }
+  else { toast(`🤝 Vi siete visti. Tutto a posto con ${esc(n.first)}.`, 'good'); }
+  st.op += 6; st.dealClosing = 0; st.pendingMeet = null;
+  return true;
+}
+// fissa un incontro VERO: appuntamento + GPS; l'eventuale affare si conclude all'arrivo
+function arrangeMeet(n, deal) {
+  const st = npcState(n); const b = (n.home != null && W.buildings[n.home]) ? n.home : null;
+  G.appointments = G.appointments || [];
+  const at = Math.floor(G.min / 60) * 60;
+  G.appointments = G.appointments.filter(ap => !(ap.nid === n.id && !ap.done && ap.quick));
+  G.appointments.push({ nid: n.id, b, spot: b ? null : 'plaza', at, pn: b && W.buildings[b] ? (W.buildings[b].n || 'da lui') : 'in Piazzetta', done: false, deal: deal || null, quick: true });
+  st.pendingMeet = { deal: deal || null, day: G.day };
+  setMeetWaypoint(n);
+  sendMsg(npcName(n, false), deal ? pick(['Perfetto, ti aspetto. Porta i contanti.', 'Vieni pure, sono qui.']) : pick(['Ci sono, passa quando vuoi.', 'Ti aspetto!']), { force: true });
+  toast(`📍 GPS impostato su ${esc(n.first)}. Raggiungilo per ${deal ? 'concludere l\'affare' : 'vedervi'}.`, 'good');
+}
+function chatCommission(n) {
+  const st = npcState(n);
+  if (st.chatBountyDay === G.day) { toast(`${esc(n.first)} ti ha già dato qualcosa da fare oggi.`, 'warn'); return; }
+  const choices = [{ item: 'acqua', q: 2, r: 40, say: 'Mi porti due bottiglie d\'acqua? Non riesco a uscire.' }, { item: 'frisella', q: 1, r: 35, say: 'Mi prendi qualcosa da mangiare? Ti offro una mancia.' }, { item: 'sigarette', q: 1, r: 55, say: 'Mi recuperi le sigarette? Te le pago bene.' }, { item: 'limoni', q: 1, r: 45, say: 'Mi servono dei limoni freschi, me li porti?' }, { item: 'caffe', q: 1, r: 30, say: 'Un caffè me lo porti? Sto morendo.' }].filter(x => ITEMS[x.item]);
+  const pc = pick(choices); const c = npcGuessCell(n);
+  G.bounties = G.bounties || [];
+  const id = 'cm' + G.day + '_' + n.id;
+  if (!G.bounties.some(b => b.id === id)) G.bounties.push({ id, kind: 'chat', item: pc.item, q: pc.q, reward: pc.r, place: null, from: n.id, cell: c, until: G.day + 3, born: G.day, text: `${n.first} ${n.last}: ${pc.say}` });
+  st.chatBountyDay = G.day; st.op += 2; setMeetWaypoint(n);
+  openPanel('🧰 Commissione da ' + esc(n.first), `<p class="desc">«${esc(pc.say)}»</p><p class="small">Portagli <b>${pc.q}× ${esc(ITEMS[pc.item].n)}</b> e avrai <b>${money(pc.r)}</b>. L'ho aggiunta alla bacheca delle commissioni e messa sul GPS.</p>`, [{ t: '📌 Vai alla bacheca', c: 'pri', f: () => { closePanel(); try { openBounties(); } catch (e) { } } }, { t: 'Ok', f: closePanel }]);
+}
+// calcola i pulsanti-azione da mostrare in chat sulla base dell'ultimo messaggio
+function chatActionsFor(n, last) {
+  const st = npcState(n); const acts = []; last = last || '';
+  const offer = (st.activeTopic && G.day - (st.activeTopic.day || G.day) <= 10) ? st.activeTopic : (st.offer && G.day - st.offer.day <= 7 ? st.offer : null);
+  if (offer && (st.dealClosing === G.day || /\b((la|lo) )?(prendo|compro|voglio)\b|\bci sto\b|\baffare fatto\b|\bva bene\b/i.test(last))) {
+    acts.push({ t: `🤝 Incontra ${esc(n.first)} e concludi l'affare${offer.price ? ' (' + money(offer.price) + ')' : ''}`, f: () => { closePanel(); arrangeMeet(n, offer); } });
+  }
+  if (st.wantMeet === G.day || /\b(ci vediamo|vediamoci|usciamo|un caff[eè]|ci prendiamo|passo da te|dove ci vediamo|quando ci vediamo|andiamo a)\b/i.test(last)) {
+    if (!acts.some(a => a._k === 'meet')) acts.push({ _k: 'meet', t: `📍 Fissa un incontro con ${esc(n.first)}`, f: () => { closePanel(); arrangeMeet(n, null); } });
+  }
+  for (const it of detectIntents(last)) { if (it.action && FEED_ACTIONS[it.action.key] && !acts.some(a => a._k === it.action.key)) acts.push({ _k: it.action.key, t: it.action.t, f: () => { try { FEED_ACTIONS[it.action.key](); } catch (e) { } } }); }
+  if (/\b(mi serve una mano|mi aiuti|ho bisogno|un favore|puoi aiutarmi|che posso fare per te|hai qualcosa da fare)\b/i.test(last)) { if (!acts.some(a => a._k === 'cm')) acts.push({ _k: 'cm', t: `🧰 Fatti dare una commissione da ${esc(n.first)}`, f: () => { closePanel(); chatCommission(n); } }); }
+  return acts.slice(0, 3);
+}
+function renderChatActions(n) {
+  const el = $('#chActs'); if (!el) return; const st = npcState(n);
+  let last = ''; for (let i = st.chat.length - 1; i >= 0; i--) { if (st.chat[i].me) { last = st.chat[i].t; break; } }
+  const acts = chatActionsFor(n, last);
+  el.innerHTML = acts.map((a, i) => `<button class="btn sm pri ch-act" data-ca="${i}">${esc(a.t)}</button>`).join(' ');
+  el.querySelectorAll('[data-ca]').forEach(b => b.onclick = () => { const a = acts[+b.dataset.ca]; if (a) a.f(); });
+}
 
 /* ---------- Chat: risposte che capiscono il messaggio ---------- */
 function npcContextRemark(n) {
