@@ -6147,15 +6147,32 @@ function restoreWorldState() {
 function quickSave() { if (!G || !G.player || G.dead) return toast('Non c\'è niente da salvare.', 'warn'); saveGame(); AU.sfx('ok'); toast('💾 Partita salvata.', 'good'); }
 function openSaveMenu() { openPanel('💾 Salvataggi', '<p class="desc">La partita si salva da sola ogni pochi secondi e quando dormi. Puoi anche salvare a mano qui, o usare i 3 slot.</p>', [{ t: '💾 Salva adesso', c: 'pri', f: () => { quickSave(); closePanel(); } }, { t: '📁 Slot di salvataggio (3)', f: () => { closePanel(); slotsScreen(() => { hideScreen(); }); } }, { t: 'Chiudi', f: closePanel }]); }
 function saveGame() {
-  if (!G || !G.player) return;
+  if (!G || !G.player) return false;
+  // cap in place le strutture che crescono senza limite: così il salvataggio non sfora mai la quota in silenzio
   try {
-    G.world = snapshotWorld(); G.shoals = SHOALS;
-    const horror = G.horror; delete G.horror;
-    const s = JSON.stringify(G); G.horror = horror;
-    localStorage.setItem(SAVE_KEY, s);
-  } catch (e) { // troppo grande: sacrifica le foto più vecchie
-    const photos = G.inv.filter(it => it.id === 'foto'); if (photos.length > 4) { for (const p of photos.slice(0, photos.length - 4)) if (p.d) p.d.img = ''; try { localStorage.setItem(SAVE_KEY, JSON.stringify(Object.assign({}, G, { horror: undefined }))); } catch (e2) { } }
-  }
+    if (G.feed && G.feed.length > 40) G.feed.length = 40;
+    if (G.news && G.news.length > 120) G.news.length = 120;
+    if (G.notes && G.notes.length > 60) G.notes.length = 60;
+    if (G.mapNotes && G.mapNotes.length > 60) G.mapNotes.length = 60;
+    if (G.npc) for (const k in G.npc) { const s = G.npc[k]; if (s && s.chat && s.chat.length > 24) s.chat = s.chat.slice(-24); }
+  } catch (e) { }
+  const build = () => { G.world = snapshotWorld(); G.shoals = SHOALS; const horror = G.horror; delete G.horror; const s = JSON.stringify(G); G.horror = horror; return s; };
+  const tryWrite = () => { try { localStorage.setItem(SAVE_KEY, build()); G.lastSaved = Date.now(); G.saveFailed = 0; return true; } catch (e) { return false; } };
+  // 1) tentativo pieno
+  if (tryWrite()) return true;
+  // 2) togli le immagini dai post del feed (cosmetiche, pesano molto in base64)
+  try { if (G.feed) for (const p of G.feed) p.img = null; } catch (e) { }
+  if (tryWrite()) return true;
+  // 3) tieni solo le 4 foto più recenti con immagine
+  try { const ph = G.inv.filter(it => it.id === 'foto' && it.d); for (const p of ph.slice(0, Math.max(0, ph.length - 4))) p.d.img = ''; } catch (e) { }
+  if (tryWrite()) return true;
+  // 4) ultima spiaggia: via tutte le immagini delle foto
+  try { const ph = G.inv.filter(it => it.id === 'foto' && it.d); for (const p of ph) p.d.img = ''; } catch (e) { }
+  if (tryWrite()) { toast('💾 Memoria quasi piena: ho salvato alleggerendo le foto.', 'warn'); return true; }
+  // davvero fallito: AVVISA (così non perdi i progressi senza accorgertene)
+  G.saveFailed = (G.saveFailed || 0) + 1;
+  if (G.saveFailed <= 2 || G.saveFailed % 6 === 0) toast('⚠️ Salvataggio non riuscito: memoria del browser piena. Libera spazio (cancella foto/vecchie partite) o salva in uno slot.', 'bad');
+  return false;
 }
 setInterval(() => { if (G && G.player && !G.dead && !$('#game').classList.contains('hidden')) saveGame(); }, 15000);
 addEventListener('beforeunload', () => { if (G && G.player && !G.dead) saveGame(); });
