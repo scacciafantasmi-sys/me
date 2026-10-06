@@ -3603,7 +3603,7 @@ function openHome(b) {
     owner && inside ? { t: '🚪 Bussa', f: () => { closePanel(); openDialog(owner); } } : null,
     b.abandoned ? { t: '🕯️ Esplora la villa', f: () => { closePanel(); exploreVillaLuna(b); } } : null,
     ...(Object.values(JOBS).some(J => placeMatches(J, b)) ? [{ t: '💼 Lavori qui', f: () => { closePanel(); jobBoard(Object.values(JOBS).filter(J => placeMatches(J, b)), '💼 ' + esc(b.n), 'Lavoro a servizio.'); } }] : []),
-    G.job.id && placeMatches(JOBS[G.job.id], b) ? (G.job.onDuty ? { t: '🛠️ Lavora', f: () => { closePanel(); doJobTask(); } } : { t: '⏱️ Timbra l\'entrata', f: () => { closePanel(); clockIn(); } }) : null,
+    G.job.id && placeMatches(JOBS[G.job.id], b) ? (G.job.onDuty ? { t: `🛠️ Lavora (turno ${(G.job.tasks || 0) + 1}/${shiftGoal(JOBS[G.job.id])})`, f: () => { closePanel(); doJobTask(); } } : { t: '⏱️ Timbra l\'entrata', f: () => { closePanel(); clockIn(); } }) : null,
     { t: '📬 Lascia un biglietto nella cassetta', d: G.flags.cards ? 'Un tuo biglietto da visita' : 'Serve un biglietto da visita (Tipografia)', dis: !owner || !G.flags.cards, f: () => { npcState(owner).op += 2; npcState(owner).number = true; closePanel(); toast('Lasci il tuo biglietto. Ora ha il tuo numero (e tu il suo).'); } }];
   openPanel((b.villa ? '🏡 ' : '🚪 ') + esc(b.n), `<canvas class="evimg" id="plArt" width="760" height="110"></canvas><p class="desc">${b.villa ? 'Cancello in ferro battuto, siepi di pitosforo, ' + (b.abandoned ? 'tutto in rovina.' : 'un\'aria di soldi.') : 'Una porta verniciata di verde, un vaso di gerani.'} ${owner ? (inside ? 'Dentro c\'è qualcuno.' : 'Sembra che non ci sia nessuno.') : 'Disabitata.'}</p>${optList(opts)}`, [{ t: 'Vai via', c: 'pri', f: closePanel }]);
   try { interiorArt($('#plArt'), b); } catch (e) { } bindOpts(opts);
@@ -4044,7 +4044,7 @@ function showPlace(b, title, desc, opts, buttons) {
   const here = Object.values(JOBS).filter(J => J.place && placeMatches(J, b) && J.id !== G.job.id);
   if (here.length && b.type !== 'impiego') opts.push({ t: `💼 Lavori qui (${here.length})`, d: here.slice(0, 4).map(J => J.n).join(', ') + (here.length > 4 ? '…' : ''), f: () => { closePanel(); jobBoard(here, '💼 Lavorare qui: ' + esc(b.n), 'Chiedi al titolare. Se hai i requisiti, cominci al prossimo turno.'); } });
   for (const bt of (G.bounties || [])) { if (bt.item && bt.place === b.type && hasInv(bt.item, bt.q || 1)) opts.unshift({ t: `📦 Consegna commissione: ${bt.q || 1}× ${ITEMS[bt.item].n} (${money(bt.reward)})`, d: 'Richiesta dalla bacheca della Piazzetta', f: () => { closePanel(); fulfillBounty(bt.id); } }); }
-  if (G.job.id && G.job.onDuty && placeMatches(JOBS[G.job.id], b) && !opts.some(o => o && /Lavora/.test(o.t))) opts.push({ t: '🛠️ Lavora (' + esc(JOBS[G.job.id].n) + ')', d: 'Il minigioco del tuo mestiere', f: () => { closePanel(); doJobTask(); } });
+  if (G.job.id && G.job.onDuty && placeMatches(JOBS[G.job.id], b) && !opts.some(o => o && /Lavora/.test(o.t))) opts.push({ t: '🛠️ Lavora (' + esc(JOBS[G.job.id].n) + ')', d: `Turno ${(G.job.tasks || 0) + 1}/${shiftGoal(JOBS[G.job.id])} di oggi`, f: () => { closePanel(); doJobTask(); } });
   if (G.job.id && placeMatches(JOBS[G.job.id], b) && !opts.some(o => o && /Timbra/.test(o.t))) opts.push(G.job.onDuty ? { t: '⏱️ Timbra l\'uscita', f: () => { closePanel(); clockOut(); } } : { t: '⏱️ Timbra l\'entrata', f: () => { closePanel(); clockIn(); } });
   const inside = npcsInBuilding(b.id);
   const ppl = inside.length ? `<div class="small muted" style="margin-top:8px">Dentro: ${inside.slice(0, 10).map(n => `<a href="#" data-talk="${n.id}" style="color:var(--cream)">${npcState(n).met ? esc(n.first + ' ' + n.last) : esc(roleLabel(n) || 'uno sconosciuto')}</a>`).join(', ')}${inside.length > 10 ? '…' : ''}</div>` : '';
@@ -4561,6 +4561,11 @@ function placeLabel(p) { if (p === 'farm') return 'Limoneto di Anavetrata'; if (
 function playerHereType(t) { const c = playerCell(); return c.b.some(id => W.buildings[id].type === t); }
 function quitJob(silent) { if (!G.job.id) return; if (G.job.onDuty) clockOut(true); if (!silent) toast('Ti sei licenziato.'); G.job = { id: null, onDuty: false, warnings: 0 }; refreshSide(); }
 function inShiftNow(J) { const h = hourOf(); if (J.hours[0] === 0 && J.hours[1] >= 24) return true; if (J.hours[1] > 24) return h >= J.hours[0] - 0.5 || h < J.hours[1] - 24; return h >= J.hours[0] - 0.5 && h < J.hours[1]; }
+// si timbra l'entrata solo vicino all'inizio del turno (da 30 min prima a 3 ore dopo). I servizi h24 sempre.
+function canClockIn(J) { if (J.hours[0] === 0 && J.hours[1] >= 24) return true; const ss = (((hourOf() - J.hours[0]) % 24) + 24) % 24; return ss <= 3 || ss >= 23.5; }
+// quanti "turni di attività" compongono una giornata di lavoro; al raggiungimento il turno si chiude da solo
+const SHIFT_GOAL = { telecamere: 1, polizia: 3, avvocato: 2, grafica: 3, camion: 3, furto: 4, farmacia: 3, tech: 3, medico: 4, charter: 2, giornalismo: 3, consegne: 4, pesca: 3 };
+function shiftGoal(J) { return SHIFT_GOAL[J.task] || 4; }
 // sabato e domenica si lavora solo nei servizi che per forza aprono 7 giorni (sanità, sicurezza, ristorazione, ospitalità, mare, trasporti)
 const WEEKEND_OPEN_CATS = ['salute', 'sicurezza', 'ristorazione', 'ospitalita', 'mare', 'trasporti'];
 function worksWeekend(J) { return WEEKEND_OPEN_CATS.includes(J.cat); }
@@ -4569,6 +4574,7 @@ function clockIn() {
   const J = JOBS[G.job.id];
   if (isWeekend() && !worksWeekend(J)) return toast(`${dayOfWeek() === 6 ? 'Sabato' : 'Domenica'}: oggi ${J.place ? 'è chiuso' : 'non si lavora'}. Goditi il weekend, si torna lunedì.`, 'warn');
   if (!inShiftNow(J)) return toast(`Il tuo turno è dalle ${J.hours[0]}:00 alle ${J.hours[1] % 24}:00.`, 'warn');
+  if (!canClockIn(J)) return toast(`Si timbra l'entrata solo a inizio turno: presentati verso le ${J.hours[0]}:00 (entro le prime ore), non a metà giornata.`, 'warn');
   G.job.onDuty = true; G.job.start = G.min; G.job.lastShift = G.day; G.job.tasks = 0;
   if (J.task === 'polizia' && hasInv('divisa')) G.player.wear = 'divisa';
   toast(`⏱️ Timbrato. ${J.n}: in servizio.`); AU.beep(880, 0.1, 'square', 0.06);
@@ -4578,8 +4584,8 @@ function clockIn() {
 function clockOut(silent) {
   const J = JOBS[G.job.id]; if (!G.job.onDuty) return;
   const hrs = (G.min - G.job.start) / 60; G.job.onDuty = false; G.job.hours = (G.job.hours || 0) + hrs; G.stats.workHours = (G.stats.workHours || 0) + hrs;
-  // sei pagato solo per il lavoro che fai davvero: ogni "turno di attività" (minigioco) vale fino a ~1,5 ore di paga. Timbrare e stare fermi non frutta nulla.
-  const tasks = G.job.tasks || 0; const paidHrs = Math.min(hrs, tasks * 1.5);
+  // sei pagato solo per il lavoro che fai davvero: ogni "turno di attività" vale ~1 ora di paga, fino al massimo della giornata. Timbrare e stare fermi non frutta nulla.
+  const tasks = G.job.tasks || 0; const paidHrs = Math.min(hrs, tasks * 1.0, shiftGoal(J) * 1.0);
   const pay = Math.round(J.pay * paidHrs * (1 + (G.job.rank || 0) * 0.15) * (1 + skill(J.sk) / 400));
   if (pay > 0) { earn(pay, `Paga: ${Math.round(paidHrs * 10) / 10} ore lavorate come ${J.n.toLowerCase()}`, 'bank'); G.job.earned = (G.job.earned || 0) + pay; }
   else if (hrs > 0.5 && !silent) toast('Hai timbrato ma non hai lavorato: niente paga. Usa «🛠️ Lavora» sul posto per fare il tuo turno.', 'warn');
@@ -4600,7 +4606,7 @@ function jobPanel() {
   const J = JOBS[G.job.id]; const b = jobPlaceB(G.job.id);
   openPanel('💼 ' + esc(J.n), `<p class="desc">${esc(J.d)}</p><p class="small">${JOB_CATS[J.cat]} · Turno: ${J.hours[0]}:00–${J.hours[1] % 24}:00 · Paga: ${J.pay ? money(J.pay) + '/ora' : 'a provvigione'}${G.job.rank ? ' (+' + G.job.rank * 15 + '% anzianità)' : ''} · Ore: ${Math.round(G.job.hours || 0)} · Richiami: ${G.job.warnings}/3</p>${b ? `<p class="small muted">Posto di lavoro: ${esc(b.n)} — ${esc(b.addr)}</p>` : ''}`, [
     b ? { t: '📍 GPS sul posto di lavoro', f: () => { G.waypoint = { cx: b.cell[0], cy: b.cell[1] }; closePanel(); } } : null,
-    G.job.onDuty && atWork() ? { t: '🛠️ Lavora', c: 'pri', f: () => { closePanel(); doJobTask(); } } : null,
+    G.job.onDuty && atWork() ? { t: `🛠️ Lavora (turno ${(G.job.tasks || 0) + 1}/${shiftGoal(J)})`, c: 'pri', f: () => { closePanel(); doJobTask(); } } : null,
     G.job.onDuty ? { t: '⏱️ Timbra l\'uscita', f: () => { closePanel(); clockOut(); } } : (atWork() || !b ? { t: '⏱️ Timbra l\'entrata', c: 'pri', f: () => { closePanel(); clockIn(); } } : null),
     { t: 'Licenziati', c: 'bad', f: () => { closePanel(); quitJob(); } }, { t: 'Chiudi', f: closePanel }]);
 }
@@ -4638,7 +4644,18 @@ const JOB_FLAVOR = {
 function doJobTask(jobId, owner) {
   const id = jobId || G.job.id, J = JOBS[id], sk = J.sk;
   const fl = JOB_FLAVOR[id] || {};
-  const done = (pay, extra) => { if (pay > 0) earn(pay, extra || 'Mance ed extra'); if (!owner) G.job.tasks = (G.job.tasks || 0) + 1; refreshSide(); };
+  const done = (pay, extra) => {
+    if (pay > 0) earn(pay, extra || 'Mance ed extra');
+    if (!owner) {
+      G.job.tasks = (G.job.tasks || 0) + 1;
+      const goal = shiftGoal(J);
+      if (G.job.onDuty && G.job.id === id) {
+        if (G.job.tasks >= goal) { setTimeout(() => { if (G.job.onDuty && G.job.id === id && (G.job.tasks || 0) >= goal) { toast('✅ Turno completato: hai finito il lavoro di oggi. Timbratura d\'uscita automatica.', 'money'); clockOut(); } }, 650); }
+        else toast(`🛠️ Turno ${G.job.tasks}/${goal} di oggi.`);
+      }
+    }
+    refreshSide();
+  };
   switch (J.task) {
     case 'bar': return minigameRecipe('bar', s => { advance(60); gainSkill('cucina', 1 + s / 4); done(Math.round(s * 2.5), 'Mance al banco'); if (owner) bizBoost(s); });
     case 'cucina': return minigameRecipe('cucina', s => { advance(90); gainSkill('cucina', 2 + s / 4); done(Math.round(s * 2), 'Extra di cucina'); if (owner) bizBoost(s); });
@@ -4750,7 +4767,7 @@ const PHARM_CUSTOMERS = [
 function pharmacyShift(J, done) {
   const N = 7; let k = 0, score = 0;
   const step = () => {
-    if (k >= N) { advance(120); gainSkill('medicina', 2 + score / 2); done(score * 7 + 6, 'Turno in farmacia'); if (score >= 6) spreadRumor({ kind: 'gift', text: 'è un farmacista di cui fidarsi', mag: 2 }); toast(`💊 Turno chiuso: ${score}/${N} corretti.`, score >= 5 ? 'money' : 'warn'); return; }
+    if (k >= N) { closePanel(); advance(120); gainSkill('medicina', 2 + score / 2); done(score * 7 + 6, 'Turno in farmacia'); if (score >= 6) spreadRumor({ kind: 'gift', text: 'è un farmacista di cui fidarsi', mag: 2 }); toast(`💊 Turno chiuso: ${score}/${N} corretti.`, score >= 5 ? 'money' : 'warn'); return; }
     if (k % 2 === 0) { // archivia un farmaco
       const [med, right] = pick(PHARM_MEDS);
       const o = PHARM_DRAWERS.map((d, i) => ({ t: '🗄️ ' + d, f: () => { if (i === right) { score++; AU.sfx('click'); } else AU.sfx('bad'); k++; step(); } }));
@@ -4795,7 +4812,7 @@ function pcComune(J, done) {
   const bar = `<div style="display:flex;justify-content:space-between;align-items:center;height:30px;padding:0 10px;background:linear-gradient(180deg,rgba(255,255,255,.25),rgba(255,255,255,.05));border-top:1px solid rgba(255,255,255,.4);position:absolute;left:0;right:0;bottom:0;font:12px Segoe UI,system-ui,sans-serif;color:#eaf4ff">
     <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#9fe3ff,#1c6fb8);box-shadow:0 0 6px #4ab6ff"></span> VetrOS</span><span>${hhmm()}</span></div>`;
   const render = () => {
-    if (k >= N) { advance(90); gainSkill('hacking', 2 + score); done(score * 9 + 6, 'Interventi IT al Comune'); if (score >= 5) spreadRumor({ kind: 'gift', text: 'tiene in piedi i computer del Comune', mag: 2 }); toast(`🖥️ Turno chiuso: ${score}/${N} ticket risolti bene.`, score >= 4 ? 'money' : 'warn'); return; }
+    if (k >= N) { closePanel(); advance(90); gainSkill('hacking', 2 + score); done(score * 5 + 4, 'Interventi IT al Comune'); if (score >= 5) spreadRumor({ kind: 'gift', text: 'tiene in piedi i computer del Comune', mag: 2 }); toast(`🖥️ Sessione chiusa: ${score}/${N} ticket risolti bene.`, score >= 4 ? 'money' : 'warn'); return; }
     const [q, a] = pool[k]; const opts = shuffle(a.map((t, i) => ({ t, ok: i === 0 })));
     const body = `<div style="position:relative;height:330px;border-radius:10px;overflow:hidden;background:linear-gradient(135deg,#17547f,#2f86bf 60%,#56a7d6);font-family:Segoe UI,system-ui,sans-serif">
       <div style="position:absolute;top:14px;left:14px;right:14px;background:rgba(240,248,255,.92);border:1px solid rgba(255,255,255,.7);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35);overflow:hidden">
