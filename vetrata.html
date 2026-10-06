@@ -7259,12 +7259,33 @@ function plantSeedHere() {
   if (!canPlantHere()) return toast('Qui non puoi piantare: scegli un terreno libero, lontano dalla strada, o una tua base al chiuso.', 'warn');
   G.grow = G.grow || { plots: [] };
   if (G.grow.plots.length >= 12) return toast('Hai troppe piante in giro: raccogli prima, o rischi grosso.', 'warn');
-  const c = playerCell(); const cover = plantCover(c.cx, c.cy);
-  removeInv('seme_erba', 1);
-  G.grow.plots.push({ day: G.day, watered: G.day, cx: c.cx, cy: c.cy, zone: cellTitle(c), cover });
+  const c = playerCell();
+  // con la crew si pianta di più in un colpo solo: ognuno mette a dimora un seme
+  const crew = (typeof npcsFollowing === 'function' ? npcsFollowing() : []);
+  const nPlant = Math.max(1, Math.min(1 + crew.length, 12 - G.grow.plots.length, countInv('seme_erba')));
+  for (let i = 0; i < nPlant; i++) { const cover = plantCover(c.cx, c.cy); removeInv('seme_erba', 1); G.grow.plots.push({ day: G.day, watered: G.day, cx: c.cx, cy: c.cy, zone: cellTitle(c), cover, crew: crew.length }); }
   advance(20);
-  toast(`🌱 Seme piantato (${plantCoverLabel(c.cx, c.cy)}). Annaffia e torna fra ${DRUGS.erba.growDays} giorni.`, 'warn');
+  if (crew.length && nPlant > 1) { for (const m of crew) { try { npcState(m).op += 2; } catch (e) { } } try { addRep('brigata', 2); } catch (e) { } toast(`🌱 Con la crew avete piantato ${nPlant} semi (${plantCoverLabel(c.cx, c.cy)}). Il raccolto sarà più grosso, e la Brigata apprezza.`, 'warn'); }
+  else toast(`🌱 Seme piantato (${plantCoverLabel(c.cx, c.cy)}). Annaffia e torna fra ${DRUGS.erba.growDays} giorni.`, 'warn');
   refreshSide();
+}
+function sellSeedsToNpcs(back) {
+  const have = countInv('seme_erba');
+  if (!have) return toast('Non hai semi da vendere.', 'warn');
+  // compratori "intelligenti": chi è nel giro (brigata/carannante/tossici) o chi coltiva
+  const buyers = NPCS.filter(n => { const st = npcState(n); return st.alive && !(st.jailed && st.jailed > G.day) && (n.addict || n.faction === 'brigata' || n.faction === 'carannante' || n.role === 'contadino'); });
+  if (!buyers.length) return toast('Nessuno nel giro vuole semi, per ora.', 'warn');
+  const demand = Math.min(have, 1 + Math.floor(buyers.length / 3) + ri(0, 2));
+  const unit = Math.round((ITEMS.seme_erba.price || 60) * (0.55 + Math.random() * 0.5) * (1 + (G.island.crime || 20) / 200));
+  const total = demand * unit;
+  removeInv('seme_erba', demand);
+  G.player.dirtyCash = (G.player.dirtyCash || 0) + total; G.stats.deals = (G.stats.deals || 0) + 1;
+  const b = pick(buyers); npcState(b).op += 2; npcState(b).met = true;
+  const crew = (typeof npcsFollowing === 'function' ? npcsFollowing() : []);
+  if (crew.length) { for (const m of crew) { try { npcState(m).op += 1; } catch (e) { } } try { addRep('brigata', 1); } catch (e) { } }
+  if (chance(0.12)) { G.wanted.heat = clamp(G.wanted.heat + 4, 0, 100); updateWantedLevel(); }
+  toast(`🫳 ${esc(b.first || 'Un contatto')} e altri comprano ${demand} ${demand > 1 ? 'semi' : 'seme'}: +${money(total)} (sporchi).`, 'money');
+  if (back) back();
 }
 function growRaidCheck() {
   if (!G.grow || !G.grow.plots || !G.grow.plots.length) return;
@@ -7295,8 +7316,9 @@ function openColtivazione() {
       return `<div class="msg">🪴 ${pl.zone ? esc(pl.zone) : 'Pianta'} #${k + 1}${cov != null ? ` <span class="muted tiny">copertura ${cov}%</span>` : ''} — ${state}${here ? '' : ' <span class="muted tiny">(non sei qui)</span>'}<div class="row" style="margin-top:4px">${btn}</div></div>`;
     }).join('');
     const canHere = canPlantHere();
-    $('#growBody').innerHTML = `<p class="small">Piante: ${G.grow.plots.length}. Puoi piantare <b>ovunque</b>: più il posto è nascosto e lontano da occhi indiscreti, meno rischi che te la trovino. Al chiuso, in una tua base (capannone, rudere, casa), la copertura è quasi totale. Raccogli, essicca, lavora in dosi, poi spaccia di notte.</p>${rows || '<p class="muted">Nessuna pianta.</p>'}<div style="margin-top:8px"><button class="btn sm" id="plant" ${!hasInv('seme_erba') || !canHere ? 'disabled' : ''}>🌱 Pianta qui${hasInv('seme_erba') ? (canHere ? ' · ' + plantCoverLabel() : ' · non qui') : ' (niente semi)'}</button> ${hasInv('erba_verde') ? `<button class="btn sm pri" id="dry">🌾 Essicca e lavora il raccolto (${countInv('erba_verde')})</button>` : ''}</div>`;
+    $('#growBody').innerHTML = `<p class="small">Piante: ${G.grow.plots.length}. Puoi piantare <b>ovunque</b>: più il posto è nascosto e lontano da occhi indiscreti, meno rischi che te la trovino. Al chiuso, in una tua base (capannone, rudere, casa), la copertura è quasi totale. Raccogli, essicca, lavora in dosi, poi spaccia di notte.</p>${rows || '<p class="muted">Nessuna pianta.</p>'}<div style="margin-top:8px"><button class="btn sm" id="plant" ${!hasInv('seme_erba') || !canHere ? 'disabled' : ''}>🌱 Pianta qui${hasInv('seme_erba') ? (canHere ? ' · ' + plantCoverLabel() : ' · non qui') : ' (niente semi)'}</button> ${hasInv('erba_verde') ? `<button class="btn sm pri" id="dry">🌾 Essicca e lavora il raccolto (${countInv('erba_verde')})</button>` : ''} ${hasInv('seme_erba') ? `<button class="btn sm" id="sellSeed">🫳 Vendi semi ai contatti (${countInv('seme_erba')})</button>` : ''}</div>`;
     if ($('#plant')) $('#plant').onclick = () => { plantSeedHere(); render(); };
+    if ($('#sellSeed')) $('#sellSeed').onclick = () => { sellSeedsToNpcs(render); };
     document.querySelectorAll('[data-water]').forEach(b => b.onclick = () => { if (!hasInv('acqua')) return toast('Ti serve una bottiglia d\'acqua per annaffiare.', 'warn'); removeInv('acqua', 1); const pl = G.grow.plots[+b.dataset.water]; pl.watered = G.day; pl.wateredCount = (pl.wateredCount || 0) + 1; advance(10); toast('💧 Pianta annaffiata con una bottiglia d\'acqua.'); render(); });
     document.querySelectorAll('[data-rip]').forEach(b => b.onclick = () => { G.grow.plots.splice(+b.dataset.rip, 1); render(); });
     document.querySelectorAll('[data-gps]').forEach(b => b.onclick = () => { const pl = G.grow.plots[+b.dataset.gps]; if (pl.cx != null) { G.waypoint = { cx: pl.cx, cy: pl.cy }; toast('📍 GPS impostato sulla piantagione.'); } });
@@ -7331,12 +7353,14 @@ function openSpaccio() {
   const demand = 1 + (G.island.crime || 20) / 100 + (isNight() ? 0.3 : 0);
   const opts = doses.map(it => { const I = ITEMS[it.id]; const price = Math.round(I.price * demand * (0.8 + Math.random() * 0.4)); return { t: `${I.ico} Vendi ${I.n.toLowerCase()} — ~${money(price)}`, d: `Ne hai ${countInv(it.id)} · rischio ${['','basso','medio','alto'][Math.min(3,Math.round((I.heat||10)/14))]}`, f: () => dealDose(it.id, price) }; });
   opts.push({ t: '↩︎ Lascia perdere', f: closePanel });
-  openPanel('🌙 Spaccio', `<p class="desc">Un cliente si avvicina nell'ombra, lo sguardo nervoso. ${G.wanted.level ? '<span class="badc">Sei già nel mirino della Polizia.</span>' : ''} Ogni vendita attira l'attenzione: a volte il cliente è un civetta.</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
+  const crew = (typeof npcsFollowing === 'function' ? npcsFollowing() : []);
+  openPanel('🌙 Spaccio', `<p class="desc">Un cliente si avvicina nell'ombra, lo sguardo nervoso. ${G.wanted.level ? '<span class="badc">Sei già nel mirino della Polizia.</span>' : ''} Ogni vendita attira l'attenzione: a volte il cliente è un civetta.${crew.length ? ` <span class="good">La crew (${crew.length}) fa da palo: meno rischi e si smercia di più.</span>` : ''}</p>${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }]); bindOpts(opts);
 }
 function dealDose(id, price) {
   const I = ITEMS[id];
-  // il cliente può essere un poliziotto in borghese
-  const bustChance = clamp(0.06 + G.wanted.level * 0.05 + (I.heat || 10) / 300 + (G.pol.crackdown ? 0.08 : 0) - skill('eloquenza') / 400, 0.03, 0.5);
+  // la crew fa da palo: meno rischio di finire in una trappola
+  const crew = (typeof npcsFollowing === 'function' ? npcsFollowing() : []);
+  const bustChance = clamp(0.06 + G.wanted.level * 0.05 + (I.heat || 10) / 300 + (G.pol.crackdown ? 0.08 : 0) - skill('eloquenza') / 400 - Math.min(0.18, crew.length * 0.05), 0.02, 0.5);
   advance(10);
   if (chance(bustChance)) {
     closePanel();
@@ -7345,12 +7369,25 @@ function dealDose(id, price) {
       { t: '🤝 Consegnati', c: 'pri', f: () => { closePanel(); G.record.pending.push({ type: 'spaccio', day: G.day }); if (hasContraband()) G.record.pending.push({ type: 'detenzione', day: G.day }); arrestPlayer('Arrestato per spaccio'); } }]);
     return;
   }
-  removeInv(id, 1); G.player.dirtyCash = (G.player.dirtyCash || 0) + price; G.stats.deals = (G.stats.deals || 0) + 1;
+  removeInv(id, 1);
+  // con la crew si smercia di più e il giro frutta meglio (profitto condiviso: parte va alla lealtà della crew)
+  let extra = 0, crewNote = '';
+  if (crew.length) {
+    const bonus = Math.round(price * Math.min(0.5, crew.length * 0.18));
+    extra = bonus;
+    for (const m of crew) { try { npcState(m).op += 1; } catch (e) { } }
+    try { addRep('brigata', 1); } catch (e) { }
+    // se ne hai, la crew piazza anche una dose in più
+    if (countInv(id) > 0 && chance(0.4 + Math.min(0.4, crew.length * 0.12))) { removeInv(id, 1); extra += price; crewNote = ' La crew ha piazzato una dose in più.'; }
+    crewNote = ' La crew ha fatto da palo e smerciato con te.' + crewNote;
+  }
+  const gain = price + extra;
+  G.player.dirtyCash = (G.player.dirtyCash || 0) + gain; G.stats.deals = (G.stats.deals || 0) + 1;
   G.island.crime = Math.min(100, (G.island.crime || 20) + (I.heat || 10) / 20);
   if (chance(0.3 + (I.heat || 10) / 200)) { G.wanted.heat = clamp(G.wanted.heat + (I.heat || 10) / 3, 0, 100); updateWantedLevel(); }
   // un tossico conosciuto diventa più legato (e più rovinato)
   const addicts = npcsHere().filter(n => n.addict); if (addicts.length) { const a = addicts[0]; npcState(a).op += 2; npcState(a).addiction = Math.min(100, (npcState(a).addiction || 40) + 8); }
-  openPanel('🌙 Spaccio', `<p class="desc">Passaggio di mano veloce, poi sparisce nel buio. +${money(price)}.</p>`, [{ t: 'Continua', c: 'pri', f: () => { closePanel(); openSpaccio(); } }, { t: 'Basta per stanotte', f: closePanel }]);
+  openPanel('🌙 Spaccio', `<p class="desc">Passaggio di mano veloce, poi sparisce nel buio. +${money(gain)}.${esc(crewNote)}</p>`, [{ t: 'Continua', c: 'pri', f: () => { closePanel(); openSpaccio(); } }, { t: 'Basta per stanotte', f: closePanel }]);
 }
 
 /* ---------- Uso e dipendenza del giocatore ---------- */
