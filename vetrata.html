@@ -6839,23 +6839,132 @@ function countInv(id) { return G.inv.filter(it => it.id === id).reduce((s, it) =
 /* ---------- Il computer VetrOS ---------- */
 function usePC(portable) {
   if (!portable && !(playerCell().b.some(id => W.buildings[id].playerHome) || (G.home && playerCell().b.includes(G.home.b)))) return toast('Il computer fisso si usa solo a casa tua.', 'warn');
-  const sig = signalHere(), online = sig > 10 || hasInv('starlink') || portable && false;
-  const apps = [
-    { t: '🌐 VetrNet (il social del server)', d: online ? 'Vetragram, bacheca, messaggi' : 'serve connessione', dis: !online, f: () => { closePanel(); openFeed(); } },
-    { t: '🏢 VetrNet Business — attività dell\'isola', d: online ? 'Directory, siti, sponsor' : 'serve connessione', dis: !online, f: () => { closePanel(); openVetrNet(); } },
-    { t: '🏢 Le mie imprese', d: 'Contabilità e gestione', f: () => { closePanel(); openCameraCommercio(); } },
-    { t: '📱 Profilo social e monetizzazione', d: 'Follower, sponsor, influencer', dis: !online, f: () => { closePanel(); openSocialHub(); } },
-    { t: '🏦 Home banking', d: online ? money(G.bank) : 'offline', dis: !online, f: () => { closePanel(); togglePhone(true); phoneApp = 'bank'; renderPhone(); } },
-    { t: '📈 Borsa Insulare', dis: !online, f: () => { closePanel(); togglePhone(true); phoneApp = 'borsa'; renderPhone(); } },
-    { t: '🗂️ Anagrafe e Camera di Commercio', d: 'cerca persone, case, attività', dis: !online, f: () => { closePanel(); openAnagrafeNet(); } },
-    hasInv('rig_analisi') || hasInv('rig_analisi') ? null : null,
-    { t: '🔎 Analisi delle prove', d: hasInv('rig_analisi') ? 'foto, audio, file cifrati' : 'serve una stazione di analisi forense', dis: !hasInv('rig_analisi'), f: () => { closePanel(); openAnalisi(); } },
-    { t: '🧩 Archivi protetti', d: 'Comune, Questura, Ospedale — serve informatica', f: () => { closePanel(); openArchivi(); } },
-    (G.player.dirtyCash || 0) > 0 ? { t: '💰 Ripulisci il contante sporco', d: money(G.player.dirtyCash) + ' da riciclare', f: () => { closePanel(); launderMoney(); } } : null,
-    (hasInv('bug') || hasInv('mic_laser')) ? { t: '🎯 Spionaggio industriale', d: 'Ruba strategie a un\'azienda rivale', f: () => { closePanel(); industrialEspionage(); } } : null,
-    { t: '📨 Posta elettronica', f: () => { closePanel(); openPanel('📨 Posta VetrOS', (G.mailbox && G.mailbox.length ? G.mailbox : []).concat(G.msgs.slice(0, 8).map(m => ({ from: m.from, text: m.text }))).map(m => `<div class="msg"><b>${esc(m.from || 'Sistema')}</b><br>${esc(m.text || m.body || '')}</div>`).join('') || '<p class="muted">Nessuna mail.</p>', [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); } }
+  openVetrOS(portable);
+}
+/* ===== VetrOS: desktop vero (stile Aero) con icone, taskbar e browser ===== */
+function pcOnline() { return signalHere() > 10 || hasInv('starlink'); }
+function openVetrOS(portable) {
+  const online = pcOnline();
+  const ICONS = [
+    { ic: '🌐', t: 'VetrBrowser', on: true, f: () => vetrBrowser('home') },
+    { ic: '📸', t: 'Vetragram', on: true, f: () => { closePanel(); openFeed(); } },
+    { ic: '🏢', t: 'Le mie imprese', on: false, f: () => { closePanel(); openCameraCommercio(); } },
+    { ic: '🏦', t: 'Home banking', on: true, f: () => vetrBrowser('banca') },
+    { ic: '📈', t: 'Borsa', on: true, f: () => vetrBrowser('borsa') },
+    { ic: '🗂️', t: 'Anagrafe', on: true, f: () => { closePanel(); openAnagrafeNet(); } },
+    { ic: '📨', t: 'Posta', on: false, f: () => vetrMail() },
+    { ic: '📱', t: 'Monetizza', on: true, f: () => { closePanel(); openSocialHub(); } },
+    hasInv('rig_analisi') ? { ic: '🔎', t: 'Analisi', on: false, f: () => { closePanel(); openAnalisi(); } } : null,
+    { ic: '🧩', t: 'Archivi', on: true, f: () => { closePanel(); openArchivi(); } },
+    (G.player.dirtyCash || 0) > 0 ? { ic: '💰', t: 'Ricicla', on: false, f: () => { closePanel(); launderMoney(); } } : null,
+    (hasInv('bug') || hasInv('mic_laser')) ? { ic: '🎯', t: 'Spionaggio', on: true, f: () => { closePanel(); industrialEspionage(); } } : null
   ].filter(Boolean);
-  openPanel((portable ? '💻 ' : '🖥️ ') + 'VetrOS', `<div class="vetros"><div class="vetros-bar">VetrOS 9.1 · utente: ${esc(G.player.first.toLowerCase())}@vetrata · ${online ? '🟢 in rete' : '🔴 offline'}</div><p class="desc">La scrivania si illumina. Un rumore di ventola, il cursore che lampeggia.</p>${optList(apps)}</div>`, [{ t: 'Spegni', c: 'pri', f: closePanel }], { wide: true }); bindOpts(apps);
+  const iconHTML = ICONS.map((a, i) => `<button data-ic="${i}" ${a.on && !online ? 'disabled' : ''} style="all:unset;cursor:pointer;width:84px;text-align:center;color:#eaf4ff;text-shadow:0 1px 2px rgba(0,0,0,.6);padding:6px 0;border-radius:8px">
+    <div style="font-size:30px;filter:drop-shadow(0 2px 2px rgba(0,0,0,.4))">${a.ic}</div><div style="font-size:11px;margin-top:2px;opacity:${a.on && !online ? 0.4 : 1}">${esc(a.t)}</div></button>`).join('');
+  const body = `<div style="position:relative;height:420px;border-radius:10px;overflow:hidden;background:linear-gradient(160deg,#1c5a86,#3f8fc4 55%,#7fc1e6);font-family:Segoe UI,system-ui,sans-serif">
+    <div style="position:absolute;inset:0;background:radial-gradient(ellipse at 70% 20%,rgba(255,255,255,.25),transparent 60%)"></div>
+    <div style="position:absolute;top:14px;left:14px;right:14px;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start">${iconHTML}</div>
+    <div style="position:absolute;left:0;right:0;bottom:0;height:34px;background:linear-gradient(180deg,rgba(255,255,255,.28),rgba(10,40,70,.5));border-top:1px solid rgba(255,255,255,.4);display:flex;align-items:center;justify-content:space-between;padding:0 10px;color:#eaf4ff;font-size:12px">
+      <span style="display:inline-flex;align-items:center;gap:7px"><span style="width:20px;height:20px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#9fe3ff,#1c6fb8);box-shadow:0 0 7px #4ab6ff"></span> Start</span>
+      <span style="opacity:.9">VetrOS 9.1 · ${esc(G.player.first.toLowerCase())}@vetrata · ${online ? '🟢 in rete' : '🔴 offline'}</span>
+      <span>${hhmm()}</span></div></div>`;
+  openPanel((portable ? '💻 ' : '🖥️ ') + 'VetrOS', body, [{ t: 'Spegni', c: 'pri', f: closePanel }], { wide: true, noPad: true });
+  document.querySelectorAll('[data-ic]').forEach(b => b.onclick = () => { const a = ICONS[+b.dataset.ic]; if (a.on && !online) return toast('Serve una connessione a internet.', 'warn'); a.f(); });
+}
+function vetrMail() {
+  const mails = (G.mailbox && G.mailbox.length ? G.mailbox : []).concat(G.msgs.slice(0, 8).map(m => ({ from: m.from, text: m.text })));
+  openPanel('📨 Posta VetrOS', `<div class="vetros">${mails.map(m => `<div class="msg"><b>${esc(m.from || 'Sistema')}</b><br>${esc(m.text || m.body || '')}</div>`).join('') || '<p class="muted">Nessuna mail.</p>'}</div>`, [{ t: '← Desktop', c: 'pri', f: () => openVetrOS(false) }, { t: 'Chiudi', f: closePanel }], { wide: true });
+}
+/* ----- VetrBrowser: barra indirizzi, segnalibri, cronologia, siti veri ----- */
+let vetrHist = [];
+function vetrBrowser(url) {
+  if (!pcOnline()) return toast('Serve una connessione a internet.', 'warn');
+  if (!url) url = vetrHist[vetrHist.length - 1] || 'home';
+  if (vetrHist[vetrHist.length - 1] !== url) vetrHist.push(url);
+  if (vetrHist.length > 40) vetrHist.shift();
+  const site = renderSite(url);
+  const marks = [['home', '🏠 Portale'], ['vetragram', '📸 Vetragram'], ['gazzetta', '📰 Gazzetta'], ['borsa', '📈 Borsa'], ['banca', '🏦 Banca'], ['imprese', '🏢 Imprese']];
+  const chrome = `<div style="background:#dce7f2;border-radius:10px;overflow:hidden;border:1px solid #9fc2e0;font-family:Segoe UI,system-ui,sans-serif">
+    <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:linear-gradient(180deg,#eaf4ff,#cfe0f0);border-bottom:1px solid #9fc2e0">
+      <button id="vbBack" style="all:unset;cursor:pointer;color:#1b3a57;font-size:16px;padding:0 4px" title="Indietro">←</button>
+      <button id="vbHome" style="all:unset;cursor:pointer;color:#1b3a57;font-size:15px;padding:0 4px" title="Portale">⌂</button>
+      <div style="flex:1;background:#fff;border:1px solid #a9cbe6;border-radius:12px;padding:3px 10px;color:#2a4a66;font-size:12px;display:flex;align-items:center;gap:6px"><span style="color:#4a7a4a">🔒</span> vetr://${esc(url)}</div>
+    </div>
+    <div style="display:flex;gap:4px;padding:5px 8px;background:#e6eef7;border-bottom:1px solid #c0d4e6;flex-wrap:wrap">${marks.map(([u, n]) => `<button data-nav="${u}" style="all:unset;cursor:pointer;font-size:11px;color:${u === url.split(':')[0] ? '#1b5e9a' : '#3a5a76'};background:${u === url.split(':')[0] ? '#cfe3f7' : 'transparent'};padding:2px 8px;border-radius:10px">${n}</button>`).join('')}</div>
+    <div style="height:360px;overflow:auto;background:#fff">${site.html}</div>
+  </div>`;
+  openPanel('🌐 ' + esc(site.title), chrome, [{ t: '🖥️ Desktop', c: 'pri', f: () => openVetrOS(false) }, { t: 'Chiudi', f: closePanel }], { wide: true, noPad: true });
+  $('#vbBack').onclick = () => { vetrHist.pop(); const prev = vetrHist.pop(); vetrBrowser(prev || 'home'); };
+  $('#vbHome').onclick = () => vetrBrowser('home');
+  document.querySelectorAll('#panel [data-nav]').forEach(el => el.onclick = () => vetrBrowser(el.dataset.nav));
+  document.querySelectorAll('#panel [data-act]').forEach(el => el.onclick = () => { const fn = VETR_ACTIONS[el.dataset.act]; if (fn) fn(el.dataset.arg); });
+  if (site.after) try { site.after(); } catch (e) { }
+}
+const VETR_ACTIONS = {
+  tool_borsa: () => { closePanel(); togglePhone(true); phoneApp = 'borsa'; renderPhone(); },
+  tool_banca: () => { closePanel(); togglePhone(true); phoneApp = 'bank'; renderPhone(); },
+  tool_imprese: () => { closePanel(); openCameraCommercio(); },
+  tool_feed: () => { closePanel(); openFeed(); },
+  company: (id) => { const c = companyById(id); if (c && c.owner === 'player') { closePanel(); openCompany(id); } }
+};
+function siteShell(headColor, head, sub, inner) {
+  return `<div style="font-family:Segoe UI,system-ui,sans-serif;color:#1e2b38">
+    <div style="background:${headColor};color:#fff;padding:16px 18px"><div style="font-size:20px;font-weight:700">${head}</div><div style="font-size:12px;opacity:.9;margin-top:2px">${sub}</div></div>
+    <div style="padding:14px 16px">${inner}</div></div>`;
+}
+function renderSite(url) {
+  const [base, arg] = url.split(':');
+  if (base === 'vetragram') {
+    const posts = (G.feed || []).slice(0, 14).map(p => `<div style="border:1px solid #e2e8ef;border-radius:10px;margin-bottom:10px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fafcff"><span style="width:26px;height:26px;border-radius:50%;background:${p.nid != null && NPCS[p.nid] ? NPCS[p.nid].look.shirt : '#88a'};display:inline-block"></span><b style="font-size:13px">${esc(p.by)}</b><span style="margin-left:auto;color:#8a97a4;font-size:11px">${esc(dateDay(p.day))} ${esc(p.t)}</span></div>
+      ${p.img ? `<img src="${p.img}" style="width:100%;display:block">` : ''}
+      <div style="padding:8px 10px;font-size:13px">${esc(p.text)}</div>
+      <div style="padding:4px 10px 10px;color:#c0392b;font-size:12px">♥ ${p.likes}</div></div>`).join('') || '<p style="color:#8a97a4">Ancora niente nel feed.</p>';
+    return { title: 'Vetragram', html: siteShell('linear-gradient(90deg,#c0398a,#e86aae)', '📸 Vetragram', 'Il social dell\'isola', `<div style="text-align:center;margin-bottom:10px"><button data-act="tool_feed" style="all:unset;cursor:pointer;background:#c0398a;color:#fff;padding:6px 14px;border-radius:14px;font-size:13px">✍️ Apri l'app per pubblicare</button></div>${posts}`) };
+  }
+  if (base === 'gazzetta') {
+    const arts = (G.news || []).slice(0, 12).map(n => `<div style="border-bottom:1px solid #eee;padding:10px 0"><div style="font-size:11px;color:#a14a35;text-transform:uppercase;letter-spacing:.5px">${esc(n.tag || 'cronaca')} · ${esc(dateDay(n.day))}</div><div style="font-size:15px;font-weight:700;margin:3px 0">${esc(n.head)}</div><div style="font-size:12px;color:#55606a">${esc(n.body || '')}</div></div>`).join('') || '<p style="color:#8a97a4">Nessuna notizia.</p>';
+    return { title: 'Gazzetta di Vetrata', html: siteShell('linear-gradient(90deg,#7a2e1e,#a14a35)', '📰 La Gazzetta di Vetrata', 'Edizione online · ' + dateDay(G.day), arts) };
+  }
+  if (base === 'borsa') {
+    const rows = STOCKS.map(s => { const st = G.stocks[s.id] || { p: 0, h: [0] }; const prev = st.h.length > 1 ? st.h[st.h.length - 2] : st.p; const up = st.p >= prev; return `<tr style="border-bottom:1px solid #eef2f6"><td style="padding:7px 6px"><b>${esc(s.id)}</b> <span style="color:#8a97a4;font-size:11px">${esc(s.n || '')}</span></td><td style="padding:7px 6px;text-align:right">${money(st.p)}</td><td style="padding:7px 6px;text-align:right;color:${up ? '#2e8b57' : '#c0392b'}">${up ? '▲' : '▼'} ${st.own || 0}</td></tr>`; }).join('');
+    return { title: 'Borsa Insulare', html: siteShell('linear-gradient(90deg,#15616d,#2a8fa6)', '📈 Borsa Insulare di Vetrata', 'Quotazioni in caprini', `<table style="width:100%;border-collapse:collapse;font-size:13px"><tr style="color:#8a97a4;font-size:11px"><td>Titolo</td><td style="text-align:right">Prezzo</td><td style="text-align:right">Tue</td></tr>${rows}</table><div style="text-align:center;margin-top:12px"><button data-act="tool_borsa" style="all:unset;cursor:pointer;background:#2a8fa6;color:#fff;padding:7px 16px;border-radius:14px;font-size:13px">💹 Compra / Vendi</button></div>`) };
+  }
+  if (base === 'banca') {
+    const tx = (G.tx || []).slice(0, 8).map(t => `<div style="display:flex;justify-content:space-between;border-bottom:1px solid #eef2f6;padding:6px 0;font-size:12px"><span>${esc(t.desc || t.reason || 'Movimento')}</span><span style="color:${(t.amount || 0) >= 0 ? '#2e8b57' : '#c0392b'}">${(t.amount || 0) >= 0 ? '+' : ''}${money(t.amount || 0)}</span></div>`).join('') || '<p style="color:#8a97a4">Nessun movimento recente.</p>';
+    return { title: 'Banca Insulare — Home banking', html: siteShell('linear-gradient(90deg,#15306b,#2a4a9a)', '🏦 Banca Insulare', 'Home banking sicuro', `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px"><div style="flex:1;min-width:120px;background:#f3f7fc;border-radius:10px;padding:12px"><div style="font-size:11px;color:#8a97a4">Conto corrente</div><div style="font-size:22px;font-weight:700;color:#15306b">${money(G.bank)}</div></div><div style="flex:1;min-width:120px;background:#f3f7fc;border-radius:10px;padding:12px"><div style="font-size:11px;color:#8a97a4">Contanti</div><div style="font-size:22px;font-weight:700">${money(G.cash)}</div></div></div><div style="font-size:13px;font-weight:600;margin-bottom:4px">Ultimi movimenti</div>${tx}<div style="text-align:center;margin-top:12px"><button data-act="tool_banca" style="all:unset;cursor:pointer;background:#2a4a9a;color:#fff;padding:7px 16px;border-radius:14px;font-size:13px">💳 Bonifici e operazioni</button></div>`) };
+  }
+  if (base === 'imprese') {
+    const all = allBusinesses().sort((a, b) => (b.sponsored - a.sponsored) || (b.rep - a.rep));
+    const rows = all.slice(0, 40).map(x => `<div data-nav="azienda:${x.kind}_${x.key}" style="cursor:pointer;border:1px solid #e2e8ef;border-radius:10px;padding:9px 11px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:22px">${x.ico || '🏢'}</span><div style="flex:1"><b style="font-size:13px">${esc(x.name)}</b> ${x.sponsored ? '<span style="color:#c08a00;font-size:11px">★ sponsor</span>' : ''}<div style="font-size:11px;color:#8a97a4">${esc(x.type)} · ${esc(x.owner)} · rep ${x.rep}/100 · ${x.web ? '🌐 sito' : 'scheda'}</div></div><span style="color:#3a5a76">›</span></div>`).join('');
+    return { title: 'VetrNet Business', html: siteShell('linear-gradient(90deg,#2a7a4a,#3a9a5a)', '🏢 VetrNet Business', all.length + ' attività sull\'isola', rows) };
+  }
+  if (base === 'azienda') {
+    const us = arg.indexOf('_'); const kind = arg.slice(0, us), key = arg.slice(us + 1);
+    const x = allBusinesses().find(b => b.kind === kind && String(b.key) === key);
+    if (!x) return { title: 'Non trovato', html: siteShell('#777', 'Sito non raggiungibile', '', '<p>La pagina non esiste più.</p>') };
+    const c = kind === 'co' ? companyById(key) : null; const sec = c ? SECTORS[c.type] : { ico: x.ico || '🏢', n: x.type };
+    if (!x.web) return { title: x.name, html: siteShell('#6a7684', (sec.ico || '🏢') + ' ' + esc(x.name), esc(x.type) + ' · ' + esc(x.owner), `<p style="color:#55606a">Questa attività <b>non ha ancora un sito web</b>: online è quasi invisibile.</p>${c && c.owner === 'player' ? '<p style="color:#2e8b57">È tua! Creane uno dalla gestione dell\'impresa per attirare più clienti.</p><div style="text-align:center;margin-top:10px"><button data-act="company" data-arg="' + key + '" style="all:unset;cursor:pointer;background:#2e8b57;color:#fff;padding:7px 16px;border-radius:14px;font-size:13px">🏢 Gestisci l\'impresa</button></div>' : ''}`) };
+    const claims = ['«Qualità e tradizione dell\'isola.»', '«Dal 2026, al servizio di Vetrata.»', '«L\'eccellenza, sul mare.»'];
+    const stars = '★'.repeat(Math.round(x.rep / 20)) + '☆'.repeat(5 - Math.round(x.rep / 20));
+    const col = ['#5a7a9a', '#3a7a5a', '#8a5a9a'][(x.web - 1) % 3];
+    let inner = `<div style="text-align:center;padding:10px 0"><div style="font-size:52px">${sec.ico || '🏢'}</div><div style="font-size:13px;color:#55606a;margin-top:4px">${esc(claims[x.web - 1] || claims[0])}</div></div>`;
+    inner += `<p style="font-size:13px"><b>Chi siamo.</b> ${esc(x.name)} è un'attività di ${esc((sec.n || x.type)).toLowerCase()} a Vetrata, gestita da ${esc(x.owner)}. Reputazione dei clienti: <span style="color:#c08a00">${stars}</span></p>`;
+    if (x.web >= 2) inner += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0"><div style="flex:1;min-width:110px;background:#f5f8fb;border-radius:8px;padding:9px;font-size:12px">📞 <b>Contatti</b><br>Telefono e PEC</div><div style="flex:1;min-width:110px;background:#f5f8fb;border-radius:8px;padding:9px;font-size:12px">📍 <b>Dove siamo</b><br>Centro Storico, Vetrata</div><div style="flex:1;min-width:110px;background:#f5f8fb;border-radius:8px;padding:9px;font-size:12px">🕐 <b>Orari</b><br>Lun–Sab</div></div>`;
+    if (x.web >= 3) inner += `<div style="background:#eefaf0;border:1px solid #bfe3c8;border-radius:10px;padding:10px;margin-top:8px"><b style="color:#2e8b57">🛒 Negozio online</b><div style="font-size:12px;color:#55606a;margin-top:3px">Ordina e ritira in sede. Spedizioni su tutta l'isola.</div><div style="margin-top:6px;font-size:12px">⭐ Recensioni verificate · <b>${x.rep}/100</b> · «Servizio impeccabile», «Tornerò di sicuro».</div></div>`;
+    if (c && c.owner === 'player') inner += `<div style="text-align:center;margin-top:12px"><button data-act="company" data-arg="${key}" style="all:unset;cursor:pointer;background:${col};color:#fff;padding:7px 16px;border-radius:14px;font-size:13px">🏢 Gestisci la tua impresa</button></div>`;
+    return { title: x.name, html: siteShell(`linear-gradient(90deg,${col},${col}cc)`, (sec.ico || '🏢') + ' ' + esc(x.name), 'www.' + x.name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) + '.vn', inner) };
+  }
+  if (base === 'meteo') {
+    const w = WEATHER[G.weather.cur] || { n: 'Sereno', ico: '☀️' };
+    return { title: 'Meteo Vetrata', html: siteShell('linear-gradient(90deg,#3d8fd1,#6fb6e6)', '⛅ Meteo Vetrata', 'Previsioni per l\'isola', `<div style="text-align:center;padding:14px 0"><div style="font-size:60px">${w.ico || '☀️'}</div><div style="font-size:20px;font-weight:700">${esc(w.n)}</div><div style="font-size:13px;color:#55606a;margin-top:4px">Mare ${['calmo', 'poco mosso', 'mosso', 'agitato'][Math.min(3, Math.floor((G.weather.wind || 0) * 3))] || 'calmo'} · stagione ${['', 'primavera', 'estate', 'autunno', 'inverno'][G.season] || ''}</div></div><p style="font-size:12px;color:#8a97a4;text-align:center">${G.island.tension > 70 ? 'Avviso: collegamenti con Partenope a rischio per la crisi.' : 'Traghetti regolari da e per Partenope.'}</p>`) };
+  }
+  // home / portale
+  const tiles = [['vetragram', '📸', 'Vetragram', 'Il social dell\'isola'], ['gazzetta', '📰', 'Gazzetta', 'Notizie di Vetrata'], ['imprese', '🏢', 'VetrNet Business', 'Le attività dell\'isola'], ['borsa', '📈', 'Borsa', 'Quotazioni'], ['banca', '🏦', 'Banca', 'Home banking'], ['meteo', '⛅', 'Meteo', 'Previsioni']];
+  const tileHTML = tiles.map(([u, ic, n, d]) => `<button data-nav="${u}" style="all:unset;cursor:pointer;flex:1;min-width:140px;background:#f5f8fc;border:1px solid #e2e8ef;border-radius:12px;padding:14px;text-align:center"><div style="font-size:30px">${ic}</div><div style="font-weight:700;font-size:14px;margin-top:4px;color:#1b3a57">${n}</div><div style="font-size:11px;color:#8a97a4">${d}</div></button>`).join('');
+  const headlines = (G.news || []).slice(0, 3).map(n => `<div style="font-size:12px;padding:4px 0;border-bottom:1px solid #eef2f6">📰 ${esc(n.head)}</div>`).join('');
+  return { title: 'VetrNet — Portale di Vetrata', html: siteShell('linear-gradient(90deg,#1c5a86,#3f8fc4)', '🌐 VetrNet', 'Il portale dell\'Isola di Vetrata', `<div style="display:flex;gap:10px;flex-wrap:wrap">${tileHTML}</div><div style="margin-top:14px;background:#fafcff;border:1px solid #e2e8ef;border-radius:10px;padding:10px"><b style="font-size:13px;color:#a14a35">Ultim'ora dalla Gazzetta</b>${headlines || '<div style="font-size:12px;color:#8a97a4">Nessuna notizia.</div>'}</div>`) };
 }
 function openAnagrafeNet() {
   const q = G.flags.anagQ || '';
