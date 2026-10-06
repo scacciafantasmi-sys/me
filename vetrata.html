@@ -4056,6 +4056,8 @@ function openDialog(n, byPhone) {
   if (st.op > 10 && !st.number) opts.push({ t: '📱 Chiedi il numero', f: () => { if (st.op > 20 || chance(0.5) || G.flags.cards) { st.number = true; st.met = true; toast('📇 Hai salvato il numero di ' + esc(n.first) + '.'); say(n, 'Segnati il numero. Ma non chiamarmi alle tre di notte.'); } else say(n, 'Ci conosciamo da troppo poco.'); refreshDlg(n); } });
   if (st.op > 35 && st.number && (!G.social.crew || !G.social.crew.members.includes(n.id))) opts.push({ t: '🐺 Invitalo nella tua crew', d: G.social.crew && G.social.crew.name ? 'Entra ne «' + esc(G.social.crew.name) + '»' : 'Fonda la tua crew con lui', f: () => crewInvite(n) });
   else if (!byPhone && st.met && st.op <= 35 && (!G.social.crew || !G.social.crew.members.includes(n.id))) opts.push({ t: '🐺 Crea/allarga la crew', d: `Serve amicizia (opinione 35+${st.number ? '' : ' e il suo numero'}). Ora: ${Math.round(st.op)}/35.`, dis: true, f: () => { } });
+  if (st.op > 40 && st.number && !isPl(n) && !st.bizPartner && !st.inCompany) opts.push({ t: '💼 Proponi una società', d: 'Senti se è disposto a diventare socio e a mettere capitale', f: () => proposePartner(n) });
+  else if (st.bizPartner && !st.inCompany) opts.push({ t: '🤝 È disposto a fare società', d: `Apporto: ${money(st.bizPartner.capital)}. Fonda un'impresa dalla Camera di Commercio e includilo tra i soci.`, dis: true, f: () => { } });
   if (st.op > 45 && npcCar(n).flirt > 0.25 && !st.partner) opts.push({ t: '💗 Prova a provarci', d: 'Col carattere giusto, e un bel look…', f: () => { say(n, npcFlirt(n)); refreshDlg(n); } });
   for (const w of jobOffersFrom(n)) opts.push(w);
   if (G.pol.playerList) opts.push({ t: G.pol.candidate ? '🗳️ Chiedi il voto e una firma' : '✍️ Chiedi una firma per la tua lista', d: G.pol.playerList.n + (G.pol.candidate ? '' : ` · firme ${G.pol.signatures.length}/12`), f: () => askVote(n, st) });
@@ -6721,6 +6723,24 @@ function crewInvite(n) {
   toast(`🐺 ${esc(n.first)} entra ne «${esc(G.social.crew.name)}»! (${G.social.crew.members.length} membri)`, 'good');
   sendMsg('Crew ' + G.social.crew.name, `${n.first} è entrato nella crew. Benvenuto!`, { force: true });
 }
+/* ---------- Soci d'impresa: disponibilità e apporto ---------- */
+function proposePartner(n) {
+  const st = npcState(n);
+  advance(10);
+  const greedy = (n.pers && n.pers.greedy) || 0.3;
+  const chAccept = clamp(0.15 + (st.op - 40) / 110 + skill('eloquenza') / 300 + greedy * 0.2 - (G.island.tension - 50) / 300, 0.08, 0.92);
+  if (chance(chAccept)) {
+    const wealth = n.wealth != null ? n.wealth : 0.4;
+    const cap = Math.max(500, Math.round((800 + wealth * 9000) * (0.7 + Math.random() * 0.6) / 100) * 100);
+    st.bizPartner = { since: G.day, capital: cap };
+    say(n, pick([`«Mi fido di te. Metto ${money(cap)} e siamo soci.»`, `«Affari? Ci sto. Il mio apporto: ${money(cap)}.»`, `«Apriamo qualcosa insieme: porto ${money(cap)} di capitale.»`]));
+    toast(`🤝 ${esc(n.first)} è disposto a fare società (apporto ${money(cap)}). Fonda un'impresa dalla Camera di Commercio e includilo tra i soci.`, 'money');
+  } else {
+    say(n, pick(['«Una società? Non adesso, scusa.»', '«Mettersi in proprio coi tempi che corrono? Troppo rischioso.»', '«Ne riparliamo quando ci conosceremo meglio.»']));
+  }
+  refreshDlg(n);
+}
+function availablePartners() { return NPCS.filter(n => { const st = npcState(n); return st.alive && !st.gone && st.bizPartner && !st.inCompany && !(st.jailed && st.jailed > G.day); }); }
 const FOLLOW_FOREVER = 1e9;
 function callOverCrew() {
   const crew = G.social.crew; if (!crew || !crew.members.length) return toast('Non hai ancora una crew. Diventa amico di qualcuno e invitalo.', 'warn');
@@ -7658,32 +7678,41 @@ function openCameraCommercio() {
 }
 let foundDraft = null;
 function foundCompanyWizard() {
-  foundDraft = foundDraft || { type: 'ristorazione', form: 'individuale', name: '', capital: 3000 };
-  const d = foundDraft;
+  foundDraft = foundDraft || { type: 'ristorazione', form: 'individuale', name: '', capital: 3000, partners: [] };
+  const d = foundDraft; d.partners = d.partners || [];
   const secOpts = Object.entries(SECTORS).map(([k, S]) => `<option value="${k}" ${d.type === k ? 'selected' : ''}>${S.ico} ${S.n}</option>`).join('');
   const formOpts = Object.entries(FORMS).map(([k, F]) => `<option value="${k}" ${d.form === k ? 'selected' : ''}>${F.n} (${F.sigla}) — ${money(F.cost)}</option>`).join('');
   const F = FORMS[d.form], S = SECTORS[d.type];
+  const avail = availablePartners(); d.partners = d.partners.filter(id => avail.some(n => n.id === id));
+  const partnersCapital = d.partners.reduce((s, id) => { const n = NPCS[id]; return s + (n && npcState(n).bizPartner ? npcState(n).bizPartner.capital : 0); }, 0);
   const totalCost = F.cost + d.capital;
+  const sociCard = avail.length ? `<div class="card"><label class="small">Soci che ti hanno dato disponibilità (${avail.length})</label>${avail.map(n => { const st = npcState(n); const on = d.partners.includes(n.id); return `<label style="display:block;margin:3px 0"><input type="checkbox" data-partner="${n.id}" ${on ? 'checked' : ''}> ${esc(n.first + ' ' + n.last)} — apporto <b>${money(st.bizPartner.capital)}</b></label>`; }).join('')}<div class="small muted">Gli apporti dei soci si aggiungono al capitale dell'impresa: più capitale e più solidità. Capitale dai soci: <b>${money(partnersCapital)}</b></div></div>` : `<div class="card small muted">Nessun socio disponibile. Parla con qualcuno che conosci (opinione 40+ e il numero) e proponigli «💼 Proponi una società».</div>`;
   openPanel('🏢 Costituzione d\'impresa', `
     <div class="card"><label class="small">Nome dell'impresa</label><input id="cName" value="${esc(d.name)}" placeholder="es. ${S.ico} La Bella Vetrata ${F.sigla}" maxlength="34" style="width:100%"></div>
     <div class="card"><label class="small">Settore</label><select id="cSec" style="width:100%">${secOpts}</select><div class="small muted">${esc(S.d)}</div></div>
     <div class="card"><label class="small">Forma giuridica</label><select id="cForm" style="width:100%">${formOpts}</select><div class="small muted">${esc(F.d)}<br>Responsabilità <b>${F.resp}</b> · imposte ${pct(F.tax)} · max ${F.maxStaff} dipendenti</div></div>
-    <div class="card"><label class="small">Capitale sociale versato: <b id="capLbl">${money(d.capital)}</b></label><input id="cCap" type="range" min="1000" max="60000" step="500" value="${d.capital}" style="width:100%"><div class="small muted">Più capitale = più respiro prima di fallire.</div></div>
-    <div class="card"><b>Costo totale per partire: ${money(totalCost)}</b> <span class="small muted">(costituzione ${money(F.cost)} + capitale ${money(d.capital)})</span><br><span class="small ${G.bank + G.cash >= totalCost ? 'good' : 'badc'}">Disponibile: ${money(G.bank + G.cash)}</span></div>`,
+    <div class="card"><label class="small">Capitale sociale versato (tuo): <b id="capLbl">${money(d.capital)}</b></label><input id="cCap" type="range" min="1000" max="60000" step="500" value="${d.capital}" style="width:100%"><div class="small muted">Più capitale = più respiro prima di fallire.</div></div>
+    ${sociCard}
+    <div class="card"><b>Costo totale per partire: ${money(totalCost)}</b> <span class="small muted">(costituzione ${money(F.cost)} + tuo capitale ${money(d.capital)})</span><br>Capitale totale dell'impresa: <b>${money(d.capital + partnersCapital)}</b>${d.partners.length ? ` <span class="good">(con ${d.partners.length} ${d.partners.length > 1 ? 'soci' : 'socio'})</span>` : ''}<br><span class="small ${G.bank + G.cash >= totalCost ? 'good' : 'badc'}">Disponibile: ${money(G.bank + G.cash)}</span></div>`,
     [{ t: `✅ Fonda (${money(totalCost)})`, c: 'pri', dis: G.bank + G.cash < totalCost, f: () => {
       const name = ($('#cName').value.trim() || (S.ico + ' ' + S.n + ' ' + G.player.last)).slice(0, 34);
       if (!pay(totalCost, 'Costituzione impresa', { atCounter: true })) return;
-      const c = { id: 'co' + G.day + '_' + Math.floor(Math.random() * 9999), owner: 'player', name, type: d.type, form: d.form, founded: G.day, cash: d.capital, rep: 20, stock: S.stock ? 40 : 100, staff: [], website: 0, sponsored: 0, ledger: [{ day: G.day, type: 'capitale', amount: d.capital, desc: 'Capitale versato' }], taxAccrued: 0, monthRev: 0, monthCost: 0, lossStreak: 0, supplier: 'locale', priceMul: 1, loans: 0, sedeBid: null, sedeAddr: defaultSedeAddr() };
+      const partners = d.partners.map(id => { const n = NPCS[id]; return { id, capital: npcState(n).bizPartner.capital }; });
+      const pcap = partners.reduce((s, p) => s + p.capital, 0);
+      const startCash = d.capital + pcap;
+      const c = { id: 'co' + G.day + '_' + Math.floor(Math.random() * 9999), owner: 'player', name, type: d.type, form: d.form, founded: G.day, cash: startCash, rep: 20 + Math.min(20, partners.length * 6), stock: S.stock ? 40 : 100, staff: [], partners, website: 0, sponsored: 0, ledger: [{ day: G.day, type: 'capitale', amount: d.capital, desc: 'Capitale versato (tuo)' }], taxAccrued: 0, monthRev: 0, monthCost: 0, lossStreak: 0, supplier: 'locale', priceMul: 1, loans: 0, sedeBid: null, sedeAddr: defaultSedeAddr() };
+      for (const p of partners) { const n = NPCS[p.id]; const st = npcState(n); st.inCompany = c.id; st.bizPartner = null; st.op += 8; c.ledger.unshift({ day: G.day, type: 'capitale', amount: p.capital, desc: 'Apporto del socio ' + n.first }); }
       G.companies = G.companies || []; G.companies.push(c); foundDraft = null;
       G.stats.companies = (G.stats.companies || 0) + 1;
-      addNews({ tag: 'economia', head: `Nasce «${name}»: ${G.player.first} ${G.player.last} apre ${S.n.toLowerCase()}`, body: `Forma ${F.sigla}, capitale ${money(d.capital)}.`, weight: 1 });
-      feedPost(null, `Ho aperto la mia azienda: ${name}! ${S.ico} Venite a trovarmi 🎉`, { by: G.player.first + ' ' + G.player.last, me: true });
-      closePanel(); toast(`🏢 «${name}» è registrata! Ora tocca farla funzionare.`, 'money'); openCompany(c.id);
+      addNews({ tag: 'economia', head: `Nasce «${name}»: ${G.player.first} ${G.player.last} apre ${S.n.toLowerCase()}`, body: `Forma ${F.sigla}, capitale ${money(startCash)}${partners.length ? ', con ' + partners.length + ' soci' : ''}.`, weight: 1 });
+      feedPost(null, `Ho aperto la mia azienda: ${name}! ${S.ico}${partners.length ? ' Con i miei soci 🤝' : ''} Venite a trovarmi 🎉`, { by: G.player.first + ' ' + G.player.last, me: true });
+      closePanel(); toast(`🏢 «${name}» è registrata!${partners.length ? ` ${partners.length} soci a bordo.` : ''} Ora tocca farla funzionare.`, 'money'); openCompany(c.id);
     } }, { t: 'Annulla', f: closePanel }], { wide: true });
   $('#cName').oninput = e => d.name = e.target.value;
   $('#cSec').onchange = e => { d.type = e.target.value; foundCompanyWizard(); };
   $('#cForm').onchange = e => { d.form = e.target.value; foundCompanyWizard(); };
   $('#cCap').oninput = e => { d.capital = +e.target.value; $('#capLbl').textContent = money(d.capital); };
+  document.querySelectorAll('[data-partner]').forEach(cb => cb.onchange = e => { const id = +e.target.dataset.partner; if (e.target.checked) { if (!d.partners.includes(id)) d.partners.push(id); } else d.partners = d.partners.filter(x => x !== id); foundCompanyWizard(); });
 }
 
 /* ---------- Gestione azienda e contabilità ---------- */
@@ -7713,6 +7742,7 @@ function openCompany(id) {
       <div><div class="small muted">Stato</div><b>${health}</b></div>
     </div>
     <div class="small muted" style="margin-top:6px">🏛️ Sede legale: ${esc(c.sedeBid != null && W.buildings[c.sedeBid] ? W.buildings[c.sedeBid].n + ' (sede operativa tua)' : (c.sedeAddr || '—'))}</div>
+    ${(c.partners && c.partners.length) ? `<div class="small" style="margin-top:4px">🤝 Soci: ${c.partners.map(p => { const n = NPCS[p.id]; return esc((n ? n.first + ' ' + n.last : 'socio')) + ' (' + money(p.capital) + ')'; }).join(', ')}</div>` : ''}
     <div class="small muted" style="margin-top:2px">Valore stimato: ${money(companyValue(c))}${c.lossStreak > 0 ? ` · <span class="badc">${c.lossStreak} settimane in perdita</span>` : ''}</div></div>
     ${optList(opts)}`, [{ t: 'Chiudi', c: 'pri', f: closePanel }], { wide: true }); bindOpts(opts);
 }
@@ -7770,6 +7800,7 @@ function closeCompany(c) {
 }
 function settleCompany(c, bankrupt) {
   c.closed = true;
+  if (c.partners) for (const p of c.partners) { const n = NPCS[p.id]; if (n) { npcState(n).inCompany = null; if (bankrupt) npcState(n).op -= 15; } }
   if (c.cash > 0) earn(Math.round(c.cash), 'Liquidazione ' + c.name, 'bank');
   else if (c.cash < 0) { if (FORMS[c.form].resp === 'illimitata') { G.debts.push({ to: 'Creditori di ' + c.name, amount: -Math.round(c.cash), due: G.day + 20 }); toast('I debiti dell\'impresa (responsabilità illimitata) ricadono su di te.', 'bad'); } }
   addNews({ tag: 'economia', head: bankrupt ? `Fallisce «${c.name}»` : `Chiude «${c.name}»`, body: bankrupt ? 'Il tribunale dichiara il fallimento.' : 'Cessata attività.', weight: bankrupt ? 2 : 1 });
@@ -7782,7 +7813,7 @@ function companiesWeekly() {
     if (c.closed || c.owner !== 'player') continue;
     const S = SECTORS[c.type], F = FORMS[c.form];
     const demand = clamp(0.6 + c.rep / 120 + (c.website || 0) * 0.08 + (c.sponsored > G.day ? 0.18 : 0) + (G.island.tourism || 1) * 0.1 - (c.priceMul - 1) * 0.6, 0.15, 2.2);
-    const capacity = 1 + c.staff.length * 0.7;
+    const capacity = 1 + c.staff.length * 0.7 + (c.partners ? c.partners.length * 0.5 : 0); // i soci lavorano l'impresa come te
     const stockF = S.stock ? clamp(c.stock / 60, 0.1, 1) : 1;
     const gross = Math.round(S.rev * 7 * demand * capacity * stockF * c.priceMul * rr(0.85, 1.15));
     const cogs = Math.round(gross * (1 - S.margin));
