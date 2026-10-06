@@ -438,7 +438,7 @@ const ITEMS = {
   starlink: { n: 'Antenna satellitare portatile', ico: '🛰️', w: 2, price: 1900, d: "Internet e telefono anche nei boschi più profondi." },
   canna: { n: 'Canna da pesca', ico: '🎣', w: 1.5, price: 45, d: "Pesca dalla riva o dal molo (E vicino all'acqua)." },
   rete: { n: 'Rete da posta', ico: '🕸️', w: 6, price: 160, d: "Da usare dalla barca sui banchi di pesce." },
-  esca: { n: 'Esca', ico: '🪱', w: 0.1, price: 2, uses: 5 },
+  esca: { n: 'Esca', ico: '🪱', w: 0.1, price: 1, d: "Una per pescata: con 10 esche fai 10 lanci." },
   // abiti
   abiti: { n: 'Abiti da strada', ico: '👕', w: 1, price: 40, wear: { warm: 1, rain: 0.1, style: 1, col: '#5a6f8f' } },
   giacca: { n: 'Giacca a vento', ico: '🧥', w: 1.4, price: 85, wear: { warm: 2.4, rain: 0.5, style: 1, col: '#9b3b2f' } },
@@ -4671,10 +4671,11 @@ function canFishHere(c) {
 function rodFishing() {
   if (!hasInv('canna')) return toast('Ti serve una canna da pesca.', 'warn');
   if (!canFishHere()) return toast('Avvicinati all\'acqua: pesca dal molo o dalla riva.', 'warn');
-  if (!hasInv('esca')) return toast('Ti serve dell\'esca (la trovi alla ferramenta o al mercato del pesce).', 'warn');
-  minigameTiming({ title: '🎣 Pesca con la canna', desc: 'Aspetta che il galleggiante affondi, poi ferra al momento giusto. Pesca: ' + Math.floor(skill('pesca')), pins: 1, speed: 0.8, zone: 0.16 + skill('pesca') / 500,
-    onWin: () => { useItem('esca'); const f = pick(['alici', 'alici', 'totano', 'orata', 'orata', 'polpo']); addInv(f, 1); gainSkill('pesca', 2); advance(30); },
-    onFail: () => { useItem('esca'); advance(20); toast('Il pesce si è mangiato l\'esca e saluta.'); } });
+  if (!hasInv('esca')) return toast('Hai finito le esche: ogni lancio ne consuma una. Comprane alla ferramenta o al mercato del pesce.', 'warn');
+  const left = countInv('esca');
+  minigameTiming({ title: '🎣 Pesca con la canna', desc: `Aspetta che il galleggiante affondi, poi ferra al momento giusto. Pesca: ${Math.floor(skill('pesca'))} · 🪱 esche: ${left} (una per lancio)`, pins: 1, speed: 0.95, zone: 0.14 + skill('pesca') / 550,
+    onWin: () => { useItem('esca'); const f = pick(['alici', 'alici', 'totano', 'orata', 'orata', 'polpo']); addInv(f, 1); gainSkill('pesca', 2); advance(30); const r = countInv('esca'); toast(r > 0 ? `🎣 Preso! Ti restano ${r} esch${r === 1 ? 'a' : 'e'}.` : '🎣 Preso! Era l\'ultima esca.', 'money'); },
+    onFail: () => { useItem('esca'); advance(20); const r = countInv('esca'); toast(`Il pesce si è mangiato l'esca e saluta.${r > 0 ? ' Esche rimaste: ' + r + '.' : ' Era l\'ultima esca.'}`, 'warn'); } });
 }
 function fishNet() {
   const p = G.player, sh = SHOALS.find(s => s.cx === p.cx && s.cy === p.cy), v = curVeh();
@@ -5389,6 +5390,7 @@ function questoreOptions(n, st) {
 
 /* ---------- Minigiochi ---------- */
 function minigameTiming(o) {
+  if (!o._dz) { o.zone = (o.zone || 0.2) * 0.82; o.speed = (o.speed || 1) * 1.15; o._dz = 1; } // un pelo più difficili: zona più stretta, ago più rapido
   let pin = 0, errs = 0, pos = 0, dir = 1, zc = rr(0.2, 0.8), waiting = o.delay || 0, done = false;
   openPanel(o.title, `<p class="desc">${o.desc}</p><canvas id="mgT" width="620" height="90" class="mgc"></canvas><p class="small muted" style="text-align:center">Premi <span class="kbd">Spazio</span> o clicca quando l'ago è nella zona verde. Errori: <b id="mgE">0</b>/2</p>`, [{ t: 'Rinuncia', f: () => { done = true; closePanel(); o.onFail && o.onFail(errs); } }], { noClose: true });
   const cvs = $('#mgT'), g = cvs.getContext('2d');
@@ -5434,7 +5436,7 @@ function minigameRecipe(kind, cb) {
   };
   openPanel(kind === 'bar' ? '☕ Al banco' : '🍳 In cucina', `<p class="desc">${kind === 'bar' ? 'Clienti in fila. Ogni bevanda ha i suoi passaggi, nell\'ordine giusto.' : 'Le comande piovono. Ogni piatto ha la sua sequenza.'} Più sei veloce, più mance.</p><div id="rcB"></div>`, [{ t: 'Fine turno', f: end }], { noClose: true });
   next();
-  const tick = () => { if (done || !$('#rcT')) return; t += 0.1; $('#rcT').style.width = clamp(100 - t * 7, 0, 100) + '%'; if (t > 14) { served++; toast('Il cliente se ne va spazientito.', 'warn'); next(); } setTimeout(tick, 100); };
+  const tick = () => { if (done || !$('#rcT')) return; t += 0.1; $('#rcT').style.width = clamp(100 - t * 8.3, 0, 100) + '%'; if (t > 12) { served++; toast('Il cliente se ne va spazientito.', 'warn'); next(); } setTimeout(tick, 100); };
   tick();
 }
 function minigameDiagnosis(kind, cb) {
@@ -5467,7 +5469,7 @@ function minigameRhythm(cb) {
   let t = 0, score = 0, done = false; const keys = ['KeyA', 'KeyS', 'KeyD'];
   openPanel('🎸 Suoni in piazza', `<p class="desc">Premi <span class="kbd">A</span> <span class="kbd">S</span> <span class="kbd">D</span> quando le note arrivano sulla linea. Una canzone napoletana, la gente si ferma.</p><canvas id="rhC" width="360" height="300" class="mgc"></canvas><p class="small" style="text-align:center">Punti: <b id="rhS">0</b></p>`, [], { noClose: true });
   const g = $('#rhC').getContext('2d');
-  const press = lane => { const n = notes.find(n => !n.hit && n.lane === lane && Math.abs(n.t - t) < 0.18); if (n) { n.hit = true; score++; AU.pluck ? AU.beep([440, 554, 659][lane] * (1 + skill('musica') / 400), 0.25, 'triangle', 0.12) : 0; $('#rhS').textContent = score; } else AU.beep(110, 0.1, 'sawtooth', 0.05); };
+  const press = lane => { const n = notes.find(n => !n.hit && n.lane === lane && Math.abs(n.t - t) < 0.14); if (n) { n.hit = true; score++; AU.pluck ? AU.beep([440, 554, 659][lane] * (1 + skill('musica') / 400), 0.25, 'triangle', 0.12) : 0; $('#rhS').textContent = score; } else AU.beep(110, 0.1, 'sawtooth', 0.05); };
   const kh = e => { const i = keys.indexOf(e.code); if (i >= 0) { e.preventDefault(); e.stopPropagation(); press(i); } };
   addEventListener('keydown', kh, true);
   $('#rhC').onclick = e => { const r = e.target.getBoundingClientRect(); press(Math.floor((e.clientX - r.left) / r.width * 3)); };
@@ -5482,14 +5484,14 @@ function minigameRhythm(cb) {
 }
 function minigameLemons(cb) { minigameClick(cb, { title: '🍋 Raccolta', desc: `Clicca i limoni maturi (gialli), lascia quelli verdi. 20 secondi.${hasTrait('vertigini') ? ' <span class="badc">Il terrazzamento è a strapiombo: ti gira la testa.</span>' : ''}`, good: '#f2d43a', bad: '#8bbf4a', bg: ['#2f5a2e', '#3f7a3b'], goodLabel: 'cassette', sway: hasTrait('vertigini') }); }
 function minigameClick(cb, o) {
-  let n = 0, t = 20, done = false; const items = [];
-  openPanel(o.title, `<p class="desc">${o.desc}</p><canvas id="lmC" width="520" height="300" class="mgc"></canvas><p class="small" style="text-align:center">${o.goodLabel}: <b id="lmN">0</b> · <span id="lmT">20</span>s</p>`, [], { noClose: true });
+  let n = 0, t = 17, done = false; const items = [];
+  openPanel(o.title, `<p class="desc">${o.desc}</p><canvas id="lmC" width="520" height="300" class="mgc"></canvas><p class="small" style="text-align:center">${o.goodLabel}: <b id="lmN">0</b> · <span id="lmT">17</span>s</p>`, [], { noClose: true });
   const c = $('#lmC'), g = c.getContext('2d');
   c.onclick = e => { const r = c.getBoundingClientRect(), x = (e.clientX - r.left) * 520 / r.width, y = (e.clientY - r.top) * 300 / r.height; for (const l of items) if (!l.gone && dist(x, y, l.x, l.y) < 15) { l.gone = true; if (l.ok) { n++; AU.sfx('click'); } else { n = Math.max(0, n - 1); AU.sfx('bad'); } $('#lmN').textContent = n; break; } };
   let last = performance.now();
   const loop = now => {
     if (done || !$('#lmC')) return; const dt = (now - last) / 1000; last = now; t -= dt; $('#lmT').textContent = Math.ceil(t);
-    if (items.filter(l => !l.gone).length < 9 && chance(0.08)) items.push({ x: rr(30, 490), y: rr(30, 270), ok: chance(0.65), life: rr(1.5, 3) });
+    if (items.filter(l => !l.gone).length < 9 && chance(0.08)) items.push({ x: rr(30, 490), y: rr(30, 270), ok: chance(0.57), life: rr(1.3, 2.6) });
     for (const l of items) { l.life -= dt; if (l.life <= 0) l.gone = true; }
     const sway = o.sway ? Math.sin(now / 300) * 8 : 0;
     g.save(); g.translate(sway, 0); g.fillStyle = o.bg[0]; g.fillRect(-10, 0, 540, 300);
