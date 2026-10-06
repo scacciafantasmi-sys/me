@@ -3692,7 +3692,7 @@ function refreshSide() {
       ${v ? `<button class="act" onclick="exitVehicle()"><span>🚪</span>Scendi</button>` : `<button class="act" onclick="sleepOutside()"><span>😴</span>Dormi qui</button>`}
       ${!v && !c.water ? '<button class="act" onclick="meditate()"><span>🧘</span>Yoga</button>' : ''}
       ${(c.plaza || c.zone === 'marina') && hasInv('chitarra') ? '<button class="act" onclick="busk()"><span>🎸</span>Suona</button>' : ''}
-      ${!c.water && c.coast && hasInv('canna') ? '<button class="act" onclick="rodFishing()"><span>🎣</span>Pesca</button>' : ''}
+      ${hasInv('canna') && canFishHere(c) ? '<button class="act" onclick="rodFishing()"><span>🎣</span>Pesca</button>' : ''}
       ${c.water && !v && ITEMS[p.wear].wear.dive ? '<button class="act" onclick="dive()"><span>🤿</span>Immergiti</button>' : ''}
       ${G.job.id ? `<button class="act" onclick="jobPanel()"><span>💼</span>Lavoro</button>` : ''}
       ${G.inv.some(it => ITEMS[it.id] && ITEMS[it.id].dose) && canDeal() ? '<button class="act" onclick="openSpaccio()"><span>🌙</span>Spaccia</button>' : ''}
@@ -4660,9 +4660,18 @@ function exploreVillaLuna(b) { discoverLore('villaluna'); discoverLore('specchi'
 }
 
 /* ---------- Pesca e mare ---------- */
+function canFishHere(c) {
+  c = c || playerCell(); if (!c || curVeh()) return false;
+  if (c.road === RD_DOCK) return true;        // dal molo
+  if (c.water) return false;                   // in acqua non si pesca con la canna
+  if (c.coast) return true;                    // dalla riva
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const cc = cellAt(c.cx + dx, c.cy + dy); if (cc && cc.water) return true; }
+  return false;
+}
 function rodFishing() {
   if (!hasInv('canna')) return toast('Ti serve una canna da pesca.', 'warn');
-  if (!hasInv('esca')) return toast('Ti serve dell\'esca.', 'warn');
+  if (!canFishHere()) return toast('Avvicinati all\'acqua: pesca dal molo o dalla riva.', 'warn');
+  if (!hasInv('esca')) return toast('Ti serve dell\'esca (la trovi alla ferramenta o al mercato del pesce).', 'warn');
   minigameTiming({ title: '🎣 Pesca con la canna', desc: 'Aspetta che il galleggiante affondi, poi ferra al momento giusto. Pesca: ' + Math.floor(skill('pesca')), pins: 1, speed: 0.8, zone: 0.16 + skill('pesca') / 500,
     onWin: () => { useItem('esca'); const f = pick(['alici', 'alici', 'totano', 'orata', 'orata', 'polpo']); addInv(f, 1); gainSkill('pesca', 2); advance(30); },
     onFail: () => { useItem('esca'); advance(20); toast('Il pesce si è mangiato l\'esca e saluta.'); } });
@@ -4737,8 +4746,35 @@ function clockIn() {
   G.job.onDuty = true; G.job.start = G.min; G.job.lastShift = G.day; G.job.tasks = 0;
   if (J.task === 'polizia' && hasInv('divisa')) G.player.wear = 'divisa';
   toast(`⏱️ Timbrato. ${J.n}: in servizio.`); AU.beep(880, 0.1, 'square', 0.06);
+  if (J.task === 'charter') { try { provideWorkBoat(J); } catch (e) { } }
   if (missionKind(J)) jobAssign();
   refreshSide();
+}
+function provideWorkBoat(J) {
+  // se non hai già una barca accanto, l'azienda ti presta quella di servizio quando timbri
+  const near = G.vehicles.some(v => !v.lost && VMODELS[v.model].type === 'boat' && Math.max(Math.abs(v.cx - G.player.cx), Math.abs(v.cy - G.player.cy)) <= 3);
+  if (near) return;
+  const b = jobPlaceB(G.job.id) || W.buildings.find(x => x.type === (J.place || 'marinas'));
+  const base = (b && b.cell) ? b.cell : [G.player.cx, G.player.cy];
+  const model = J.id === 'traghettatore' ? 'gommone' : 'gozzo';
+  const [cx, cy] = boatSpot(base[0], base[1]);
+  const v = addVehicle(model, cx, cy, { fuel: 0.95, workBoat: true });
+  addInv('chiave', 1, { vid: v.id, title: 'Chiave barca di servizio' }, true);
+  G.waypoint = { cx, cy };
+  toast(`⛵ L'azienda ti dà la ${VMODELS[model].n} di servizio: è ormeggiata al molo (GPS impostato). La riconsegni a fine turno.`, 'money');
+}
+function removeWorkBoats(silent) {
+  let removed = 0;
+  for (let i = G.vehicles.length - 1; i >= 0; i--) {
+    const v = G.vehicles[i]; if (!v.workBoat) continue;
+    if (G.player.veh === v.id) { // se sei ancora a bordo, sbarca a terra al molo
+      const b = W.buildings.find(x => x.type === 'marinas') || W.buildings.find(x => x.type === 'terminal');
+      if (b && b.cell) { G.player.cx = b.cell[0]; G.player.cy = b.cell[1]; try { snapToken(); } catch (e) { } }
+      G.player.veh = null; G.player.inVeh = false;
+    }
+    try { removeKeys(v.id); } catch (e) { } G.vehicles.splice(i, 1); removed++;
+  }
+  if (removed && !silent) toast('⛵ Hai riconsegnato la barca di servizio.');
 }
 function clockOut(silent) {
   const J = JOBS[G.job.id]; if (!G.job.onDuty) return;
@@ -4749,6 +4785,7 @@ function clockOut(silent) {
   if (pay > 0) { earn(pay, `Paga: ${Math.round(paidHrs * 10) / 10} ore lavorate come ${J.n.toLowerCase()}`, 'bank'); G.job.earned = (G.job.earned || 0) + pay; }
   else if (hrs > 0.5 && !silent) toast('Hai timbrato ma non hai lavorato: niente paga. Usa «🛠️ Lavora» sul posto per fare il tuo turno.', 'warn');
   G.missions = G.missions.filter(m => !m.job); syncMarkers();
+  if (J.task === 'charter') { try { removeWorkBoats(silent); } catch (e) { } }
   if (G.job.hours > 40 * ((G.job.rank || 0) + 1) && (G.job.rank || 0) < 3) { G.job.rank = (G.job.rank || 0) + 1; toast(`📈 Promozione! ${['', 'Esperto', 'Capo turno', 'Responsabile'][G.job.rank]}: la paga sale.`, 'money'); }
   if (!silent) toast('⏱️ Hai timbrato l\'uscita.');
   refreshSide();
@@ -5542,13 +5579,15 @@ function minigameTelecamere(J, cb) {
 }
 function minigameCassa(cb) {
   let round = 0, score = 0;
-  const goods = [['Pane e latte', 3.4], ['Due birre Faro', 6], ['Un pacco di pasta e i pomodori', 4.7], ['Sigarette e gettoni', 7.5], ['Un biglietto del traghetto', 20.2], ['La Gazzetta e un caffè', 2.7], ['Benzina, 12 litri', 23.4], ['Una cassetta di limoni', 12], ['Bende e antidolorifici', 19], ['Un orata e due ricci', 17.8]];
+  // prezzi in caprini interi: il resto è sempre un numero netto, senza decimali invisibili
+  const goods = [['Pane e latte', 3], ['Due birre Faro', 6], ['Un pacco di pasta e i pomodori', 5], ['Sigarette e gettoni', 8], ['Un biglietto del traghetto', 20], ['La Gazzetta e un caffè', 3], ['Benzina, 12 litri', 23], ['Una cassetta di limoni', 12], ['Bende e antidolorifici', 19], ['Un\'orata e due ricci', 18]];
   const step = () => {
     if (round >= 6) { closePanel(); toast(`Cassa chiusa: ${score}/6 resti giusti.`, score >= 5 ? 'money' : 'warn'); return cb(score); }
-    const [what, price] = pick(goods); const paid = [5, 10, 20, 50].find(x => x > price) || 50; const right = Math.round((paid - price) * 10) / 10;
-    const opts = shuffle([right, Math.round((right + pick([0.5, 1, -0.5, 2, -1])) * 10) / 10, Math.round((right + pick([0.2, -0.2, 1.5, -2])) * 10) / 10].filter((v, i, a) => v >= 0 && a.indexOf(v) === i));
-    const t0 = performance.now();
-    const o = opts.map(v => ({ t: money(v).replace('ℭ ', 'ℭ ') + (v % 1 ? '' : ''), f: () => { const fast = performance.now() - t0 < 6000; if (v === right) { score++; AU.sfx('coin'); } else { AU.sfx('bad'); toast('Resto sbagliato: il cliente protesta.', 'bad'); } round++; step(); } }));
+    const [what, price] = pick(goods); const paid = [5, 10, 20, 50].find(x => x > price) || (price + 10); const right = paid - price;
+    const wrongs = [right + pick([1, 2, -1, -2, 3, 5]), right + pick([1, -1, 2, -2, 4, -3])];
+    const opts = shuffle([...new Set([right, ...wrongs].filter(v => v >= 0))]);
+    while (opts.length < 2) opts.push(right + opts.length + 1);
+    const o = opts.map(v => ({ t: money(v), f: () => { if (v === right) { score++; AU.sfx('coin'); toast('Resto esatto.'); } else { AU.sfx('bad'); toast(`Resto sbagliato: erano ${money(right)}. Il cliente protesta.`, 'bad'); } round++; step(); } }));
     openPanel('🧾 Alla cassa', `<p class="desc">Cliente ${round + 1}/6: <b>${esc(what)}</b> — totale <b>${money(price)}</b>. Ti dà una banconota da <b>${money(paid)}</b>. Quanto gli dai di resto?</p>${optList(o)}`, [], { noClose: true }); bindOpts(o);
   };
   step();
@@ -7073,7 +7112,12 @@ function codeProgram(key) {
 function runProgram(file) {
   const key = file.prog, P = PROG_TEMPLATES[key]; if (!P) return toast('Programma non eseguibile.', 'warn');
   const q = (file.quality || 50) / 100;
+  // i programmi che fruttano soldi/follower si possono eseguire una volta al giorno (niente soldi infiniti)
+  const limited = ['game', 'tradebot', 'socialbot'].includes(key);
+  const pr = G.pcPrograms[key] = G.pcPrograms[key] || { quality: file.quality || 50 };
+  if (limited && pr.lastRun === G.day) return toast('Questo programma l\'hai già eseguito oggi: frutta una volta al giorno. Riprova domani.', 'warn');
   advance(20);
+  if (limited) pr.lastRun = G.day;
   if (key === 'tradebot') { const owned = STOCKS.reduce((s, st) => s + ((G.stocks[st.id] || {}).own || 0) * ((G.stocks[st.id] || {}).p || 0), 0); const gain = Math.round(owned * 0.02 * q); if (gain > 0) { earn(gain, 'Rendimento del bot di trading', 'bank'); toast(`🤖 Il bot ha reso ${money(gain)} sui tuoi titoli.`, 'money'); } else toast('🤖 Il bot gira, ma non possiedi titoli su cui operare.', 'warn'); }
   else if (key === 'socialbot') { const f = Math.round(rr(5, 25) * q + 5); G.social.followers = (G.social.followers || 0) + f; toast(`📣 Il bot ti ha portato ${f} follower.`, 'money'); }
   else if (key === 'cleaner') { if ((G.player.dirtyCash || 0) <= 0) return toast('🧼 Non hai contante sporco da ripulire.', 'warn'); const dirty = G.player.dirtyCash; const rate = 0.6 + 0.3 * q; const clean = Math.round(dirty * rate); G.player.dirtyCash = 0; earn(clean, 'Fondi ripuliti (script)', 'bank'); G.wanted.heat = clamp(G.wanted.heat + 6, 0, 100); updateWantedLevel(); if (chance(0.2 - q * 0.1)) addTrace(20); toast(`🧼 Ripuliti ${money(clean)} (perdita ${Math.round((1 - rate) * 100)}%).`, 'money'); }
