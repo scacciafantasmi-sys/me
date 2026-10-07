@@ -758,6 +758,14 @@
   }
   .notice-block p { margin: 0.4rem 0 0; line-height: 1.55; max-width: 62ch; }
 
+  /* ---------- Annuncio di approvazione (legge/mozione/modifica/referendum) ---------- */
+  .enactment-banner {
+    border: 1px solid var(--good); background: var(--good-soft); border-radius: var(--radius-md);
+    padding: 0.6rem 0.85rem; margin: 0 0 0.7rem; font-family: var(--font-display);
+    font-weight: 700; letter-spacing: 0.02em; color: var(--good); font-size: 0.95rem;
+  }
+  .enactment-banner.rejected { border-color: var(--critical); background: var(--critical-soft); color: var(--critical); }
+
   @media (max-width: 420px) {
     body { padding: 1.25rem 0.75rem 3rem; }
     .poll-grid { grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); }
@@ -10798,6 +10806,48 @@
     if (!state.enactedPolicies) state.enactedPolicies = [];
     state.enactedPolicies.unshift({ week: state.turn, title: title, note: note, metric: metric || null });
   }
+  // Richiesto da un giocatore: quando un voto (legge, mozione, modifica di legge, referendum) viene
+  // risolto — subito o dopo settimane di attesa (vedi p.pendingLegge/pendingMozione/ecc.) — deve comparire
+  // un annuncio chiaro e distinto dal solito esito, non solo una riga di log: un banner colorato
+  // (verde se approvato, rosso se respinto) seguito da come hanno reagito il Paese e il Parlamento,
+  // coerente con numeri già calcolati al momento della risoluzione (repDelta/cgDelta/l'effetto
+  // sull'indicatore), non inventato a parte. Il salvataggio nella memoria della partita esiste già
+  // (state.log + recordEnactedPolicy, sopra): qui si costruisce solo l'HTML dell'annuncio da anteporre
+  // al testo di esito già scritto in ciascun punto di risoluzione.
+  function buildEnactmentAnnouncement(opts) {
+    var p = state.player;
+    var passed = opts.passed;
+    var bannerLabel = (opts.kindLabel + (passed ? " APPROVATA" : " RESPINTA")).toUpperCase();
+    var html = '<div class="enactment-banner' + (passed ? "" : " rejected") + '">' + bannerLabel + "</div>";
+
+    var pos = p.family ? LEFT_RIGHT_POSITION[p.family] : undefined;
+    var leanLabel = pos === undefined ? "una parte consistente dell'opinione pubblica" : pos <= -1 ? "il centrosinistra" : pos >= 1 ? "il centrodestra" : "il centro";
+    var oppositeLabel = pos === undefined ? "le opposizioni" : pos <= -1 ? "il centrodestra" : pos >= 1 ? "il centrosinistra" : "le ali più estreme dello schieramento";
+    var repDelta = opts.repDelta || 0;
+
+    var publicReaction;
+    if (passed) {
+      if (repDelta > 1.5) publicReaction = "L'opinione pubblica accoglie la notizia con favore diffuso, ben oltre il solo elettorato di " + leanLabel + ".";
+      else if (repDelta > 0) publicReaction = leanLabel.charAt(0).toUpperCase() + leanLabel.slice(1) + " festeggia il risultato, mentre " + oppositeLabel + " resta scettic" + (oppositeLabel.indexOf("opposizioni") !== -1 ? "a" : "o") + ".";
+      else publicReaction = "Il provvedimento passa, ma divide l'opinione pubblica più del previsto, con malumori anche dentro " + leanLabel + ".";
+    } else {
+      publicReaction = "La bocciatura delude " + leanLabel + ", mentre " + oppositeLabel + " la accoglie come una vittoria politica.";
+    }
+
+    var parlReaction;
+    if (passed) {
+      parlReaction = opts.isGoverno
+        ? "In Aula la maggioranza rivendica il risultato; l'opposizione lo contesta duramente."
+        : "In Aula il voto spacca gli schieramenti tradizionali: il provvedimento passa nonostante le resistenze del governo.";
+    } else {
+      parlReaction = opts.isGoverno
+        ? "In Aula la bocciatura mette in imbarazzo la maggioranza, con mugugni anche tra gli alleati di governo."
+        : "In Aula il governo incassa il voto contrario e lo rivendica come una propria vittoria politica.";
+    }
+
+    html += '<p class="ci-hint" style="margin:0 0 0.8rem">' + publicReaction + " " + parlReaction + "</p>";
+    return html;
+  }
   // Leggi, mozioni e referendum del giocatore pescano tutti dallo stesso bacino di "nouns" combinatori
   // (vedi FAMILY_ANGLE_NOUNS/SITUATION_THEMES), solo con un involucro diverso ("Proposta di Legge su X",
   // "Mozione di impegno su X", "Referendum per una nuova legge su X"...): finché un tema veniva già
@@ -11249,9 +11299,10 @@
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "questo esito referendario", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum nazionale", repDelta: 0, isGoverno: p.parliamentRole === "governo" });
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Referendum nazionale — il paese ha votato",
-      cat: "Referendum Nazionale", title: topic.title, brief: esito + stanceNote + " Come si posiziona il tuo partito su questo esito?",
+      cat: "Referendum Nazionale", title: topic.title, brief: announceHtml + esito + stanceNote + " Come si posiziona il tuo partito su questo esito?",
       choices: choices
     };
   }
@@ -11807,9 +11858,10 @@
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo referendum", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum", repDelta: passed ? 2 : -2, isGoverno: isGoverno });
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Esito del referendum che hai promosso",
-      cat: "Referendum Proposto", title: topic.title, brief: esito + " Come reagisce il tuo partito a questo risultato?",
+      cat: "Referendum Proposto", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito a questo risultato?",
       choices: choices
     };
   }
@@ -12156,9 +12208,10 @@
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: isGoverno });
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua mozione è passata in Aula" : "La tua mozione è stata respinta in Aula",
-      cat: "Mozione Parlamentare", title: topic.title, brief: esito + " Come reagisce il tuo partito?",
+      cat: "Mozione Parlamentare", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito?",
       choices: choices
     };
   }
@@ -12305,9 +12358,10 @@
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno });
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua legge è passata in Aula" : "La tua proposta di legge è stata respinta",
-      cat: "Proposta di Legge", title: topic.title, brief: esito + " Come reagisce il tuo partito?",
+      cat: "Proposta di Legge", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito?",
       choices: choices
     };
   }
@@ -12375,9 +12429,10 @@
     var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: isGoverno });
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua modifica di legge è passata in Aula" : "La tua proposta di modifica è stata respinta",
-      cat: "Modifica di Legge", title: topic.title, brief: esito + " Come reagisce il tuo partito?",
+      cat: "Modifica di Legge", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito?",
       choices: choices
     };
   }
@@ -12455,7 +12510,8 @@
       recordEnactedPolicy(dossier.title.split(" (")[0], "Modifica approvata (proposta da " + meta.proposerName + "): " + meta.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.", meta.metric);
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Modifica di Legge" });
-    state.resultData = { resultText: esito, headlines: [] };
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo" });
+    state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   // ---------- Proposte di legge presentate da altri partiti ----------
   // Stessa logica delle mozioni CPU: chi propone (di governo o di opposizione) pesca dal pool pesato
@@ -12540,7 +12596,8 @@
       }
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
-    state.resultData = { resultText: esito, headlines: [] };
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo" });
+    state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   // ---------- Mozioni presentate da altri partiti ----------
   // Non solo il giocatore: ogni tanto è un ALTRO partito (di governo o di opposizione) a presentare una
@@ -12628,7 +12685,8 @@
       }
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Mozione Parlamentare" });
-    state.resultData = { resultText: esito, headlines: [] };
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: p.parliamentRole === "governo" });
+    state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   function renderMozioniPanel() {
     var p = state.player;
