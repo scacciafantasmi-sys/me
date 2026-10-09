@@ -9333,6 +9333,16 @@
   var FORMATION_SIGNATURE_TARGET = 300000;
   var FORMATION_ORGANIZER_COST = 900;
   var FORMATION_ORGANIZER_BOOST = 1.25;
+  // Richiesto da un giocatore: più varietà di azioni durante la Raccolta Firme, oltre alle 4 di sempre
+  // (comizio/banchetto/porta a porta/social) e all'organizzatore una tantum. Tre nuove iniziative, ognuna
+  // con un ruolo diverso dalle altre: il patrocinio è l'unica azione di formazione che tocca la
+  // reputazione (le 4 originarie non la toccano mai), il grande sostenitore è l'unico modo per far
+  // ENTRARE fondi durante la formazione (prima si poteva solo spendere, mai guadagnare — utile anche per
+  // rimettersi in careggiata se si finisce in rosso), l'evento di lancio è un vero momento-cardine
+  // utilizzabile una sola volta, con una resa alta su più fronti insieme.
+  var FORMATION_PATRONAGE_COOLDOWN = 5;
+  var FORMATION_DONOR_COOLDOWN = 6;
+  var FORMATION_LAUNCH_EVENT_COST = 700;
   // Segnalato da un giocatore: la Raccolta Firme era sempre la stessa identica schermata, settimana dopo
   // settimana (stesse 4 etichette, stessa frase di apertura) — solo il conteggio delle firme cambiava.
   // Qui sotto due pool di varianti puramente testuali (l'effetto meccanico di ciascuna azione resta
@@ -9428,6 +9438,34 @@
         effects: { fondi: -FORMATION_ORGANIZER_COST }, hiresFormationOrganizer: true,
         result: "Il nuovo organizzatore territoriale porta metodo ed esperienza: da ora ogni iniziativa di raccolta firme rende di più."
       });
+    }
+    if (state.turn >= (p.formationPatronageCooldownTurn || 0)) {
+      choices.push(Object.assign(applyOutcomeVariance({
+        label: "Chiedi il patrocinio di un'associazione o circolo locale", hint: "Gratuito, costruisce credibilità più che numeri",
+        cost: 0,
+        effects: { reputazione: rand(1, 3), iscritti: rand(2, 6), formationSignatures: Math.round(rand(800, 1800) * boost) },
+        result: "Un'associazione del territorio concede il proprio patrocinio al comitato: non porta moltissime firme, ma dà credibilità vera."
+      }), { formationPatronage: true }));
+    }
+    if (state.turn >= (p.formationDonorCooldownTurn || 0)) {
+      var donorSuccess = Math.random() < 0.45;
+      choices.push({
+        label: "Cerca un grande sostenitore per una donazione", hint: "Nessun costo, ma l'esito di questa settimana è incerto",
+        cost: 0,
+        effects: donorSuccess ? { fondi: rand(600, 1200) } : { visibilita: rand(1, 2) },
+        result: donorSuccess
+          ? "Un imprenditore locale, convinto dal progetto, versa una donazione sostanziosa nelle casse del comitato."
+          : "Nessun grande sostenitore si fa avanti questa settimana, ma il giro di contatti fa comunque un po' di rumore.",
+        formationDonor: true
+      });
+    }
+    if (!p.formationLaunchEventDone && p.fondi >= FORMATION_LAUNCH_EVENT_COST) {
+      choices.push(Object.assign(applyOutcomeVariance({
+        label: "Organizza il lancio ufficiale del comitato (" + fmtEuro(FORMATION_LAUNCH_EVENT_COST) + ")",
+        hint: "Costo una tantum, il momento clou della raccolta firme", cost: FORMATION_LAUNCH_EVENT_COST,
+        effects: { fondi: -FORMATION_LAUNCH_EVENT_COST, visibilita: rand(5, 9), iscritti: rand(20, 40), reputazione: rand(1, 3), formationSignatures: Math.round(rand(6000, 11000) * boost) },
+        result: "Il lancio ufficiale del comitato promotore riempie la piazza principale: stampa, simpatizzanti e curiosi, in quello che resterà il momento clou della raccolta firme."
+      }), { isFormationLaunchEvent: true }));
     }
     var signatures = Math.round(p.formationSignatures || 0);
     var mood = FORMATION_WEEK_MOODS[Math.floor(Math.random() * FORMATION_WEEK_MOODS.length)];
@@ -14064,6 +14102,7 @@
     // "new" alla fondazione) lo imposta esplicitamente a false, per attraversare la Raccolta Firme
     // (vedi buildFormationDossier) prima di poter davvero cominciare a giocare.
     formationComplete: true, formationSignatures: 0, formationOrganizerHired: false, formationSocialPostTurn: 0,
+    formationPatronageCooldownTurn: 0, formationDonorCooldownTurn: 0, formationLaunchEventDone: false,
     // Età di partenza del leader al momento della fondazione/presa in mano del partito: da qui, insieme a
     // foundedTurn, si calcola l'età attuale (vedi leaderAge) senza bisogno di aggiornarla turno per turno.
     // 45 è il default per un salvataggio precedente a questa funzionalità (mai avuto occasione di
@@ -21910,6 +21949,9 @@
           state.player.judicialRisk = clamp(state.player.judicialRisk + choice.judicialRiskDelta, 1, 95);
         }
         if (choice.hiresFormationOrganizer) state.player.formationOrganizerHired = true;
+        if (choice.formationPatronage) state.player.formationPatronageCooldownTurn = state.turn + FORMATION_PATRONAGE_COOLDOWN;
+        if (choice.formationDonor) state.player.formationDonorCooldownTurn = state.turn + FORMATION_DONOR_COOLDOWN;
+        if (choice.isFormationLaunchEvent) state.player.formationLaunchEventDone = true;
         if (choice.successionAnnounced) state.player.successionAnnounced = true;
         if (choice.conflictBlindTrust) state.player.ownedOutletId = null;
         if (choice.retireLeader) {
