@@ -11230,9 +11230,13 @@
   // il doppio turno, che storicamente amplifica la vittoria al ballottaggio), il proporzionale (o
   // nessuna scelta fatta) non altera nulla — resta il riparto fedele di sempre.
   function applyElectoralSystemWeights(weights) {
+    if (!weights.length) return weights;
     var sys = state.electoralSystem;
-    if (!sys || sys === "proporzionale" || !weights.length) return weights;
     var bonus = sys === "doppioturno" ? 1.55 : sys === "maggioritario" ? 1.35 : 1;
+    // Il premio di maggioranza aggiuntivo di una legge elettorale di governo (electoralMajorityBonusExtra,
+    // vedi proposeElectoralLaw) si somma moltiplicativamente a quello eventuale del sistema di voto: una
+    // legge può scegliere doppio turno E un premio extra, non sono alternative esclusive.
+    bonus *= 1 + (state.electoralMajorityBonusExtra || 0);
     if (bonus === 1) return weights;
     var maxIdx = 0;
     for (var i = 1; i < weights.length; i++) { if (weights[i] > weights[maxIdx]) maxIdx = i; }
@@ -11943,6 +11947,184 @@
         '<span class="olabel">' + t.title + '</span><span class="odesc">' + t.brief + '</span></button>';
     });
     html += '</div><button type="button" class="staff-btn hire" data-reroll-referendum="1">Rimescola le proposte</button></section>';
+    return html;
+  }
+
+  // ---------- Legge Elettorale proposta dal governo ----------
+  // Richiesta esplicita di un giocatore: oltre ai 3 referendum rari sul sistema di voto (sopra, decisi
+  // dall'elettorato), una vera iniziativa DI GOVERNO che il giocatore costruisce da sé, scegliendo
+  // sistema di voto, soglie di sbarramento per partiti e coalizioni e un eventuale premio di maggioranza
+  // aggiuntivo, e le dà un nome a sua scelta — come un "Rosatellum" o un "Mattarellum" reale. Al massimo
+  // una volta per legislatura (stesso identico schema di p.referendumLegislatureUsed sopra: si confronta
+  // con state.legislature, che scatta a ogni elezione, non un cooldown a settimane), e passa solo con
+  // l'approvazione unanime della maggioranza di governo (un governo solista decide sempre da sé). Più
+  // fattori il giocatore cambia rispetto alla legge in vigore oggi, più è difficile ottenere quel
+  // consenso unanime: un ritocco isolato passa quasi sempre, una riscrittura completa è un azzardo serio.
+  // Se approvata, resta in vigore per sempre (esattamente come state.electoralSystem dei referendum sopra)
+  // finché non arriva una nuova legge elettorale o un referendum sul sistema di voto.
+  var ELECTORAL_LAW_SISTEMA_OPTIONS = [
+    { id: "proporzionale", label: "Proporzionale puro", desc: "Nessun premio di seggi: la ripartizione rispecchia fedelmente i voti.", corruzioneDelta: 0.2 },
+    { id: "maggioritario", label: "Maggioritario a collegi uninominali", desc: "Premio implicito di seggi per il blocco che arriva primo.", corruzioneDelta: -0.15 },
+    { id: "doppioturno", label: "Doppio turno di collegio", desc: "Premio ancora più marcato per il blocco che arriva primo al ballottaggio.", corruzioneDelta: -0.25 }
+  ];
+  var ELECTORAL_LAW_SOGLIA_PARTITO_OPTIONS = [2, 3, 5, 8];
+  var ELECTORAL_LAW_SOGLIA_COALIZIONE_OPTIONS = [5, 10, 15, 20];
+  var ELECTORAL_LAW_PREMIO_OPTIONS = [
+    { value: 0, label: "Nessun premio extra", desc: "Nessun bonus oltre a quello eventuale del sistema di voto scelto." },
+    { value: 0.1, label: "Premio moderato (+10%)", desc: "Un seggio in più ogni dieci per il blocco che arriva primo, oltre al sistema di voto." },
+    { value: 0.2, label: "Premio forte (+20%)", desc: "Un seggio in più ogni cinque per il blocco che arriva primo, oltre al sistema di voto." }
+  ];
+  function electoralLawCurrentSettings() {
+    return {
+      sistema: state.electoralSystem || "proporzionale",
+      sogliaPartito: state.electoralThresholdParty || 3,
+      sogliaCoalizione: state.electoralThresholdCoalition || 10,
+      premioExtra: state.electoralMajorityBonusExtra || 0
+    };
+  }
+  function describeElectoralLawChange(settings) {
+    var sistemaInfo = ELECTORAL_LAW_SISTEMA_OPTIONS.filter(function (o) { return o.id === settings.sistema; })[0];
+    var parts = [
+      "sistema " + (sistemaInfo ? sistemaInfo.label.toLowerCase() : settings.sistema),
+      "soglia di sbarramento al " + settings.sogliaPartito + "% per i singoli partiti",
+      "al " + settings.sogliaCoalizione + "% per le coalizioni"
+    ];
+    if (settings.premioExtra > 0) parts.push("premio di maggioranza aggiuntivo del " + Math.round(settings.premioExtra * 100) + "%");
+    return parts.join(", ");
+  }
+  function electoralLawChangedFactorsCount(draft) {
+    var current = electoralLawCurrentSettings();
+    var count = 0;
+    if (draft.sistema !== current.sistema) count++;
+    if (draft.sogliaPartito !== current.sogliaPartito) count++;
+    if (draft.sogliaCoalizione !== current.sogliaCoalizione) count++;
+    if (draft.premioExtra !== current.premioExtra) count++;
+    return count;
+  }
+  // Stessa base probabilistica di resolveCoalitionApproval (la fiducia di coalizione, o un governo
+  // solista che decide sempre da sé), ma con una penalità aggiuntiva per ogni fattore cambiato rispetto
+  // alla legge in vigore: un governo unito approva quasi sempre un ritocco isolato, ma anche la
+  // coalizione più coesa fatica a trovare l'unanimità su una riscrittura completa del sistema di voto.
+  function electoralLawApproveProbability(draft) {
+    var allyIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var trust = 72;
+    if (allyIds.length) {
+      var allianceId = state.govEntity.id;
+      if (!state.coalitionTrust) state.coalitionTrust = {};
+      if (state.coalitionTrust[allianceId] === undefined) state.coalitionTrust[allianceId] = initialCoalitionTrust(allianceId);
+      trust = state.coalitionTrust[allianceId];
+    }
+    var base = clamp(trust / 100 + 0.12, 0.12, 0.92);
+    var changed = electoralLawChangedFactorsCount(draft);
+    return clamp(base - changed * 0.18, 0.04, 0.92);
+  }
+  function proposeElectoralLaw(draft) {
+    var p = state.player;
+    if (p.parliamentRole !== "governo") return null;
+    if (p.electoralLawLegislatureUsed === state.legislature) return null;
+    if (p.pendingElectoralLaw) return null;
+    var name = (draft.name || "").trim();
+    if (!name) return null;
+    if (ELECTORAL_LAW_SISTEMA_OPTIONS.map(function (o) { return o.id; }).indexOf(draft.sistema) === -1) return null;
+    if (ELECTORAL_LAW_SOGLIA_PARTITO_OPTIONS.indexOf(draft.sogliaPartito) === -1) return null;
+    if (ELECTORAL_LAW_SOGLIA_COALIZIONE_OPTIONS.indexOf(draft.sogliaCoalizione) === -1) return null;
+    if (ELECTORAL_LAW_PREMIO_OPTIONS.map(function (o) { return o.value; }).indexOf(draft.premioExtra) === -1) return null;
+    p.electoralLawLegislatureUsed = state.legislature;
+    p.pendingElectoralLaw = {
+      name: name, sistema: draft.sistema, sogliaPartito: draft.sogliaPartito, sogliaCoalizione: draft.sogliaCoalizione, premioExtra: draft.premioExtra,
+      acceptProb: electoralLawApproveProbability(draft), resolveTurn: state.turn + 4 + Math.floor(Math.random() * 5)
+    };
+    state.electoralLawDraft = { name: "", sistema: null, sogliaPartito: null, sogliaCoalizione: null, premioExtra: null };
+    state.log.unshift({
+      week: state.turn, title: "Proposta di legge elettorale depositata", choiceLabel: name,
+      result: "Il governo deposita in Parlamento \"" + name + "\", una proposta di riforma della legge elettorale. L'iter richiederà qualche settimana, e serve il consenso di tutta la maggioranza per approvarla.",
+      headlines: [], type: "legge", cat: "Legge Elettorale"
+    });
+    return { resultText: "Hai depositato \"" + name + "\". L'esito arriverà tra qualche settimana.", headlines: [] };
+  }
+  function resolveElectoralLawIfDue() {
+    var p = state.player;
+    if (!p.pendingElectoralLaw) return null;
+    if (state.turn < p.pendingElectoralLaw.resolveTurn) return null;
+    var law = p.pendingElectoralLaw;
+    p.pendingElectoralLaw = null;
+    var passed = Math.random() < law.acceptProb;
+    var repDelta = passed ? rand(1, 3) : -rand(0.5, 2);
+    p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+    if (state.consensoGoverno !== undefined) {
+      var cgDelta = passed ? rand(0.5, 1.5) : -rand(1, 3);
+      state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
+    }
+    var esito;
+    if (passed) {
+      var sistemaInfo = ELECTORAL_LAW_SISTEMA_OPTIONS.filter(function (o) { return o.id === law.sistema; })[0];
+      state.electoralSystem = law.sistema;
+      state.electoralThresholdParty = law.sogliaPartito;
+      state.electoralThresholdCoalition = law.sogliaCoalizione;
+      state.electoralMajorityBonusExtra = law.premioExtra;
+      var metricDelta = (sistemaInfo ? sistemaInfo.corruzioneDelta : 0)
+        + (law.sogliaPartito - 3) * -0.03 + (law.sogliaCoalizione - 10) * -0.015 + law.premioExtra * -1.2;
+      state.countryProfile.corruzione = clamp(state.countryProfile.corruzione + metricDelta, 1, 10);
+      var changeDesc = describeElectoralLawChange(law);
+      esito = "\"" + law.name + "\" viene approvata dal Parlamento con il voto compatto della maggioranza di governo: dalle prossime elezioni politiche si vota con un nuovo sistema — " + changeDesc + ".";
+      recordEnactedPolicy(law.name, "Legge elettorale approvata: " + changeDesc + ". Resterà in vigore fino a una nuova legge elettorale o a un referendum sul sistema di voto.", "corruzione");
+    } else {
+      esito = "\"" + law.name + "\" non trova l'unanimità necessaria dentro la maggioranza: qualche alleato si smarca su una riforma che tocca gli equilibri stessi della coalizione, e la proposta resta ferma al palo. Il sistema elettorale in vigore non cambia.";
+    }
+    state.log.unshift({ week: state.turn, title: law.name, choiceLabel: "Esito del voto in Aula", result: esito, headlines: [], type: "legge", cat: "Legge Elettorale" });
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var choices = buildSituationChoices({ noun: "la tua proposta di legge elettorale", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "corruzione", themeId: METRIC_TO_THEME_ID.corruzione, inParliament: !!p.inParliament }, 5);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge Elettorale", repDelta: repDelta, isGoverno: true });
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua legge elettorale è passata" : "La tua legge elettorale è stata respinta",
+      cat: "Legge Elettorale", title: law.name, brief: announceHtml + esito + " Come reagisce il tuo partito?",
+      choices: choices
+    };
+  }
+  function renderElectoralLawProposal() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return "";
+    var html = '<section aria-label="Proponi una Legge Elettorale"><details class="log"><summary>Proponi una Legge Elettorale<span>▾</span></summary>';
+    if (p.pendingElectoralLaw) {
+      html += '<p class="ci-hint">La tua proposta <strong>"' + p.pendingElectoralLaw.name + '"</strong> è in discussione in Parlamento: l\'esito arriverà tra qualche settimana.</p></details></section>';
+      return html;
+    }
+    if (p.electoralLawLegislatureUsed === state.legislature) {
+      html += '<p class="ci-hint">Hai già usato la tua unica proposta di legge elettorale per questo mandato: potrai riproporne un\'altra solo dalla prossima legislatura.</p></details></section>';
+      return html;
+    }
+    var current = electoralLawCurrentSettings();
+    var draft = state.electoralLawDraft;
+    if (!draft.sistema) draft.sistema = current.sistema;
+    if (!draft.sogliaPartito) draft.sogliaPartito = current.sogliaPartito;
+    if (!draft.sogliaCoalizione) draft.sogliaCoalizione = current.sogliaCoalizione;
+    if (draft.premioExtra === null || draft.premioExtra === undefined) draft.premioExtra = current.premioExtra;
+    var changedCount = electoralLawChangedFactorsCount(draft);
+    var prob = electoralLawApproveProbability(draft);
+    html += '<p class="ci-hint">Da governo puoi scrivere una vera legge elettorale: scegli sistema di voto, soglie di sbarramento e premio di maggioranza, e dalle un nome a tua scelta. Al massimo una volta per legislatura, e passa solo con l\'approvazione unanime della tua maggioranza di governo. Legge in vigore oggi: ' + describeElectoralLawChange(current) + '. Più fattori cambi rispetto a questa, più è difficile ottenere il consenso unanime.</p>' +
+      '<div class="field"><label class="field-label" for="electoral-law-name-input">Nome della legge</label>' +
+      '<input type="text" id="electoral-law-name-input" maxlength="50" placeholder="Es. Legge Fontana" value="' + (draft.name || "").replace(/"/g, "&quot;") + '"></div>' +
+      '<div class="field"><label class="field-label">Sistema di voto</label><div class="option-grid">' +
+      ELECTORAL_LAW_SISTEMA_OPTIONS.map(function (o) {
+        return '<button type="button" class="option-card' + (draft.sistema === o.id ? " selected" : "") + '" data-elaw-sistema="' + o.id + '"><span class="olabel">' + o.label + (o.id === current.sistema ? " (attuale)" : "") + '</span><span class="odesc">' + o.desc + '</span></button>';
+      }).join("") + '</div></div>' +
+      '<div class="field"><label class="field-label">Soglia di sbarramento per i singoli partiti</label><div class="option-grid">' +
+      ELECTORAL_LAW_SOGLIA_PARTITO_OPTIONS.map(function (v) {
+        return '<button type="button" class="option-card' + (draft.sogliaPartito === v ? " selected" : "") + '" data-elaw-soglia-partito="' + v + '"><span class="olabel">' + v + "%" + (v === current.sogliaPartito ? " (attuale)" : "") + '</span></button>';
+      }).join("") + '</div></div>' +
+      '<div class="field"><label class="field-label">Soglia minima per le coalizioni</label><div class="option-grid">' +
+      ELECTORAL_LAW_SOGLIA_COALIZIONE_OPTIONS.map(function (v) {
+        return '<button type="button" class="option-card' + (draft.sogliaCoalizione === v ? " selected" : "") + '" data-elaw-soglia-coalizione="' + v + '"><span class="olabel">' + v + "%" + (v === current.sogliaCoalizione ? " (attuale)" : "") + '</span></button>';
+      }).join("") + '</div></div>' +
+      '<div class="field"><label class="field-label">Premio di maggioranza aggiuntivo</label><div class="option-grid">' +
+      ELECTORAL_LAW_PREMIO_OPTIONS.map(function (o) {
+        return '<button type="button" class="option-card' + (draft.premioExtra === o.value ? " selected" : "") + '" data-elaw-premio="' + o.value + '"><span class="olabel">' + o.label + (o.value === current.premioExtra ? " (attuale)" : "") + '</span><span class="odesc">' + o.desc + '</span></button>';
+      }).join("") + '</div></div>' +
+      '<p class="ci-hint">Stai cambiando <strong>' + changedCount + " fattor" + (changedCount === 1 ? "e" : "i") + ' su 4</strong> rispetto alla legge in vigore: probabilità stimata di approvazione unanime <strong>' + Math.round(prob * 100) + '%</strong>.</p>' +
+      '<button class="save-bar-btn primary" id="propose-electoral-law-btn" type="button" style="align-self:flex-start">Deposita la legge elettorale</button>' +
+      "</details></section>";
     return html;
   }
 
@@ -13822,7 +14004,9 @@
     foreignLeaders: {}, foreignLeaderRapport: {},
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
     cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, cpuQuestionTimeCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
-    electoralSystem: null, president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null, presidentReturnedLawTitles: [], mandatoEsplorativoCooldownTurn: 0, presidentTerm: null,
+    electoralSystem: null, electoralThresholdParty: 3, electoralThresholdCoalition: 10, electoralMajorityBonusExtra: 0,
+    electoralLawDraft: { name: "", sistema: null, sogliaPartito: null, sogliaCoalizione: null, premioExtra: null },
+    president: null, nextPresidentElectionTurn: 260, pendingPresidentElection: null, presidentReturnedLawTitles: [], mandatoEsplorativoCooldownTurn: 0, presidentTerm: null,
     countryEpochs: [], currentEpoch: null,
     fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
     spaceProgram: freshSpaceProgram(),
@@ -13839,6 +14023,7 @@
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
     regionsWon: {}, regionalIssueCooldownTurn: 0,
     reformCooldownTurn: 0, completedReformDomains: [], lastReformOutcome: null, civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumLegislatureUsed: null,
+    electoralLawLegislatureUsed: null, pendingElectoralLaw: null,
     cumulativeGovWeeks: 0, lingeringScandal: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
@@ -14808,6 +14993,10 @@
   function allianceDossier() {
     var p = state.player;
     var fam = familyById(p.family);
+    // Soglie testuali dinamiche: se una legge elettorale di governo (proposeElectoralLaw) ha cambiato le
+    // soglie reali, questi testi non devono restare fermi al vecchio 10%/3% di default.
+    var sc = state.electoralThresholdCoalition || 10;
+    var sp = state.electoralThresholdParty || 3;
     var currentId = p.allianceId;
     var current = coalitionById(currentId);
     // p.allianceId viene azzerato a ogni elezione (va rinegoziato), ma se il giocatore aveva costruito
@@ -14826,7 +15015,7 @@
     // una nuova adesione.
     if (current) {
       choices.push({
-        label: "Corri con " + current.label, hint: "Continua con l'alleanza attuale — soglia coalizione 10%",
+        label: "Corri con " + current.label, hint: "Continua con l'alleanza attuale — soglia coalizione " + sc + "%",
         effects: { reputazione: 1 },
         result: "Il partito conferma l'alleanza con " + current.label + " in vista del voto: continuità, non una nuova intesa.",
         alliance: currentId, keepCurrent: true
@@ -14840,28 +15029,28 @@
     // COALITION_IDEOLOGY_GAP_LIMIT — vedi wouldExceedCoalitionSpread. Qui si applica lo stesso identico
     // controllo, così un partito troppo lontano da un blocco non lo vede proprio più tra le opzioni.
     if (currentId !== "centrodestra" && !wouldExceedCoalitionSpread(coalitionFamilyIds("centrodestra"), fam.id)) {
-      choices.push({ label: "Allearsi con il Centrodestra", hint: "FdI, Lega, Forza Italia — soglia coalizione 10%",
+      choices.push({ label: "Allearsi con il Centrodestra", hint: "FdI, Lega, Forza Italia — soglia coalizione " + sc + "%",
         effects: { reputazione: 3 },
-        result: "L'accordo con il centrodestra apre le porte a un listino comune, con soglia di coalizione al 10%.",
+        result: "L'accordo con il centrodestra apre le porte a un listino comune, con soglia di coalizione al " + sc + "%.",
         alliance: "centrodestra" });
     }
     if (currentId !== "campolargo" && !wouldExceedCoalitionSpread(coalitionFamilyIds("campolargo"), fam.id)) {
-      choices.push({ label: "Allearsi con il Campo Largo (PD–AVS)", hint: "PD, AVS — soglia coalizione 10%",
+      choices.push({ label: "Allearsi con il Campo Largo (PD–AVS)", hint: "PD, AVS — soglia coalizione " + sc + "%",
         effects: { reputazione: 3 },
-        result: "L'intesa con il campo largo porta il partito dentro una coalizione ampia, soglia al 10%.",
+        result: "L'intesa con il campo largo porta il partito dentro una coalizione ampia, soglia al " + sc + "%.",
         alliance: "campolargo" });
     }
-    choices.push({ label: "Corri da solo", hint: "Nessuna alleanza — soglia 3% da soli",
+    choices.push({ label: "Corri da solo", hint: "Nessuna alleanza — soglia " + sp + "% da soli",
       effects: { reputazione: 1 },
       result: current
-        ? "Il partito lascia " + current.label + " e si presenta da solo alle urne: identità intatta, ma la soglia individuale resta al 3%."
-        : "Il partito si presenta da solo alle urne: identità intatta, ma la soglia individuale resta al 3%.",
+        ? "Il partito lascia " + current.label + " e si presenta da solo alle urne: identità intatta, ma la soglia individuale resta al " + sp + "%."
+        : "Il partito si presenta da solo alle urne: identità intatta, ma la soglia individuale resta al " + sp + "%.",
       alliance: null });
     return {
       id: "alleanza_negoziato", cat: "Strategia Elettorale", title: "Trattativa per un'Alleanza",
       brief: current
-        ? "Le elezioni si avvicinano. Sei già alleato con " + current.label + ": confermi, o valuti un cambio di schieramento? Correre in coalizione abbassa la soglia di sbarramento al 10% collettivo, ma corri con altri simboli sulla scheda."
-        : "Le elezioni si avvicinano. Ti contattano da più schieramenti per valutare un accordo di coalizione: correre insieme abbassa la soglia di sbarramento al 10% collettivo, ma corri con altri simboli sulla scheda.",
+        ? "Le elezioni si avvicinano. Sei già alleato con " + current.label + ": confermi, o valuti un cambio di schieramento? Correre in coalizione abbassa la soglia di sbarramento al " + sc + "% collettivo, ma corri con altri simboli sulla scheda."
+        : "Le elezioni si avvicinano. Ti contattano da più schieramenti per valutare un accordo di coalizione: correre insieme abbassa la soglia di sbarramento al " + sc + "% collettivo, ma corri con altri simboli sulla scheda.",
       choices: choices
     };
   }
@@ -15795,6 +15984,11 @@
   // "se si votasse oggi" nell'emiciclo — stessa identica logica, un solo punto per non farle divergere.
   function computeQualifiedElectionEntities() {
     var p = state.player;
+    // Soglie parametrizzate dalla legge elettorale in vigore (3%/10% di default, vedi
+    // proposeElectoralLaw/resolveElectoralLawIfDue): una nuova legge le può cambiare per sempre, non
+    // sono più due costanti fisse.
+    var sogliaPartito = state.electoralThresholdParty || 3;
+    var sogliaCoalizione = state.electoralThresholdCoalition || 10;
     var entities = [];
     var activeIds = activeParties().map(function (party) { return party.id; });
     var cdMembers = COALITIONS.centrodestra.members.filter(function (id) { return activeIds.indexOf(id) !== -1; });
@@ -15816,12 +16010,12 @@
     // stesso: senza soglia raggiunta, restava del tutto invisibile ai seggi anche con sondaggi alti.
     var coalitionMemberIds = [];
     var playerCovered = false;
-    if (cdVotes >= 10) {
+    if (cdVotes >= sogliaCoalizione) {
       entities.push({ id: "centrodestra", label: COALITIONS.centrodestra.label, votes: cdVotes, members: cdMembers.concat(playerInCd ? ["player"] : []), isCoalition: true });
       coalitionMemberIds = coalitionMemberIds.concat(cdMembers);
       if (playerInCd) playerCovered = true;
     }
-    if (clVotes >= 10) {
+    if (clVotes >= sogliaCoalizione) {
       entities.push({ id: "campolargo", label: COALITIONS.campolargo.label, votes: clVotes, members: clMembers.concat(playerInCl ? ["player"] : []), isCoalition: true });
       coalitionMemberIds = coalitionMemberIds.concat(clMembers);
       if (playerInCl) playerCovered = true;
@@ -15834,7 +16028,7 @@
     }).filter(function (c) { return c.members.length >= 2; });
     dynamicCoalitions.forEach(function (c) {
       var votes = c.members.reduce(function (s, id) { return s + (id === "player" ? p.sondaggi : state.parties[id]); }, 0);
-      if (votes < 10) return;
+      if (votes < sogliaCoalizione) return;
       entities.push({ id: c.id, label: c.label, votes: votes, members: c.members.slice(), isCoalition: true });
       coalitionMemberIds = coalitionMemberIds.concat(c.members.filter(function (id) { return id !== "player"; }));
       if (c.playerInThis) playerCovered = true;
@@ -15851,7 +16045,7 @@
       entities.push({ id: "player", label: p.name, votes: p.sondaggi, members: ["player"], isCoalition: false });
     }
 
-    entities.forEach(function (e) { e.qualifies = e.isCoalition ? e.votes >= 10 : e.votes >= 3; });
+    entities.forEach(function (e) { e.qualifies = e.isCoalition ? e.votes >= sogliaCoalizione : e.votes >= sogliaPartito; });
     return { entities: entities, qualified: entities.filter(function (e) { return e.qualifies; }) };
   }
   // Ripartisce i seggi di Camera e Senato tra le entità qualificate (vedi computeQualifiedElectionEntities)
@@ -19320,7 +19514,7 @@
         var cd = p.coalitionInviteCooldowns[b[0]] || 0;
         var weeksLeft = cd - state.turn;
         var disabled = weeksLeft > 0;
-        var status = weeksLeft > 0 ? "Riprova tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : b[2] + " — soglia coalizione 10%";
+        var status = weeksLeft > 0 ? "Riprova tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : b[2] + " — soglia coalizione " + (state.electoralThresholdCoalition || 10) + "%";
         html += '<button type="button" class="option-card" data-invite-bloc="' + b[0] + '"' + (disabled ? " disabled" : "") + '><span class="olabel">Invita il ' + b[1] + '</span><span class="odesc">' + status + '</span></button>';
       });
       (state.dynamicCoalitions || []).forEach(function (c) {
@@ -19333,8 +19527,8 @@
         var foundedByPlayer = c.id.indexOf("dyn_coal_player_") === 0;
         var label = foundedByPlayer ? "Rientra in " + c.label : "Chiedi di aderire a " + c.label;
         var status = weeksLeft > 0 ? "Riprova tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
-          : foundedByPlayer ? "La coalizione che avevi fondato tu, ora prosegue senza di te — soglia 10%"
-          : "Coalizione già nata tra partiti terzi — soglia 10%";
+          : foundedByPlayer ? "La coalizione che avevi fondato tu, ora prosegue senza di te — soglia " + (state.electoralThresholdCoalition || 10) + "%"
+          : "Coalizione già nata tra partiti terzi — soglia " + (state.electoralThresholdCoalition || 10) + "%";
         html += '<button type="button" class="option-card" data-invite-bloc="' + c.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + label + '</span><span class="odesc">' + status + '</span></button>';
       });
       var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
@@ -19433,9 +19627,10 @@
     var senEntries = buildHemicycleEntries(senMap);
     var camTotal = camEntries.reduce(function (s, e) { return s + e.seats; }, 0);
     var senTotal = senEntries.reduce(function (s, e) { return s + e.seats; }, 0);
+    var sogliaPartitoNote = state.electoralThresholdParty || 3, sogliaCoalizioneNote = state.electoralThresholdCoalition || 10;
     var note = isReal
-      ? "L'emiciclo uscito davvero dalle urne, con i partiti (soglia 3%) e le coalizioni (soglia 10%) che hanno superato lo sbarramento: resta fisso per tutta la legislatura, a differenza del quadro sondaggi qui sotto."
-      : "Nessuna elezione politica ancora registrata in questo salvataggio: l'emiciclo qui sotto è una proiezione sui sondaggi di oggi (stesse soglie del voto vero: partiti singoli sopra il 3%, coalizioni sopra il 10%), si aggiorna ogni settimana finché non si vota davvero — da quel momento in poi mostrerà la composizione reale e fissa uscita dalle urne.";
+      ? "L'emiciclo uscito davvero dalle urne, con i partiti (soglia " + sogliaPartitoNote + "%) e le coalizioni (soglia " + sogliaCoalizioneNote + "%) che hanno superato lo sbarramento: resta fisso per tutta la legislatura, a differenza del quadro sondaggi qui sotto."
+      : "Nessuna elezione politica ancora registrata in questo salvataggio: l'emiciclo qui sotto è una proiezione sui sondaggi di oggi (stesse soglie del voto vero: partiti singoli sopra il " + sogliaPartitoNote + "%, coalizioni sopra il " + sogliaCoalizioneNote + "%), si aggiorna ogni settimana finché non si vota davvero — da quel momento in poi mostrerà la composizione reale e fissa uscita dalle urne.";
     return '<section aria-label="Composizione reale del Parlamento"><details class="log" open><summary>' + headerNote + '<span>▾</span></summary>' +
       '<p class="ci-hint">' + note + '</p>' +
       '<div class="chambers">' +
@@ -20158,7 +20353,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", icon: "⚖️", nav: "Parlamento", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", icon: "🌍", nav: "Estero", render: function () {
         return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
@@ -22608,6 +22803,48 @@
         render();
       });
     }
+    app.querySelectorAll("[data-elaw-sistema]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.electoralLawDraft.sistema = btn.getAttribute("data-elaw-sistema");
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-elaw-soglia-partito]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.electoralLawDraft.sogliaPartito = parseFloat(btn.getAttribute("data-elaw-soglia-partito"));
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-elaw-soglia-coalizione]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.electoralLawDraft.sogliaCoalizione = parseFloat(btn.getAttribute("data-elaw-soglia-coalizione"));
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-elaw-premio]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.electoralLawDraft.premioExtra = parseFloat(btn.getAttribute("data-elaw-premio"));
+        save();
+        render();
+      });
+    });
+    var elawNameInput = document.getElementById("electoral-law-name-input");
+    if (elawNameInput) elawNameInput.addEventListener("input", function () { state.electoralLawDraft.name = elawNameInput.value; });
+    var proposeElawBtn = document.getElementById("propose-electoral-law-btn");
+    if (proposeElawBtn) {
+      proposeElawBtn.addEventListener("click", function () {
+        var draft = state.electoralLawDraft;
+        if (!(draft.name || "").trim()) { showSaveStatus("Dai un nome alla tua legge elettorale.", true); return; }
+        var outcome = proposeElectoralLaw(draft);
+        if (!outcome) { showSaveStatus("Non puoi ancora depositare questa legge.", true); return; }
+        showSaveStatus(outcome.resultText, false);
+        save();
+        render();
+      });
+    }
     var foundOrgBtn = document.getElementById("found-organization-btn");
     if (foundOrgBtn) {
       foundOrgBtn.addEventListener("click", function () {
@@ -22982,6 +23219,14 @@
     var leggeDossier = resolveLeggeIfDue();
     if (leggeDossier) {
       state.aiDynamicDossier = leggeDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var electoralLawDossier = resolveElectoralLawIfDue();
+    if (electoralLawDossier) {
+      state.aiDynamicDossier = electoralLawDossier;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
