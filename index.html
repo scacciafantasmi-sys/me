@@ -16084,6 +16084,49 @@
     var qualified = computeQualifiedElectionEntities().qualified;
     return computeChamberSeatsById(qualified);
   }
+  // Segnalato da un giocatore: la classifica finale mostrava il giocatore come se avesse corso da solo
+  // ogni volta che la SUA alleanza non raggiungeva la soglia combinata del 10% (fix precedente, limitata
+  // a lui), ma lo stesso esatto problema restava per QUALSIASI altra coalizione — fissa (Centrodestra,
+  // Campo Largo) o nata durante la partita — di cui il giocatore non faceva parte: se non raggiungeva la
+  // soglia, spariva del tutto dalla classifica, e i suoi membri comparivano sparsi come partiti
+  // indipendenti, come se non avessero mai corso insieme. Qui si generalizza la stessa logica a ogni
+  // coalizione esistita in questa tornata elettorale, giocatore compreso o no: se la coalizione HA
+  // raggiunto la soglia, la riga è già pronta e corretta in "qualified" (nessun ricalcolo, zero rischio
+  // di divergenza dai seggi veri); se NON l'ha raggiunta, i suoi membri attivi corrono comunque ciascuno
+  // per conto proprio per i seggi (quello non cambia: lo fa già computeChamberSeatsById), ma la riga di
+  // classifica deve comunque raccontare CON CHI hanno corso — non farli sembrare candidati solitari fin
+  // dall'inizio. I membri così raggruppati vengono rimossi dall'elenco individuale per evitare di contarli
+  // due volte (una nella riga di coalizione, una per conto proprio).
+  function buildElectionStandingsRows(qualified, seatsById) {
+    var p = state.player;
+    var rows = [];
+    var claimedMemberIds = {};
+    function addCoalitionGroup(id, label, memberIds) {
+      var already = qualified.filter(function (e) { return e.id === id; })[0];
+      if (already) {
+        rows.push({ id: already.id, label: already.label, votes: already.votes, isCoalition: true, totalSeats: already.totalSeats });
+        memberIds.forEach(function (mid) { claimedMemberIds[mid] = true; });
+        return;
+      }
+      var activeMembers = memberIds.filter(function (mid) { return mid === "player" || activeParties().some(function (pt) { return pt.id === mid; }); });
+      if (activeMembers.length < 2) return;
+      var votes = activeMembers.reduce(function (s, mid) { return s + (mid === "player" ? p.sondaggi : (state.parties[mid] || 0)); }, 0);
+      var seats = activeMembers.reduce(function (s, mid) { return s + (seatsById[mid] ? seatsById[mid].camera + seatsById[mid].senato : 0); }, 0);
+      rows.push({ id: id, label: label, votes: votes, isCoalition: true, totalSeats: seats });
+      activeMembers.forEach(function (mid) { claimedMemberIds[mid] = true; });
+    }
+    addCoalitionGroup("centrodestra", COALITIONS.centrodestra.label, COALITIONS.centrodestra.members.concat(p.allianceId === "centrodestra" ? ["player"] : []));
+    addCoalitionGroup("campolargo", COALITIONS.campolargo.label, COALITIONS.campolargo.members.concat(p.allianceId === "campolargo" ? ["player"] : []));
+    (state.dynamicCoalitions || []).forEach(function (c) {
+      addCoalitionGroup(c.id, c.label, c.members.concat(p.allianceId === c.id ? ["player"] : []));
+    });
+    qualified.forEach(function (e) {
+      if (e.isCoalition) return;
+      if (claimedMemberIds[e.id]) return;
+      rows.push({ id: e.id, label: e.label, votes: e.votes, isCoalition: false, totalSeats: e.totalSeats });
+    });
+    return rows;
+  }
   function resolveElection() {
     var p = state.player;
     var built = computeQualifiedElectionEntities();
@@ -16104,31 +16147,9 @@
     // alle elezioni non conta chi prende più voti in assoluto come partito, conta chi somma più seggi nel
     // proprio blocco — è quello che stabilisce davvero chi vince (vedi "winner" subito sotto). Mostrata
     // nella schermata di risultato elettorale (renderElectionResult), non come pannello permanente.
-    // Segnalato da un giocatore: se la propria alleanza non raggiunge la soglia combinata del 10%,
-    // computeQualifiedElectionEntities() la fa correttamente tornare in corsa per conto proprio (per i
-    // seggi, sopra: chi tra i suoi membri supera comunque il 3% individuale li vince lo stesso — quello
-    // resta invariato), ma qui in classifica il giocatore compariva come se avesse corso da solo fin
-    // dall'inizio, mentre in realtà ha corso con un'alleanza che semplicemente non ha superato la soglia.
-    // La riga in classifica deve raccontare CON CHI ha corso (nome dell'alleanza, voti aggregati dei
-    // partiti che la compongono), non azzerare quell'appartenenza solo perché sotto soglia.
-    var standingsRows = qualified;
-    var playerRunEntity = entities.filter(function (e) { return e.members.indexOf("player") !== -1; })[0];
-    if (playerRunEntity && !playerRunEntity.isCoalition && p.allianceId) {
-      var ownCoalForStandings = coalitionById(p.allianceId);
-      var ownCoalActiveMembers = ownCoalForStandings
-        ? ownCoalForStandings.members.filter(function (id) { return activeParties().some(function (pt) { return pt.id === id; }); })
-        : [];
-      if (ownCoalForStandings && ownCoalActiveMembers.length) {
-        var ownCoalVotes = ownCoalActiveMembers.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0) + p.sondaggi;
-        var ownCoalSeats = ownCoalActiveMembers.concat(["player"]).reduce(function (s, id) {
-          return s + (seatsById[id] ? seatsById[id].camera + seatsById[id].senato : 0);
-        }, 0);
-        standingsRows = qualified.filter(function (e) { return e.id !== "player"; }).concat([{
-          id: p.allianceId, label: ownCoalForStandings.label, votes: ownCoalVotes, isCoalition: true, totalSeats: ownCoalSeats
-        }]);
-      }
-    }
-    state.lastElectionStandings = standingsRows.map(function (e) {
+    // La vera costruzione delle righe (compreso il caso di una coalizione, del giocatore o no, sotto
+    // soglia) è in buildElectionStandingsRows sopra.
+    state.lastElectionStandings = buildElectionStandingsRows(qualified, seatsById).map(function (e) {
       return { id: e.id, label: e.label, votes: e.votes, isCoalition: e.isCoalition, seats: e.totalSeats };
     }).sort(function (a, b) { return b.seats - a.seats; });
 
