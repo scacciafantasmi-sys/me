@@ -13602,17 +13602,58 @@
   // Deriva lentamente (4% del divario a settimana) verso l'affinità ideologica col governo attuale:
   // basta e avanza per rendere i rapporti vivi nel tempo, senza scatti innaturali settimana per settimana.
   // Attiva solo mentre si è al governo: è lì che si "sbloccano" davvero i rapporti con l'estero.
+  // Richiesto da un giocatore: finora bastava l'affinità ideologica a tenere alti i rapporti, senza che
+  // una visita di Stato (NATION_ACTIONS.visita) servisse davvero a MANTENERLI — era solo un piccolo
+  // bonus in più, mai un vero bisogno. Ora una nazione mai visitata per troppo tempo (NEGLECT_THRESHOLD_
+  // WEEKS) comincia a raffreddarsi da sola, indipendentemente dall'affinità ideologica: la visita di
+  // Stato (sola tra le azioni bilaterali, non il semplice accordo commerciale) resetta questo orologio,
+  // diventando lo strumento specifico per tenere in piedi un rapporto, non solo un gesto di prestigio.
+  var NEGLECT_THRESHOLD_WEEKS = 20;
+  var NEGLECT_MAX_DRIFT_PER_WEEK = 0.35;
+  var NEGLECT_FLOOR = 15;
   function updateForeignRelations() {
     var p = state.player;
     if (!p || p.parliamentRole !== "governo") return;
     if (!state.foreignRelations) state.foreignRelations = {};
+    if (!state.lastPositiveContactTurn) state.lastPositiveContactTurn = {};
     WORLD_NATIONS.forEach(function (nation) {
       if (state.foreignRelations[nation.id] === undefined) state.foreignRelations[nation.id] = familyAffinity(p.family, nation.family);
+      // L'orologio della trascuratezza parte da quando il rapporto con questa nazione diventa per la
+      // prima volta rilevante (ora che si governa davvero), non dalla settimana 1 di partita: altrimenti
+      // un neo-governo riceverebbe subito avvisi su nazioni con cui non ha ancora avuto occasione di fare
+      // nulla.
+      if (state.lastPositiveContactTurn[nation.id] === undefined) state.lastPositiveContactTurn[nation.id] = state.turn;
       var target = familyAffinity(p.family, nation.family);
       state.foreignRelations[nation.id] = clamp(state.foreignRelations[nation.id] + (target - state.foreignRelations[nation.id]) * 0.04 + (Math.random() - 0.5) * 0.6, 0, 100);
+      var weeksSinceContact = state.turn - state.lastPositiveContactTurn[nation.id];
+      if (weeksSinceContact > NEGLECT_THRESHOLD_WEEKS) {
+        var neglectDrift = -clamp((weeksSinceContact - NEGLECT_THRESHOLD_WEEKS) * 0.01, 0, NEGLECT_MAX_DRIFT_PER_WEEK);
+        state.foreignRelations[nation.id] = clamp(state.foreignRelations[nation.id] + neglectDrift, NEGLECT_FLOOR, 100);
+      }
     });
     updateOrganizationEffects();
     driftForeignLeaderRapport();
+    checkForeignRelationsAdvisorReminder();
+  }
+  // Un piccolo promemoria "a voce dei consiglieri", non un vero dossier da risolvere: ogni 8 settimane
+  // circa (se c'è davvero qualcosa da segnalare, e non sempre anche in quel caso, per non diventare
+  // ripetitivo) lo staff di politica estera nota la nazione più trascurata e lo mette a verbale nel
+  // Diario di Partito — visibile ma non invasivo, coerente con "ogni tanto te lo ricordano".
+  var FOREIGN_RELATIONS_ADVISOR_COOLDOWN = 8;
+  function checkForeignRelationsAdvisorReminder() {
+    var p = state.player;
+    if (state.turn < (p.foreignRelationsAdvisorCooldownTurn || 0)) return;
+    p.foreignRelationsAdvisorCooldownTurn = state.turn + FOREIGN_RELATIONS_ADVISOR_COOLDOWN;
+    var neglected = WORLD_NATIONS.filter(function (n) {
+      return (state.turn - (state.lastPositiveContactTurn[n.id] || state.turn)) > NEGLECT_THRESHOLD_WEEKS;
+    });
+    if (!neglected.length || Math.random() > 0.55) return;
+    neglected.sort(function (a, b) { return (state.foreignRelations[a.id] || 50) - (state.foreignRelations[b.id] || 50); });
+    var pick = neglected[0];
+    var weeksSince = state.turn - state.lastPositiveContactTurn[pick.id];
+    var text = "I tuoi consiglieri di politica estera ti segnalano che non organizzi una visita di Stato con " + pick.name +
+      " da " + weeksSince + " settimane: senza un gesto diplomatico, il rapporto bilaterale rischia di continuare a raffreddarsi.";
+    state.log.unshift({ week: state.turn, title: "I consiglieri segnalano un rapporto trascurato", choiceLabel: pick.name, result: text, headlines: [], type: "geopolitica", cat: "Politica Estera" });
   }
   // ---------- Capi di Stato/Governo esteri: un rapporto personale, non solo la nazione in astratto ----------
   // "Rapporti con l'estero" agiva finora solo sulla nazione come entità astratta (state.foreignRelations):
@@ -13738,7 +13779,7 @@
   // "nazione_azione"), colmano quel vuoto senza toccare il drift passivo già esistente.
   var NATION_ACTIONS = {
     accordo: { label: "Proponi un accordo commerciale", desc: "Rafforza il legame commerciale e le relazioni bilaterali con questa nazione.", cost: 350, cooldown: 10 },
-    visita: { label: "Organizza una visita di Stato", desc: "Un gesto diplomatico ad alto profilo: costa di più, ma pesa anche sul prestigio internazionale del governo.", cost: 600, cooldown: 14 },
+    visita: { label: "Organizza una visita di Stato", desc: "Un gesto diplomatico ad alto profilo: costa di più, ma pesa sul prestigio internazionale del governo ed è l'unico modo per evitare che il rapporto si raffreddi da solo nel tempo.", cost: 600, cooldown: 14 },
     tensione: { label: "Alza la tensione diplomatica", desc: "Una linea dura verso questa nazione: nessun costo, ma le relazioni bilaterali ne risentono.", cost: 0, cooldown: 8 }
   };
   function resolveNationAction(nationId, actionId) {
@@ -13764,7 +13805,12 @@
       state.foreignRelations[nationId] = clamp(cur + rand(5, 10), 0, 100);
       state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche + 0.2, 1, 10);
       p.reputazione = clamp(p.reputazione + rand(0.5, 1.5), 0, 100);
-      resultText = "Una visita di Stato a " + nation.name + " rafforza il prestigio internazionale del governo e i legami bilaterali.";
+      // Solo la visita di Stato (non il semplice accordo commerciale) resetta l'orologio della
+      // trascuratezza: vedi updateForeignRelations/NEGLECT_THRESHOLD_WEEKS — è lo strumento specifico
+      // contro il raffreddamento, non solo un bonus in più tra tanti.
+      if (!state.lastPositiveContactTurn) state.lastPositiveContactTurn = {};
+      state.lastPositiveContactTurn[nationId] = state.turn;
+      resultText = "Una visita di Stato a " + nation.name + " rafforza il prestigio internazionale del governo e i legami bilaterali, allontanando il rischio che il rapporto si raffreddi da solo.";
     } else {
       state.foreignRelations[nationId] = clamp(cur - rand(6, 12), 0, 100);
       p.visibilita = clamp(p.visibilita + rand(0.5, 1.5), 0, 100);
@@ -13810,8 +13856,9 @@
       return { n: n, val: state.foreignRelations[n.id] || 50, eu: nationIsEU(n) };
     }).sort(function (a, b) { return b.val - a.val; });
     if (!p.nationActionCooldowns) p.nationActionCooldowns = {};
+    if (!state.lastPositiveContactTurn) state.lastPositiveContactTurn = {};
     var html = '<section aria-label="Rapporti con l\'estero"><details class="log" open><summary>Rapporti con l\'estero (' + rows.length + ' nazioni)<span>▾</span></summary>' +
-      '<p class="ci-hint">Le relazioni con le principali potenze mondiali, sbloccate perché sei al governo: si avvicinano lentamente a quanto il tuo orientamento politico è affine al loro, ma puoi anche agire direttamente su una singola nazione — tocca la riga per aprire le azioni disponibili. Ogni nazione ha anche un capo di Stato/governo con cui costruisci un rapporto personale distinto dalla relazione bilaterale: insegue quella nazionale nel tempo, ma un vertice riuscito o un incidente diplomatico possono spostarlo molto più in fretta.</p>' +
+      '<p class="ci-hint">Le relazioni con le principali potenze mondiali, sbloccate perché sei al governo: si avvicinano lentamente a quanto il tuo orientamento politico è affine al loro, ma puoi anche agire direttamente su una singola nazione — tocca la riga per aprire le azioni disponibili. Ogni nazione ha anche un capo di Stato/governo con cui costruisci un rapporto personale distinto dalla relazione bilaterale: insegue quella nazionale nel tempo, ma un vertice riuscito o un incidente diplomatico possono spostarlo molto più in fretta. Senza una visita di Stato per troppo tempo (oltre ' + NEGLECT_THRESHOLD_WEEKS + ' settimane) il rapporto comincia a raffreddarsi da solo, indipendentemente dall\'affinità politica.</p>' +
       '<div class="party-directory">';
     html += rows.map(function (r) {
       var chipClass = r.val >= 66 ? "good" : r.val <= 33 ? "critical" : "neutral";
@@ -13820,11 +13867,15 @@
       var leaderName = ensureForeignLeaderName(r.n);
       var leaderRapport = ensureForeignLeaderRapport(r.n);
       var leaderLbl = foreignLeaderRapportLabel(leaderRapport);
+      var weeksSinceVisit = state.turn - (state.lastPositiveContactTurn[r.n.id] !== undefined ? state.lastPositiveContactTurn[r.n.id] : state.turn);
+      var isNeglected = weeksSinceVisit > NEGLECT_THRESHOLD_WEEKS;
+      var visitNote = weeksSinceVisit <= 0 ? "Visita di Stato recente" : "Ultima visita di Stato: " + weeksSinceVisit + " settiman" + (weeksSinceVisit === 1 ? "a" : "e") + " fa";
       var row = '<button type="button" class="party-row' + (isOpen ? " open" : "") + '" data-nation-tile="' + r.n.id + '">' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.n.name +
         (r.eu ? ' <span class="chip">UE</span>' : "") + '</strong><span class="chip ' + chipClass + '">' + fmt1(r.val) + "%</span></div>" +
         '<div class="party-row-sub">' + r.n.area + " — orientamento " + (fam ? fam.label : r.n.family) + '</div>' +
-        '<div class="party-row-sub">' + leaderTitleForNation(r.n) + " " + leaderName + ' <span class="chip ' + leaderLbl.cls + '">' + leaderLbl.text + "</span></div></div></button>";
+        '<div class="party-row-sub">' + leaderTitleForNation(r.n) + " " + leaderName + ' <span class="chip ' + leaderLbl.cls + '">' + leaderLbl.text + "</span></div>" +
+        '<div class="party-row-sub">' + visitNote + (isNeglected ? ' <span class="chip accent">Rapporto in raffreddamento</span>' : "") + '</div></div></button>';
       if (isOpen) {
         row += '<div class="option-grid" style="margin:0.5rem 0 0.9rem">' + Object.keys(NATION_ACTIONS).map(function (id) {
           var act = NATION_ACTIONS[id];
@@ -14047,7 +14098,7 @@
     visitedPages: {}, explorationHintDismissed: false,
     passedNationalReferendumIds: [], enactedPolicies: [], partyLogoOverrides: {},
     govEntity: { id: "centrodestra", memberIds: COALITIONS.centrodestra.members.slice() },
-    foreignRelations: {}, euMembershipOverrides: {}, euFederalized: false,
+    foreignRelations: {}, euMembershipOverrides: {}, euFederalized: false, lastPositiveContactTurn: {},
     foreignLeaders: {}, foreignLeaderRapport: {},
     orgDraft: { type: null, name: "", logoDataUrl: null, memberIds: [] },
     cpuMozioneCooldownTurn: 0, cpuLeggeCooldownTurn: 0, cpuAmendmentCooldownTurn: 0, cpuQuestionTimeCooldownTurn: 0, euParliamentVoteCooldownTurn: 0,
@@ -14098,6 +14149,7 @@
     leaderInterviewCooldownTurn: 0, consiglioComunaleCooldownTurn: 0,
     electoralProgram: null, electoralProgramOffered: false, salottoCooldownTurn: 0, ufficioCooldownTurn: 0,
     internationalCongressCooldownTurn: 0, debateLastElectionTurn: 0, endorsementCooldownTurn: 0, foreignLeaderEventCooldownTurn: 0, storyArcCooldownTurn: 0,
+    foreignRelationsAdvisorCooldownTurn: 0,
     dichiarazioniWeek: 0, dichiarazioniCount: 0, iniziativaLiberaCooldownTurn: 0,
     // true di default (anche per mergeDefaults su un salvataggio vecchio, o per un takeover — un partito
     // già esistente è per definizione già formato): solo la creazione di un partito NUOVO (vedi il ramo
