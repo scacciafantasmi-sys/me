@@ -1298,7 +1298,22 @@
       metrics: { relazioniDiplomatiche: -0.5, difesa: 0.2, sicurezza: -0.3 } },
     { id: "incidente_navale", cat: "Conflitto Internazionale", title: "Incidente navale in acque contese",
       text: "Un incidente tra unità navali in acque contese fa temporaneamente salire la tensione militare internazionale, con effetti immediati sui mercati dell'energia.",
-      metrics: { sicurezza: -0.4, energia: -0.3, difesa: 0.15 } }
+      metrics: { sicurezza: -0.4, energia: -0.3, difesa: 0.15 } },
+    { id: "escalation_missilistica", cat: "Conflitto Internazionale", title: "Escalation missilistica in un'area di crisi",
+      text: "Il lancio di un nuovo sistema missilistico in un'area di crisi già instabile fa temere un'escalation militare, con le cancellerie occidentali in allerta.",
+      metrics: { sicurezza: -0.5, relazioniDiplomatiche: -0.3, difesa: 0.25 } },
+    { id: "cyberattacco_alleato", cat: "Conflitto Internazionale", title: "Cyberattacco a un paese alleato",
+      text: "Un attacco informatico su vasta scala colpisce le infrastrutture critiche di un paese alleato, riaprendo il dibattito sulla difesa cibernetica comune.",
+      metrics: { sicurezza: -0.3, relazioniDiplomatiche: 0.15, difesa: 0.2 } },
+    { id: "accordo_commerciale_bilaterale", cat: "Scambi Internazionali", title: "Nuovo accordo commerciale bilaterale",
+      text: "L'Italia firma un nuovo accordo commerciale bilaterale che apre nuovi mercati alle imprese esportatrici nazionali.",
+      metrics: { commercio: 0.5, economia: 0.3, relazioniDiplomatiche: 0.3 } },
+    { id: "missione_commerciale_estero", cat: "Scambi Internazionali", title: "Missione commerciale all'estero",
+      text: "Una delegazione di imprenditori italiani torna da una missione commerciale all'estero con diversi contratti di esportazione firmati.",
+      metrics: { commercio: 0.4, aziende: 0.3 } },
+    { id: "investimento_estero_strategico", cat: "Scambi Internazionali", title: "Grande investimento estero in Italia",
+      text: "Un grande gruppo estero annuncia un investimento strategico in Italia, con nuovi stabilimenti produttivi e migliaia di posti di lavoro previsti.",
+      metrics: { economia: 0.5, aziende: 0.4, disoccupazione: -0.3 } }
   ];
   // Rarissimo di proposito (circa una volta ogni 50 settimane in media): non è pensato per essere
   // frequente come triggerMinorCountryEvent, ma per restare un vero evento imprevisto quando arriva.
@@ -1316,6 +1331,79 @@
     state.worldNews.unshift({ week: state.turn, cat: ev.cat, text: ev.text });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
     state.log.unshift({ week: state.turn, title: ev.title, choiceLabel: ev.cat, result: ev.text, headlines: [], type: "shock", cat: ev.cat });
+  }
+  // ---------- Scioperi: disordine sociale quando la qualità della vita crolla ----------
+  // Segnalato da un giocatore: finché la Felicità e qualità della vita della Scheda Paese resta sotto una
+  // soglia critica, il paese non sta a guardare — sindacati e cittadini scendono in piazza. A differenza
+  // degli shock sopra (imprevedibili, indipendenti da tutto), questo è un effetto diretto e RICORRENTE di
+  // un indicatore basso: ogni settimana sotto soglia ha una probabilità di produrre un nuovo episodio,
+  // con un costo reale per l'ordine pubblico, le casse dello Stato (i danni da riparare) e il consenso di
+  // chi governa. Se la protesta si trascina per troppe settimane di fila, i sindacati alzano il tiro (vedi
+  // checkUnionRevoltTrigger/buildUnionRevoltDossier più sotto): non è più solo cronaca di sottofondo, ma un
+  // vero dossier che chiede una risposta a chi è al governo.
+  var STRIKE_FELICITA_THRESHOLD = 3;
+  var STRIKE_COOLDOWN_WEEKS = 3;
+  var STRIKE_CITIES = ["Milano", "Torino", "Napoli", "Roma", "Bologna", "Palermo", "Genova", "Firenze", "Bari", "Catania", "Venezia", "Bergamo"];
+  var STRIKE_EVENTS = [
+    { title: "Sciopero generale dei trasporti", text: "I sindacati proclamano uno sciopero generale dei trasporti pubblici a {city}: bus e metro fermi per l'intera giornata, pendolari bloccati." },
+    { title: "Corteo finito in tensione", text: "Un corteo di protesta a {city} degenera in tafferugli con le forze dell'ordine: alcune vetrine danneggiate, diversi fermi di polizia." },
+    { title: "Blocco stradale dei sindacati", text: "I sindacati bloccano per ore un'arteria stradale strategica vicino a {city}, in segno di protesta contro il carovita." },
+    { title: "Presidio davanti alla Prefettura", text: "Centinaia di lavoratori organizzano un presidio davanti alla Prefettura di {city}, chiedendo risposte immediate al governo." },
+    { title: "Sciopero nella sanità pubblica", text: "Il personale sanitario di {city} incrocia le braccia per un giorno, lasciando attivi solo i servizi essenziali negli ospedali." },
+    { title: "Occupazione simbolica di una piazza", text: "Un gruppo di manifestanti occupa per la notte una piazza centrale di {city}, in segno di protesta contro il carovita e la precarietà." },
+    { title: "Scontri durante un corteo studentesco", text: "Un corteo studentesco a {city} si scontra con un cordone di polizia: alcuni cassonetti incendiati, traffico in tilt per ore." }
+  ];
+  function triggerStrikeUnrest() {
+    var cp = state.countryProfile;
+    if (!cp || cp.felicita === undefined) return;
+    if (cp.felicita >= STRIKE_FELICITA_THRESHOLD) { state.strikeStreak = 0; return; }
+    state.strikeStreak = (state.strikeStreak || 0) + 1;
+    if (state.turn < (state.lastStrikeTurn || 0)) return;
+    if (Math.random() > 0.5) return;
+    state.lastStrikeTurn = state.turn + STRIKE_COOLDOWN_WEEKS;
+    var city = STRIKE_CITIES[Math.floor(Math.random() * STRIKE_CITIES.length)];
+    var ev = STRIKE_EVENTS[Math.floor(Math.random() * STRIKE_EVENTS.length)];
+    var text = ev.text.split("{city}").join(city);
+    cp.sicurezza = clamp(cp.sicurezza - rand(0.15, 0.4), 1, 10);
+    var stateCostBn = rand(0.05, 0.25);
+    if (state.bilancioStato) state.bilancioStato.uscite += stateCostBn;
+    if (state.consensoGoverno !== undefined && state.consensoGoverno !== null) {
+      state.consensoGoverno = clamp(state.consensoGoverno - rand(1, 3), 0, 100);
+    }
+    var costLabel = Math.round(stateCostBn * 1000) + " milioni di euro";
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ week: state.turn, cat: "Ordine pubblico", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    state.log.unshift({ week: state.turn, title: ev.title, choiceLabel: "Ordine pubblico", result: text + " I danni e la gestione dell'ordine pubblico sono costati circa " + costLabel + " alle casse dello Stato.", headlines: [], type: "cronaca", cat: "Ordine pubblico" });
+  }
+  // Se la protesta si trascina per troppe settimane di fila senza che la qualità della vita si riprenda,
+  // i sindacati non restano sullo sfondo: chiedono conto direttamente a chi governa, con un vero dossier
+  // da risolvere (non solo cronaca). Riguarda solo chi è effettivamente al governo: è lì che la domanda
+  // "cosa fai per risolvere la situazione" ha davvero un destinatario.
+  var UNION_REVOLT_STREAK_THRESHOLD = 4;
+  var UNION_REVOLT_COOLDOWN_WEEKS = 20;
+  function checkUnionRevoltTrigger() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return false;
+    if ((state.strikeStreak || 0) < UNION_REVOLT_STREAK_THRESHOLD) return false;
+    if (state.turn < (state.unionRevoltCooldownTurn || 0)) return false;
+    return Math.random() < 0.45;
+  }
+  function buildUnionRevoltDossier() {
+    state.unionRevoltCooldownTurn = state.turn + UNION_REVOLT_COOLDOWN_WEEKS;
+    state.strikeStreak = 0;
+    return {
+      id: "union_revolt", cat: "Ordine Pubblico", title: "I Sindacati Minacciano uno Sciopero Generale",
+      brief: "Dopo settimane di proteste e scioperi in tutto il paese, i grandi sindacati annunciano uno sciopero generale a oltranza se il governo non cambia rotta sulla qualità della vita dei cittadini.",
+      choices: [
+        { label: "Apri un tavolo di trattativa e fai concessioni", hint: "Costa alle casse pubbliche, ma disinnesca la protesta", effects: { fondi: -300, reputazione: 2, consensoGoverno: 3, national: { felicita: 0.6, sicurezza: 0.1 } },
+          result: "Il tavolo con i sindacati porta a un accordo che allenta la tensione sociale, a un costo per le casse pubbliche." },
+        { label: "Ordina alle forze dell'ordine di garantire i servizi essenziali", hint: "Linea dura: mantiene l'ordine ma non risolve il malcontento", effects: { reputazione: -1, consensoGoverno: -1, national: { sicurezza: 0.4, felicita: -0.4 } },
+          result: "La linea dura garantisce i servizi essenziali, ma non affronta le cause del malcontento: la tensione resta sotto la superficie, pronta a riesplodere." },
+        { label: "Ignora la minaccia e vai avanti con l'agenda di governo", hint: "Nessun costo immediato, rischia di aggravare la crisi", effects: { reputazione: -3, consensoGoverno: -4, national: { felicita: -0.5, sicurezza: -0.3 } },
+          result: "Il governo tira dritto senza rispondere: i sindacati annunciano nuove mobilitazioni, e il malcontento nel paese cresce ulteriormente." }
+      ]
+    };
   }
   // ---------- Tracce di lungo periodo: transizione ambientale e ricerca e sviluppo ----------
   // Oltre al drift settimanale della Scheda Paese, questi due indicatori hanno un loro filo narrativo
@@ -11774,6 +11862,7 @@
     triggerRealConflictNews();
     triggerMinorCountryEvent();
     triggerCountryShock();
+    triggerStrikeUnrest();
     triggerNucleoUpdate();
     triggerLocalElectionCycle();
     triggerRegionalElectionCycle();
@@ -14135,6 +14224,7 @@
     fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
     spaceProgram: freshSpaceProgram(),
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
+    lastStrikeTurn: 0, strikeStreak: 0, unionRevoltCooldownTurn: 0,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
     coupCooldownTurn: 0, foreignInterferenceCooldownTurn: 0, referendumTopicHistory: {},
     qtScene: null, qtManualScene: null, leaderInterview: null, partyEventScene: null, consiglioComunaleScene: null, programMeeting: null,
@@ -16710,18 +16800,21 @@
   // avere un unico bersaglio, qualunque sia la fase. Chiamata DOPO render(), per sovrascrivere il
   // ripristino generico dello scroll già avvenuto lì dentro.
   function scrollToWeeklyCard() {
-    var el = document.getElementById("weekly-card-anchor");
-    if (el && typeof el.scrollIntoView === "function") { el.scrollIntoView({ block: "start", behavior: "smooth" }); return; }
-    // Molte scene speciali (Question Time, congressi di partito, interviste, talk show, Consiglio
-    // Comunale...) non passano da renderDossierCard/renderResultCard e quindi non hanno quell'ancora —
-    // ma iniziano comunque sempre subito dopo la barra di navigazione delle pagine (tranne in modalità
-    // Presidente, che non ha affatto quella barra: lì basta l'ancora sopra, sempre presente). In questi
-    // casi si scorre appena sotto la barra, stesso identico risultato percepito dal giocatore.
+    // Segnalato da un giocatore: scorrere fino all'INIZIO della card (come faceva la prima versione di
+    // questo fix) portava il bordo superiore della barra di navigazione delle pagine (Guida/Partito/
+    // Territorio/...) fuori dallo schermo, proprio sopra la card — bastava vedere la card, ma si perdevano
+    // i menu. Il bersaglio giusto è l'inizio della barra di navigazione stessa: resta così visibile sia la
+    // barra dei menu sia, subito sotto, la scheda di dossier/esito (o la scena speciale) appena generata.
     var nav = document.getElementById("page-nav-bar");
     if (nav && typeof window !== "undefined" && window.scrollTo) {
-      var target = nav.getBoundingClientRect().bottom + window.scrollY;
-      window.scrollTo({ top: target, left: 0, behavior: "smooth" });
+      var target = nav.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo({ top: Math.max(target, 0), left: 0, behavior: "smooth" });
+      return;
     }
+    // Modalità Presidente: non ha la barra di navigazione delle pagine, ma usa sempre
+    // renderDossierCard/renderResultCard, quindi questa ancora è comunque presente.
+    var el = document.getElementById("weekly-card-anchor");
+    if (el && typeof el.scrollIntoView === "function") { el.scrollIntoView({ block: "start", behavior: "smooth" }); }
   }
   function bindSetupInteractions() {
     bindFileInputTriggers();
@@ -23231,6 +23324,7 @@
     triggerRealConflictNews();
     triggerMinorCountryEvent();
     triggerCountryShock();
+    triggerStrikeUnrest();
     triggerNucleoUpdate();
     var localElectionSpotlight = triggerLocalElectionCycle();
     var regionalElectionSpotlight = triggerRegionalElectionCycle();
@@ -23308,6 +23402,13 @@
         state.phase = "building";
         return;
       }
+    }
+
+    if (checkUnionRevoltTrigger()) {
+      state.aiDynamicDossier = buildUnionRevoltDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
     }
 
     var p = state.player;
