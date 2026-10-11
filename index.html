@@ -7700,13 +7700,13 @@
     },
     {
       id: "crisi_di_coalizione", label: "Crisi di coalizione", totalStages: 4,
-      eligible: function (p) { return !!p.allianceId && !!coalitionById(p.allianceId) && coalitionById(p.allianceId).members.length >= 1; },
+      eligible: function (p) { return !!p.allianceId && !!coalitionById(p.allianceId) && liveCoalitionMemberIds(coalitionById(p.allianceId)).length >= 1; },
       startData: function () {
         var p = state.player;
         var coal = coalitionById(p.allianceId);
         var relations = state.partyRelations || {};
         var worstId = null, worstRel = 101;
-        coal.members.forEach(function (mid) {
+        liveCoalitionMemberIds(coal).forEach(function (mid) {
           var rel = relations[mid] !== undefined ? relations[mid] : 50;
           if (rel < worstRel) { worstRel = rel; worstId = mid; }
         });
@@ -17802,7 +17802,7 @@
     var coal = coalitionById(p.allianceId);
     var choices = {};
     if (coal) {
-      coal.members.filter(function (id) { return id !== "player"; }).forEach(function (id) {
+      liveCoalitionMemberIds(coal).filter(function (id) { return id !== "player"; }).forEach(function (id) {
         var party = partyById(id);
         choices[id] = pickStrategyForFamily(party && party.familyId);
       });
@@ -18652,7 +18652,7 @@
     if (!p.allianceId) return '<p class="ci-hint">Il partito non fa parte, in questo momento, di nessuna coalizione elettorale.</p>';
     var coal = coalitionById(p.allianceId);
     if (!coal) return '<p class="ci-hint">Il partito non fa parte, in questo momento, di nessuna coalizione elettorale.</p>';
-    var partnerIds = coal.members.filter(function (id) { return id !== "player"; });
+    var partnerIds = liveCoalitionMemberIds(coal).filter(function (id) { return id !== "player"; });
     var partners = partnerIds.map(function (id) {
       var party = activeParties().filter(function (pt) { return pt.id === id; })[0];
       var rel = state.partyRelations ? state.partyRelations[id] : undefined;
@@ -18716,6 +18716,20 @@
     if (COALITIONS[id]) return COALITIONS[id];
     var dyn = (state.dynamicCoalitions || []).filter(function (c) { return c.id === id; })[0];
     return dyn ? { label: dyn.label, members: dyn.members } : null;
+  }
+  // Membri "vivi" di una coalizione: esclude chi è stato sciolto nel frattempo — incluso un partito
+  // storico preso in mano dal giocatore con "Prendi il comando di un partito esistente" (quel partito
+  // viene aggiunto a state.dissolvedPartyIds proprio come un partito sciolto normalmente, vedi la
+  // fondazione in takeover). coal.members, per le coalizioni fisse (Centrodestra/Campo Largo), è
+  // l'elenco storico immutabile dei partiti reali: senza questo filtro, un partito preso in mano dal
+  // giocatore resta un membro fantasma per sempre — un secondo "se stesso" che compare come alleato nei
+  // pannelli, pesa due volte nei conteggi, o viene persino scelto come l'alleato che "lascia la
+  // coalizione" in un Arco Narrativo, con esiti incoerenti (es. "Forza Italia lascia la coalizione"
+  // mentre il giocatore guida proprio Forza Italia).
+  function liveCoalitionMemberIds(coal) {
+    if (!coal || !coal.members) return [];
+    var dissolved = state.dissolvedPartyIds || [];
+    return coal.members.filter(function (mid) { return dissolved.indexOf(mid) === -1; });
   }
   // Etichetta del governo in carica, risolta sempre "a caldo" (mai congelata al momento dell'elezione):
   // così un partito o una coalizione rinominati dopo il voto restano corretti anche nella scritta del
@@ -19169,7 +19183,7 @@
   // coalizione si scioglie da sola.
   function avgCoalitionRelation(id) {
     var coal = coalitionById(id);
-    var members = coal ? coal.members : [];
+    var members = liveCoalitionMemberIds(coal);
     if (!members.length) return 50;
     var sum = members.reduce(function (s, mid) { return s + (state.partyRelations && state.partyRelations[mid] !== undefined ? state.partyRelations[mid] : 50); }, 0);
     return sum / members.length;
@@ -19180,7 +19194,7 @@
   // conseguenza il giocatore non veniva MAI contato come membro, qualunque fosse la sua alleanza.
   function coalitionMemberCount(coal, id) {
     if (!coal) return 0;
-    return coal.members.length + (state.player && state.player.allianceId === id ? 1 : 0);
+    return liveCoalitionMemberIds(coal).length + (state.player && state.player.allianceId === id ? 1 : 0);
   }
   // Prima il controllo di compatibilità ideologica di un invito guardava SOLO alla distanza tra il
   // giocatore e il singolo partito invitato — mai a chi era GIÀ dentro la coalizione. Un giocatore poteva
@@ -19205,7 +19219,7 @@
     if (p.allianceId) {
       var coal = coalitionById(p.allianceId);
       if (coal) {
-        coal.members.forEach(function (mid) {
+        liveCoalitionMemberIds(coal).forEach(function (mid) {
           var pt = partyById(mid);
           if (pt && pt.familyId) famIds.push(pt.familyId);
         });
@@ -19218,7 +19232,7 @@
   function coalitionFamilyIds(coalId) {
     var coal = coalitionById(coalId);
     if (!coal) return [];
-    return coal.members.map(function (mid) { var pt = partyById(mid); return pt ? pt.familyId : null; }).filter(Boolean);
+    return liveCoalitionMemberIds(coal).map(function (mid) { var pt = partyById(mid); return pt ? pt.familyId : null; }).filter(Boolean);
   }
   // Prima una coalizione poteva crescere all'infinito senza alcuna controindicazione: più alleati
   // significava solo più seggi, mai più rischio — un giocatore poteva accumulare quanti alleati voleva
@@ -19398,11 +19412,12 @@
     if (!p || !p.allianceId) return;
     if (state.turn < (p.allyReactionCooldownTurn || 0)) return;
     var coal = coalitionById(p.allianceId);
-    if (!coal || !coal.members.length) return;
+    var liveMembers = liveCoalitionMemberIds(coal);
+    if (!coal || !liveMembers.length) return;
     if (!state.partyRelations) state.partyRelations = {};
     var relations = state.partyRelations;
     var worstId = null, worstRel = 101, bestId = null, bestRel = -1;
-    coal.members.forEach(function (mid) {
+    liveMembers.forEach(function (mid) {
       var rel = relations[mid] !== undefined ? relations[mid] : 50;
       if (rel < worstRel) { worstRel = rel; worstId = mid; }
       if (rel > bestRel) { bestRel = rel; bestId = mid; }
@@ -19838,9 +19853,9 @@
       // per conto proprio se trascurati a lungo, o coprirti le spalle se coltivati davvero (vedi
       // triggerCoalitionAllyReaction) — questa riga rende visibile chi rischia di più e chi è più fedele,
       // invece di lasciare il giocatore a scoprirlo solo quando un alleato se n'è già andato.
-      if (coal && coal.members.length) {
+      if (coal && liveCoalitionMemberIds(coal).length) {
         html += '<p class="ci-hint">Rapporto con i singoli alleati:</p><div class="correnti-row">' +
-          coal.members.map(function (mid) {
+          liveCoalitionMemberIds(coal).map(function (mid) {
             var mp = partyById(mid);
             var rel = Math.round(state.partyRelations && state.partyRelations[mid] !== undefined ? state.partyRelations[mid] : 50);
             var relNote = rel <= 22 ? " (a rischio abbandono)" : rel >= 78 ? " (alleato fedele)" : "";
