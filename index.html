@@ -2034,6 +2034,26 @@
   BUDGET_CATEGORIES.forEach(function (cat) {
     cat.subs.forEach(function (sub) { BUDGET_SUBCATEGORY_BY_KEY[cat.id + "." + sub.id] = { cat: cat, sub: sub }; });
   });
+  // Ricostruzione a posteriori di state.lastYearBudgetAllocations per un salvataggio che ha già uno
+  // storico di bilanci chiusi (state.budgetHistory) da PRIMA che questo campo esistesse: senza questo
+  // recupero, il pulsante "Conferma gli stanziamenti adottati l'anno scorso" (vedi renderBudgetAllocation)
+  // restava invisibile per chiunque avesse già giocato almeno un anno da governo, perché il nuovo campo
+  // nasceva vuoto anche se i dati dell'ultimo bilancio chiuso esistevano già, solo sotto un'altra forma
+  // (state.budgetHistory[0].lines, indicizzato per etichetta leggibile, non per chiave "cat.sub").
+  function reconstructLastYearBudgetAllocations() {
+    if (!state.budgetHistory || !state.budgetHistory.length) return null;
+    var last = state.budgetHistory[0];
+    if (!last.lines || !last.lines.length) return null;
+    var out = {};
+    last.lines.forEach(function (l) {
+      var key = Object.keys(BUDGET_SUBCATEGORY_BY_KEY).filter(function (k) {
+        var info = BUDGET_SUBCATEGORY_BY_KEY[k];
+        return info.cat.label === l.catLabel && info.sub.label === l.subLabel;
+      })[0];
+      if (key) out[key] = l.amount;
+    });
+    return Object.keys(out).length ? out : null;
+  }
   // Quanto "tesoretto" discrezionale c'è ogni anno da stanziare: una quota fissa della spesa pubblica
   // annua del Bilancio dello Stato, in miliardi di euro.
   function budgetPoolTotal() { return Math.round(state.bilancioStato.uscite * 0.15); }
@@ -18260,6 +18280,13 @@
   function renderBudgetAllocation() {
     var p = state.player;
     if (!p || p.parliamentRole !== "governo") return renderPublicBudgetReport();
+    // Migrazione una tantum: se questo salvataggio ha già uno storico di bilanci ma non ha ancora
+    // state.lastYearBudgetAllocations (introdotto dopo), lo ricostruisce ora dall'ultimo bilancio chiuso
+    // — vedi reconstructLastYearBudgetAllocations.
+    if ((!state.lastYearBudgetAllocations || !Object.keys(state.lastYearBudgetAllocations).length)) {
+      var reconstructed = reconstructLastYearBudgetAllocations();
+      if (reconstructed) state.lastYearBudgetAllocations = reconstructed;
+    }
     var pool = budgetPoolTotal();
     var allocations = state.budgetAllocations || {};
     var allocated = 0, cut = 0;
