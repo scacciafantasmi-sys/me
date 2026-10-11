@@ -16699,6 +16699,30 @@
       });
     });
   }
+  // Segnalato da un giocatore: dopo ogni scelta settimanale (o dopo "Avanti alla settimana successiva")
+  // la pagina tornava in cima del tutto — sopra la testata e la barra di salvataggio — costringendo a
+  // scorrere un po' in giù ogni volta per rivedere l'esito appena comparso. Il salvataggio/ripristino
+  // generico dello scrollY dentro render() (vedi scrollYBeforeSwap) preserva correttamente la posizione
+  // per i click che non devono spostare la vista (es. aprire un pannello inline), ma qui serve l'opposto:
+  // portare DAVVERO in vista l'inizio della scheda di dossier/esito appena generata, non lasciare lo
+  // scroll fermo dov'era (che spesso è proprio 0, in cima, se il giocatore non aveva ancora scrollato).
+  // id="weekly-card-anchor" è condiviso da renderDossierCard e renderResultCard (vedi sopra) proprio per
+  // avere un unico bersaglio, qualunque sia la fase. Chiamata DOPO render(), per sovrascrivere il
+  // ripristino generico dello scroll già avvenuto lì dentro.
+  function scrollToWeeklyCard() {
+    var el = document.getElementById("weekly-card-anchor");
+    if (el && typeof el.scrollIntoView === "function") { el.scrollIntoView({ block: "start", behavior: "smooth" }); return; }
+    // Molte scene speciali (Question Time, congressi di partito, interviste, talk show, Consiglio
+    // Comunale...) non passano da renderDossierCard/renderResultCard e quindi non hanno quell'ancora —
+    // ma iniziano comunque sempre subito dopo la barra di navigazione delle pagine (tranne in modalità
+    // Presidente, che non ha affatto quella barra: lì basta l'ancora sopra, sempre presente). In questi
+    // casi si scorre appena sotto la barra, stesso identico risultato percepito dal giocatore.
+    var nav = document.getElementById("page-nav-bar");
+    if (nav && typeof window !== "undefined" && window.scrollTo) {
+      var target = nav.getBoundingClientRect().bottom + window.scrollY;
+      window.scrollTo({ top: target, left: 0, behavior: "smooth" });
+    }
+  }
   function bindSetupInteractions() {
     bindFileInputTriggers();
     var setupImportBtn = document.getElementById("setup-import-btn");
@@ -19998,7 +20022,7 @@
   }
 
   function renderDossierCard(dossier) {
-    var html = '<section aria-label="Dossier della settimana"><p class="eyebrow">' +
+    var html = '<section id="weekly-card-anchor" aria-label="Dossier della settimana"><p class="eyebrow">' +
       (dossier.eyebrow || (dossier.localDynamic ? "Situazione della settimana — generata in base alla tua storia"
         : "Dossier della settimana")) + '</p>' +
       '<div class="dossier"><span class="chip neutral cat">' + dossier.cat + '</span>' +
@@ -20058,7 +20082,7 @@
       ? '<p class="ci-hint">Decisione presa in autonomia da ' + (state.player.interimLeaderName || "un dirigente del partito") +
         ': hai perso le ultime primarie e non guidi più le scelte settimanali del partito, finché non vincerai una nuova primaria.</p>'
       : "";
-    return '<section aria-label="Esito della decisione"><p class="eyebrow">Esito</p>' +
+    return '<section id="weekly-card-anchor" aria-label="Esito della decisione"><p class="eyebrow">Esito</p>' +
       '<div class="dossier result-panel"><h2>Settimana ' + state.turn + " archiviata</h2>" +
       autoNote +
       '<p class="outcome">' + result.resultText + "</p>" +
@@ -20596,7 +20620,7 @@
       return '<button type="button" class="page-nav-btn' + (pg.id === current ? " active" : "") + '" data-nav-page="' + pg.id + '" title="' + pg.label.replace(/"/g, "&quot;") + '">' +
         '<span class="page-nav-icon">' + pg.icon + '</span><span class="page-nav-label">' + pg.nav + '</span></button>';
     }).join("");
-    return '<nav aria-label="Sezioni di gioco" class="page-nav-bar">' + tutorialBtn + items + "</nav>";
+    return '<nav id="page-nav-bar" aria-label="Sezioni di gioco" class="page-nav-bar">' + tutorialBtn + items + "</nav>";
   }
   // onBeforeNavigate (facoltativo) permette a una scena in corso di congedarsi in modo pulito prima di
   // lasciare spazio alla pagina scelta.
@@ -22133,6 +22157,7 @@
         state.phase = "result";
         save();
         render();
+        scrollToWeeklyCard();
       });
     });
 
@@ -22154,6 +22179,7 @@
         }
         save();
         render();
+        scrollToWeeklyCard();
       });
     }
 
