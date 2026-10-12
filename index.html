@@ -17829,13 +17829,24 @@
     "una serie di interviste sui principali quotidiani nazionali", "una campagna pubblicitaria mirata sui social media",
     "una serie di ospitate nei talk show politici del prime time", "un'iniziativa mediatica coordinata sui temi al centro del dibattito pubblico"
   ];
+  // Segnalato da un giocatore: gli eventi più cari rendevano MENO per euro speso di un semplice comizio
+  // da 2000, nonostante la descrizione del Congresso dica esplicitamente "il più caro, ma anche il più
+  // efficace" — un Congresso da 15000 dava solo il doppio del comizio da 2000 (7,5 volte più economico),
+  // e una Missione diplomatica da 30000 dava lo STESSO identico sondaggi medio del comizio, rendendo
+  // inutile spendere di più. Ora l'effetto sui sondaggi scala in proporzione al costo (anzi, un po' più
+  // che proporzionalmente per premiare l'investimento), così un evento costoso è sempre la scelta
+  // migliore se si hanno i fondi, non solo quando non si hanno alternative più economiche.
+  // NOTA: "congresso" e "manifestazione" sono tra PARTY_EVENT_SCENE_TYPES (vedi sotto) e non passano mai
+  // da qui: il loro click apre sempre launchPartyEventScene, che risolve l'effetto reale tramite
+  // buildRallySpeechChoices/buildPublicAppearanceChoices (con una "magnitude" tarata sul costo
+  // dell'evento, vedi lì). I due rami restano qui solo a scopo di documentazione/coerenza del costo.
   function partyEventEffects(eventId) {
     if (eventId === "comizio") return { sondaggi: rand(0.08, 0.12) };
     if (eventId === "manifestazione") return { sondaggi: rand(0.08, 0.12), reputazione: rand(1, 2.5), visibilita: rand(3, 6) };
     if (eventId === "congresso") return { sondaggi: rand(0.16, 0.24) };
     if (eventId === "cena_partito") return { reputazione: rand(1, 3), iscritti: rand(8, 18) };
-    if (eventId === "tour_territoriale") return { sondaggi: rand(0.08, 0.12), reputazione: rand(3, 6) };
-    if (eventId === "missione_diplomatica") return { sondaggi: rand(0.08, 0.12), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
+    if (eventId === "tour_territoriale") return { sondaggi: rand(0.22, 0.34), reputazione: rand(3, 6) };
+    if (eventId === "missione_diplomatica") return { sondaggi: rand(1.3, 1.9), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
     if (eventId === "campagna_mediatica_nazionale") return { sondaggi: rand(0.08, 0.12) };
     return {};
   }
@@ -17885,7 +17896,12 @@
   // dell'intervista al leader: fase dedicata, un passo alla volta, nessun'altra azione nel frattempo.
   var PARTY_EVENT_SCENE_TYPES = { congresso: true, manifestazione: true, cena_partito: true };
   var PARTY_EVENT_SCENE_LABELS = { congresso: "il Congresso Nazionale", manifestazione: "la manifestazione di piazza", cena_partito: "la cena di partito" };
-  function buildAudienceQuestion(noun, isGoverno) {
+  // Segnalato da un giocatore: discorso e domanda del pubblico usavano sempre la stessa magnitudine
+  // (1, il default di RALLY_SPEECH_ARCHETYPES/PUBLIC_APPEARANCE_ARCHETYPES), identica per un Congresso da
+  // 15000 e per una cena di partito da 3000 — rendendo l'evento più caro un pessimo affare per euro
+  // speso. Ora la magnitudine scala con il peso reale dell'evento, in proporzione al suo costo.
+  var PARTY_EVENT_SCENE_MAGNITUDE = { congresso: 3.2, manifestazione: 1.8, cena_partito: 1 };
+  function buildAudienceQuestion(noun, isGoverno, magnitude) {
     var askerName = generateStaffName();
     var pFamily = state.player && state.player.family;
     var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5 && !isExpectedWeakMetricFor(pFamily, k); });
@@ -17897,7 +17913,7 @@
       : askerName + " alza la mano dal pubblico: “E su " + topicLabel + ", cosa pensa di fare concretamente il partito?”";
     return {
       askerName: askerName, topicLabel: topicLabel, text: text,
-      choices: buildPublicAppearanceChoices({ topicLabel: topicLabel, isGoverno: isGoverno, fromCtx: "dal confronto con il pubblico", subj: "il pubblico", nationalMetric: metric }, 4)
+      choices: buildPublicAppearanceChoices({ topicLabel: topicLabel, isGoverno: isGoverno, fromCtx: "dal confronto con il pubblico", subj: "il pubblico", nationalMetric: metric, magnitude: magnitude }, 4)
     };
   }
   function launchPartyEventScene(eventId) {
@@ -17913,11 +17929,12 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var topic = pickParliamentaryTopic(p, true);
     var isGoverno = p.parliamentRole === "governo";
-    var question = buildAudienceQuestion(topic.noun, isGoverno);
+    var magnitude = PARTY_EVENT_SCENE_MAGNITUDE[eventId] || 1;
+    var question = buildAudienceQuestion(topic.noun, isGoverno, magnitude);
     state.partyEventScene = {
       eventId: eventId, step: 0, city: city, noun: topic.noun, isGoverno: isGoverno,
       speechAnswered: null, speechResult: null,
-      speechChoices: buildRallySpeechChoices({ noun: topic.noun, nationalMetric: THEME_TO_NATIONAL_METRIC[topic.themeObj.id], themeId: topic.themeObj.id }, 4),
+      speechChoices: buildRallySpeechChoices({ noun: topic.noun, nationalMetric: THEME_TO_NATIONAL_METRIC[topic.themeObj.id], themeId: topic.themeObj.id, magnitude: magnitude }, 4),
       question: question, questionAnswered: null, questionResult: null
     };
     state.phase = "party_event_scene";
