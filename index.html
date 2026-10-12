@@ -12815,7 +12815,7 @@
       var metric = THEME_TO_NATIONAL_METRIC[themeId];
       var cat = THEME_TO_LEGISLATIVE_SECTION[themeId] || themeId;
       nouns.forEach(function (noun) {
-        AMENDMENT_SHAPES_THEMATIC.forEach(function (shape) { topics.push(Object.assign(shape.build(noun, metric), { cat: cat })); });
+        AMENDMENT_SHAPES_THEMATIC.forEach(function (shape) { topics.push(Object.assign(shape.build(noun, metric), { cat: cat, shapeId: shape.id })); });
       });
     });
     return topics;
@@ -12823,14 +12823,23 @@
   function amendmentTopicsGeneral() {
     var topics = [];
     GENERAL_AMENDMENT_LAWS.forEach(function (t) {
-      AMENDMENT_SHAPES_NAMED.forEach(function (shape) { topics.push(Object.assign(shape.build(t.name, t.metric), { cat: t.cat })); });
+      AMENDMENT_SHAPES_NAMED.forEach(function (shape) { topics.push(Object.assign(shape.build(t.name, t.metric), { cat: t.cat, shapeId: shape.id })); });
     });
     return topics;
+  }
+  // Un decreto correttivo, come il decreto-legge (vedi filterLawTopicsByGovernmentRole), è un atto
+  // esecutivo: corregge un decreto legislativo già emanato, ed è riservato al Governo, mai a un
+  // parlamentare d'opposizione di propria iniziativa. Le altre forme di modifica (Modifica a una legge,
+  // Abrogazione Parziale...) restano vera iniziativa parlamentare, aperta a chiunque.
+  function filterAmendmentTopicsByGovernmentRole(topics, isGoverno) {
+    if (isGoverno) return topics;
+    return topics.filter(function (t) { return t.shapeId !== "correttivo" && t.shapeId !== "decreto_correttivo_tema"; });
   }
   function allAmendmentTopics(p) {
     var accepted = p.acceptedAmendments || [];
     var validTopic = function (t) { return accepted.indexOf(t.title) === -1; };
-    return amendmentTopicsForFamily(p.family).filter(validTopic).concat(amendmentTopicsGeneral().filter(validTopic));
+    var topics = amendmentTopicsForFamily(p.family).filter(validTopic).concat(amendmentTopicsGeneral().filter(validTopic));
+    return filterAmendmentTopicsByGovernmentRole(topics, p.parliamentRole === "governo");
   }
   function generateAmendmentCandidates(p) {
     if (!p.amendmentSelectedCat) return [];
@@ -13181,6 +13190,7 @@
     var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
     var topicPool = proposer.familyId ? amendmentTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = amendmentTopicsGeneral();
+    topicPool = filterAmendmentTopicsByGovernmentRole(topicPool, isGovProposer);
     if (!topicPool.length) return null;
     // Una legge già in vigore può essere modificata più volte nel corso della partita (a differenza di
     // mozioni/leggi nuove, qui non si consulta resolvedTopicNouns): quello che va evitato è solo la
