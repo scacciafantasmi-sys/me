@@ -12707,7 +12707,7 @@
       var metric = THEME_TO_NATIONAL_METRIC[themeId];
       var cat = THEME_TO_LEGISLATIVE_SECTION[themeId] || themeId;
       nouns.forEach(function (noun) {
-        LAW_SHAPES.forEach(function (shape) { topics.push(Object.assign(shape.build(noun, metric), { cat: cat })); });
+        LAW_SHAPES.forEach(function (shape) { topics.push(Object.assign(shape.build(noun, metric), { cat: cat, shapeId: shape.id })); });
       });
     });
     return topics;
@@ -12715,15 +12715,24 @@
   function lawTopicsGeneral() {
     var topics = [];
     GENERAL_LAW_TOPICS.forEach(function (t) {
-      LAW_SHAPES.forEach(function (shape) { topics.push(Object.assign(shape.build(t.noun, t.metric), { cat: t.cat })); });
+      LAW_SHAPES.forEach(function (shape) { topics.push(Object.assign(shape.build(t.noun, t.metric), { cat: t.cat, shapeId: shape.id })); });
     });
     return topics;
+  }
+  // Un decreto-legge (art. 77 Cost.) è un potere esecutivo: solo il Governo può emanarlo, mai un
+  // parlamentare d'opposizione di propria iniziativa. A differenza delle altre due "forme" (proposta di
+  // legge, disegno di legge delega), che restano un vero atto di iniziativa parlamentare aperto a
+  // chiunque, qui la forma "decreto" va filtrata via per chi non siede davvero al governo.
+  function filterLawTopicsByGovernmentRole(topics, isGoverno) {
+    if (isGoverno) return topics;
+    return topics.filter(function (t) { return t.shapeId !== "decreto"; });
   }
   function allLawTopics(p) {
     var accepted = p.acceptedLeggi || [];
     var resolvedNouns = p.resolvedTopicNouns || [];
     var validTopic = function (t) { return accepted.indexOf(t.title) === -1 && resolvedNouns.indexOf(t.noun) === -1; };
-    return lawTopicsForFamily(p.family).filter(validTopic).concat(lawTopicsGeneral().filter(validTopic));
+    var topics = lawTopicsForFamily(p.family).filter(validTopic).concat(lawTopicsGeneral().filter(validTopic));
+    return filterLawTopicsByGovernmentRole(topics, p.parliamentRole === "governo");
   }
   function generateLawCandidates(p) {
     if (!p.leggeSelectedCat) return [];
@@ -13252,6 +13261,7 @@
     var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
     var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = lawTopicsGeneral();
+    topicPool = filterLawTopicsByGovernmentRole(topicPool, isGovProposer);
     if (!topicPool.length) return null;
     var picked = pickCpuTopic(topicPool);
     var topic = picked.topic;
