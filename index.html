@@ -14609,7 +14609,7 @@
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
-    cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConsultazioni: null,
+    cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConfidenceVote: false, pendingConsultazioni: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0, lastYearBudgetAllocations: {},
@@ -14649,7 +14649,7 @@
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null, mozioneSelectedCat: null,
-    campaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
+    campaignCooldowns: {}, euCampaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
     sezioniLocations: [], sezioniCoalizioni: {}, localAllyCandidates: null, localSectionCooldownTurn: 0,
     currentTermAllianceId: null, correntiLeaders: {}, acceptedMozioni: [], acceptedReferendum: [], resolvedTopicNouns: [], logoDataUrl: null,
     leaderTrust: 65, playerIsLeader: true, interimLeaderName: null, leaderName: null, primariesCooldownTurn: 0, short: null,
@@ -15604,6 +15604,7 @@
     if (state.currentDossierId === "coalition_ministry_demand") return coalitionMinistryDemandDossier();
     if (state.currentDossierId === "cabinet_formation") return cabinetFormationDossier();
     if (state.currentDossierId === "government_oath") return governmentOathDossier();
+    if (state.currentDossierId === "confidence_vote") return confidenceVoteDossier();
     if (state.currentDossierId === "gov_emendamento") return decretoDinamicoDossier();
     for (var i = 0; i < CORRENTI_DOSSIER_TEMPLATES.length; i++) {
       if (CORRENTI_DOSSIER_TEMPLATES[i].id === state.currentDossierId) return correntiTensionDossier(CORRENTI_DOSSIER_TEMPLATES[i]);
@@ -16884,6 +16885,13 @@
     // nella stragrande maggioranza dei casi, prima che la legislatura inizi davvero. Vedi
     // governmentOathDossier, mostrato non appena state.pendingCabinetFormation si svuota.
     if (p.parliamentRole === "governo") state.pendingGovernmentOath = true;
+    // Il voto di fiducia vero e proprio (art. 94 Cost.): un passaggio distinto dal giuramento sopra, e a
+    // differenza di quello riguarda l'Aula intera, non solo chi fa parte del nuovo Governo — chi è
+    // all'opposizione vota comunque sulla fiducia, anche se non ha prestato alcun giuramento. Richiesto
+    // da un giocatore. Vedi confidenceVoteDossier: l'esito numerico non è mai in discussione (la
+    // coalizione ha già la maggioranza reale uscita dalle urne), ma la scelta di voto/presentazione ha
+    // comunque conseguenze politiche reali.
+    if (p.inParliament) state.pendingConfidenceVote = true;
 
     state.electionResults.unshift({
       turn: state.turn, legislature: state.legislature, sondaggi: p.sondaggi,
@@ -18096,6 +18104,114 @@
     return html;
   }
 
+  // ---------- Campagna Elettorale Europea: stessa logica della campagna nazionale sopra, ma per le
+  // elezioni europee (state.nextEuropeanElectionTurn, vedi resolveEuropeanElection), con cooldown e
+  // flavor dedicati — richiesto da un giocatore, prima le europee si risolvevano senza che il partito
+  // potesse fare alcuna campagna attiva. Effetti tarati un po' più in basso di quelli nazionali: le
+  // europee restano elezioni "di secondo ordine", con mobilitazione tipicamente minore. ----------
+  var EU_CAMPAIGN_WINDOW_WEEKS = 8;
+  function weeksToEuropeanElection() {
+    if (!state.nextEuropeanElectionTurn) return Infinity;
+    return state.nextEuropeanElectionTurn - state.turn;
+  }
+  function inEuCampaignWindow() {
+    var w = weeksToEuropeanElection();
+    return w >= 0 && w <= EU_CAMPAIGN_WINDOW_WEEKS;
+  }
+  var EU_CAMPAIGN_ACTIVITIES = {
+    comizio_europeo: { label: "Comizio sui temi europei", cost: 900, cooldown: 3,
+      desc: "Un comizio dedicato ai temi che si decidono a Bruxelles, non alla politica nazionale di ogni giorno." },
+    porta_a_porta_eu: { label: "Porta a porta per le europee", cost: 350, cooldown: 2,
+      desc: "I militanti bussano casa per casa per spiegare perché votare la lista anche alle europee." },
+    spot_europeo: { label: "Spot per le europee", cost: 1500, cooldown: 3,
+      desc: "Uno spot elettorale dedicato alla campagna per il Parlamento Europeo." },
+    dibattito_capilista: { label: "Dibattito tra capilista", cost: 0, cooldown: 4,
+      desc: "Un confronto diretto con i capilista delle altre liste in corsa per l'Europarlamento." },
+    campagna_social_eu: { label: "Campagna social sui temi europei", cost: 800, cooldown: 2,
+      desc: "Contenuti mirati sui temi europei, per intercettare un elettorato spesso meno mobilitato del solito." },
+    volantinaggio_eu: { label: "Volantinaggio sui temi europei", cost: 150, cooldown: 2,
+      desc: "Militanti con volantini sui temi europei nei luoghi di passaggio quotidiano." },
+    endorsement_eurodeputato: { label: "Endorsement di un europarlamentare uscente", cost: 2000, cooldown: 6,
+      desc: "Un eurodeputato uscente si schiera pubblicamente per la lista, nel bene e nel male." },
+    tour_capoluoghi_eu: { label: "Tour nei capoluoghi di circoscrizione", cost: 1200, cooldown: 4,
+      desc: "Un giro di tappe nei capoluoghi delle circoscrizioni elettorali europee." },
+    intervista_tematica_eu: { label: "Intervista sui temi europei", cost: 200, cooldown: 2,
+      desc: "Un'intervista dedicata alle politiche europee, meno seguita di un talk show nazionale ma più approfondita." },
+    attacco_lista_rivale: { label: "Attacco a una lista rivale", cost: 0, cooldown: 5,
+      desc: "Una campagna di comunicazione aggressiva contro una lista rivale in corsa per l'Europarlamento." }
+  };
+  function euCampaignActivityEffects(id) {
+    if (id === "comizio_europeo") return { iscritti: rand(20, 45), visibilita: rand(3, 6), reputazione: rand(0.5, 1.5) };
+    if (id === "porta_a_porta_eu") return { iscritti: rand(12, 28), reputazione: rand(0.4, 1.2) };
+    if (id === "spot_europeo") return { visibilita: rand(6, 12), iscritti: rand(8, 20) };
+    if (id === "dibattito_capilista") {
+      var win = Math.random() < 0.55;
+      return win ? { visibilita: rand(5, 10), reputazione: rand(1, 3) } : { visibilita: rand(2, 6), reputazione: -rand(0.5, 2) };
+    }
+    if (id === "campagna_social_eu") return { visibilita: rand(5, 11), iscritti: rand(14, 30) };
+    if (id === "volantinaggio_eu") return { iscritti: rand(6, 14), reputazione: rand(0.1, 0.5) };
+    if (id === "endorsement_eurodeputato") {
+      var backfire = Math.random() < 0.3;
+      return backfire ? { visibilita: rand(4, 8), reputazione: -rand(1.5, 4) } : { visibilita: rand(8, 16), iscritti: rand(16, 32), reputazione: rand(1, 2.5) };
+    }
+    if (id === "tour_capoluoghi_eu") return { sondaggi: rand(0.08, 0.2), reputazione: rand(0.4, 1.2), visibilita: rand(2, 5) };
+    if (id === "intervista_tematica_eu") return { visibilita: rand(2, 5), reputazione: rand(0.4, 1.2), iscritti: rand(8, 16) };
+    if (id === "attacco_lista_rivale") {
+      var lands = Math.random() < 0.5;
+      return lands ? { visibilita: rand(3, 7), sondaggi: rand(0.06, 0.14) } : { reputazione: -rand(1.2, 3), visibilita: rand(1.5, 4) };
+    }
+    return {};
+  }
+  function euCampaignActivityFlavor(id) {
+    var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
+    var rivalPool = activeParties();
+    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    if (id === "comizio_europeo") return "Il comizio sui temi europei a " + city + " scalda la base militante nel pieno della campagna per l'Europarlamento.";
+    if (id === "porta_a_porta_eu") return "Il porta a porta a " + city + " e in altre città spiega agli indecisi perché contare anche il voto europeo.";
+    if (id === "spot_europeo") return "Lo spot per le europee porta il simbolo della lista in milioni di case italiane.";
+    if (id === "dibattito_capilista") return "Il dibattito tra capilista tiene incollati gli elettori più attenti ai temi europei.";
+    if (id === "campagna_social_eu") return "La campagna social sui temi europei genera condivisioni e commenti, tra entusiasmo e polemiche.";
+    if (id === "volantinaggio_eu") return "Il volantinaggio sui temi europei a " + city + " raggiunge chi i media tradizionali non intercettano più.";
+    if (id === "endorsement_eurodeputato") return "Un eurodeputato uscente si schiera pubblicamente per la lista: la notizia rimbalza sui media.";
+    if (id === "tour_capoluoghi_eu") return "Il tour tocca " + city + " e altri capoluoghi di circoscrizione, con comizi quotidiani sui temi europei.";
+    if (id === "intervista_tematica_eu") return "L'intervista sui temi europei, più lunga e distesa di un talk show, raccoglie un pubblico di appassionati.";
+    if (id === "attacco_lista_rivale") return "La campagna di attacco contro la lista di " + rival.name + " domina il dibattito sulle europee della settimana.";
+    return EU_CAMPAIGN_ACTIVITIES[id].label + " si svolge senza intoppi.";
+  }
+  function resolveEuCampaignActivity(id) {
+    var a = EU_CAMPAIGN_ACTIVITIES[id];
+    var p = state.player;
+    if (!inEuCampaignWindow()) return null;
+    if (!p.euCampaignCooldowns) p.euCampaignCooldowns = {};
+    if (state.turn < (p.euCampaignCooldowns[id] || 0)) return null;
+    if (p.fondi < a.cost) return null;
+    p.fondi -= a.cost;
+    p.euCampaignCooldowns[id] = state.turn + a.cooldown;
+    var dossier = { title: a.label, cat: "Campagna Elettorale Europea" };
+    var choice = { label: a.label, effects: euCampaignActivityEffects(id), result: euCampaignActivityFlavor(id) };
+    return applyChoice(dossier, choice);
+  }
+  function renderEuCampaignPanel() {
+    var p = state.player;
+    if (!p || !inEuCampaignWindow()) return "";
+    if (!p.euCampaignCooldowns) p.euCampaignCooldowns = {};
+    var w = weeksToEuropeanElection();
+    var html = '<section aria-label="Campagna Elettorale Europea"><details class="log" open><summary>Campagna per le Europee — mancano ' + w + " settiman" + (w === 1 ? "a" : "e") + '<span>▾</span></summary>' +
+      '<p class="ci-hint">Le elezioni europee sono vicine: puoi organizzare iniziative di campagna dedicate, oltre agli eventi di partito ordinari.</p><div class="option-grid">';
+    Object.keys(EU_CAMPAIGN_ACTIVITIES).forEach(function (id) {
+      var a = EU_CAMPAIGN_ACTIVITIES[id];
+      var cd = p.euCampaignCooldowns[id] || 0;
+      var weeksLeft = cd - state.turn;
+      var disabled = weeksLeft > 0 || p.fondi < a.cost;
+      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+        : p.fondi < a.cost ? "Fondi insufficienti (" + fmtEuro(a.cost) + ")" : (a.cost ? "Costo: " + fmtEuro(a.cost) : "Nessun costo");
+      html += '<button type="button" class="option-card" data-eu-campaign-activity="' + id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
+    });
+    html += "</div></details></section>";
+    return html;
+  }
+
   // ---------- Liste Elettorali: candidati a Camera e Senato ----------
   // Depositare la lista è un atto vero, non solo cosmetico: 25 settimane prima del voto politico, il
   // partito sceglie CON QUALE CRITERIO comporre la propria squadra di candidati — non i quasi 600 nomi
@@ -18981,6 +19097,43 @@
       '<p class="eyebrow" style="margin-top:1rem">Settore privato</p><div class="stat-grid">' + privato + "</div>" + privateWarning +
       ideologyHtml + "</details></section>";
   }
+  // ---------- Cronologia Elettorale: ogni elezione politica nazionale ed europea affrontata ----------
+  // Richiesto da un giocatore: i dati c'erano già (state.electionResults per le politiche, salvato in
+  // resolveElection; state.europeanElectionResults per le europee, salvato in resolveEuropeanElection),
+  // ma venivano usati solo per contare le tornate affrontate, mai mostrati come un vero elenco
+  // consultabile. Le due liste vengono unite e ordinate dalla più recente alla più vecchia.
+  function renderElectionHistoryPanel() {
+    var p = state.player;
+    var national = (state.electionResults || []).map(function (e) {
+      return { kind: "nazionali", turn: e.turn, legislature: e.legislature, seatsCamera: e.seatsCamera, seatsSenato: e.seatsSenato, allianceId: e.allianceId };
+    });
+    var eu = (state.europeanElectionResults || []).map(function (e) {
+      return { kind: "europee", turn: e.turn, seats: e.seats };
+    });
+    var merged = national.concat(eu).sort(function (a, b) { return b.turn - a.turn; });
+    if (!merged.length) return "";
+    var itemHtml = function (e) {
+      if (e.kind === "nazionali") {
+        var inParl = e.seatsCamera > 0 || e.seatsSenato > 0;
+        var allianceLabel = e.allianceId ? ((coalitionById(e.allianceId) || {}).label || "una coalizione") : "da solo";
+        return '<li><span class="chip ' + (inParl ? "good" : "critical") + '">Politiche</span> <strong>Legislatura ' + e.legislature + '</strong>' +
+          ' <span class="ci-hint">(settimana ' + e.turn + ' — ' + weekLabel(e.turn) + ')</span><br>' +
+          (inParl
+            ? p.name + " entra in Parlamento con " + e.seatsCamera + " seggi alla Camera e " + e.seatsSenato + " al Senato, correndo " + allianceLabel + "."
+            : p.name + " resta fuori dal Parlamento in questa legislatura, correndo " + allianceLabel + ".") + "</li>";
+      }
+      var hasSeats = e.seats > 0;
+      return '<li><span class="chip ' + (hasSeats ? "good" : "critical") + '">Europee</span> <strong>Elezioni Europee</strong>' +
+        ' <span class="ci-hint">(settimana ' + e.turn + ' — ' + weekLabel(e.turn) + ')</span><br>' +
+        (hasSeats
+          ? p.name + " elegge " + e.seats + " " + (e.seats === 1 ? "eurodeputato" : "eurodeputati") + " al Parlamento Europeo."
+          : p.name + " non raggiunge la soglia di sbarramento e resta fuori dal Parlamento Europeo.") + "</li>";
+    };
+    return '<section aria-label="Cronologia Elettorale"><details class="log">' +
+      '<summary>Cronologia Elettorale — ' + merged.length + ' tornat' + (merged.length === 1 ? "a" : "e") + '<span>▾</span></summary>' +
+      '<p class="ci-hint">Ogni elezione politica nazionale ed europea affrontata dal partito, dalla più recente alla più vecchia.</p>' +
+      '<ul class="enacted-policy-list">' + merged.map(itemHtml).join("") + "</ul></details></section>";
+  }
   // ---------- Storico Completo dei Provvedimenti: tutto ciò che è stato varato, dalla prima volta ----------
   // Prima questo elenco viveva sepolto in fondo al pannello Scheda Paese, dopo tutte le griglie di
   // indicatori — tecnicamente completo (mai troncato, legge da state.enactedPolicies senza tagli), ma di
@@ -19522,6 +19675,65 @@
       ]
     };
   }
+  // ---------- Voto di Fiducia al nuovo Governo ----------
+  // Un passaggio distinto dal giuramento sopra (art. 94 Cost.): qui vota l'Aula intera, non solo chi fa
+  // parte del nuovo Governo — l'opposizione vota comunque sulla fiducia, anche senza aver prestato alcun
+  // giuramento. L'esito numerico non è mai davvero in discussione (la coalizione ha già la maggioranza
+  // reale uscita dalle urne, vedi state.parliamentSeats, non una proiezione sui sondaggi), ma la scelta
+  // di come presentarsi o votare in Aula ha comunque conseguenze politiche reali. Richiesto da un
+  // giocatore.
+  function confidenceVoteDossier() {
+    var p = state.player;
+    var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
+    // Rete di sicurezza: state.parliamentSeats (i seggi REALI, fissi dall'ultima elezione) dovrebbe
+    // sempre essere fresco a questo punto, dato che resolveElection() lo popola subito prima di impostare
+    // pendingConfidenceVote — ma se per qualunque motivo mancasse (salvataggio mai passato da una vera
+    // elezione), ricade sulla stessa proiezione sui sondaggi già usata da renderParliament(), invece di
+    // mostrare un innaturale "0 voti favorevoli".
+    var camSeats = (state.parliamentSeats && state.parliamentSeats.camera) || projectSeats(400);
+    var senSeats = (state.parliamentSeats && state.parliamentSeats.senato) || projectSeats(200);
+    var playerInGov = p.parliamentRole === "governo";
+    var govCamera = govMemberIds.reduce(function (s, id) { return s + (camSeats[id] || 0); }, 0) + (playerInGov ? (p.seatsCamera || 0) : 0);
+    var govSenato = govMemberIds.reduce(function (s, id) { return s + (senSeats[id] || 0); }, 0) + (playerInGov ? (p.seatsSenato || 0) : 0);
+    var premierName = (state.cabinet && state.cabinet.premierId === "player") ? p.name : govEntityLabel();
+    var tallyText = "Alla Camera il Governo può contare su " + govCamera + " voti favorevoli su 400 (soglia 201), al Senato su " + govSenato + " su 200 (soglia 101).";
+    if (playerInGov) {
+      return {
+        id: "confidence_vote", kind: "situazione", localDynamic: false,
+        eyebrow: "Voto di Fiducia al nuovo Governo",
+        cat: "Governo", title: "Il Governo si presenta alle Camere per la Fiducia",
+        brief: "Dopo il giuramento, " + premierName + " si presenta in Parlamento per il voto di fiducia previsto dall'articolo 94 della Costituzione: senza la fiducia di entrambe le Camere, il Governo non può restare in carica. " + tallyText + " Come ti presenti in Aula per il discorso di fiducia?",
+        choices: [
+          { label: "Rivendica con forza il mandato ricevuto dagli elettori", hint: "Discorso di governo, toni netti", effects: { reputazione: rand(1, 3), visibilita: rand(2, 5) },
+            result: "Il discorso di fiducia rivendica con forza il mandato elettorale: la maggioranza lo accoglie con convinzione, l'opposizione contesta i toni." },
+          { label: "Tendi la mano anche alle opposizioni, nel discorso di fiducia", hint: "Più unificante, meno mobilitante", effects: { reputazione: rand(2, 4) },
+            result: "Il discorso di apertura anche verso le opposizioni viene apprezzato per il tono istituzionale, pur senza cambiare il voto di nessuno." }
+        ]
+      };
+    }
+    // Opposizione: un vero voto in Aula, con conseguenze reali sul rapporto col nuovo Governo.
+    var govFamilyId = currentGoverningFamilyId();
+    var myPos = LEFT_RIGHT_POSITION[p.family], govPos = LEFT_RIGHT_POSITION[govFamilyId];
+    var farFromGov = (myPos === undefined || govPos === undefined) ? true : Math.abs(myPos - govPos) >= 3;
+    var nearestGovId = govMemberIds[0];
+    return {
+      id: "confidence_vote", kind: "situazione", localDynamic: false,
+      eyebrow: "Voto di Fiducia al nuovo Governo",
+      cat: "Governo", title: "Il tuo Gruppo vota la Fiducia al nuovo Governo",
+      brief: premierName + " si presenta in Parlamento per il voto di fiducia previsto dall'articolo 94 della Costituzione. " + tallyText + " Il tuo gruppo parlamentare come vota?",
+      choices: [
+        { label: "Vota la fiducia a favore", hint: farFromGov ? "Sorprendente per la tua base, ma apre un canale col Governo" : "Coerente se sei ideologicamente vicino alla nuova maggioranza",
+          effects: { reputazione: farFromGov ? -rand(2, 5) : rand(1, 3), relationDelta: nearestGovId ? { id: nearestGovId, delta: rand(4, 9) } : undefined },
+          result: farFromGov ? "Il voto a favore spiazza la tua base, ma apre comunque un canale di dialogo con il nuovo Governo." : "Il voto a favore, coerente con la tua linea, viene letto come un gesto di responsabilità istituzionale." },
+        { label: "Vota contro, come ci si aspetta dall'opposizione", hint: "Linea tradizionale, nessuna sorpresa",
+          effects: { reputazione: rand(0.5, 1.5), relationDelta: nearestGovId ? { id: nearestGovId, delta: -rand(2, 5) } : undefined },
+          result: "Il voto contrario alla fiducia conferma la linea di opposizione, senza scosse particolari." },
+        { label: "Astieniti", hint: "Via di mezzo, non scontenta né convince nessuno",
+          effects: { reputazione: -rand(0.5, 1.5) },
+          result: "L'astensione sulla fiducia lascia tutti un po' insoddisfatti: né vera opposizione, né vero sostegno." }
+      ]
+    };
+  }
   // ---------- Consultazioni al Quirinale ----------
   // Prima di questa funzionalità, una coalizione vinceva le elezioni e passava direttamente alla scelta
   // dei ministri (vedi cabinetFormationDossier) nella stessa identica settimana: nella realtà italiana,
@@ -19650,7 +19862,7 @@
   // degli alleati.
   function isCoalitionGatedDossier(dossier) {
     if (!dossier) return false;
-    if (dossier.id === "cabinet_formation" || dossier.id === "government_oath" || dossier.id === "coalition_ministry_demand") return false;
+    if (dossier.id === "cabinet_formation" || dossier.id === "government_oath" || dossier.id === "confidence_vote" || dossier.id === "coalition_ministry_demand") return false;
     return dossier.cat === "Governo" || dossier.cat === "Riforme di Governo";
   }
   // ---------- Controllo di legittimità della Corte dei Conti ----------
@@ -21098,7 +21310,7 @@
   // usa uno screen reader).
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", icon: "🏛️", nav: "Partito", render: function () {
-        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
+        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderEuCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", icon: "🗺️", nav: "Territorio", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
@@ -21125,7 +21337,7 @@
         return renderLog();
       } },
     { id: "storia", label: "Storia del Partito — riepilogo di carriera", icon: "🏆", nav: "Storia", render: function () {
-        return renderCareerSummary() + renderPolicyHistoryPanel();
+        return renderCareerSummary() + renderElectionHistoryPanel() + renderPolicyHistoryPanel();
       } }
   ];
   function activePageDef() {
@@ -22314,6 +22526,9 @@
           applyGovernmentCollapseLeadershipShock();
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "confidence_vote") {
+        state.pendingConfidenceVote = false;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "president_election") {
         resolvePresidentElection(dossier, choice);
       } else if (dossier.id === "gov_instaura_regime") {
@@ -22844,6 +23059,16 @@
         var id = btn.getAttribute("data-campaign-activity");
         var res = resolveCampaignActivity(id);
         if (!res) { showSaveStatus("Non puoi ancora organizzare questa iniziativa di campagna (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-eu-campaign-activity]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-eu-campaign-activity");
+        var res = resolveEuCampaignActivity(id);
+        if (!res) { showSaveStatus("Non puoi ancora organizzare questa iniziativa di campagna europea (fondi o tempo di recupero insufficienti).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
@@ -23983,6 +24208,12 @@
 
     if (state.pendingGovernmentOath) {
       state.currentDossierId = "government_oath";
+      state.phase = "building";
+      return;
+    }
+
+    if (state.pendingConfidenceVote) {
+      state.currentDossierId = "confidence_vote";
       state.phase = "building";
       return;
     }
