@@ -5901,6 +5901,47 @@
     if (!state.cabinet) return true;
     return state.cabinet.premierId === "player";
   }
+  // Il programma di coalizione non nasce più da 1-2 proposte accettate una a una, ma da un vero
+  // scrutinio: ogni membro della coalizione (il giocatore compreso) mette sul tavolo i 5 punti dei
+  // propri temi identitari, tutti i punti vanno al voto (il proponente vota sempre a favore del
+  // proprio, gli altri in base all'affinità ideologica tra famiglie politiche, vedi familyAffinity),
+  // e i 10 più votati entrano nel programma. I punti che non superano lo scrutinio restano disponibili
+  // per un secondo giro: un turno a testa, dove ogni partito può riproporre il proprio punto perdente
+  // (accettato/mediato/respinto come le vecchie proposte di coalizione), fino a un massimo di 15 punti
+  // totali nel programma.
+  function familyNoun(familyId, key) {
+    var angleNouns = (FAMILY_ANGLE_NOUNS[familyId] && FAMILY_ANGLE_NOUNS[familyId][key]) || [];
+    return angleNouns.length ? angleNouns[Math.floor(Math.random() * angleNouns.length)]
+      : (PROGRAM_GENERIC_PROPOSALS[key] || ("intervenire su " + (PROGRAM_THEME_LABELS[key] || key).toLowerCase()));
+  }
+  function buildCoalitionProgramBallot(p, partnerParties) {
+    var ballotMembers = partnerParties.map(function (ap) {
+      return { id: ap.id, name: ap.name, color: ap.color, familyId: ap.familyId, isPlayer: false };
+    }).concat([{ id: "player", name: p.name, color: p.color, familyId: p.family, isPlayer: true }]);
+    var candidates = [];
+    ballotMembers.forEach(function (m) {
+      (FAMILY_SIGNATURE_THEMES[m.familyId] || []).forEach(function (key) {
+        var noun = familyNoun(m.familyId, key);
+        candidates.push({
+          key: key, label: PROGRAM_THEME_LABELS[key] || key, noun: noun,
+          proposerId: m.id, proposerName: m.name, proposerFamilyId: m.familyId, proposerColor: m.color, isPlayerPoint: m.isPlayer,
+          text: (m.isPlayer ? "Punto proposto dal partito: " : "Punto proposto da " + m.name + ": ") + capitalizeFirst(noun) + "."
+        });
+      });
+    });
+    candidates.forEach(function (c) {
+      var votes = 0;
+      ballotMembers.forEach(function (voter) {
+        votes += voter.id === c.proposerId ? 100 : familyAffinity(voter.familyId, c.proposerFamilyId);
+      });
+      c.votes = Math.round(votes / ballotMembers.length + rand(-8, 8));
+    });
+    candidates.sort(function (a, b) { return b.votes - a.votes; });
+    var winners = candidates.slice(0, Math.min(10, candidates.length));
+    var losers = candidates.slice(winners.length);
+    return { ballotMembers: ballotMembers, sortedCandidates: candidates, winners: winners, losers: losers };
+  }
+  function capitalizeFirst(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
   function buildProgramMeetingFields(p) {
     var family = p.family;
     var playerKeys = (FAMILY_SIGNATURE_THEMES[family] || []).slice();
@@ -5924,27 +5965,41 @@
       var fragment = PROGRAM_GENERIC_PROPOSALS[key] || ("intervenire su " + (PROGRAM_THEME_LABELS[key] || key).toLowerCase());
       fields.push({ key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: "member", proposerName: proposer, proposalFragment: fragment, decided: null, chosenText: null });
     });
-    // Se il partito è in coalizione, il programma non è più soltanto suo: fino a 2 alleati (scelti a
-    // caso tra i membri della coalizione) mettono sul tavolo un proprio punto, pescato dai LORO temi
-    // identitari (mai uno già coperto sopra) — il giocatore decide se accettarlo, mediarlo o respingerlo.
+    // Se il partito è in coalizione, il programma di coalizione nasce da un vero scrutinio tra tutti i
+    // membri (vedi buildCoalitionProgramBallot) invece che da 1-2 proposte isolate: un campo speciale
+    // mostra l'esito del voto, seguito da un turno a testa per riproporre un punto perdente.
     if (p.allianceId) {
       var coal = coalitionById(p.allianceId);
       var partnerParties = coal ? activeParties().filter(function (ap) { return coal.members.indexOf(ap.id) !== -1; }) : [];
-      var usedKeys = fields.map(function (f) { return f.key; });
-      shuffleN(partnerParties, Math.min(2, partnerParties.length)).forEach(function (partner) {
-        var partnerThemes = (FAMILY_SIGNATURE_THEMES[partner.familyId] || []).filter(function (k) { return usedKeys.indexOf(k) === -1; });
-        if (!partnerThemes.length) return;
-        var key = partnerThemes[Math.floor(Math.random() * partnerThemes.length)];
-        usedKeys.push(key);
-        var angleNouns = (FAMILY_ANGLE_NOUNS[partner.familyId] && FAMILY_ANGLE_NOUNS[partner.familyId][key]) || [];
-        var noun = angleNouns.length ? angleNouns[Math.floor(Math.random() * angleNouns.length)]
-          : (PROGRAM_GENERIC_PROPOSALS[key] || ("intervenire su " + (PROGRAM_THEME_LABELS[key] || key).toLowerCase()));
-        fields.push({
-          key: key, label: PROGRAM_THEME_LABELS[key] || key, mode: "coalition",
-          partnerName: partner.name, partnerColor: partner.color, proposalNoun: noun,
-          decided: null, chosenText: null
+      if (partnerParties.length) {
+        var ballot = buildCoalitionProgramBallot(p, partnerParties);
+        fields.push({ mode: "coalition_ballot", sortedCandidates: ballot.sortedCandidates, winners: ballot.winners, losers: ballot.losers, acknowledged: false });
+        var extraSlotsLeft = 15 - ballot.winners.length;
+        var losersByMember = {};
+        ballot.losers.forEach(function (l) {
+          (losersByMember[l.proposerId] = losersByMember[l.proposerId] || []).push(l);
         });
-      });
+        shuffleN(ballot.ballotMembers, ballot.ballotMembers.length).forEach(function (m) {
+          if (extraSlotsLeft <= 0) return;
+          var pool = losersByMember[m.id];
+          if (!pool || !pool.length) return;
+          var pick = pool[0];
+          extraSlotsLeft--;
+          if (m.isPlayer) {
+            fields.push({
+              key: pick.key, label: pick.label, mode: isLeader ? "player" : "proposal", forCoalition: true,
+              choices: [{ label: capitalizeFirst(pick.noun), text: "Punto aggiuntivo proposto dal partito per il programma di coalizione: " + capitalizeFirst(pick.noun) + "." }],
+              chosenLabel: null, chosenText: null, decided: isLeader ? undefined : null
+            });
+          } else {
+            fields.push({
+              key: pick.key, label: pick.label, mode: "coalition",
+              partnerName: m.name, partnerColor: m.color, proposalNoun: pick.noun,
+              decided: null, chosenText: null
+            });
+          }
+        });
+      }
     }
     return fields;
   }
@@ -21214,7 +21269,9 @@
         if (idx > pm.step - 1) return;
         html += '<div class="qt-exchange">';
         if (f.mode === "player") {
-          html += '<p class="qt-question"><strong>Capitolo: ' + f.label + '</strong> — qual è il punto qualificante del programma su questo fronte?</p>';
+          html += f.forCoalition
+            ? '<p class="qt-question">Il tuo punto su <strong>' + f.label + '</strong> non ha passato lo scrutinio: vuoi riproporlo per il secondo giro del programma di coalizione?</p>'
+            : '<p class="qt-question"><strong>Capitolo: ' + f.label + '</strong> — qual è il punto qualificante del programma su questo fronte?</p>';
           if (f.chosenText) {
             html += '<p class="qt-answer"><strong>' + f.chosenLabel + "</strong> — " + f.chosenText + "</p>";
           } else {
@@ -21223,7 +21280,9 @@
             }).join("") + "</div>";
           }
         } else if (f.mode === "proposal") {
-          html += '<p class="qt-question"><strong>Capitolo: ' + f.label + "</strong> — su questo fronte non decidi tu da solo: proponi un punto a " + (pm.premierPartyName || "chi guida la coalizione") + ", che dovrà valutarlo.</p>";
+          html += f.forCoalition
+            ? '<p class="qt-question">Il tuo punto su <strong>' + f.label + "</strong> non ha passato lo scrutinio: lo riproponi per il secondo giro, ma decide " + (pm.premierPartyName || "chi guida la coalizione") + ".</p>"
+            : '<p class="qt-question"><strong>Capitolo: ' + f.label + "</strong> — su questo fronte non decidi tu da solo: proponi un punto a " + (pm.premierPartyName || "chi guida la coalizione") + ", che dovrà valutarlo.</p>";
           if (f.decided) {
             html += '<p class="qt-answer"><strong>' + f.chosenLabel + "</strong> — " + (f.decided === "accepted" ? "Proposta accolta: " + f.chosenText
               : f.decided === "mediated" ? "Accolta solo in parte, con una versione più sfumata: " + f.chosenText
@@ -21232,6 +21291,17 @@
             html += '<div class="choices">' + f.choices.map(function (c, i) {
               return '<button type="button" class="choice-btn" data-program-field-choice="' + idx + ":" + i + '"><span class="clabel">' + c.label + '</span></button>';
             }).join("") + "</div>";
+          }
+        } else if (f.mode === "coalition_ballot") {
+          var sortedForDisplay = f.sortedCandidates;
+          html += '<p class="qt-question"><strong>Scrutinio del Programma di Coalizione</strong> — ' + sortedForDisplay.length + ' punti proposti da ' + f.winners.length + '+' + f.losers.length + ' candidature vanno al voto: ogni partito vota sempre a favore del proprio punto, e per affinità politica su quelli degli altri. I ' + f.winners.length + ' più votati entrano nel programma.</p>';
+          html += '<ul class="enacted-policy-list">' + sortedForDisplay.map(function (c, i) {
+            var won = i < f.winners.length;
+            return '<li><strong>' + c.label + '</strong> <span class="ci-hint">(' + c.proposerName + ', ' + c.votes + ' voti)</span> ' +
+              (won ? '<span class="chip good">Entra nel programma</span>' : '<span class="chip">Non passa</span>') + '<br>' + c.text + '</li>';
+          }).join("") + '</ul>';
+          if (!f.acknowledged) {
+            html += '<div class="qt-continue-row"><button type="button" class="advance-btn" data-program-ballot-continue="' + idx + '">Chiudi lo scrutinio</button></div>';
           }
         } else if (f.mode === "coalition") {
           html += '<div class="qt-speaker">' + personBadgeHtml(f.partnerName, null, 26, f.partnerColor) +
@@ -21276,6 +21346,13 @@
     }
     // Passo finale: riepilogo.
     html += '<p class="ci-hint">Il programma elettorale è pronto.</p>';
+    var ballotField = pm.fields.filter(function (f) { return f.mode === "coalition_ballot"; })[0];
+    if (ballotField) {
+      html += '<div class="qt-exchange"><p class="qt-question"><strong>Esito dello scrutinio di coalizione</strong></p>' +
+        ballotField.winners.map(function (w) {
+          return '<p class="qt-answer"><strong>' + w.label + '</strong> (' + w.proposerName + ', ' + w.votes + ' voti) — ' + w.text + '</p>';
+        }).join("") + "</div>";
+    }
     pm.fields.filter(function (f) { return f.chosenText; }).forEach(function (f) {
       html += '<div class="qt-exchange"><p class="qt-question"><strong>' + f.label + "</strong></p><p class=\"qt-answer\">" + f.chosenText + "</p></div>";
     });
@@ -21973,6 +22050,19 @@
           render();
         });
       }
+      // Chiude il riepilogo dello scrutinio di coalizione (vedi buildCoalitionProgramBallot): non è una
+      // scelta ma solo la presa d'atto dell'esito del voto, già deciso al momento della costruzione dei
+      // campi, prima di passare all'eventuale secondo giro di proposte aggiuntive.
+      app.querySelectorAll("[data-program-ballot-continue]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var idx = parseInt(btn.getAttribute("data-program-ballot-continue"), 10);
+          var pm = state.programMeeting;
+          pm.fields[idx].acknowledged = true;
+          pm.step++;
+          save();
+          render();
+        });
+      });
       app.querySelectorAll("[data-program-field-choice]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var parts = btn.getAttribute("data-program-field-choice").split(":");
@@ -22067,12 +22157,23 @@
         pmCloseBtn.addEventListener("click", function () {
           var pm = state.programMeeting;
           var p = state.player;
-          var chapters = pm.fields.filter(function (f) { return f.chosenText; }).map(function (f) {
-            // "proposal" è lo stesso capitolo identitario del partito di "player", solo filtrato dal
-            // vaglio della coalizione quando non è lui a guidarla: resta un punto del partito, non un
-            // punto dei tesserati, perché finisca nel Programma di Partito e non in quello di Coalizione.
-            var source = (f.mode === "player" || f.mode === "proposal") ? "leader" : f.mode === "coalition" ? "coalizione" : "tesserati";
-            return { key: f.key, label: f.label, text: f.chosenText, source: source };
+          var chapters = [];
+          pm.fields.forEach(function (f) {
+            // Il campo dello scrutinio (vedi buildCoalitionProgramBallot) non ha un chosenText singolo:
+            // si espande direttamente nei suoi 10 punti vincenti, tutti marcati come programma di coalizione.
+            if (f.mode === "coalition_ballot") {
+              f.winners.forEach(function (w) {
+                chapters.push({ key: w.key, label: w.label, text: w.text, source: "coalizione" });
+              });
+              return;
+            }
+            if (!f.chosenText) return;
+            // "proposal"/"player" sono lo stesso capitolo identitario del partito, solo filtrato dal vaglio
+            // della coalizione quando non la guida — resta un punto del partito, non dei tesserati, a
+            // meno che f.forCoalition non lo segnali come un punto aggiuntivo del secondo giro di
+            // coalizione (vedi buildProgramMeetingFields), che finisce invece nel Programma di Coalizione.
+            var source = (f.mode === "coalition" || f.forCoalition) ? "coalizione" : (f.mode === "player" || f.mode === "proposal") ? "leader" : "tesserati";
+            chapters.push({ key: f.key, label: f.label, text: f.chosenText, source: source });
           });
           p.electoralProgram = { draftedAtTurn: state.turn, chapters: chapters, notes: pm.notes || "" };
           p.electoralProgramOffered = true;
