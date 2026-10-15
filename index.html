@@ -18864,15 +18864,32 @@
         '<p class="ci-hint">Il programma elettorale verrà scritto insieme al nucleo, ai deputati e ai tesserati del partito circa ' +
         PROGRAM_MEETING_WINDOW_WEEKS + ' settimane prima delle prossime elezioni politiche.</p></details></section>';
     }
-    var html = '<section aria-label="Programma Elettorale"><details class="log"><summary>Programma Elettorale<span>▾</span></summary>' +
-      '<p class="ci-hint">Scritto in assemblea alla settimana ' + prog.draftedAtTurn + ' (' + weekLabel(prog.draftedAtTurn) + '), ' + prog.chapters.length + ' capitoli.</p>' +
-      '<ul class="enacted-policy-list">' + prog.chapters.map(function (c) {
-        return '<li><strong>' + c.label + '</strong> <span class="ci-hint">(' + (c.source === "leader" ? "punto del leader" : c.source === "coalizione" ? "proposta della coalizione" : "proposta dei tesserati") + ')</span><br>' + c.text + '</li>';
-      }).join("") + '</ul>';
+    // Se il partito è (o era, al momento della riunione) in coalizione, i punti scritti dagli alleati
+    // (source "coalizione") non restano mescolati in un'unica lista col resto: diventano un secondo
+    // documento a parte, il Programma di Coalizione, perché il programma di partito resti solo il
+    // proprio e sia chiaro cosa è stato negoziato con gli altri.
+    var coalitionChapters = prog.chapters.filter(function (c) { return c.source === "coalizione"; });
+    var partyChapters = prog.chapters.filter(function (c) { return c.source !== "coalizione"; });
+    function chapterLi(c) {
+      return '<li><strong>' + c.label + '</strong> <span class="ci-hint">(' + (c.source === "leader" ? "punto del leader" : "proposta dei tesserati") + ')</span><br>' + c.text + '</li>';
+    }
+    function coalitionLi(c) {
+      return '<li><strong>' + c.label + '</strong><br>' + c.text + '</li>';
+    }
+    var partyLabel = coalitionChapters.length ? "Programma di Partito" : "Programma Elettorale";
+    var html = '<section aria-label="Programma Elettorale"><details class="log"><summary>' + partyLabel + '<span>▾</span></summary>' +
+      '<p class="ci-hint">Scritto in assemblea alla settimana ' + prog.draftedAtTurn + ' (' + weekLabel(prog.draftedAtTurn) + '), ' + partyChapters.length + ' capitoli.</p>' +
+      '<ul class="enacted-policy-list">' + partyChapters.map(chapterLi).join("") + '</ul>';
     if (prog.notes) {
       html += '<p class="ci-hint"><strong>Note del leader:</strong> ' + prog.notes.replace(/</g, "&lt;") + '</p>';
     }
-    html += '</details></section>';
+    html += '</details>';
+    if (coalitionChapters.length) {
+      html += '<details class="log"><summary>Programma di Coalizione<span>▾</span></summary>' +
+        '<p class="ci-hint">I punti negoziati con gli alleati nella stessa riunione, ' + coalitionChapters.length + ' capitol' + (coalitionChapters.length === 1 ? "o" : "i") + '.</p>' +
+        '<ul class="enacted-policy-list">' + coalitionChapters.map(coalitionLi).join("") + '</ul></details>';
+    }
+    html += '</section>';
     return html;
   }
 
@@ -21219,11 +21236,11 @@
         } else if (f.mode === "coalition") {
           html += '<div class="qt-speaker">' + personBadgeHtml(f.partnerName, null, 26, f.partnerColor) +
             '<span><span class="qt-speaker-name">' + f.partnerName + '</span> <span class="qt-speaker-party">— partner di coalizione</span></span></div>' +
-            '<p class="qt-question">Per il programma comune, propone di puntare ' + suLabel(f.proposalNoun) + ' (capitolo <strong>' + f.label + "</strong>).</p>";
+            '<p class="qt-question">Per il programma di coalizione, propone di puntare ' + suLabel(f.proposalNoun) + ' (capitolo <strong>' + f.label + "</strong>).</p>";
           if (f.decided) {
-            html += '<p class="qt-answer">' + (f.decided === "accepted" ? "Accettato nel programma comune: " + f.chosenText
+            html += '<p class="qt-answer">' + (f.decided === "accepted" ? "Accettato nel programma di coalizione: " + f.chosenText
               : f.decided === "mediated" ? "Mediato e ammorbidito, poi inserito: " + f.chosenText
-              : "Respinto: il punto non entra nel programma comune, gli alleati ne prendono atto.") + "</p>";
+              : "Respinto: il punto non entra nel programma di coalizione, gli alleati ne prendono atto.") + "</p>";
           } else {
             html += '<div class="choices">' +
               '<button type="button" class="choice-btn" data-program-coalition-vote="' + idx + ':accept"><span class="clabel">Accetta la proposta</span></button>' +
@@ -22019,11 +22036,11 @@
           }
           if (verdict === "accept") {
             f.decided = "accepted";
-            f.chosenText = "Punto proposto da " + f.partnerName + " e accolto nel programma comune: " + capitalizedNoun + ".";
+            f.chosenText = "Punto proposto da " + f.partnerName + " e accolto nel programma di coalizione: " + capitalizedNoun + ".";
             if (p.allianceId) state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] + rand(2, 5), 0, 100);
           } else if (verdict === "mediate") {
             f.decided = "mediated";
-            f.chosenText = "Punto mediato con " + f.partnerName + ": il programma comune recepisce una versione più equilibrata " + suLabel(f.proposalNoun) + ".";
+            f.chosenText = "Punto mediato con " + f.partnerName + ": il programma di coalizione recepisce una versione più equilibrata " + suLabel(f.proposalNoun) + ".";
             if (p.allianceId) state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] + rand(0, 2), 0, 100);
           } else {
             f.decided = "rejected";
@@ -22051,7 +22068,10 @@
           var pm = state.programMeeting;
           var p = state.player;
           var chapters = pm.fields.filter(function (f) { return f.chosenText; }).map(function (f) {
-            var source = f.mode === "player" ? "leader" : f.mode === "coalition" ? "coalizione" : "tesserati";
+            // "proposal" è lo stesso capitolo identitario del partito di "player", solo filtrato dal
+            // vaglio della coalizione quando non è lui a guidarla: resta un punto del partito, non un
+            // punto dei tesserati, perché finisca nel Programma di Partito e non in quello di Coalizione.
+            var source = (f.mode === "player" || f.mode === "proposal") ? "leader" : f.mode === "coalition" ? "coalizione" : "tesserati";
             return { key: f.key, label: f.label, text: f.chosenText, source: source };
           });
           p.electoralProgram = { draftedAtTurn: state.turn, chapters: chapters, notes: pm.notes || "" };
