@@ -2437,13 +2437,33 @@
       });
     }
   }
-  // Le relazioni con gli altri partiti tendono lentamente verso il centro (50) se nessuna scelta le
-  // spinge in una direzione precisa — come nella realtà, le ruggini si smussano se non alimentate.
+  // Il punto di equilibrio verso cui una relazione tende a lungo termine, se nessuna scelta la spinge
+  // altrove: non 50 per chiunque, ma un valore che riflette la vicinanza ideologica reale (riusa
+  // familyAffinity, la stessa scala usata per il programma di coalizione) e, soprattutto, se quel
+  // partito è oggi un vero alleato del giocatore — altrimenti anche gli alleati scivolavano verso la
+  // "neutralità" con lo stesso ritmo di un rivale qualsiasi, svuotando di senso l'ideologia di partenza
+  // calcolata da initPartyRelations su un'intera legislatura.
+  function partyRelationRestPoint(p, party) {
+    var coal = p.allianceId ? coalitionById(p.allianceId) : null;
+    if (coal && coal.members.indexOf(party.id) !== -1) return 72;
+    var rivalId = familyById(p.family) ? familyById(p.family).rival : null;
+    var base = familyAffinity(p.family, party.familyId || p.family);
+    if (party.id === rivalId) base -= 15;
+    return clamp(base, 10, 92);
+  }
+  // Le relazioni con gli altri partiti tendono lentamente verso il loro punto di equilibrio ideologico
+  // (vedi partyRelationRestPoint) se nessuna scelta le spinge in una direzione precisa — come nella
+  // realtà, le ruggini si smussano se non alimentate, ma un alleato resta un alleato e un rivale
+  // ideologico resta freddo, non tutto collassa verso la stessa "neutralità" con chiunque.
   function driftPartyRelations() {
-    if (!state.partyRelations) return;
+    if (!state.partyRelations || !state.player) return;
+    var p = state.player;
     Object.keys(state.partyRelations).forEach(function (id) {
+      var party = partyById(id);
+      if (!party) return;
       var v = state.partyRelations[id];
-      state.partyRelations[id] = clamp(v + (50 - v) * 0.01, 0, 100);
+      var target = partyRelationRestPoint(p, party);
+      state.partyRelations[id] = clamp(v + (target - v) * 0.01, 0, 100);
     });
   }
 
@@ -11170,6 +11190,38 @@
       headlines: [], type: "cronaca"
     });
   }
+  // Segnalato da un giocatore dopo un'intera legislatura: i due blocchi storici potevano solo
+  // allargarsi (vedi sopra), mai perdere pezzi, mentre nella realtà càpita anche il contrario (un
+  // partito che rompe e corre da solo). Stesso evento raro, simmetrico, ma leggermente più probabile
+  // dell'adesione: lascia il blocco il membro ideologicamente più periferico rispetto alla posizione
+  // media sinistra-destra degli altri (vedi LEFT_RIGHT_POSITION), lo stesso criterio già usato per
+  // valutare quanto un blocco è ideologicamente "largo". Non scende mai sotto i 2 membri, e il
+  // Presidente del Consiglio in carica non lascia mai il proprio blocco con questo evento.
+  function triggerFixedCoalitionDefection() {
+    ["centrodestra", "campolargo"].forEach(function (blocId) {
+      var coal = COALITIONS[blocId];
+      if (coal.members.length <= 2) return;
+      if (Math.random() > 0.016 * politicalVolatilityMultiplier()) return;
+      var memberParties = coal.members.map(function (id) { return partyById(id); }).filter(Boolean);
+      var positions = memberParties.map(function (pt) { return LEFT_RIGHT_POSITION[pt.familyId]; }).filter(function (v) { return v !== undefined; });
+      if (!positions.length) return;
+      var avgPos = positions.reduce(function (s, v) { return s + v; }, 0) / positions.length;
+      var sorted = memberParties.slice().sort(function (a, b) {
+        var pa = LEFT_RIGHT_POSITION[a.familyId], pb = LEFT_RIGHT_POSITION[b.familyId];
+        var da = pa === undefined ? -1 : Math.abs(pa - avgPos), db = pb === undefined ? -1 : Math.abs(pb - avgPos);
+        return db - da;
+      });
+      var premierId = state.cabinet ? state.cabinet.premierId : null;
+      var leaving = sorted.filter(function (pt) { return pt.id !== premierId; })[0];
+      if (!leaving) return;
+      coal.members.splice(coal.members.indexOf(leaving.id), 1);
+      state.log.unshift({
+        week: state.turn, title: "Un partito lascia un blocco storico", choiceLabel: leaving.name,
+        result: leaving.name + " annuncia la rottura con " + coal.label + ": alle prossime elezioni correrà fuori dal blocco.",
+        headlines: [], type: "cronaca"
+      });
+    });
+  }
 
   // ---------- Deriva ideologica di lungo periodo ----------
   // Non solo il giocatore può cambiare linea a metà partita (vedi il cambio di famiglia ideologica nel
@@ -12209,6 +12261,7 @@
     triggerSpontaneousPartyFormation();
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
+    triggerFixedCoalitionDefection();
     triggerPartyIdeologicalDrift();
     triggerLeaderSuccession();
     updateForeignRelations();
@@ -14926,8 +14979,17 @@
       }
     });
   }
+  // COALITIONS (i due blocchi storici, Centrodestra/Campo Largo) non vive in state ma in una costante
+  // di modulo: si reinizializza sempre ai 3 membri di partenza ogni volta che la pagina viene
+  // ricaricata. Senza questo, ogni cambiamento reale di membership (un partito che aderisce o lascia
+  // il blocco, un alleato che se ne va) andrebbe perso al primo reload — segnalato da un giocatore dopo
+  // un'intera legislatura in cui i due blocchi storici sembravano immutabili, a differenza delle
+  // coalizioni nate in partita (quelle vivono già in state.dynamicCoalitions).
   function save() {
-    try { localStorage.setItem(currentStorageKey(), JSON.stringify(state)); } catch (e) {}
+    try {
+      state.fixedCoalitionMembers = { centrodestra: COALITIONS.centrodestra.members.slice(), campolargo: COALITIONS.campolargo.members.slice() };
+      localStorage.setItem(currentStorageKey(), JSON.stringify(state));
+    } catch (e) {}
   }
   // Riempie automaticamente ogni campo strutturale mancante in un salvataggio (aggiunto in versioni
   // successive a quella del salvataggio) con il suo valore di default, più le migrazioni "vere" caso per
@@ -15018,6 +15080,13 @@
       }
       if (parsed.player.seggiEuropei > 0 && !parsed.player.euGroup && !parsed.euGroupPending) parsed.euGroupPending = true;
       if (!parsed.partyRelations) parsed.partyRelations = initPartyRelations(parsed.player);
+    }
+    // Ripristina la membership salvata dei due blocchi storici (vedi save()): senza questo, COALITIONS
+    // tornerebbe sempre ai suoi 3 membri di partenza a ogni caricamento, cancellando ogni adesione o
+    // defezione avvenuta in partita.
+    if (parsed.fixedCoalitionMembers) {
+      if (parsed.fixedCoalitionMembers.centrodestra) COALITIONS.centrodestra.members = parsed.fixedCoalitionMembers.centrodestra.slice();
+      if (parsed.fixedCoalitionMembers.campolargo) COALITIONS.campolargo.members = parsed.fixedCoalitionMembers.campolargo.slice();
     }
     // I partiti dinamici (nati da scissioni o spontaneamente) non salvavano un familyId, solo una
     // descrizione testuale ("famiglia"): tutto ciò che dipende dall'ideologia di un partito CPU (mozioni,
@@ -24262,6 +24331,7 @@
     triggerSpontaneousPartyFormation();
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
+    triggerFixedCoalitionDefection();
     triggerPartyIdeologicalDrift();
     triggerLeaderSuccession();
     updateForeignRelations();
