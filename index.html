@@ -12374,6 +12374,58 @@
       return { id: s.id, label: s.label, count: counts[s.id] };
     });
   }
+  // Richiesto da un giocatore: con decine di categorie e centinaia di temi tra referendum, leggi,
+  // mozioni e modifiche, trovare un argomento specifico (es. "eutanasia" o "salario minimo") navigando
+  // categoria per categoria è lento. Una barra di ricerca testuale, uguale nei 4 pannelli, bypassa del
+  // tutto il menu delle categorie quando c'è una query: cerca su titolo, testo e sostantivo del tema, su
+  // TUTTI i temi disponibili in quel momento (non solo quelli della categoria eventualmente già aperta).
+  function searchFilterTopics(topics, query) {
+    var q = (query || "").trim().toLowerCase();
+    if (!q) return null;
+    return topics.filter(function (t) {
+      return (t.title && t.title.toLowerCase().indexOf(q) !== -1) ||
+        (t.brief && t.brief.toLowerCase().indexOf(q) !== -1) ||
+        (t.noun && t.noun.toLowerCase().indexOf(q) !== -1);
+    });
+  }
+  function renderTopicSearchBox(inputId, query, placeholder) {
+    var safeQuery = (query || "").replace(/"/g, "&quot;");
+    return '<div class="row" style="gap:0.5rem;margin-bottom:0.6rem">' +
+      '<input type="text" id="' + inputId + '" placeholder="' + placeholder + '" value="' + safeQuery + '" style="flex:1;min-width:0">' +
+      (query ? '<button type="button" class="staff-btn hire" data-clear-topic-search="' + inputId + '">✕ Cancella</button>' : "") +
+      "</div>";
+  }
+  // Un solo punto per collegare l'input e il bottone "Cancella" di ciascuno dei 4 pannelli di ricerca,
+  // invece di ripetere 4 volte lo stesso listener: la mappa associa l'id del campo al nome del
+  // sotto-campo in cui vive la query, dentro state.player.
+  var TOPIC_SEARCH_FIELDS = {
+    "referendum-search-input": "referendumSearchQuery",
+    "mozione-search-input": "mozioneSearchQuery",
+    "legge-search-input": "leggeSearchQuery",
+    "amendment-search-input": "amendmentSearchQuery"
+  };
+  function bindTopicSearchInputs() {
+    Object.keys(TOPIC_SEARCH_FIELDS).forEach(function (inputId) {
+      var el = document.getElementById(inputId);
+      if (!el) return;
+      el.addEventListener("input", function () {
+        var cursor = el.selectionStart;
+        state.player[TOPIC_SEARCH_FIELDS[inputId]] = el.value;
+        render();
+        var fresh = document.getElementById(inputId);
+        if (fresh) { fresh.focus(); fresh.setSelectionRange(cursor, cursor); }
+      });
+    });
+    app.querySelectorAll("[data-clear-topic-search]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var inputId = btn.getAttribute("data-clear-topic-search");
+        var key = TOPIC_SEARCH_FIELDS[inputId];
+        if (key) state.player[key] = "";
+        save();
+        render();
+      });
+    });
+  }
   var REFERENDUM_SHAPES = [
     { id: "abrogativo", build: function (noun, metric) { return { title: "Referendum abrogativo su " + noun, brief: "Un referendum per abrogare le norme vigenti su " + noun + ".", metric: metric, noun: noun }; } },
     { id: "istitutivo", build: function (noun, metric) { return { title: "Referendum per una nuova legge su " + noun, brief: "Un referendum per introdurre una nuova legge su " + noun + ".", metric: metric, noun: noun }; } },
@@ -12631,6 +12683,22 @@
     }
     if (p.fondi < REFERENDUM_PROPOSAL_COST) {
       html += '<p class="ci-hint">Servono almeno ' + fmtEuro(REFERENDUM_PROPOSAL_COST) + " per avviare la raccolta firme.</p></details></section>";
+      return html;
+    }
+    html += renderTopicSearchBox("referendum-search-input", p.referendumSearchQuery, "Cerca un tema (es. eutanasia, cannabis, salario minimo)…");
+    var refSearchMatches = searchFilterTopics(allReferendumTopics(p), p.referendumSearchQuery);
+    if (refSearchMatches) {
+      p.referendumCandidates = refSearchMatches;
+      if (!refSearchMatches.length) {
+        html += '<p class="ci-hint">Nessun risultato per questa ricerca.</p></details></section>';
+        return html;
+      }
+      html += '<p class="ci-hint">' + refSearchMatches.length + ' risultat' + (refSearchMatches.length === 1 ? "o" : "i") + ': costa ' + fmtEuro(REFERENDUM_PROPOSAL_COST) + ", con un tempo di raccolta firme prima dell'esito.</p><div class=\"option-grid\">";
+      refSearchMatches.forEach(function (t, i) {
+        html += '<button type="button" class="option-card" data-propose-referendum="' + i + '">' +
+          '<span class="olabel">' + t.title + '</span><span class="odesc">' + t.brief + '</span></button>';
+      });
+      html += '</div></details></section>';
       return html;
     }
     // Niente più un pool "rimescolato": si naviga per categoria tematica, come un vero menu di sezioni
@@ -13696,6 +13764,22 @@
       html += '<p class="ci-hint">Puoi ' + (symbolic ? "prendere posizione su un nuovo tema" : "presentare una nuova mozione") + ' tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
       return html;
     }
+    html += renderTopicSearchBox("mozione-search-input", p.mozioneSearchQuery, "Cerca un tema (es. reddito di cittadinanza, salario minimo)…");
+    var mozSearchMatches = searchFilterTopics(allMozioneTopics(p), p.mozioneSearchQuery);
+    if (mozSearchMatches) {
+      p.mozioneCandidates = mozSearchMatches;
+      if (!mozSearchMatches.length) {
+        html += '<p class="ci-hint">Nessun risultato per questa ricerca.</p></details></section>';
+        return html;
+      }
+      html += '<p class="ci-hint">' + mozSearchMatches.length + ' risultat' + (mozSearchMatches.length === 1 ? "o" : "i") + ':</p><div class="option-grid">';
+      mozSearchMatches.forEach(function (t, i) {
+        html += '<button type="button" class="option-card" data-propose-mozione="' + i + '">' +
+          '<span class="olabel">' + t.title + '</span><span class="odesc">' + (symbolic ? "Iniziativa simbolica — nessun voto in Aula, nessun effetto reale" : t.brief) + '</span></button>';
+      });
+      html += '</div></details></section>';
+      return html;
+    }
     // Niente più un pool "rimescolato": si naviga per categoria tematica, come un vero menu di sezioni.
     if (!p.mozioneSelectedCat) {
       var mozSections = legislativeSectionsWithTopics(allMozioneTopics(p));
@@ -13752,6 +13836,23 @@
       html += '<p class="ci-hint">Puoi ' + (symbolic ? "presentare una nuova proposta programmatica" : "depositare una nuova proposta di legge") + ' tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
       return html;
     }
+    html += renderTopicSearchBox("legge-search-input", p.leggeSearchQuery, "Cerca una proposta (es. ius scholae, pena di morte)…");
+    var legSearchMatches = searchFilterTopics(allLawTopics(p), p.leggeSearchQuery);
+    if (legSearchMatches) {
+      p.leggeCandidates = legSearchMatches;
+      if (!legSearchMatches.length) {
+        html += '<p class="ci-hint">Nessun risultato per questa ricerca.</p></details></section>';
+        return html;
+      }
+      html += '<p class="ci-hint">' + legSearchMatches.length + ' risultat' + (legSearchMatches.length === 1 ? "o" : "i") + ':</p><div class="option-grid">';
+      legSearchMatches.forEach(function (t, i) {
+        var effectHintSearch = (!symbolic && t.metric && METRIC_LABELS[t.metric]) ? " Se approvata, migliora " + METRIC_LABELS[t.metric] + "." : "";
+        html += '<button type="button" class="option-card" data-propose-legge="' + i + '">' +
+          '<span class="olabel">' + t.title + '</span><span class="odesc">' + (symbolic ? "Iniziativa simbolica — nessun iter legislativo, nessun effetto reale" : t.brief + effectHintSearch) + '</span></button>';
+      });
+      html += '</div></details></section>';
+      return html;
+    }
     if (!p.leggeSelectedCat) {
       var legSections = legislativeSectionsWithTopics(allLawTopics(p));
       html += '<p class="ci-hint">' + (symbolic
@@ -13803,6 +13904,22 @@
     var weeksLeft = (p.amendmentCooldownTurn || 0) - state.turn;
     if (weeksLeft > 0) {
       html += '<p class="ci-hint">Puoi depositare una nuova proposta di modifica tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + ".</p></details></section>";
+      return html;
+    }
+    html += renderTopicSearchBox("amendment-search-input", p.amendmentSearchQuery, "Cerca una legge in vigore su cui intervenire…");
+    var amendSearchMatches = searchFilterTopics(allAmendmentTopics(p), p.amendmentSearchQuery);
+    if (amendSearchMatches) {
+      p.amendmentCandidates = amendSearchMatches;
+      if (!amendSearchMatches.length) {
+        html += '<p class="ci-hint">Nessun risultato per questa ricerca.</p></details></section>';
+        return html;
+      }
+      html += '<p class="ci-hint">' + amendSearchMatches.length + ' risultat' + (amendSearchMatches.length === 1 ? "o" : "i") + ':</p><div class="option-grid">';
+      amendSearchMatches.forEach(function (t, i) {
+        html += '<button type="button" class="option-card" data-propose-amendment="' + i + '">' +
+          '<span class="olabel">' + t.title + '</span><span class="odesc">' + t.brief + '</span></button>';
+      });
+      html += '</div></details></section>';
       return html;
     }
     if (!p.amendmentSelectedCat) {
@@ -14877,6 +14994,7 @@
     amministratoriLocali: 0, seggiEuropei: 0, euGroup: null, eventCooldowns: {}, lastPartyEventTurn: null, lastPollingTarget: null, candidatePools: {},
     regionsWon: {}, regionalIssueCooldownTurn: 0,
     reformCooldownTurn: 0, completedReformDomains: [], lastReformOutcome: null, civilWarCooldownTurn: 0, referendumCooldownTurn: 0, pendingReferendum: null, referendumCandidates: null, referendumSelectedCat: null, referendumLegislatureUsed: null,
+    referendumSearchQuery: "", mozioneSearchQuery: "", leggeSearchQuery: "", amendmentSearchQuery: "",
     electoralLawLegislatureUsed: null, pendingElectoralLaw: null,
     cumulativeGovWeeks: 0, lingeringScandal: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
@@ -23777,6 +23895,7 @@
         render();
       });
     });
+    bindTopicSearchInputs();
     app.querySelectorAll("[data-gov-reform]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
