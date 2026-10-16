@@ -10868,8 +10868,14 @@
     // Il partito storico, rimasto nelle mani dello sfidante, diventa un vero nuovo soggetto attivo — ma
     // solo se la scena politica non ha già raggiunto il tetto di PARTY_COUNT_CAP: stessa logica applicata
     // alla scissione di corrente qui sopra, per lo stesso motivo (un'azione del giocatore non deve poter
-    // far superare il tetto promesso, che tutte le nascite guidate dalla CPU rispettano già).
-    if (activeParties().length < PARTY_COUNT_CAP) {
+    // far superare il tetto promesso, che tutte le nascite guidate dalla CPU rispettano già). Segnalato
+    // da un giocatore: quando il tetto blocca la creazione (facile da raggiungere in una partita lunga),
+    // il partito storico scompariva senza lasciare traccia e il suo 65% di consenso andava perso nel
+    // nulla, mentre il testo sotto continuava comunque a dire che restava "nelle mani" dello sfidante —
+    // ora, se non può nascere come soggetto vero, quel consenso confluisce nell'astensione, come un
+    // normale scioglimento di partito (vedi triggerPartyLifecycleFollowup), e il testo lo dice chiaro.
+    var oldPartyCreated = activeParties().length < PARTY_COUNT_CAP;
+    if (oldPartyCreated) {
       var oldPartyId = "dyn_" + p.name.toLowerCase().replace(/[^a-z0-9]+/g, "") + "_" + state.turn;
       var oldParty = {
         id: oldPartyId, name: p.name, short: p.short || p.name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase(),
@@ -10886,6 +10892,8 @@
         if (!state.partyLogoOverrides) state.partyLogoOverrides = {};
         state.partyLogoOverrides[oldParty.id] = p.logoDataUrl;
       }
+    } else {
+      state.indecisi = (state.indecisi || 0) + oldPollShare;
     }
 
     var freshParty = generateSplinterParty(pseudoParent, state.turn);
@@ -10909,9 +10917,14 @@
     p.currents = null;
     p.primariesCooldownTurn = state.turn + PRIMARIES_RETRY_COOLDOWN_TURNS;
 
-    var resultText = "Rinunci alla contesa interna e lasci " + oldName + " nelle mani di " + challenger +
-      ": porti con te chi ti è rimasto fedele e fondi subito " + p.name + ", di cui resti l'indiscusso leader. " +
-      "Puoi rinominarlo e dargli un nuovo simbolo quando vuoi, dal pannello \"Ideologia e leader\".";
+    var resultText = oldPartyCreated
+      ? "Rinunci alla contesa interna e lasci " + oldName + " nelle mani di " + challenger +
+        ": porti con te chi ti è rimasto fedele e fondi subito " + p.name + ", di cui resti l'indiscusso leader. " +
+        "Puoi rinominarlo e dargli un nuovo simbolo quando vuoi, dal pannello \"Ideologia e leader\"."
+      : "Rinunci alla contesa interna: con troppi soggetti già sulla scena politica, " + oldName +
+        " non sopravvive alla tua uscita e si dissolve, la sua base si disperde perlopiù nell'astensione. " +
+        "Porti con te chi ti è rimasto fedele e fondi subito " + p.name + ", di cui resti l'indiscusso leader. " +
+        "Puoi rinominarlo e dargli un nuovo simbolo quando vuoi, dal pannello \"Ideologia e leader\".";
     state.log.unshift({
       week: state.turn, title: "Scissione: nasce " + p.name, choiceLabel: "Primarie di Partito",
       result: resultText, headlines: [], type: "cronaca", cat: "Primarie di Partito"
