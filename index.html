@@ -11381,6 +11381,15 @@
   function recordEnactedPolicy(title, note, metric) {
     if (!state.enactedPolicies) state.enactedPolicies = [];
     state.enactedPolicies.unshift({ week: state.turn, title: title, note: note, metric: metric || null });
+    // Richiesto da un giocatore: il salario minimo passa da capitolo astratto ("salari") a cifra
+    // concreta. La prima volta che una legge, mozione o referendum sul tema viene approvata (qualunque
+    // sia la famiglia politica che l'ha proposta, individuata qui dal testo invece che da un singolo id,
+    // dato quanti punti diversi nel codice toccano questo tema), si sblocca il controllo in Scheda Paese
+    // per fissare l'importo netto esatto (vedi renderNationalStrip).
+    if (!state.salarioMinimoAttivo && /salario minimo/i.test(title + " " + (note || ""))) {
+      state.salarioMinimoAttivo = true;
+      if (state.salarioMinimoNetto === null || state.salarioMinimoNetto === undefined) state.salarioMinimoNetto = 1100;
+    }
   }
   // Richiesto da un giocatore: quando un voto (legge, mozione, modifica di legge, referendum) viene
   // risolto — subito o dopo settimane di attesa (vedi p.pendingLegge/pendingMozione/ecc.) — deve comparire
@@ -12393,7 +12402,15 @@
     { noun: "una gratuità del trasporto pubblico locale per i giovani under 26", metric: "trasporti", cat: "trasporti" },
     { noun: "un invio di nuove truppe italiane in missioni di pace internazionali", metric: "relazioniDiplomatiche", cat: "esteri" },
     { noun: "un servizio civile universale obbligatorio di un anno per i giovani", metric: "felicita", cat: "cultura" },
-    { noun: "un tetto nazionale ai prezzi dei prodotti agricoli di base", metric: "commercio", cat: "agricoltura" }
+    { noun: "un tetto nazionale ai prezzi dei prodotti agricoli di base", metric: "commercio", cat: "agricoltura" },
+    { noun: "il ripristino della leva militare obbligatoria per i giovani", metric: "difesa", cat: "esteri" },
+    { noun: "il via libera alla coltivazione e vendita di carne sintetica", metric: "economia", cat: "agricoltura" },
+    { noun: "la reintroduzione della pena di morte per i reati più gravi", metric: "giustizia", cat: "giustizia" },
+    { noun: "l'introduzione obbligatoria dell'educazione sessuo-affettiva nelle scuole", metric: "scuola", cat: "scuola" },
+    { noun: "la costruzione del ponte sullo Stretto di Messina", metric: "trasporti", cat: "trasporti" },
+    { noun: "l'introduzione di quote giovanili obbligatorie nelle liste elettorali", metric: "felicita", cat: "istituzioni" },
+    { noun: "il pieno diritto al voto fuori sede per studenti e lavoratori lontani da casa", metric: "felicita", cat: "istituzioni" },
+    { noun: "l'abolizione del canone RAI in bolletta", metric: "economia", cat: "cultura" }
   ];
   function referendumTopicsForFamily(familyId) {
     var angles = FAMILY_ANGLE_NOUNS[familyId];
@@ -14814,7 +14831,8 @@
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
     cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConfidenceVote: false, pendingConsultazioni: null,
-    natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
+    natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, liraAnnounced: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
+    salarioMinimoAttivo: false, salarioMinimoNetto: null,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0, lastYearBudgetAllocations: {},
     usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {}, realConflictNewsCooldowns: {},
@@ -15136,8 +15154,18 @@
   function jitter(base) { return base * (0.75 + Math.random() * 0.5); }
   function fmt1(n) { return n.toFixed(1); }
   function fmtInt(n) { return Math.round(n).toLocaleString("it-IT"); }
-  function fmtEuro(n) { return "€ " + Math.round(n).toLocaleString("it-IT"); }
-  function fmtEuroMld(nMld) { return "€ " + fmt1(nMld) + " mld"; }
+  // Dopo un'uscita dall'Unione Europea (state.leftEu), l'Italia torna alla lira: tutte le cifre restano
+  // in euro nei dati interni (nessun rischio di rompere soglie/confronti sparsi in tutto il gioco), solo
+  // la VISUALIZZAZIONE cambia, qui e in fmtEuroMld, al cambio fisso reale d'ingresso nell'euro.
+  var LIRA_EXCHANGE_RATE = 1936.27;
+  function fmtEuro(n) {
+    if (state.leftEu) return "₤ " + Math.round(n * LIRA_EXCHANGE_RATE).toLocaleString("it-IT");
+    return "€ " + Math.round(n).toLocaleString("it-IT");
+  }
+  function fmtEuroMld(nMld) {
+    if (state.leftEu) return "₤ " + fmt1(nMld * LIRA_EXCHANGE_RATE) + " mld";
+    return "€ " + fmt1(nMld) + " mld";
+  }
   function pickN(arr, n) {
     var pool = arr.slice(), out = [];
     while (out.length < n && pool.length) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
@@ -16076,6 +16104,7 @@
       cp.felicita = Math.max(1, cp.felicita - 2);
       cp.economia = Math.max(1, cp.economia - 1.5);
       state.leftEu = true; state.leftNato = true; state.euExitDecided = true; state.natoDecided = true;
+      announceLiraReturn();
       state.italyMilitaryStance = "non_allineata";
       state.spreadBps += 220; state.ratingIdx = Math.max(0, state.ratingIdx - 2); state.ratingOutlook = "Negativo";
     } else if (info.type === "comunista") {
@@ -16777,6 +16806,19 @@
   function euExitReferendumPassProb(p) {
     return clamp(0.12 + p.reputazione / 500 + (p.seggiEuropei || 0) / 220, 0.05, 0.4);
   }
+  // Richiesto da un giocatore: fuori dall'euro, l'Italia torna alla lira. Un solo annuncio (mai due
+  // volte, anche se l'uscita dall'UE scatta da più rami narrativi diversi), al cambio fisso reale
+  // d'ingresso nell'euro — da qui in avanti ogni cifra in euro (fmtEuro/fmtEuroMld) viene mostrata
+  // convertita, mentre i dati interni restano sempre in euro.
+  function announceLiraReturn() {
+    if (state.liraAnnounced) return;
+    state.liraAnnounced = true;
+    var text = "Con l'uscita dall'Unione Europea, l'Italia abbandona l'euro e torna alla lira: dal cambio fisso storico (1 euro = " +
+      LIRA_EXCHANGE_RATE.toLocaleString("it-IT") + " lire), tutte le cifre pubbliche tornano a essere contate nella vecchia moneta nazionale.";
+    state.log.unshift({ week: state.turn, title: "Ritorno alla Lira", choiceLabel: "Uscita dall'Unione Europea", result: text, headlines: [], type: "istituzioni", cat: "Economia" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Economia", text: text });
+  }
   function applyEuExitConsequences() {
     var cp = state.countryProfile;
     cp.economia = Math.max(1, cp.economia - 2.5);
@@ -16791,6 +16833,7 @@
     if (state.spreadHistory.length > 12) state.spreadHistory.shift();
     state.leftEu = true;
     state.euExitDecided = true;
+    announceLiraReturn();
   }
   // Subito dopo un'uscita dall'UE effettiva, il governo deve scegliere la nuova collocazione
   // internazionale: aderire a un blocco già esistente (i BRICS) o restare liberi di fondare in seguito
@@ -19064,6 +19107,16 @@
         (state.leftNato ? '<span class="chip accent">Fuori dalla NATO</span>' : "") +
         (state.leftEu ? '<span class="chip accent">Fuori dall\'UE</span>' : "") + "</div></div>";
     }
+    // Richiesto da un giocatore: appena una legge/mozione/referendum sul salario minimo viene approvata
+    // (vedi recordEnactedPolicy), il capitolo astratto "salari" diventa anche una cifra concreta, che il
+    // governo può fissare direttamente da qui — nessun costo o raffreddamento, è solo la messa in pratica
+    // di una legge già approvata, non una nuova scelta politica a sé.
+    if (state.salarioMinimoAttivo) {
+      html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Salario minimo legale (netto mensile)</div>' +
+        '<div class="row"><span class="value">' + fmtEuro(state.salarioMinimoNetto || 0) + '</span></div>' +
+        '<div class="row" style="margin-top:0.4rem;gap:0.5rem"><input type="number" step="10" min="300" max="3000" class="fiscal-input" id="salario-minimo-input" value="' + Math.round(state.salarioMinimoNetto || 1100) + '">' +
+        '<button type="button" class="choice-btn" id="salario-minimo-submit-btn" style="width:auto;padding:0.4rem 0.9rem"><span class="clabel">Aggiorna</span></button></div></div>';
+    }
     html += "</div></section>";
     return html;
   }
@@ -21060,7 +21113,7 @@
       if (!v || Math.abs(v) < threshold) return "";
       var cls = v > 0 ? "up" : "down";
       var sign = v > 0 ? "+" : "−";
-      var display = k === "fondi" ? sign + "€" + Math.round(Math.abs(v)) : sign + Math.abs(v).toFixed(k === "iscritti" ? 0 : k === "sondaggi" ? 2 : 1);
+      var display = k === "fondi" ? sign + (state.leftEu ? "₤" + Math.round(Math.abs(v) * LIRA_EXCHANGE_RATE) : "€" + Math.round(Math.abs(v))) : sign + Math.abs(v).toFixed(k === "iscritti" ? 0 : k === "sondaggi" ? 2 : 1);
       return '<span class="impact-chip ' + cls + '">' + IMPACT_CHIP_LABELS[k] + " " + display + "</span>";
     }).join("");
     // Le voci "national" (Scheda Paese, es. relazioni diplomatiche, ambientalismo) toccate da prese di
@@ -23337,6 +23390,18 @@
         var res = saveFiscalPolicyBatch(values);
         if (!res) { showSaveStatus("Nessuna modifica da salvare, o manovra non ancora disponibile (tempo di recupero).", true); return; }
         showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    }
+    var salarioMinimoBtn = document.getElementById("salario-minimo-submit-btn");
+    if (salarioMinimoBtn) {
+      salarioMinimoBtn.addEventListener("click", function () {
+        var input = document.getElementById("salario-minimo-input");
+        var v = input ? parseFloat(input.value) : NaN;
+        if (!isFinite(v)) { showSaveStatus("Inserisci un importo valido.", true); return; }
+        state.salarioMinimoNetto = clamp(v, 300, 3000);
+        showSaveStatus("Salario minimo legale fissato a " + fmtEuro(state.salarioMinimoNetto) + " netti al mese.", false);
         save();
         render();
       });
