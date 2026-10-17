@@ -9243,6 +9243,32 @@
       ]
     };
   }
+  // Richiesto da un giocatore: senza più elezioni libere da affrontare sotto un regime, l'opposizione
+  // restava comunque sulla scena per il resto della partita, senza che il regime potesse fare nulla di
+  // concreto contro di lei fuori dal voto (che comunque non c'è più) — un'incoerenza evidente per chi sta
+  // giocando una svolta autoritaria. Qui il regime può sciogliere con la forza un partito ancora attivo,
+  // esclusi gli alleati del proprio stesso governo (non ha senso colpire chi sta già dalla propria parte).
+  function generateAbolishPartyDossier() {
+    if (!state.regime) return null;
+    var govIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var targets = activeParties().filter(function (party) { return govIds.indexOf(party.id) === -1; })
+      .sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); });
+    if (!targets.length) return null;
+    var choices = targets.slice(0, 10).map(function (party) {
+      return {
+        label: "Abolisci " + party.name, hint: fmt1(state.parties[party.id] || 0) + "% nei sondaggi — " + party.famiglia,
+        abolishPartyId: party.id, effects: {}, result: ""
+      };
+    });
+    choices.push({ label: "Non abolire nessun partito, per ora", hint: "La possibilità resta aperta per più avanti nella partita", effects: {},
+      result: "Il regime sceglie di non infierire, per ora: la possibilità resta aperta." });
+    return {
+      id: "gov_abolisci_partito", kind: "notizia", cat: "Governo",
+      title: "Abolisci un Partito",
+      brief: "Senza più elezioni libere da affrontare, il regime può colpire direttamente chi resta sulla scena politica: sciogliere con la forza un partito, cancellandolo dalla vita pubblica. Consolida il potere, ma non senza costi — sull'opinione pubblica, sui rapporti internazionali, e sulla tenuta stessa del regime.",
+      choices: choices
+    };
+  }
   // Il traguardo finale di un regime comunista maturo: l'abolizione della moneta. Non basta essere al
   // potere né aver instaurato il regime da poco — serve che il settore privato sia stato quasi del tutto
   // assorbito (aziende <= 2, coerente con il decadimento strutturale già in atto sotto un governo
@@ -9312,7 +9338,7 @@
     if (!state.euExitDecided && !state.leftEu) {
       var lockedReason = p.pendingReferendum ? "C'è già un referendum in corso: attendi che si concluda"
         : (state.euExitCooldownTurn && state.turn < state.euExitCooldownTurn) ? "Il tema è stato appena chiuso: riprova più avanti nella legislatura"
-        : (p.sondaggi < 35 || (p.seggiEuropei || 0) < EU_EXIT_MIN_SEATS) ? ("Serve almeno il 35% nei sondaggi e " + EU_EXIT_MIN_SEATS + " seggi al Parlamento Europeo (ora: " + fmt1(p.sondaggi) + "%, " + (p.seggiEuropei || 0) + " seggi)")
+        : (p.sondaggi < EU_EXIT_MIN_SONDAGGI || (p.seggiEuropei || 0) < EU_EXIT_MIN_SEATS) ? ("Serve almeno il " + EU_EXIT_MIN_SONDAGGI + "% nei sondaggi e " + EU_EXIT_MIN_SEATS + " seggi al Parlamento Europeo (ora: " + fmt1(p.sondaggi) + "%, " + (p.seggiEuropei || 0) + " seggi)")
         : null;
       items.push({ id: "gov_uscita_ue", label: "Uscita dall'Unione Europea", desc: lockedReason || "Apri il dibattito più divisivo di tutti", disabled: !!lockedReason });
     }
@@ -9327,6 +9353,9 @@
     }
     if (state.regime) {
       items.push({ id: "gov_ripristina_democrazia", label: "Ripristina la Democrazia", desc: "Apri il dibattito per smantellare " + REGIME_LABELS[state.regime.type].name, disabled: false });
+      var govIdsForAbolish = (state.govEntity && state.govEntity.memberIds) || [];
+      var hasAbolishTargets = activeParties().some(function (party) { return govIdsForAbolish.indexOf(party.id) === -1; });
+      items.push({ id: "gov_abolisci_partito", label: "Abolisci un Partito", desc: hasAbolishTargets ? "Sciogli con la forza un partito ancora attivo" : "Nessun partito da sciogliere resta sulla scena", disabled: !hasAbolishTargets });
     }
     if (!items.length) return "";
     var coupRisk = isExtremistFamily(p.family) && state.consensoGoverno !== undefined && state.consensoGoverno < COUP_TRUST_THRESHOLD;
@@ -17006,11 +17035,17 @@
   }
 
   // ---------- Uscita dall'Unione Europea ----------
-  // Non deve essere un click: serve una delegazione europea davvero grande (EU_EXIT_MIN_SEATS su 76
-  // seggi italiani), essere al governo, e un referendum vincolante che può anche fallire — con
-  // probabilità di successo tenuta volutamente bassa. Solo se il referendum passa scattano le
-  // conseguenze reali; se fallisce, il tema resta chiuso per molte settimane (state.euExitCooldownTurn).
-  var EU_EXIT_MIN_SEATS = 25;
+  // Non deve essere un click: serve una delegazione europea consistente (EU_EXIT_MIN_SEATS su 76 seggi
+  // italiani), essere al governo, e un referendum vincolante che può anche fallire — con probabilità di
+  // successo tenuta volutamente bassa. Solo se il referendum passa scattano le conseguenze reali; se
+  // fallisce, il tema resta chiuso per molte settimane (state.euExitCooldownTurn).
+  // Soglie abbassate (35%/25 seggi -> 28%/18 seggi) su segnalazione di un giocatore: i sondaggi del
+  // giocatore hanno un tetto fisso al 40% per formula (vedi i vari clamp(..., 0, 40) sparsi nel file),
+  // quindi 35% chiedeva di restare stabilmente entro 5 punti dal tetto assoluto — quasi irraggiungibile
+  // in pratica. In cambio, le conseguenze reali dell'uscita (sotto, applyEuExitConsequences) sono state
+  // inasprite: la soglia più bassa non deve rendere la scelta stessa meno pesante.
+  var EU_EXIT_MIN_SONDAGGI = 28;
+  var EU_EXIT_MIN_SEATS = 18;
   function euExitReferendumPassProb(p) {
     return clamp(0.12 + p.reputazione / 500 + (p.seggiEuropei || 0) / 220, 0.05, 0.4);
   }
@@ -17027,16 +17062,22 @@
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Economia", text: text });
   }
+  // Conseguenze inasprite insieme all'abbassamento della soglia di accesso sopra (35%/25 seggi ->
+  // 28%/18 seggi): la scelta deve restare pesante quanto prima, solo più raggiungibile. Aggiunto anche
+  // un colpo diretto sul deficit (fondi europei persi, scambi commerciali disgregati da un giorno
+  // all'altro): si collega al nuovo allarme sui conti pubblici (vedi gov_deficit_eccessivo), che diventa
+  // molto più probabile nelle settimane successive a un'uscita dall'UE.
   function applyEuExitConsequences() {
     var cp = state.countryProfile;
-    cp.economia = Math.max(1, cp.economia - 2.5);
-    cp.commercio = Math.max(1, cp.commercio - 2.8);
-    cp.relazioniDiplomatiche = Math.max(1, cp.relazioniDiplomatiche - 3);
-    cp.inflazione = Math.max(1, cp.inflazione - 1.5);
-    cp.pil = Math.max(1, cp.pil - 1.8);
-    state.spreadBps += 250;
-    state.ratingIdx = Math.max(0, state.ratingIdx - 2);
+    cp.economia = Math.max(1, cp.economia - 3.5);
+    cp.commercio = Math.max(1, cp.commercio - 4);
+    cp.relazioniDiplomatiche = Math.max(1, cp.relazioniDiplomatiche - 4.5);
+    cp.inflazione = Math.max(1, cp.inflazione - 2.2);
+    cp.pil = Math.max(1, cp.pil - 2.5);
+    state.spreadBps += 350;
+    state.ratingIdx = Math.max(0, state.ratingIdx - 3);
     state.ratingOutlook = "Negativo";
+    state.deficitPil = clamp((state.deficitPil || 0) + 2, -1, 12);
     state.spreadHistory.push(state.spreadBps);
     if (state.spreadHistory.length > 12) state.spreadHistory.shift();
     state.leftEu = true;
@@ -23228,6 +23269,30 @@
           }
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_abolisci_partito") {
+        if (choice.abolishPartyId) {
+          var targetParty = partyById(choice.abolishPartyId);
+          var targetShare = state.parties[choice.abolishPartyId] || 0;
+          if (!state.dissolvedPartyIds) state.dissolvedPartyIds = [];
+          state.dissolvedPartyIds.push(choice.abolishPartyId);
+          removePartyFromCoalitions(choice.abolishPartyId);
+          delete state.partyArcs[choice.abolishPartyId];
+          // Il consenso del partito sciolto non sparisce nel nulla: una parte confluisce verso il regime
+          // per paura (repressione che intimidisce, non persuade davvero), il resto si ritira dalla vita
+          // pubblica invece di convergere altrove.
+          var toPlayer = targetShare * 0.3;
+          var toIndecisi = targetShare - toPlayer;
+          state.player.sondaggi = clamp(state.player.sondaggi + toPlayer, 0, 40);
+          state.indecisi = (state.indecisi || 0) + toIndecisi;
+          state.parties[choice.abolishPartyId] = 0;
+          var cpAbp = state.countryProfile;
+          cpAbp.felicita = clamp(cpAbp.felicita - rand(1, 2), 1, 10);
+          cpAbp.relazioniDiplomatiche = clamp(cpAbp.relazioniDiplomatiche - rand(1, 2.5), 1, 10);
+          state.player.reputazione = clamp(state.player.reputazione - rand(3, 7), 0, 100);
+          choice.result = (targetParty ? targetParty.name : "Il partito") + " viene sciolto con la forza, i suoi dirigenti messi a tacere: una parte della sua base si rifugia nel regime per paura, il resto si ritira dalla vita pubblica.";
+          addDiaryEntry("Un'altra voce messa a tacere", "Oggi abbiamo sciolto con la forza " + (targetParty ? targetParty.name : "un partito") + ". So cosa significa mettere a tacere un avversario invece di batterlo alle urne — e so che non sarà facile tornare indietro da qui.");
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "geo_world_war") {
         if (choice.stance) {
           state.worldWarActive = true;
@@ -24117,6 +24182,7 @@
         if (!dossier && id === "gov_instaura_regime") dossier = generateRegimeEstablishDossier();
         if (!dossier && id === "gov_ripristina_democrazia") dossier = generateRegimeRestoreDossier();
         if (!dossier && id === "gov_abolisci_moneta") dossier = generateAbolishCurrencyDossier();
+        if (!dossier && id === "gov_abolisci_partito") dossier = generateAbolishPartyDossier();
         if (!dossier) return;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
@@ -25304,7 +25370,7 @@
         if (d.id === "gov_uscita_ue") {
           if (state.euExitDecided || state.leftEu || p.pendingReferendum) return false;
           if (state.euExitCooldownTurn && state.turn < state.euExitCooldownTurn) return false;
-          return p.sondaggi >= 35 && (p.seggiEuropei || 0) >= EU_EXIT_MIN_SEATS;
+          return p.sondaggi >= EU_EXIT_MIN_SONDAGGI && (p.seggiEuropei || 0) >= EU_EXIT_MIN_SEATS;
         }
         if (d.id === "gov_federalizza_ue") {
           return p.family === "europeista" && !state.euFederalized && !state.leftEu && !state.euExitDecided;
