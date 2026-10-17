@@ -3353,6 +3353,10 @@
         if (r.approvalLocal === undefined) r.approvalLocal = 50;
         if (r.playerIsGovernor === undefined) r.playerIsGovernor = !!r.playerGoverns;
         if (r.regionalLeaderName === undefined) r.regionalLeaderName = null;
+        if (r.regionalLeaderSource === undefined) r.regionalLeaderSource = r.regionalLeaderName ? "Esponente di partito" : null;
+        if (r.regionalLeaderTraits === undefined) r.regionalLeaderTraits = null;
+        if (r.regionalLeaderSkill === undefined) r.regionalLeaderSkill = 0;
+        if (r.fondiRegionali === undefined) r.fondiRegionali = null;
         if (!r.metrics) { var regDef = regionById(id); if (regDef) r.metrics = initRegionMetrics(regDef); }
         if (r.pendingRegionalLaw === undefined) r.pendingRegionalLaw = null;
       });
@@ -3374,8 +3378,13 @@
         // playerIsGovernor (vs il semplice playerGoverns, che indica solo "la regione è del MIO
         // partito"): true solo se il giocatore ha scelto di candidarsi di persona e ha vinto, vedi
         // buildRegionalCandidacyDossier/resolveRegionalElectionForPlayer. Se false ma playerGoverns è
-        // true, un esponente di partito generato (regionalLeaderName) governa al posto suo.
-        playerIsGovernor: false, regionalLeaderName: null,
+        // true, un esponente di partito generato (regionalLeaderName) governa al posto suo, con una vera
+        // provenienza/capacità politica (regionalLeaderSource/Traits/Skill, vedi generateRegionalDelegate).
+        playerIsGovernor: false, regionalLeaderName: null, regionalLeaderSource: null, regionalLeaderTraits: null, regionalLeaderSkill: 0,
+        // Le "casse della regione" (richieste da un giocatore per la Modalità Presidente di Regione):
+        // seminate solo quando servono davvero, cioè alla prima vittoria personale, vedi
+        // enterRegionalPresidency — resta null per tutte le regioni mai governate di persona dal giocatore.
+        fondiRegionali: null,
         // I problemi e i punti di forza REALI di questa regione (vedi ITALIAN_REGIONS.issues/strengths),
         // tracciati come numeri 1-10 che cambiano nel tempo in base a come la regione viene gestita (le
         // azioni di governo regionale li spostano direttamente, vedi buildRegionalGovernanceDossier) e a
@@ -3434,7 +3443,7 @@
     // altri), ed essere Presidente della Repubblica (state.mode, un ruolo separato e ancora più
     // incompatibile di un semplice incarico di governo: p.parliamentRole può restare "governo" o
     // "opposizione" per inerzia da prima dell'elezione al Colle, senza più alcun significato reale).
-    return !!p && p.parliamentRole !== "governo" && state.mode !== "president";
+    return !!p && p.parliamentRole !== "governo" && state.mode !== "president" && state.mode !== "regional_president";
   }
   function buildRegionalCandidacyDossier(regionId, sectionsHere) {
     var choices = [
@@ -3460,17 +3469,98 @@
   // governo nazionale), dalla riuscita di un mandato esplorativo con sostegno, e da beginPlayerPresidency.
   function resignPlayerFromGovernedRegions(reasonText) {
     if (!state.regions) return;
+    // Se il giocatore è già in "Modalità Presidente di Regione" (vedi enterRegionalPresidency), non è lui
+    // personalmente a tornare al governo nazionale quando il partito vince le elezioni in sua assenza —
+    // a guidarlo, nel frattempo, è il leader ad interim (p.interimLeaderName): non c'è alcuna reale
+    // incompatibilità da far scattare qui. La fine del suo mandato regionale (rielezione o rinuncia) è
+    // gestita a parte da resolveRegionalElectionForPlayer/exitRegionalPresidency.
+    if (state.mode === "regional_president") return;
     Object.keys(state.regions).forEach(function (id) {
       var r = state.regions[id];
       if (!r.playerIsGovernor) return;
       r.playerIsGovernor = false;
-      r.regionalLeaderName = generateStaffName();
-      var text = "Incompatibilità tra le due cariche: " + reasonText + ", e le dimissioni dalla presidenza della " + id + " sono immediate. " + r.regionalLeaderName + " prende il posto del giocatore alla guida della regione, per conto del partito.";
+      var delegate = generateRegionalDelegate(id);
+      r.regionalLeaderName = delegate.name; r.regionalLeaderSource = delegate.source; r.regionalLeaderTraits = delegate.traits; r.regionalLeaderSkill = delegate.skill;
+      var text = "Incompatibilità tra le due cariche: " + reasonText + ", e le dimissioni dalla presidenza della " + id + " sono immediate. " + r.regionalLeaderName + " (" + delegate.source + ") prende il posto del giocatore alla guida della regione, per conto del partito.";
       state.log.unshift({ week: state.turn, title: "Dimissioni dalla presidenza della " + id, choiceLabel: id, result: text, headlines: [], type: "locale", cat: "Elezioni Regionali" });
       if (!state.worldNews) state.worldNews = [];
       state.worldNews.unshift({ cat: "Elezioni Regionali", text: text });
     });
     if (state.worldNews && state.worldNews.length > 6) state.worldNews.length = 6;
+  }
+  // Richiesto da un giocatore: un esponente delegato non è più un semplice nome a caso — ha una vera
+  // "capacità politica", che può pesare in positivo, in negativo o in modo misto, esattamente come i
+  // profili già usati per lo staff di partito (vedi CANDIDATE_TIERS/CANDIDATE_PERKS). Può essere un
+  // esponente di partito generico oppure, se la regione ha almeno un comune noto (ITALY_LOCATIONS), il
+  // sindaco di una città di quella regione — due provenienze realistiche per chi può aspirare alla
+  // presidenza al posto del giocatore. skill (circa -0.6..+0.6) alimenta la deriva del gradimento locale
+  // di una regione delegata, vedi driftRegionalMetrics.
+  var REGIONAL_DELEGATE_TRAITS = [
+    { text: "Amministratore di lungo corso, molto stimato sul territorio.", skillDelta: 0.35 },
+    { text: "Ottimo comunicatore, ma con poca esperienza di gestione concreta.", skillDelta: 0.1 },
+    { text: "Rete di relazioni solidissima con gli enti locali.", skillDelta: 0.25 },
+    { text: "Reduce da un passato scandalo mai del tutto chiarito.", skillDelta: -0.3 },
+    { text: "Piuttosto inesperto/a, al primo vero incarico di governo.", skillDelta: -0.2 },
+    { text: "Noto/a per litigare spesso con gli alleati di coalizione.", skillDelta: -0.15 },
+    { text: "Capacità amministrativa fuori dal comune, con una squadra solida.", skillDelta: 0.4 },
+    { text: "Profilo lineare, senza particolari qualità o difetti.", skillDelta: 0 },
+    { text: "Molto popolare tra i cittadini, meno tra i tecnici di settore.", skillDelta: 0.1 },
+    { text: "Gestione opaca dei fondi pubblici, già nel mirino della stampa locale.", skillDelta: -0.35 }
+  ];
+  function generateRegionalDelegate(regionId) {
+    var citiesHere = (typeof ITALY_LOCATIONS !== "undefined" ? ITALY_LOCATIONS : []).filter(function (l) { return l.region === regionId; });
+    var isMayor = citiesHere.length > 0 && Math.random() < 0.5;
+    var city = isMayor ? citiesHere[Math.floor(Math.random() * citiesHere.length)].name : null;
+    var traits = shuffleN(REGIONAL_DELEGATE_TRAITS, 2);
+    var skill = clamp(traits.reduce(function (s, t) { return s + t.skillDelta; }, 0), -0.6, 0.6);
+    return {
+      name: generateStaffName(),
+      source: isMayor ? ("Sindaco di " + city) : "Esponente di partito",
+      traits: traits.map(function (t) { return t.text; }),
+      skill: skill
+    };
+  }
+  function regionalDelegateSkillLabel(skill) {
+    var s = skill || 0;
+    if (s >= 0.25) return "capacità politica alta";
+    if (s >= 0.05) return "capacità politica nella media";
+    if (s <= -0.25) return "capacità politica scarsa";
+    if (s <= -0.05) return "capacità politica sotto la media";
+    return "capacità politica nella media";
+  }
+  // Richiesto da un giocatore: anche le elezioni regionali devono dare un vero RISULTATO, non solo
+  // vittoria/sconfitta del giocatore — una classifica dei partiti in corsa, con le loro quote di voto
+  // stimate. Non esiste nel gioco una simulazione granulare per singolo candidato regionale: la
+  // classifica resta quindi una stima plausibile, costruita coerentemente con l'esito già determinato
+  // (chi vince davvero, secondo la logica esistente, è sempre in testa) e pesata sui sondaggi nazionali
+  // reali dei partiti rivali — non un numero scollegato dal resto della partita.
+  function buildRegionalElectionRankingHtml(regionId, playerLabel, playerColor, playerPct, winnerIsPlayer) {
+    var r = state.regions[regionId];
+    var incumbentParty = partyById(r.governorPartyId);
+    var incumbentLabel = incumbentParty ? incumbentParty.name : ((familyById(r.governorFamilyId) || {}).label || r.governorFamilyId);
+    var rivalPool = activeParties().filter(function (pt) { return pt.id !== "player" && pt.name !== incumbentLabel && pt.name !== playerLabel; });
+    rivalPool = shuffleN(rivalPool, Math.min(rivalPool.length, 4));
+    var entries = [];
+    if (!winnerIsPlayer) entries.push({ name: incumbentLabel, pct: rand(28, 40), winner: true });
+    entries.push({ name: playerLabel, pct: playerPct, winner: winnerIsPlayer });
+    var usedPct = entries.reduce(function (s, e) { return s + e.pct; }, 0);
+    var remaining = Math.max(15, 100 - usedPct);
+    var weights = rivalPool.map(function (pt) { return Math.max(1, state.parties[pt.id] || 1); });
+    var totalW = weights.reduce(function (s, w) { return s + w; }, 0) || 1;
+    rivalPool.forEach(function (pt, i) { entries.push({ name: pt.name, pct: remaining * weights[i] / totalW, winner: false }); });
+    // Chi vince la presidenza (sistema reale: maggioritario sul candidato presidente, non sulle liste)
+    // deve restare sempre primo in classifica, anche quando la sua quota di partenza è modesta: senza
+    // questo vincolo un rivale pesante poteva risultare "più votato" del neo-eletto presidente, un
+    // risultato incoerente con l'esito che la classifica dovrebbe illustrare.
+    var maxRivalPct = entries.reduce(function (m, e) { return e.winner ? m : Math.max(m, e.pct); }, 0);
+    var winnerEntry = entries.filter(function (e) { return e.winner; })[0];
+    if (winnerEntry && winnerEntry.pct <= maxRivalPct) winnerEntry.pct = maxRivalPct + rand(2, 6);
+    entries.sort(function (a, b) { return b.pct - a.pct; });
+    var sumPct = entries.reduce(function (s, e) { return s + e.pct; }, 0) || 1;
+    return entries.map(function (e, i) {
+      var pct = e.pct / sumPct * 100;
+      return (i + 1) + "&#176; " + e.name + (e.name === playerLabel ? " (il tuo partito)" : "") + " — " + pct.toFixed(1) + "%" + (e.winner ? " — Presidente eletto" : "");
+    }).join("<br>");
   }
   // La versione che coinvolge davvero il giocatore: scatta solo per una regione dove ha almeno una
   // sezione aperta. A differenza della cronaca di sottofondo, qui l'esito diventa il dossier della
@@ -3479,7 +3569,10 @@
   // stabilisce se, in caso di vittoria, la regione la governa davvero il giocatore (playerIsGovernor) o
   // un esponente di partito generato (regionalLeaderName) — nel secondo caso il partito la controlla lo
   // stesso (playerGoverns resta true per tutto quello che già legge quel campo, es. i ministeri), ma il
-  // giocatore non ha accesso al ciclo di governo regionale vero e proprio.
+  // giocatore non ha accesso al ciclo di governo regionale vero e proprio. Richiesto da un giocatore:
+  // diventare presidente di regione IN PRIMA PERSONA fa scattare una vera "Modalità Presidente di
+  // Regione" (vedi enterRegionalPresidency/advanceRegionalPresidentTurnLogic), esattamente come
+  // beginPlayerPresidency fa per il Colle — con un leader ad interim del partito nel frattempo.
   function resolveRegionalElectionForPlayer(regionId, sectionsHere, runSelf) {
     var p = state.player;
     var region = regionById(regionId);
@@ -3495,13 +3588,19 @@
     r.nextElectionTurn = state.turn + REGIONAL_ELECTION_CYCLE_WEEKS + Math.floor(Math.random() * 15) - 7;
     if (!p.regionsWon) p.regionsWon = {};
     var city = sectionsHere[0].name;
-    var title, text;
+    var title, text, playerPct, ranking;
     if (becomesGovernor) {
       r.governorFamilyId = p.family;
       r.governorPartyId = "player";
       r.playerGoverns = true;
       r.playerIsGovernor = !!runSelf;
-      r.regionalLeaderName = runSelf ? null : generateStaffName();
+      var delegate = null;
+      if (runSelf) {
+        r.regionalLeaderName = null; r.regionalLeaderSource = null; r.regionalLeaderTraits = null; r.regionalLeaderSkill = 0;
+      } else {
+        delegate = generateRegionalDelegate(regionId);
+        r.regionalLeaderName = delegate.name; r.regionalLeaderSource = delegate.source; r.regionalLeaderTraits = delegate.traits; r.regionalLeaderSkill = delegate.skill;
+      }
       // Riparte da un gradimento "da insediamento" solo per un NUOVO mandato personale: una rielezione
       // da uscente apprezzato mantiene invece il gradimento già costruito, non lo azzera a ogni voto.
       if (!wasPersonalIncumbent) r.approvalLocal = 55;
@@ -3510,34 +3609,46 @@
       p.reputazione = clamp(p.reputazione + rand(5, 9), 0, 100);
       p.visibilita = clamp(p.visibilita + rand(6, 11), 0, 100);
       p.iscritti = Math.max(0, p.iscritti + won * 15);
+      playerPct = clamp(won * 1.1 + 15, 24, 48);
+      ranking = buildRegionalElectionRankingHtml(regionId, p.name, p.color, playerPct, true);
       if (runSelf) {
         title = wasPersonalIncumbent ? (p.name + " viene riconfermata/o alla guida della " + regionId) : ("Vittoria storica: " + p.name + " guida la " + regionId);
         text = wasPersonalIncumbent
           ? "Il partito viene riconfermato alla presidenza della " + regionId + ": il gradimento costruito in questi anni di governo regionale paga."
           : "Il partito vince le elezioni regionali in " + regionId + " ed esprime il nuovo presidente di regione, guidato in prima persona dal leader nazionale: un risultato che pesa, ben oltre il perimetro di " + city + ".";
+        if (!wasPersonalIncumbent) enterRegionalPresidency(regionId);
+        else if (state.regionalPresidency) state.regionalPresidency.termEndTurn = r.nextElectionTurn;
       } else {
         title = "Vittoria in " + regionId + ": " + r.regionalLeaderName + " alla presidenza";
-        text = "Il partito vince le elezioni regionali in " + regionId + " ed esprime il nuovo presidente di regione nella persona di " + r.regionalLeaderName + ": un risultato che pesa, ben oltre il perimetro di " + city + ".";
+        text = "Il partito vince le elezioni regionali in " + regionId + " ed esprime il nuovo presidente di regione nella persona di " + r.regionalLeaderName + " (" + delegate.source + "): un risultato che pesa, ben oltre il perimetro di " + city + ". " + delegate.traits[0];
+        if (wasPersonalIncumbent) exitRegionalPresidency("il partito ha scelto di affidare la presidenza a " + r.regionalLeaderName + " invece che a te");
       }
     } else if (won >= 5) {
+      if (wasPersonalIncumbent) exitRegionalPresidency("la lista non ottiene più la maggioranza necessaria per la presidenza della " + regionId);
       r.playerGoverns = false;
       r.playerIsGovernor = false;
-      r.regionalLeaderName = null;
+      r.regionalLeaderName = null; r.regionalLeaderSource = null; r.regionalLeaderTraits = null; r.regionalLeaderSkill = 0;
       if (wasPersonalIncumbent) r.approvalLocal = 50;
       p.amministratoriLocali = (p.amministratoriLocali || 0) + won;
       p.reputazione = clamp(p.reputazione + Math.min(5, won * 0.35), 0, 100);
       p.visibilita = clamp(p.visibilita + Math.min(7, won * 0.5), 0, 100);
       p.iscritti = Math.max(0, p.iscritti + won * 10);
+      playerPct = clamp(won * 1.1 + 2, 4, 22);
+      ranking = buildRegionalElectionRankingHtml(regionId, p.name, p.color, playerPct, false);
       title = "Elezioni Regionali in " + regionId;
       text = "Il partito elegge " + won + " consiglieri regionali in " + regionId + ": un ingresso in Consiglio Regionale, ma la presidenza resta ad altri.";
     } else {
+      if (wasPersonalIncumbent) exitRegionalPresidency("il partito non riesce più a entrare in Consiglio Regionale in " + regionId);
       r.playerGoverns = false;
       r.playerIsGovernor = false;
-      r.regionalLeaderName = null;
+      r.regionalLeaderName = null; r.regionalLeaderSource = null; r.regionalLeaderTraits = null; r.regionalLeaderSkill = 0;
       if (wasPersonalIncumbent) r.approvalLocal = 50;
+      playerPct = clamp(won * 1.1 + 1, 1, 8);
+      ranking = buildRegionalElectionRankingHtml(regionId, p.name, p.color, playerPct, false);
       title = "Elezioni Regionali in " + regionId;
       text = "In " + regionId + " il partito si presenta ma non riesce a entrare davvero in Consiglio Regionale questa volta.";
     }
+    text += "<br><br><strong>Classifica stimata del voto in " + regionId + ":</strong><br>" + ranking;
     state.log.unshift({ week: state.turn, title: title, choiceLabel: regionId, result: text, headlines: [], type: "locale", cat: "Elezioni Regionali" });
     state.worldNews.unshift({ cat: "Elezioni Regionali", text: text });
     var themeId = region.issues[Math.floor(Math.random() * region.issues.length)];
@@ -3775,7 +3886,11 @@
       // famiglia) vive anche lei di fortuna propria sul gradimento, visto che nessuno la gestisce dal di
       // dentro: un piccolo passo casuale, raro un vero annuncio in cronaca per non intasare il diario.
       if (r.playerGoverns && !r.playerIsGovernor && Math.random() < 0.08) {
-        var delta = rand(-3, 4);
+        // La capacità politica del delegato (vedi generateRegionalDelegate) pesa davvero su questa deriva:
+        // un profilo con tratti tutti positivi tende a far crescere il gradimento nel tempo, uno tutto
+        // negativo lo logora — senza che il giocatore debba mai leggere un numero "bonus/malus" esplicito,
+        // solo l'effetto osservabile sul gradimento locale mostrato nel pannello regioni.
+        var delta = rand(-3, 4) + (r.regionalLeaderSkill || 0) * 6;
         r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + delta, 0, 100);
         if (Math.random() < 0.3) {
           var flavorThemes = regionTrackedThemes(region);
@@ -3808,6 +3923,10 @@
       var govColor = isPlayerParty ? (p ? p.color : "#888") : (govParty ? govParty.color : "#888");
       var weeksLeft = r.nextElectionTurn - state.turn;
       var presentHere = !!playerRegionIds[region.id];
+      // Richiesto da un giocatore: un delegato non è un nome anonimo, ha una provenienza (esponente di
+      // partito o sindaco di una città della regione) e una vera capacità politica, vedi
+      // generateRegionalDelegate/regionalDelegateSkillLabel.
+      var delegateLine = isDelegated && r.regionalLeaderSource ? (r.regionalLeaderSource + " — " + regionalDelegateSkillLabel(r.regionalLeaderSkill)) : "";
       // Punto di forza e nodo critico REALI di questa regione (vedi ITALIAN_REGIONS.strengths/issues e
       // r.metrics, che cambiano nel tempo): mostrati solo dove il partito ha davvero un motivo di
       // interesse (presenza territoriale o governo), per non affollare inutilmente le altre 15+ regioni.
@@ -3818,7 +3937,7 @@
         var worst = themes.reduce(function (w, id) { return r.metrics[id] < r.metrics[w] ? id : w; }, themes[0]);
         metricsLine = "Punto di forza: " + SITUATION_THEME_BY_ID[best].label.replace("Politica — ", "") + " (" + fmt1(r.metrics[best]) + "/10) · Nodo critico: " + SITUATION_THEME_BY_ID[worst].label.replace("Politica — ", "") + " (" + fmt1(r.metrics[worst]) + "/10)";
       }
-      return { name: region.id, govLabel: govLabel, govColor: govColor, isPlayerParty: isPlayerParty, isPlayerGov: isPlayerGov, isDelegated: isDelegated, weeksLeft: weeksLeft, presentHere: presentHere, approvalLocal: r.approvalLocal, metricsLine: metricsLine };
+      return { name: region.id, govLabel: govLabel, govColor: govColor, isPlayerParty: isPlayerParty, isPlayerGov: isPlayerGov, isDelegated: isDelegated, weeksLeft: weeksLeft, presentHere: presentHere, approvalLocal: r.approvalLocal, metricsLine: metricsLine, delegateLine: delegateLine };
     }).sort(function (a, b) {
       if (a.isPlayerParty !== b.isPlayerParty) return a.isPlayerParty ? -1 : 1;
       if (a.presentHere !== b.presentHere) return a.presentHere ? -1 : 1;
@@ -3832,14 +3951,189 @@
       // una regione delegata a un esponente di partito non ha questo ciclo di interazione.
       var approvalLine = r.isPlayerGov ? '<div class="party-row-sub">Gradimento locale: ' + Math.round(r.approvalLocal === undefined ? 50 : r.approvalLocal) + '%</div>' : "";
       var metricsHtml = r.metricsLine ? '<div class="ci-hint">' + r.metricsLine + '</div>' : "";
+      var delegateHtml = r.delegateLine ? '<div class="ci-hint">' + r.delegateLine + '</div>' : "";
       return '<div class="party-row"><span class="sw" style="background:' + r.govColor + '"></span>' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + '</strong>' + chip + '</div>' +
         '<div class="party-row-sub">Governatore: ' + r.govLabel + (r.presentHere ? " — presenza del tuo partito" : "") + '</div>' +
-        approvalLine + metricsHtml + countdown + '</div></div>';
+        approvalLine + delegateHtml + metricsHtml + countdown + '</div></div>';
     }).join("");
     return '<section aria-label="Le Regioni d\'Italia"><details class="log"><summary>Le Regioni d\'Italia<span>▾</span></summary>' +
       '<p class="ci-hint">Chi governa oggi ciascuna delle 20 regioni, e quando torna a votare. Ogni regione ha i suoi problemi e punti di forza reali, che cambiano nel tempo in base a come viene gestita.</p>' +
       '<div class="party-directory">' + items + "</div></details></section>";
+  }
+
+  // ---------- La modalità di gioco "Presidente di Regione" ----------
+  // Richiesto da un giocatore: diventare presidente di una regione IN PRIMA PERSONA non può restare "una
+  // regione in più da seguire" mentre si continua a fare anche tutto il resto — nella realtà non si può
+  // essere parlamentari/ministri E presidente di regione insieme. Esattamente come beginPlayerPresidency
+  // fa per il Colle, da qui in avanti il giocatore lascia la guida nazionale del partito a un leader ad
+  // interim (p.interimLeaderName/p.playerIsLeader=false) e il turno passa per intero da
+  // advanceRegionalPresidentTurnLogic: niente più mozioni, leggi, primarie o scandali di partito, solo il
+  // governo di QUELLA regione — una "casse della regione" (r.fondiRegionali) e una vera scheda regione
+  // (r.metrics), vedi renderRegionalPresidencyPage. Il resto del paese continua a vivere in sottofondo
+  // con le stesse funzioni periodiche di sempre, proprio come durante il settennato al Quirinale.
+  var REGIONAL_TREASURY_SEED_MIN = 15000, REGIONAL_TREASURY_SEED_MAX = 40000;
+  function enterRegionalPresidency(regionId) {
+    var p = state.player;
+    var successor = primariesChallengerName(p);
+    var formerPartyName = p.name;
+    var r = state.regions[regionId];
+    p.playerIsLeader = false;
+    p.interimLeaderName = successor;
+    if (r.fondiRegionali === undefined || r.fondiRegionali === null) r.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
+    state.regionalPresidency = { regionId: regionId, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: r.nextElectionTurn };
+    state.mode = "regional_president";
+    var text = "Da oggi " + formerPartyName + " è guidato ad interim da " + successor + ": eletto/a presidente della " + regionId + ", il/la leader nazionale si dedica da qui in avanti solo al governo della regione, non più alla politica nazionale.";
+    state.log.unshift({ week: state.turn, title: "Guida nazionale del partito lasciata ad interim", choiceLabel: regionId, result: text, headlines: [], type: "dossier", cat: "Istituzioni" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
+  // Specularmente a enterRegionalPresidency: fine del mandato regionale (persa la rielezione, o scelta
+  // volontaria di non ricandidarsi) — il giocatore riprende la guida nazionale del partito da dove
+  // l'aveva lasciata. A differenza della Presidenza della Repubblica (che chiude la partita con un vero
+  // epilogo), qui si torna a giocare come leader di partito: non è un traguardo che chiude la storia.
+  function exitRegionalPresidency(reasonText) {
+    var p = state.player;
+    var rp = state.regionalPresidency;
+    var formerLeader = p.interimLeaderName;
+    p.playerIsLeader = true;
+    p.interimLeaderName = null;
+    state.mode = "party";
+    var text = "Il mandato da presidente della " + (rp ? rp.regionId : "regione") + " si chiude: " + reasonText + ". Riprendi subito la guida nazionale di " + p.name + ", dopo che " + (formerLeader || "un dirigente di fiducia") + " l'aveva retta ad interim.";
+    state.regionalPresidency = null;
+    state.log.unshift({ week: state.turn, title: "Fine del mandato regionale: torni alla guida del partito", choiceLabel: rp ? rp.regionId : "", result: text, headlines: [], type: "dossier", cat: "Istituzioni" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
+  // Variante di buildRegionalGovernanceDossier che non deve scegliere a caso TRA PIÙ regioni governate
+  // (qui ce n'è sempre e solo una, quella della presidenza) né tirare una probabilità settimanale: in
+  // "Modalità Presidente di Regione" il dossier della settimana è SEMPRE su quella regione, visto che è
+  // l'unica cosa di cui il giocatore si occupa ora.
+  function buildRegionalGovernanceDossierFor(regionId) {
+    var r = state.regions[regionId];
+    var protestChance = clamp((55 - (r.approvalLocal === undefined ? 50 : r.approvalLocal)) / 80, 0.08, 0.55);
+    var roll = Math.random();
+    if (roll < protestChance) return buildRegionalProtestDossier(regionId);
+    if (roll < protestChance + 0.4) return buildRegionalProposalDossier(regionId);
+    return buildRegionalInvestmentDossier(regionId);
+  }
+  // A fine mandato (r.nextElectionTurn raggiunto), il presidente di regione in carica decide PRIMA se
+  // ricandidarsi o lasciare il posto — speculare a buildRegionalCandidacyDossier, ma qui chi decide è già
+  // l'uscente in carica, non chi deve ancora scegliere come presentarsi la prima volta.
+  function buildRegionalReelectionChoiceDossier(regionId) {
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Fine mandato regionale — " + regionId,
+      cat: "Elezioni Regionali", title: "Il tuo mandato da presidente della " + regionId + " sta per concludersi",
+      brief: "Dopo anni alla guida della regione, si torna al voto: ti ricandidi alla presidenza, con l'esito deciso dal gradimento costruito in questi anni, oppure lasci che sia un esponente locale a correre al posto tuo e torni subito alla guida nazionale del partito?",
+      regionalReelectionRegionId: regionId,
+      choices: [
+        { label: "Ricandidati alla presidenza", hint: "Il risultato dipende dal gradimento costruito in questi anni di governo regionale", regionalReelectionSelf: true, effects: {},
+          result: "Ti ricandidi alla presidenza della regione." },
+        { label: "Non ricandidarti: torna alla guida nazionale del partito", hint: "Il partito candida un nuovo nome per la regione; tu riprendi subito la guida nazionale", regionalReelectionSelf: false, effects: {},
+          result: "Decidi di non ricandidarti e torni alla guida nazionale del partito." }
+      ]
+    };
+  }
+  // Il "turno" della Presidenza di Regione: sostituisce interamente la catena di dossier di partito di
+  // advanceTurnLogicCore finché dura il mandato regionale (vedi la chiamata in advanceTurnLogicCore). Il
+  // resto del paese continua a essere simulato con le stesse funzioni periodiche di sempre — partiti,
+  // coalizioni, governo, bilancio, relazioni internazionali, le altre 19 regioni — ma nessun dossier
+  // rivolto a un leader di partito può più presentarsi: quel ruolo, per il giocatore, non esiste più
+  // finché dura il mandato regionale.
+  function advanceRegionalPresidentTurnLogic() {
+    // Esito di un'elezione (prima vittoria o rielezione) rimandato alla settimana successiva — stesso
+    // meccanismo di state.pendingConsultazioni, vedi la chiamata gemella nella catena nazionale.
+    if (state.pendingRegionalElectionResult) {
+      state.aiDynamicDossier = state.pendingRegionalElectionResult;
+      state.currentDossierId = "ai_dynamic";
+      state.pendingRegionalElectionResult = null;
+      state.phase = "building";
+      return;
+    }
+    var rp = state.regionalPresidency;
+    var regionId = rp.regionId;
+    recomputePeriodic();
+    updateCoalitionTrust();
+    updateCpuOnlyCoalitionTrust();
+    triggerCoalitionAllyReaction();
+    triggerRivalPartyEvent();
+    triggerPlayerNewsEvent();
+    triggerExternalMovementEvent();
+    triggerGovernmentCrisisContagion();
+    triggerPartyLifecycleFollowup();
+    triggerSpontaneousPartyFormation();
+    triggerDynamicCoalitionFormation();
+    triggerFixedCoalitionExpansion();
+    triggerFixedCoalitionDefection();
+    triggerPartyIdeologicalDrift();
+    triggerLeaderSuccession();
+    updateForeignRelations();
+    triggerEuMembershipShift();
+    updateNatoEuStanding();
+    triggerCpuNatoEuExit();
+    triggerCpuEuFederalization();
+    resolveAnnualBudget();
+    resolveMonthlyPartyTax();
+    triggerWorldNews();
+    triggerRealConflictNews();
+    resolveRegionalConflictsIfDue();
+    ensureRegionsInit();
+    driftRegionalMetrics();
+    resolveRegionalLawsIfDue();
+    triggerMinorCountryEvent();
+    triggerCountryShock();
+    triggerStrikeUnrest();
+    triggerNucleoUpdate();
+    triggerLocalElectionCycle();
+    resolveEuropeanElection();
+    if (!state.regime && state.turn >= state.nextElectionTurn) { resolveElection(); }
+    var r = state.regions[regionId];
+    if (state.turn >= r.nextElectionTurn) {
+      state.aiDynamicDossier = buildRegionalReelectionChoiceDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    // Le altre 19 regioni non si fermano certo perché il giocatore si occupa solo della propria: vivono
+    // comunque la loro cronaca di sottofondo (nessun dossier dedicato, come fuori da questa modalità).
+    ITALIAN_REGIONS.forEach(function (region) {
+      if (region.id === regionId) return;
+      if (state.turn >= state.regions[region.id].nextElectionTurn) resolveRegionalElectionBackground(region.id);
+    });
+    state.aiDynamicDossier = buildRegionalGovernanceDossierFor(regionId);
+    state.currentDossierId = "ai_dynamic";
+    state.phase = "building";
+  }
+  // Cruscotto dedicato, al posto delle pagine di partito: anni di mandato, casse regionali, gradimento
+  // locale e la "scheda della regione" vera e propria — i temi tracciati (problemi e punti di forza
+  // reali, vedi ITALIAN_REGIONS/r.metrics), non la Scheda Paese nazionale. Deliberatamente NON mostra il
+  // bilancio/i pannelli nazionali di partito: in questa modalità il giocatore si occupa solo della
+  // regione, esattamente come richiesto.
+  function renderRegionalPresidencyPage() {
+    var rp = state.regionalPresidency;
+    var regionId = rp.regionId;
+    var region = regionById(regionId);
+    var r = state.regions[regionId];
+    var years = Math.round((state.turn - rp.electedTurn) / 52 * 10) / 10;
+    var weeksLeft = Math.max(0, r.nextElectionTurn - state.turn);
+    var html = '<section aria-label="La tua presidenza regionale"><p class="eyebrow">Presidente della Regione ' + regionId + '</p><div class="stat-grid">';
+    html += '<div class="stat-tile"><div class="label">Anni di mandato</div><div class="row"><span class="value">' + years + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Settimane alla prossima elezione regionale</div><div class="row"><span class="value">' + weeksLeft + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Gradimento locale</div><div class="row"><span class="value">' + Math.round(r.approvalLocal === undefined ? 50 : r.approvalLocal) + "%</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Casse della regione</div><div class="row"><span class="value">' + fmtEuro(Math.round(r.fondiRegionali || 0)) + "</span></div></div>";
+    html += "</div>" +
+      '<p class="ci-hint" style="margin-top:0.6rem">Hai lasciato la guida nazionale di ' + rp.formerPartyName + " a " + (state.player.interimLeaderName || "un dirigente di fiducia") +
+      ": da qui in avanti ti occupi solo del governo di " + regionId + ", non più della politica nazionale, finché non finirà questo mandato.</p></section>";
+    html += '<section aria-label="Scheda della Regione"><p class="eyebrow">Scheda della Regione — ' + regionId + '</p><div class="stat-grid">';
+    regionTrackedThemes(region).forEach(function (themeId) {
+      var theme = SITUATION_THEME_BY_ID[themeId];
+      var isStrength = region.strengths.indexOf(themeId) !== -1;
+      html += '<div class="stat-tile"><div class="label">' + theme.label.replace("Politica — ", "") + (isStrength ? " (punto di forza)" : " (nodo critico)") + '</div><div class="row"><span class="value">' + fmt1(r.metrics[themeId]) + " / 10</span></div></div>";
+    });
+    html += "</div></section>";
+    return html;
   }
 
   // ---------- Apertura mirata di sezioni locali, con coalizioni civiche locali ----------
@@ -15485,6 +15779,7 @@
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
     cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConfidenceVote: false, pendingConsultazioni: null,
+    playerMinistry: null, regionalPresidency: null, pendingRegionalElectionResult: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, liraAnnounced: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
     salarioMinimoAttivo: false, salarioMinimoNetto: null,
     bilancioStato: { entrate: 920, uscite: 979 },
@@ -17885,6 +18180,7 @@
     state.cabinet = null;
     state.cabinetCpuNamePool = {};
     state.pendingCabinetFormation = null;
+    state.playerMinistry = null;
     var cabinetAlloc = computeCabinetAllocation();
     if (cabinetAlloc) {
       var cabinetAssignments = {};
@@ -20558,6 +20854,65 @@
     "Ambiente e Transizione Ecologica": "dell'Ambiente e della Transizione Ecologica",
     "Infrastrutture e Trasporti": "delle Infrastrutture e dei Trasporti", "Lavoro e Politiche Sociali": "del Lavoro e delle Politiche Sociali"
   };
+  // ---------- Il Ministro in carica (richiesto da un giocatore) ----------
+  // Prima, qualunque ministero il partito ottenesse in coalizione (senza esprimere il Presidente del
+  // Consiglio) restava puramente decorativo: il giocatore si limitava a scegliere un nome da un elenco,
+  // senza alcuna funzione reale legata a QUEL dicastero specifico. Qui, se il partito non guida la
+  // coalizione (non esprime il Premier), il giocatore può assumere personalmente UNO dei ministeri
+  // ottenuti dal partito (vedi la scelta aggiunta in cabinetFormationDossier) — e da lì in avanti
+  // riceve, settimana dopo settimana, vere funzioni ministeriali legate a quello specifico dicastero,
+  // con effetti mirati sulle voci della Scheda Paese di competenza reale di quel ministero — non più
+  // la Scheda Paese intera, come farebbe invece un Presidente del Consiglio (che resta, per esplicita
+  // richiesta, del tutto invariato: da Premier si controlla già tutto come oggi).
+  var MINISTRY_FOCUS = {
+    "Economia e Finanze": { metrics: ["economia", "pil"], nouns: ["la pressione fiscale sulle imprese", "il taglio del cuneo fiscale", "la manovra di bilancio", "gli incentivi agli investimenti privati"] },
+    "Interno": { metrics: ["sicurezza", "immigrazione"], nouns: ["il piano sicurezza nelle grandi città", "la gestione dei flussi migratori", "il potenziamento delle forze dell'ordine", "l'ordine pubblico durante un corteo"] },
+    "Esteri": { metrics: ["relazioniDiplomatiche", "commercio"], nouns: ["un vertice diplomatico bilaterale", "un accordo commerciale internazionale", "la linea italiana in un consesso internazionale", "una crisi diplomatica da gestire"] },
+    "Difesa": { metrics: ["difesa", "relazioniDiplomatiche"], nouns: ["l'ammodernamento delle Forze Armate", "una missione militare all'estero", "il budget della Difesa", "un'esercitazione congiunta NATO"] },
+    "Giustizia": { metrics: ["giustizia", "corruzione"], nouns: ["la riforma dei tempi processuali", "il sovraffollamento carcerario", "una norma anticorruzione", "l'organico della magistratura"] },
+    "Istruzione": { metrics: ["scuola", "ricercaSviluppo"], nouns: ["l'edilizia scolastica", "gli stipendi del personale docente", "i fondi per la ricerca universitaria", "la riforma dei programmi scolastici"] },
+    "Salute": { metrics: ["sanita", "felicita"], nouns: ["le liste d'attesa negli ospedali", "la carenza di personale sanitario", "i fondi per la sanità territoriale", "una campagna di prevenzione"] },
+    "Ambiente e Transizione Ecologica": { metrics: ["ambientalismo", "energia"], nouns: ["gli incentivi alle rinnovabili", "un piano contro il dissesto idrogeologico", "la transizione energetica", "una bonifica ambientale"] },
+    "Infrastrutture e Trasporti": { metrics: ["trasporti", "casa"], nouns: ["la manutenzione di strade e ponti", "il potenziamento del trasporto pubblico locale", "un grande cantiere infrastrutturale", "il piano casa"] },
+    "Lavoro e Politiche Sociali": { metrics: ["disoccupazione", "welfare"], nouns: ["gli incentivi all'occupazione giovanile", "la riforma degli ammortizzatori sociali", "il salario minimo", "le politiche per la natalità"] }
+  };
+  var MINISTER_ACTION_COOLDOWN_TURNS = 10;
+  function checkMinisterActionTrigger() {
+    var p = state.player;
+    if (!p || !state.playerMinistry || !state.cabinet) return false;
+    // Da Presidente del Consiglio controlli già tutto il governo: nessuna funzione ministeriale separata.
+    if (state.cabinet.premierId === "player") { state.playerMinistry = null; return false; }
+    // Il governo è caduto o il partito non ne fa più parte senza passare da una nuova formazione: niente
+    // da gestire finché non torna davvero al governo.
+    if (p.parliamentRole !== "governo") { state.playerMinistry = null; return false; }
+    if (state.turn < (p.ministerActionCooldownTurn || 0)) return false;
+    return Math.random() < 0.4;
+  }
+  function buildMinisterActionDossier() {
+    var p = state.player;
+    p.ministerActionCooldownTurn = state.turn + MINISTER_ACTION_COOLDOWN_TURNS;
+    var ministry = state.playerMinistry.ministry;
+    var focus = MINISTRY_FOCUS[ministry] || { metrics: ["economia"], nouns: ["una questione del dicastero"] };
+    var noun = focus.nouns[Math.floor(Math.random() * focus.nouns.length)];
+    var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
+    var m1 = focus.metrics[0], m2 = focus.metrics[1] || focus.metrics[0];
+    function natEff(v1, v2) { var n = {}; n[m1] = v1; if (m2 !== m1) n[m2] = v2; return n; }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Ministero " + articled,
+      cat: "Governo — Ministero", title: "Da Ministro " + articled + ": " + noun,
+      brief: "Come titolare del Ministero " + articled + ", tocca a te decidere come affrontare " + noun + ": una scelta che pesa sulla Scheda Paese, nell'area di tua diretta competenza ministeriale.",
+      choices: [
+        { label: "Investi con decisione", hint: "Costa ai fondi pubblici, effetto pieno sul dicastero", effects: { fondi: -rand(400, 800), reputazione: rand(1, 3), national: natEff(0.5, 0.3) },
+          result: "L'intervento deciso su " + noun + " produce risultati concreti nel tuo dicastero, pur pesando sulle casse pubbliche." },
+        { label: "Procedi con cautela, senza grandi investimenti", hint: "Effetto contenuto, nessun rischio particolare", effects: { national: natEff(0.15, 0.1) },
+          result: "Una linea prudente su " + noun + " produce un piccolo passo avanti nel tuo dicastero, senza scosse." },
+        { label: "Rinvia la decisione", hint: "Nessun effetto, nessun rischio immediato", effects: {},
+          result: "Decidi di rinviare la decisione su " + noun + ": per ora, nel tuo dicastero, nulla cambia." },
+        { label: "Taglia la spesa su questo fronte", hint: "Libera fondi pubblici, ma il dicastero ne risente", effects: { fondi: rand(300, 600), reputazione: -rand(1, 2), national: natEff(-0.4, -0.25) },
+          result: "Il taglio alla spesa su " + noun + " libera risorse pubbliche, ma il tuo dicastero ne esce con un passo indietro." }
+      ]
+    };
+  }
   // Prima funzionava solo per governi di coalizione (2+ membri): un governo di un SOLO partito (o del
   // giocatore da solo) non aveva alcuna ripartizione dei ministeri, e il pannello restava vuoto. Ora
   // gestisce in modo unificato sia il caso di un solo partito (che riceve tutti i ministeri) sia quello
@@ -20698,11 +21053,24 @@
         result: cand.name + " (" + cand.source + ") diventa il nuovo Ministro " + articled + "."
       };
     });
+    // Richiesto da un giocatore: se il partito non guida la coalizione (non esprime il Premier), il
+    // giocatore può tenere per sé uno dei ministeri ottenuti, con vere funzioni ministeriali settimanali
+    // (vedi checkMinisterActionTrigger) invece di affidarlo sempre a un esponente generato. Un solo
+    // ministero personale per legislatura — realistico, non si può guidare due dicasteri insieme —
+    // quindi l'opzione scompare non appena ne ha già preso in carico uno.
+    var canSelfAssign = state.cabinet && state.cabinet.premierId !== "player" && !state.playerMinistry;
+    if (canSelfAssign) {
+      choices.push({
+        label: "Assumi personalmente il Ministero " + articled, hint: "Vere funzioni ministeriali da gestire settimana dopo settimana",
+        cabinetCandidateId: "player_self", effects: {},
+        result: "Decidi di assumere personalmente la carica di Ministro " + articled + ": da oggi segui di persona questo dicastero."
+      });
+    }
     return {
       id: "cabinet_formation", kind: "situazione", localDynamic: false,
       eyebrow: "Formazione del Governo — ministero " + (doneCount + 1) + " di " + totalCount,
       cat: "Governo", title: "A chi affidi il Ministero " + articled + "?",
-      brief: "Il tuo partito ha ottenuto il Ministero " + articled + ": scegli a chi affidare l'incarico tra le persone di fiducia del partito.",
+      brief: "Il tuo partito ha ottenuto il Ministero " + articled + ": scegli a chi affidare l'incarico tra le persone di fiducia del partito" + (canSelfAssign ? ", oppure tienilo per te" : "") + ".",
       choices: choices
     };
   }
@@ -21716,8 +22084,9 @@
           var ministerLines = list.map(function (ministry) {
             var a = cabinet.assignments && cabinet.assignments[ministry];
             var articled = MINISTRY_ARTICLED[ministry] || ministry;
+            var personalTag = (state.playerMinistry && state.playerMinistry.ministry === ministry) ? ' <span class="chip good">Lo gestisci tu</span>' : "";
             return a
-              ? '<div class="ci-hint" style="margin-top:0.2rem"><strong>' + a.name + '</strong> — Ministro ' + articled + (a.source ? " (" + a.source + ")" : "") + '</div>'
+              ? '<div class="ci-hint" style="margin-top:0.2rem"><strong>' + a.name + '</strong> — Ministro ' + articled + (a.source ? " (" + a.source + ")" : "") + personalTag + '</div>'
               : '<div class="ci-hint" style="margin-top:0.2rem">Ministro ' + articled + ' — <em>ancora da assegnare</em></div>';
           }).join("");
           return '<div class="stat-tile"><div class="label">' + name + (id === cabinet.premierId ? " (Presidenza)" : "") + '</div><div class="row"><span class="value">' + list.length + " ministero" + (list.length === 1 ? "" : "i") + '</span></div>' + ministerLines + '</div>';
@@ -23236,6 +23605,21 @@
       }
       body += '<div id="page-content-anchor"></div>';
       body += renderPresidentModePage();
+    } else if (state.mode === "regional_president") {
+      // Speculare alla Modalità Presidente: niente barra di navigazione né pannelli di partito, solo il
+      // dossier della settimana (sempre sulla regione, vedi advanceRegionalPresidentTurnLogic) e il
+      // cruscotto dedicato al mandato regionale in corso.
+      body = "";
+      if (state.phase === "building") {
+        var regPresDossier = currentDossier();
+        if (!regPresDossier) { advanceRegionalPresidentTurnLogic(); regPresDossier = currentDossier(); }
+        body += renderDossierCard(regPresDossier);
+      } else if (state.phase === "result") {
+        body += renderResultCard(state.resultData);
+        body += renderHeadlines(state.resultData.headlines);
+      }
+      body += '<div id="page-content-anchor"></div>';
+      body += renderRegionalPresidencyPage();
     } else {
       body = renderPageNav();
       if (state.phase === "building") {
@@ -23613,14 +23997,21 @@
       } else if (dossier.id === "cabinet_formation") {
         var pcf = state.pendingCabinetFormation;
         var ministryAssigned = pcf.remainingMinistries.shift();
-        var chosenCandidate = pcf.candidates.filter(function (c) { return c.id === choice.cabinetCandidateId; })[0];
-        if (chosenCandidate) {
+        if (choice.cabinetCandidateId === "player_self") {
           if (!state.cabinet) state.cabinet = { turn: state.turn, premierId: "player", ministries: {}, assignments: {} };
           if (!state.cabinet.assignments) state.cabinet.assignments = {};
-          state.cabinet.assignments[ministryAssigned] = { holderId: "player", name: chosenCandidate.name, source: chosenCandidate.source };
-          // Chi ha già ricevuto un ministero non può riceverne un secondo: lo togliamo dal pool prima del
-          // prossimo giro, così la stessa persona non finisce a capo di due dicasteri diversi.
-          pcf.candidates = pcf.candidates.filter(function (c) { return c.id !== chosenCandidate.id; });
+          state.cabinet.assignments[ministryAssigned] = { holderId: "player", name: state.player.name, source: "Il leader del partito in persona" };
+          state.playerMinistry = { ministry: ministryAssigned, since: state.turn };
+        } else {
+          var chosenCandidate = pcf.candidates.filter(function (c) { return c.id === choice.cabinetCandidateId; })[0];
+          if (chosenCandidate) {
+            if (!state.cabinet) state.cabinet = { turn: state.turn, premierId: "player", ministries: {}, assignments: {} };
+            if (!state.cabinet.assignments) state.cabinet.assignments = {};
+            state.cabinet.assignments[ministryAssigned] = { holderId: "player", name: chosenCandidate.name, source: chosenCandidate.source };
+            // Chi ha già ricevuto un ministero non può riceverne un secondo: lo togliamo dal pool prima del
+            // prossimo giro, così la stessa persona non finisce a capo di due dicasteri diversi.
+            pcf.candidates = pcf.candidates.filter(function (c) { return c.id !== chosenCandidate.id; });
+          }
         }
         if (!pcf.remainingMinistries.length) {
           state.pendingCabinetFormation = null;
@@ -23749,6 +24140,28 @@
           // dossier e la scelta — niente candidatura possibile, si passa oltre senza clamorosi errori.
           state.resultData = { resultText: "Nel frattempo il partito non ha più alcuna sezione in " + candRegionId + ": la candidatura decade.", headlines: [] };
         }
+      } else if (dossier.regionalReelectionRegionId && choice.regionalReelectionSelf !== undefined) {
+        // Fine mandato da presidente di regione in carica (vedi buildRegionalReelectionChoiceDossier):
+        // ricandidarsi passa comunque dalla stessa logica elettorale di sempre (resolveRegionalElectionForPlayer,
+        // con il bonus/malus da uscente), rimandata alla settimana successiva come ogni altro esito
+        // elettorale del giocatore. Non ricandidarsi, invece, non richiede affatto una vera campagna: il
+        // partito affida subito la regione a un delegato e il giocatore torna alla guida nazionale.
+        var reRegionId = dossier.regionalReelectionRegionId;
+        if (choice.regionalReelectionSelf) {
+          var reSectionsHere = playerSectionsInRegion(reRegionId);
+          state.pendingRegionalElectionResult = resolveRegionalElectionForPlayer(reRegionId, reSectionsHere, true);
+          state.resultData = { resultText: "La campagna per la riconferma alla presidenza della " + reRegionId + " si chiude: il risultato arriva nei prossimi giorni.", headlines: [] };
+        } else {
+          var stepDownRegion = state.regions[reRegionId];
+          stepDownRegion.playerIsGovernor = false;
+          var stepDownDelegate = generateRegionalDelegate(reRegionId);
+          stepDownRegion.regionalLeaderName = stepDownDelegate.name;
+          stepDownRegion.regionalLeaderSource = stepDownDelegate.source;
+          stepDownRegion.regionalLeaderTraits = stepDownDelegate.traits;
+          stepDownRegion.regionalLeaderSkill = stepDownDelegate.skill;
+          exitRegionalPresidency("hai scelto di non ricandidarti alla presidenza della " + reRegionId + ", lasciando il testimone a " + stepDownDelegate.name + " (" + stepDownDelegate.source + ")");
+          state.resultData = { resultText: choice.result, headlines: [] };
+        }
       } else if (dossier.regionalGovernanceId && choice.regionalLawThemeId) {
         // Una vera legge regionale non ha effetto immediato: resta in discussione in Consiglio per
         // settimane, vedi resolveRegionalLawsIfDue (stessa logica del tempo di attesa delle leggi
@@ -23766,7 +24179,19 @@
             govRegion.metrics[dossier.regionalMetricThemeId] = clamp(govRegion.metrics[dossier.regionalMetricThemeId] + choice.regionalMetricDelta, 1, 10);
           }
         }
-        state.resultData = applyChoice(dossier, choice);
+        // Richiesto da un giocatore: in "Modalità Presidente di Regione" il costo/ricavo di una scelta di
+        // governo regionale deve pesare sulle CASSE DELLA REGIONE (r.fondiRegionali), non sui fondi del
+        // partito a livello nazionale — due portafogli distinti, proprio come nella realtà. Il resto degli
+        // effetti (reputazione, Scheda Paese...) passa comunque per applyChoice come sempre.
+        if (govRegion && govRegion.playerIsGovernor && choice.effects && choice.effects.fondi) {
+          if (govRegion.fondiRegionali === undefined || govRegion.fondiRegionali === null) govRegion.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
+          govRegion.fondiRegionali = Math.max(0, govRegion.fondiRegionali + choice.effects.fondi);
+          var regionalEffects = {};
+          Object.keys(choice.effects).forEach(function (k) { if (k !== "fondi") regionalEffects[k] = choice.effects[k]; });
+          state.resultData = applyChoice(dossier, { label: choice.label, hint: choice.hint, result: choice.result, effects: regionalEffects });
+        } else {
+          state.resultData = applyChoice(dossier, choice);
+        }
       } else if (dossier.id === "trial_open") {
         var p = state.player;
         if (choice.trialStrategy) {
@@ -25216,6 +25641,10 @@
     // catena di dossier di partito qui sotto non si applica più: il turno passa per intero da
     // advancePresidentTurnLogic, con le sue proprie regole, finché non finisce il settennato.
     if (state.mode === "president") { advancePresidentTurnLogic(); return; }
+    // Specularmente alla Presidenza della Repubblica: finché dura un mandato da presidente di regione
+    // (vedi enterRegionalPresidency), l'intera catena di dossier di partito qui sotto non si applica —
+    // il turno passa per intero da advanceRegionalPresidentTurnLogic, scope-ato sulla sola regione.
+    if (state.mode === "regional_president") { advanceRegionalPresidentTurnLogic(); return; }
     // Priorità assoluta, prima di qualunque altra cosa: finché il comitato promotore non ha raccolto le
     // firme necessarie, il partito non esiste ancora davvero come soggetto elettorale — niente Parlamento,
     // niente elezioni, niente dossier riservati a un partito riconosciuto, solo la Raccolta Firme (vedi
@@ -25790,6 +26219,13 @@
 
     if (checkRegionalGovernanceTrigger()) {
       state.aiDynamicDossier = buildRegionalGovernanceDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkMinisterActionTrigger()) {
+      state.aiDynamicDossier = buildMinisterActionDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
