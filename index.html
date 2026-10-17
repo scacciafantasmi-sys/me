@@ -3334,11 +3334,46 @@
   // scadenze diverse tutto l'anno, non un'unica tornata annunciata una volta sola.
   // Un problema parte su valori bassi (3-4.5), un punto di forza su valori alti (6.5-8): non fissi,
   // un po' di rumore per non avere 20 regioni con esattamente lo stesso punto di partenza.
+  // Richiesto da un giocatore: una "Scheda della Regione" con 4 soli numeri (i 2 problemi + i 2 punti di
+  // forza "identitari") era troppo povera per sostenere una vera modalità di gioco — ora ogni regione
+  // traccia TUTTI i 20 temi di SITUATION_THEMES, non solo i 4 che la caratterizzano: i 2 problemi e i 2
+  // punti di forza restano gli estremi (bassi/alti), gli altri 16 partono su un valore neutro, ma
+  // CAMBIANO comunque nel tempo (vedi driftRegionalMetrics) e sono tutti utilizzabili per leggi, mozioni e
+  // interventi mirati (vedi renderRegionalLeggiPage/renderRegionalMozioniPage), non solo i 4 "titolari".
+  function regionAllThemeIds() { return SITUATION_THEMES.map(function (t) { return t.id; }); }
+  function initRegionMetricValue(region, themeId) {
+    var isIssue = region.issues.indexOf(themeId) !== -1, isStrength = region.strengths.indexOf(themeId) !== -1;
+    var base = isIssue ? (3 + Math.random() * 1.5) : isStrength ? (6.5 + Math.random() * 1.5) : (4.5 + Math.random() * 2.5);
+    return Math.round(base * 10) / 10;
+  }
   function initRegionMetrics(region) {
     var metrics = {};
-    region.issues.forEach(function (themeId) { metrics[themeId] = Math.round((3 + Math.random() * 1.5) * 10) / 10; });
-    region.strengths.forEach(function (themeId) { metrics[themeId] = Math.round((6.5 + Math.random() * 1.5) * 10) / 10; });
+    regionAllThemeIds().forEach(function (themeId) { metrics[themeId] = initRegionMetricValue(region, themeId); });
     return metrics;
+  }
+  // Le città reali della regione (vedi ITALY_LOCATIONS), ciascuna con un proprio grado di soddisfazione
+  // (0-100) e un tema caldo locale: richiesto da un giocatore per poter davvero "vedere come sono messe
+  // le città", non solo un numero unico per tutta la regione.
+  function citiesForRegion(regionId) {
+    return ITALY_LOCATIONS.filter(function (l) { return l.region === regionId; }).map(function (l) { return l.name; });
+  }
+  function initRegionCities(region) {
+    var names = citiesForRegion(region.id).slice(0, 6);
+    if (!names.length) names = [region.id];
+    var pool = regionAllThemeIds();
+    return names.map(function (name) {
+      return { name: name, satisfaction: Math.round(40 + Math.random() * 30), focusThemeId: pool[Math.floor(Math.random() * pool.length)] };
+    });
+  }
+  // Il diario regionale (richiesto da un giocatore): a differenza di state.worldNews (condiviso con tutto
+  // il resto del gioco e tagliato a 6 voci), le notizie regionali hanno uno spazio proprio e più ampio, e
+  // restano consultabili anche quando il resto del mondo ne produce molte altre nella stessa settimana.
+  function addRegionalNews(regionId, text) {
+    var r = state.regions[regionId];
+    if (!r) return;
+    if (!r.newsLog) r.newsLog = [];
+    r.newsLog.unshift({ week: state.turn, text: text });
+    if (r.newsLog.length > 30) r.newsLog.length = 30;
   }
   function ensureRegionsInit() {
     if (state.regions && Object.keys(state.regions).length >= ITALIAN_REGIONS.length) {
@@ -3357,8 +3392,24 @@
         if (r.regionalLeaderTraits === undefined) r.regionalLeaderTraits = null;
         if (r.regionalLeaderSkill === undefined) r.regionalLeaderSkill = 0;
         if (r.fondiRegionali === undefined) r.fondiRegionali = null;
-        if (!r.metrics) { var regDef = regionById(id); if (regDef) r.metrics = initRegionMetrics(regDef); }
+        var regDef = regionById(id);
+        if (!r.metrics) { if (regDef) r.metrics = initRegionMetrics(regDef); }
+        else if (regDef) {
+          // Backfill dei salvataggi con solo i 4 temi "identitari" tracciati: la Scheda della Regione ora
+          // ne mostra tutti e 20, vedi initRegionMetrics/regionAllThemeIds.
+          regionAllThemeIds().forEach(function (themeId) {
+            if (r.metrics[themeId] === undefined) r.metrics[themeId] = initRegionMetricValue(regDef, themeId);
+          });
+        }
         if (r.pendingRegionalLaw === undefined) r.pendingRegionalLaw = null;
+        if (!r.cities || !r.cities.length) { if (regDef) r.cities = initRegionCities(regDef); }
+        if (!r.newsLog) r.newsLog = [];
+        if (!r.lawsHistory) r.lawsHistory = [];
+        if (!r.motionsHistory) r.motionsHistory = [];
+        if (r.regionalActionCooldownTurn === undefined) r.regionalActionCooldownTurn = 0;
+        if (r.cityEventCooldownTurn === undefined) r.cityEventCooldownTurn = 0;
+        if (r.issueEventCooldownTurn === undefined) r.issueEventCooldownTurn = 0;
+        if (r.opportunityEventCooldownTurn === undefined) r.opportunityEventCooldownTurn = 0;
       });
       return;
     }
@@ -3391,7 +3442,13 @@
         // un lento drift di sottofondo anche senza alcun intervento (vedi driftRegionalMetrics) — non
         // restano mai fissi per tutta la partita.
         metrics: initRegionMetrics(region),
-        pendingRegionalLaw: null
+        pendingRegionalLaw: null,
+        // Città, notizie e storico di leggi/mozioni: il materiale vero e proprio della Modalità Presidente
+        // di Regione (vedi renderRegionalCittaPage/renderRegionalNotiziePage/renderRegionalLeggiPage), non
+        // solo un cruscotto con 4 numeri. regionalActionCooldownTurn limita a un'azione proattiva (legge,
+        // mozione o visita a una città) ogni poche settimane, cosi' da non poter fare tutto insieme.
+        cities: initRegionCities(region), newsLog: [], lawsHistory: [], motionsHistory: [],
+        regionalActionCooldownTurn: 0, cityEventCooldownTurn: 0, issueEventCooldownTurn: 0, opportunityEventCooldownTurn: 0
       };
     });
   }
@@ -3765,10 +3822,10 @@
     if (roll < protestChance + 0.4) return buildRegionalProposalDossier(regionId);
     return buildRegionalInvestmentDossier(regionId);
   }
-  function buildRegionalInvestmentDossier(regionId) {
+  function buildRegionalInvestmentDossier(regionId, themeIdOverride) {
     var region = regionById(regionId);
     var themes = regionTrackedThemes(region);
-    var themeId = themes[Math.floor(Math.random() * themes.length)];
+    var themeId = themeIdOverride || themes[Math.floor(Math.random() * themes.length)];
     var theme = SITUATION_THEME_BY_ID[themeId];
     var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
     var natMetric = THEME_TO_NATIONAL_METRIC[themeId];
@@ -3792,9 +3849,9 @@
   }
   // Richiesto da un giocatore: non solo decisioni amministrative di routine, anche vere manifestazioni
   // da gestire — più probabili quando un tema specifico (problema o punto di forza) è messo peggio.
-  function buildRegionalProtestDossier(regionId) {
+  function buildRegionalProtestDossier(regionId, themeIdOverride) {
     var region = regionById(regionId);
-    var themeId = worstRegionTheme(regionId);
+    var themeId = themeIdOverride || worstRegionTheme(regionId);
     var theme = SITUATION_THEME_BY_ID[themeId];
     var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
     var natMetric = THEME_TO_NATIONAL_METRIC[themeId];
@@ -3866,6 +3923,10 @@
       state.log.unshift({ week: state.turn, title: (passed ? "Approvata" : "Bocciata") + " una legge regionale in " + id, choiceLabel: law.noun, result: text, headlines: [], type: "locale", cat: "Governo Regionale" });
       if (!state.worldNews) state.worldNews = [];
       state.worldNews.unshift({ cat: "Governo Regionale", text: text });
+      if (!r.lawsHistory) r.lawsHistory = [];
+      r.lawsHistory.unshift({ week: state.turn, noun: law.noun, outcome: passed ? "passed" : "failed" });
+      if (r.lawsHistory.length > 30) r.lawsHistory.length = 30;
+      if (r.playerIsGovernor) addRegionalNews(id, text);
     });
     if (state.worldNews && state.worldNews.length > 6) state.worldNews.length = 6;
   }
@@ -3882,6 +3943,17 @@
       if (!r || !r.metrics) return;
       region.issues.forEach(function (id) { r.metrics[id] = clamp(r.metrics[id] + (4 - r.metrics[id]) * 0.01 + (Math.random() - 0.5) * 0.3, 1, 10); });
       region.strengths.forEach(function (id) { r.metrics[id] = clamp(r.metrics[id] + (7 - r.metrics[id]) * 0.01 + (Math.random() - 0.5) * 0.3, 1, 10); });
+      // I 16 temi non "identitari" (vedi initRegionMetrics) derivano più piano verso un valore neutro: non
+      // restano comunque mai fissi, e sono gli stessi che leggi/mozioni/visite a una città possono spostare.
+      regionAllThemeIds().forEach(function (id) {
+        if (region.issues.indexOf(id) !== -1 || region.strengths.indexOf(id) !== -1) return;
+        r.metrics[id] = clamp(r.metrics[id] + (5.5 - r.metrics[id]) * 0.01 + (Math.random() - 0.5) * 0.25, 1, 10);
+      });
+      // Anche le città seguono un lento ritorno verso una soddisfazione media, con un po' di rumore: senza
+      // alcun intervento mirato (vedi renderRegionalCittaPage) nessuna città resta ferma per sempre.
+      if (r.cities) {
+        r.cities.forEach(function (c) { c.satisfaction = clamp(c.satisfaction + (55 - c.satisfaction) * 0.015 + (Math.random() - 0.5) * 2, 0, 100); });
+      }
       // Una regione delegata a un esponente di partito (non il giocatore, non la CPU di un'altra
       // famiglia) vive anche lei di fortuna propria sul gradimento, visto che nessuno la gestisce dal di
       // dentro: un piccolo passo casuale, raro un vero annuncio in cronaca per non intasare il diario.
@@ -3981,8 +4053,10 @@
     p.playerIsLeader = false;
     p.interimLeaderName = successor;
     if (r.fondiRegionali === undefined || r.fondiRegionali === null) r.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
+    if (!r.giunta || !r.giunta.length) r.giunta = generateRegionalGiunta();
     state.regionalPresidency = { regionId: regionId, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: r.nextElectionTurn };
     state.mode = "regional_president";
+    state.regionalUiPage = "scheda";
     var text = "Da oggi " + formerPartyName + " è guidato ad interim da " + successor + ": eletto/a presidente della " + regionId + ", il/la leader nazionale si dedica da qui in avanti solo al governo della regione, non più alla politica nazionale.";
     state.log.unshift({ week: state.turn, title: "Guida nazionale del partito lasciata ad interim", choiceLabel: regionId, result: text, headlines: [], type: "dossier", cat: "Istituzioni" });
     if (!state.worldNews) state.worldNews = [];
@@ -4007,17 +4081,94 @@
     state.worldNews.unshift({ cat: "Istituzioni", text: text });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
   }
-  // Variante di buildRegionalGovernanceDossier che non deve scegliere a caso TRA PIÙ regioni governate
-  // (qui ce n'è sempre e solo una, quella della presidenza) né tirare una probabilità settimanale: in
-  // "Modalità Presidente di Regione" il dossier della settimana è SEMPRE su quella regione, visto che è
-  // l'unica cosa di cui il giocatore si occupa ora.
+  // La città messa peggio (mai scelta a caso: serve per decidere se la settimana porta una vera crisi
+  // locale, vedi buildRegionalGovernanceDossierFor).
+  function worstCityIn(regionId) {
+    var r = state.regions[regionId];
+    if (!r.cities || !r.cities.length) return null;
+    return r.cities.reduce(function (w, c) { return c.satisfaction < w.satisfaction ? c : w; }, r.cities[0]);
+  }
+  function worstMetricOverall(regionId) {
+    var r = state.regions[regionId], ids = regionAllThemeIds();
+    return ids.reduce(function (w, id) { return r.metrics[id] < r.metrics[w] ? id : w; }, ids[0]);
+  }
+  function bestMetricOverall(regionId) {
+    var r = state.regions[regionId], ids = regionAllThemeIds();
+    return ids.reduce(function (b, id) { return r.metrics[id] > r.metrics[b] ? id : b; }, ids[0]);
+  }
+  // Richiesto da un giocatore: una città specifica può davvero entrare in crisi (soddisfazione sotto
+  // soglia), con un evento che la riguarda per nome — non un generico "problema regionale" senza volto.
+  function buildCityCrisisDossier(regionId, city) {
+    var theme = SITUATION_THEME_BY_ID[city.focusThemeId];
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var natMetric = THEME_TO_NATIONAL_METRIC[city.focusThemeId];
+    var investEffects = { fondi: -rand(800, 1300) };
+    if (natMetric) { investEffects.national = {}; investEffects.national[natMetric] = 0.2; }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Crisi Locale — " + city.name,
+      cat: "Governo Regionale", title: noun.charAt(0).toUpperCase() + noun.slice(1) + " a " + city.name,
+      brief: "A " + city.name + " la situazione su " + noun + " è ormai critica: i cittadini chiedono una risposta immediata dalla Regione, non solo un impegno generico.",
+      regionalGovernanceId: regionId, regionalMetricThemeId: city.focusThemeId, regionalCityName: city.name,
+      choices: [
+        { label: "Investi subito su " + city.name, hint: "Costoso, ma risolve davvero il problema locale", regionalApprovalDelta: rand(4, 7), regionalMetricDelta: rand(0.8, 1.3), regionalCityDelta: rand(15, 24), effects: investEffects,
+          result: "L'investimento immediato a " + city.name + " disinnesca la crisi locale su " + noun + ", pur pesando sulle casse regionali." },
+        { label: "Promessa di intervento futuro", hint: "Costo contenuto, effetto modesto e in parte temporaneo", regionalApprovalDelta: rand(0, 2), regionalMetricDelta: rand(0, 0.2), regionalCityDelta: rand(3, 8), effects: { fondi: -rand(150, 300) },
+          result: "La promessa di un intervento futuro a " + city.name + " acquieta per ora gli animi, senza risolvere il nodo di fondo." },
+        { label: "Ignora la crisi locale", hint: "Nessun costo immediato, ma la città non lo dimentica", regionalApprovalDelta: -rand(3, 6), regionalMetricDelta: 0, regionalCityDelta: -rand(10, 18), effects: {},
+          result: "La crisi a " + city.name + " viene ignorata: nessun costo immediato per le casse regionali, ma la città non lo dimentica." }
+      ]
+    };
+  }
+  // Richiesto da un giocatore: non solo crisi da gestire, anche vere opportunità quando un punto di
+  // forza sta andando particolarmente bene — una cornice positiva, non solo emergenze.
+  function buildRegionalOpportunityDossier(regionId, themeId) {
+    var theme = SITUATION_THEME_BY_ID[themeId];
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var natMetric = THEME_TO_NATIONAL_METRIC[themeId];
+    var promoteEffects = { fondi: -rand(500, 900) };
+    if (natMetric) { promoteEffects.national = {}; promoteEffects.national[natMetric] = 0.25; }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Opportunità Regionale — " + regionId,
+      cat: "Governo Regionale", title: regionId + " come modello nazionale su " + noun,
+      brief: "Il successo della Regione su " + noun + " attira l'attenzione nazionale: un'occasione da consolidare con nuovi investimenti, o semplicemente da promuovere politicamente senza spendere di più.",
+      regionalGovernanceId: regionId, regionalMetricThemeId: themeId,
+      choices: [
+        { label: "Investi per consolidare il primato", hint: "Rafforza ulteriormente il punto di forza, pesa sui fondi regionali", regionalApprovalDelta: rand(5, 9), regionalMetricDelta: rand(0.3, 0.6), effects: promoteEffects,
+          result: "L'investimento per consolidare il primato su " + noun + " rafforza ulteriormente un punto di forza già riconosciuto, a scapito delle casse regionali." },
+        { label: "Promuovi il risultato senza nuovi investimenti", hint: "Visibilità politica immediata, nessun costo per le casse regionali", regionalApprovalDelta: rand(3, 6), regionalMetricDelta: 0, effects: { reputazione: rand(1, 3) },
+          result: "La promozione del risultato su " + noun + " porta visibilità politica, senza pesare sulle casse regionali." },
+        { label: "Non fare nulla di particolare", hint: "Nessun effetto", regionalApprovalDelta: 0, regionalMetricDelta: 0, effects: {},
+          result: "Il successo su " + noun + " resta per ora un fatto acquisito, senza ulteriori iniziative." }
+      ]
+    };
+  }
+  // Richiesto da un giocatore: il dossier della settimana non deve più essere un dado a 3 facce sempre
+  // uguale — qui le condizioni REALI della regione decidono cosa succede, con una vera priorità (una città
+  // in crisi conta più di un nodo critico regionale generico, che conta più di una routine amministrativa),
+  // non solo "casuale ma con pesi diversi". Ogni tipo di evento ha il proprio raffreddamento
+  // (r.cityEventCooldownTurn/issueEventCooldownTurn/opportunityEventCooldownTurn), così lo stesso tipo di
+  // crisi non si ripete settimana dopo settimana sulla stessa identica cosa.
   function buildRegionalGovernanceDossierFor(regionId) {
     var r = state.regions[regionId];
-    var protestChance = clamp((55 - (r.approvalLocal === undefined ? 50 : r.approvalLocal)) / 80, 0.08, 0.55);
-    var roll = Math.random();
-    if (roll < protestChance) return buildRegionalProtestDossier(regionId);
-    if (roll < protestChance + 0.4) return buildRegionalProposalDossier(regionId);
-    return buildRegionalInvestmentDossier(regionId);
+    var worstCity = worstCityIn(regionId);
+    if (worstCity && worstCity.satisfaction < 32 && state.turn >= (r.cityEventCooldownTurn || 0)) {
+      r.cityEventCooldownTurn = state.turn + 9;
+      return buildCityCrisisDossier(regionId, worstCity);
+    }
+    var worstTheme = worstMetricOverall(regionId);
+    if (r.metrics[worstTheme] < 3.4 && state.turn >= (r.issueEventCooldownTurn || 0)) {
+      r.issueEventCooldownTurn = state.turn + 8;
+      return buildRegionalProtestDossier(regionId, worstTheme);
+    }
+    var bestTheme = bestMetricOverall(regionId);
+    if (r.metrics[bestTheme] > 8.2 && state.turn >= (r.opportunityEventCooldownTurn || 0) && Math.random() < 0.6) {
+      r.opportunityEventCooldownTurn = state.turn + 10;
+      return buildRegionalOpportunityDossier(regionId, bestTheme);
+    }
+    // Nessuna condizione critica o eccellente in questo momento: routine amministrativa, ma puntata sul
+    // tema davvero più debole tra quelli "identitari" della regione, non su uno scelto a caso.
+    if (Math.random() < 0.35) return buildRegionalProposalDossier(regionId);
+    return buildRegionalInvestmentDossier(regionId, worstRegionTheme(regionId));
   }
   // A fine mandato (r.nextElectionTurn raggiunto), il presidente di regione in carica decide PRIMA se
   // ricandidarsi o lasciare il posto — speculare a buildRegionalCandidacyDossier, ma qui chi decide è già
@@ -4096,6 +4247,47 @@
       state.phase = "building";
       return;
     }
+    // Richiesto da un giocatore: un gradimento locale ai minimi deve avere conseguenze istituzionali vere
+    // (una mozione di sfiducia che può costringere a elezioni anticipate), non restare solo un numero
+    // basso senza alcun rischio reale — esattamente come il crollo del consenso di governo a livello
+    // nazionale (vedi consensoGoverno<20).
+    if (checkRegionalConfidenceCrisisTrigger(regionId)) {
+      state.aiDynamicDossier = buildRegionalConfidenceCrisisDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    // Varietà settimanale vera, non solo un singolo generatore di routine (richiesto con forza da un
+    // giocatore): emergenze di Protezione Civile, scandali in Giunta, pressioni di lobby e il rapporto
+    // con Roma hanno la priorità, ciascuno con il proprio raffreddamento — solo se nessuno di questi
+    // scatta questa settimana si ricade sulla routine amministrativa di buildRegionalGovernanceDossierFor.
+    if (checkRegionalEmergencyTrigger(regionId)) {
+      state.aiDynamicDossier = buildRegionalEmergencyDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    if (checkRegionalScandalTrigger(regionId)) {
+      state.aiDynamicDossier = buildRegionalScandalDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    if (checkRegionalNationalAlignmentTrigger(regionId)) {
+      var alignmentDossier = buildRegionalNationalAlignmentDossier(regionId);
+      if (alignmentDossier) {
+        state.aiDynamicDossier = alignmentDossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
+    }
+    if (checkRegionalLobbyTrigger(regionId)) {
+      state.aiDynamicDossier = buildRegionalLobbyDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
     // Le altre 19 regioni non si fermano certo perché il giocatore si occupa solo della propria: vivono
     // comunque la loro cronaca di sottofondo (nessun dossier dedicato, come fuori da questa modalità).
     ITALIAN_REGIONS.forEach(function (region) {
@@ -4106,34 +4298,463 @@
     state.currentDossierId = "ai_dynamic";
     state.phase = "building";
   }
-  // Cruscotto dedicato, al posto delle pagine di partito: anni di mandato, casse regionali, gradimento
-  // locale e la "scheda della regione" vera e propria — i temi tracciati (problemi e punti di forza
-  // reali, vedi ITALIAN_REGIONS/r.metrics), non la Scheda Paese nazionale. Deliberatamente NON mostra il
-  // bilancio/i pannelli nazionali di partito: in questa modalità il giocatore si occupa solo della
-  // regione, esattamente come richiesto.
-  function renderRegionalPresidencyPage() {
+  // ---------- Mozione di sfiducia regionale ----------
+  // Richiesto da un giocatore: un gradimento locale bassissimo deve poter davvero far cadere un
+  // presidente di regione, non restare solo un brutto numero senza conseguenze — speculare al crollo del
+  // consenso di governo nazionale (consensoGoverno<20 -> mandato esplorativo/elezioni).
+  function checkRegionalConfidenceCrisisTrigger(regionId) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.confidenceCrisisCooldownTurn || 0)) return false;
+    return (r.approvalLocal === undefined ? 50 : r.approvalLocal) < 18 && Math.random() < 0.5;
+  }
+  function buildRegionalConfidenceCrisisDossier(regionId) {
+    var r = state.regions[regionId];
+    r.confidenceCrisisCooldownTurn = state.turn + 20;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Mozione di Sfiducia — " + regionId,
+      cat: "Governo Regionale", title: "Il Consiglio Regionale vota una mozione di sfiducia",
+      brief: "Il gradimento verso il tuo governo regionale è ai minimi storici: le opposizioni in Consiglio Regionale presentano una mozione di sfiducia. Affronti il voto, sperando di reggere, o anticipi tu stesso le elezioni prima che la situazione peggiori ancora?",
+      regionalConfidenceCrisisId: regionId,
+      choices: [
+        { label: "Affronta il voto in Consiglio Regionale", hint: "Rischi di cadere comunque, se il gradimento resta troppo basso", regionalConfidenceChoice: "affronta", effects: {}, result: "Decidi di affrontare il voto di sfiducia in Consiglio Regionale." },
+        { label: "Anticipa tu stesso le elezioni regionali", hint: "Eviti l'onta della sfiducia, ma vai comunque al voto", regionalConfidenceChoice: "anticipa", effects: {}, result: "Decidi di anticipare tu stesso le elezioni regionali, prima del voto di sfiducia." }
+      ]
+    };
+  }
+  // ---------- Giunta Regionale: Assessori nominati dal presidente ----------
+  // Richiesto da un giocatore: non solo un numero di gradimento, anche una vera squadra di governo
+  // regionale — nominata alla presidenza (vedi enterRegionalPresidency) e rivedibile dalla scheda
+  // "Giunta Regionale".
+  var REGIONAL_ASSESSORATI = ["Sanità", "Bilancio", "Trasporti e Infrastrutture", "Ambiente e Territorio", "Lavoro e Sviluppo Economico", "Istruzione e Formazione"];
+  function generateRegionalGiunta() {
+    return REGIONAL_ASSESSORATI.map(function (a) { return { assessorato: a, name: generateStaffName(), loyalty: Math.round(rand(50, 80)) }; });
+  }
+  // ---------- Rapporto con il Governo nazionale ----------
+  // Richiesto da un giocatore: ciò che succede a Roma deve pesare davvero sulla regione — un governo
+  // nazionale ideologicamente vicino a chi governa la regione concede più margine, uno lontano può
+  // tagliare i trasferimenti o impugnare le leggi regionali davanti alla Corte Costituzionale.
+  function nationalRegionalAlignment(regionId) {
+    var govFamilyId = currentGoverningFamilyId();
+    var regionFamilyId = state.regions[regionId].governorFamilyId;
+    if (!govFamilyId || !regionFamilyId) return "neutro";
+    if (govFamilyId === regionFamilyId) return "allineato";
+    if (ideologicallyIncompatible(govFamilyId, regionFamilyId)) return "opposto";
+    return "neutro";
+  }
+  function checkRegionalNationalAlignmentTrigger(regionId) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.alignmentEventCooldownTurn || 0)) return false;
+    return Math.random() < 0.14;
+  }
+  function buildRegionalNationalAlignmentDossier(regionId) {
+    var r = state.regions[regionId];
+    r.alignmentEventCooldownTurn = state.turn + 12;
+    var alignment = nationalRegionalAlignment(regionId);
+    var govLabel = govEntityLabel();
+    if (alignment === "allineato") {
+      return {
+        id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Rapporti con Roma — " + regionId,
+        cat: "Governo Regionale", title: "Il Governo nazionale stanzia fondi aggiuntivi per " + regionId,
+        brief: govLabel + ", ideologicamente vicino al tuo governo regionale, stanzia fondi aggiuntivi per " + regionId + ": un'occasione da cogliere.",
+        regionalGovernanceId: regionId,
+        choices: [
+          { label: "Accetta i fondi e investili subito", hint: "Casse regionali rafforzate e gradimento in crescita", regionalApprovalDelta: rand(3, 6), effects: { fondiRegionaliBonus: Math.round(rand(2000, 4000)) }, result: "I fondi aggiuntivi da Roma vengono accettati e investiti subito: le casse regionali ne beneficiano." },
+          { label: "Accetta, ma con cautela sulla spesa", hint: "Effetto più contenuto, meno rischi", regionalApprovalDelta: rand(1, 3), effects: { fondiRegionaliBonus: Math.round(rand(1000, 2000)) }, result: "I fondi vengono accettati con cautela, senza impegnarli tutti subito." }
+        ]
+      };
+    }
+    if (alignment === "opposto") {
+      return {
+        id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Rapporti con Roma — " + regionId,
+        cat: "Governo Regionale", title: "Il Governo nazionale taglia i trasferimenti a " + regionId,
+        brief: govLabel + ", ideologicamente opposto al tuo governo regionale, taglia i trasferimenti a " + regionId + " e minaccia di impugnare una tua legge regionale davanti alla Corte Costituzionale. Come rispondi?",
+        regionalGovernanceId: regionId,
+        choices: [
+          { label: "Fai ricorso alla Corte Costituzionale", hint: "Battaglia legale lunga, ma difende l'autonomia regionale", regionalApprovalDelta: rand(3, 6), effects: { fondiRegionaliBonus: -Math.round(rand(800, 1500)), reputazione: rand(1, 3) }, result: "Il ricorso alla Consulta diventa un simbolo di resistenza all'ingerenza di Roma, pur senza risolvere subito il taglio ai fondi." },
+          { label: "Protesta pubblicamente, senza vie legali", hint: "Visibilità politica, nessun costo diretto", regionalApprovalDelta: rand(2, 4), effects: { fondiRegionaliBonus: -Math.round(rand(1000, 1800)) }, result: "La protesta pubblica contro il taglio ai trasferimenti trova eco sui media, ma i fondi restano tagliati." },
+          { label: "Accetta il taglio senza reagire", hint: "Nessuno scontro politico, ma le casse regionali ne risentono", regionalApprovalDelta: -rand(2, 5), effects: { fondiRegionaliBonus: -Math.round(rand(1500, 2500)) }, result: "Il taglio ai trasferimenti viene accettato senza reazioni pubbliche: le casse regionali ne risentono." }
+        ]
+      };
+    }
+    return null;
+  }
+  // ---------- Protezione Civile: emergenze regionali ----------
+  // Richiesto da un giocatore: anche un vero "effetto farfalla" leggero — tagliare ripetutamente la spesa
+  // sull'ambiente (vedi il contatore ambienteCutStreak, aggiornato nella risoluzione generica dei dossier
+  // di governo regionale) alza nel tempo il rischio reale di una emergenza ambientale seria.
+  var REGIONAL_EMERGENCY_KINDS = [
+    { label: "un'alluvione improvvisa", themeId: "ambiente" },
+    { label: "un incendio boschivo di vaste proporzioni", themeId: "ambiente" },
+    { label: "una scossa di terremoto di media intensità", themeId: "infrastrutture" },
+    { label: "una frana che isola alcune frazioni", themeId: "infrastrutture" }
+  ];
+  function checkRegionalEmergencyTrigger(regionId) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.emergencyCooldownTurn || 0)) return false;
+    var ambienteVal = r.metrics.ambiente === undefined ? 5 : r.metrics.ambiente;
+    var ambienteRisk = clamp((7 - ambienteVal) / 10, 0, 0.6);
+    var butterflyBonus = (r.ambienteCutStreak || 0) * 0.025;
+    return Math.random() < clamp(0.025 + ambienteRisk * 0.1 + butterflyBonus, 0.015, 0.3);
+  }
+  function buildRegionalEmergencyDossier(regionId) {
+    var r = state.regions[regionId];
+    r.emergencyCooldownTurn = state.turn + 14;
+    var kind = REGIONAL_EMERGENCY_KINDS[Math.floor(Math.random() * REGIONAL_EMERGENCY_KINDS.length)];
+    var cities = r.cities && r.cities.length ? r.cities : [{ name: regionId }];
+    var city = cities[Math.floor(Math.random() * cities.length)];
+    var severe = (r.ambienteCutStreak || 0) >= 3;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Protezione Civile — " + regionId,
+      cat: "Governo Regionale", title: "Emergenza: " + kind.label + " a " + city.name,
+      brief: (severe
+        ? "Anni di tagli alla spesa ambientale si fanno sentire: " + kind.label + " colpisce " + city.name + " con una violenza fuori dal comune. "
+        : kind.label.charAt(0).toUpperCase() + kind.label.slice(1) + " colpisce " + city.name + ". ") +
+        "La macchina della Protezione Civile regionale si attiva: come gestisci l'emergenza?",
+      regionalGovernanceId: regionId, regionalMetricThemeId: kind.themeId, regionalCityName: city.name,
+      choices: [
+        { label: "Dichiara lo stato di emergenza e mobilita tutte le risorse", hint: "Molto costoso, ma salva vite e reputazione", regionalApprovalDelta: rand(3, 7), regionalMetricDelta: rand(0.3, 0.6), regionalCityDelta: rand(5, 10), effects: { fondiRegionaliBonus: -Math.round(rand(1500, 2800)), reputazione: rand(2, 5) }, result: "La dichiarazione dello stato di emergenza mobilita tutte le risorse disponibili: una risposta che costa molto, ma salva vite a " + city.name + "." },
+        { label: "Risposta ordinaria, senza stato di emergenza", hint: "Più economico, ma la risposta è più lenta", regionalApprovalDelta: -rand(1, 3), regionalMetricDelta: -rand(0.1, 0.3), regionalCityDelta: -rand(3, 8), effects: { fondiRegionaliBonus: -Math.round(rand(500, 900)) }, result: "La risposta ordinaria, senza stato di emergenza, costa meno ma arriva più lenta a " + city.name + "." },
+        { label: "Richiedi l'intervento del Governo nazionale", hint: "Nessun costo per le casse regionali, ma dipendi da Roma", regionalApprovalDelta: rand(0, 2), regionalMetricDelta: 0, effects: {}, result: "L'intervento richiesto al Governo nazionale arriva, ma la gestione dell'emergenza passa in parte dalle mani della Regione." }
+      ]
+    };
+  }
+  // ---------- Scandalo in Giunta ----------
+  function checkRegionalScandalTrigger(regionId) {
+    var r = state.regions[regionId];
+    if (!r.giunta || !r.giunta.length) return false;
+    if (state.turn < (r.scandalCooldownTurn || 0)) return false;
+    return Math.random() < 0.07;
+  }
+  function buildRegionalScandalDossier(regionId) {
+    var r = state.regions[regionId];
+    r.scandalCooldownTurn = state.turn + 22;
+    var assessore = r.giunta[Math.floor(Math.random() * r.giunta.length)];
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Scandalo in Giunta — " + regionId,
+      cat: "Governo Regionale", title: "Indagine sull'Assessore " + assessore.assessorato,
+      brief: assessore.name + ", Assessore " + assessore.assessorato + " di " + regionId + ", è coinvolto/a in un'inchiesta della Magistratura per presunte irregolarità negli appalti regionali. Come reagisci?",
+      regionalGovernanceId: regionId, regionalGiuntaAssessorato: assessore.assessorato,
+      choices: [
+        { label: "Proteggi l'assessore e tieni la squadra unita", hint: "La giunta resta compatta, ma il danno d'immagine può aggravarsi se l'inchiesta va avanti", regionalApprovalDelta: -rand(5, 9), regionalScandalChoice: "protegge", effects: { national: { corruzione: -0.3 } }, result: "Decidi di proteggere " + assessore.name + ": la giunta resta compatta, ma l'opinione pubblica nota la scelta." },
+        { label: "Chiedi le dimissioni dell'assessore", hint: "Perdi l'assessore, ma limiti il danno d'immagine", regionalApprovalDelta: rand(1, 3), regionalScandalChoice: "dimissioni", effects: { reputazione: rand(1, 2) }, result: assessore.name + " lascia la Giunta: una scelta che limita il danno d'immagine, pur costando un volto esperto alla squadra di governo." },
+        { label: "Attendi l'esito dell'inchiesta senza muoverti", hint: "Via di mezzo: nessuno ne è pienamente satisfatto", regionalApprovalDelta: -rand(1, 3), regionalScandalChoice: "attesa", effects: {}, result: "L'attesa dell'esito dell'inchiesta, senza prese di posizione, non scontenta né convince nessuno." }
+      ]
+    };
+  }
+  // ---------- Pressioni delle lobby ----------
+  var REGIONAL_LOBBIES = [
+    { name: "la lobby dei costruttori", themeId: "infrastrutture", ask: "accelerare le autorizzazioni per nuovi cantieri edilizi" },
+    { name: "i sindacati del comparto sanitario", themeId: "sanita", ask: "nuove assunzioni di personale sanitario" },
+    { name: "le associazioni ambientaliste", themeId: "ambiente", ask: "bloccare un progetto a forte impatto ambientale" },
+    { name: "gli operatori turistici e balneari", themeId: "economia", ask: "una proroga sulle concessioni demaniali" },
+    { name: "le associazioni di categoria agricole", themeId: "agricoltura", ask: "nuovi aiuti alle aziende agricole in difficoltà" },
+    { name: "le associazioni dei trasportatori", themeId: "trasporti", ask: "sgravi sul costo dei pedaggi regionali" }
+  ];
+  function checkRegionalLobbyTrigger(regionId) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.lobbyCooldownTurn || 0)) return false;
+    return Math.random() < 0.16;
+  }
+  function buildRegionalLobbyDossier(regionId) {
+    var r = state.regions[regionId];
+    r.lobbyCooldownTurn = state.turn + 10;
+    var lobby = REGIONAL_LOBBIES[Math.floor(Math.random() * REGIONAL_LOBBIES.length)];
+    var favorSign = lobby.themeId === "ambiente" ? -1 : 1;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Pressione di Lobby — " + regionId,
+      cat: "Governo Regionale", title: lobby.name.charAt(0).toUpperCase() + lobby.name.slice(1) + " chiede di " + lobby.ask,
+      brief: lobby.name.charAt(0).toUpperCase() + lobby.name.slice(1) + " chiede alla Regione di " + lobby.ask + ", in cambio del proprio sostegno elettorale. Come rispondi?",
+      regionalGovernanceId: regionId, regionalMetricThemeId: lobby.themeId,
+      choices: [
+        { label: "Accetta la richiesta", hint: "Consenso presso quel gruppo, ma rischio di critiche per favoritismo", regionalApprovalDelta: rand(2, 4), regionalMetricDelta: rand(0.2, 0.5) * favorSign, effects: { reputazione: -rand(0.5, 1.5) }, result: "La richiesta di " + lobby.name + " viene accolta: consenso immediato presso quel gruppo, qualche critica sulla stampa." },
+        { label: "Rifiuta la richiesta", hint: "Mantieni la linea, ma perdi quel sostegno", regionalApprovalDelta: -rand(1, 3), effects: { reputazione: rand(0.5, 1.5) }, result: "La richiesta di " + lobby.name + " viene respinta: una linea coerente, che però costa quel sostegno." },
+        { label: "Proponi un compromesso", hint: "Nessuno è pienamente satisfatto, effetto misto", regionalApprovalDelta: rand(0, 2), regionalMetricDelta: rand(0, 0.2) * favorSign, effects: {}, result: "Il compromesso proposto a " + lobby.name + " non entusiasma nessuno, ma evita una rottura netta." }
+      ]
+    };
+  }
+  // ---------- Dimissioni volontarie dalla presidenza di regione ----------
+  // Richiesto da un giocatore: deve esistere un vero tasto per dimettersi in qualunque momento, non solo
+  // la scelta a fine mandato (vedi buildRegionalReelectionChoiceDossier) — un costo politico reale, ma
+  // sempre disponibile, esattamente come ci si aspetterebbe da una vera carica istituzionale.
+  function resignFromRegionalPresidencyNow() {
+    var rp = state.regionalPresidency;
+    if (!rp) return;
+    var regionId = rp.regionId;
+    var r = state.regions[regionId];
+    r.playerIsGovernor = false;
+    var delegate = generateRegionalDelegate(regionId);
+    r.regionalLeaderName = delegate.name; r.regionalLeaderSource = delegate.source; r.regionalLeaderTraits = delegate.traits; r.regionalLeaderSkill = delegate.skill;
+    r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) - 8, 0, 100);
+    exitRegionalPresidency("hai scelto di dimetterti volontariamente dalla presidenza della " + regionId + " prima della fine del mandato, lasciando il testimone a " + delegate.name + " (" + delegate.source + ")");
+  }
+  // ---------- Navigazione a più schede della Modalità Presidente di Regione ----------
+  // Richiesto con forza da un giocatore: non una sola schermata piatta, ma vere sezioni navigabili come
+  // nella modalità normale (vedi PAGE_DEFS/renderPageNav) — Scheda, Giunta, Leggi, Mozioni, Città,
+  // Notizie e Politica Nazionale (per restare informati su cosa succede a Roma mentre si governa la
+  // regione, richiesto esplicitamente).
+  var REGIONAL_PAGE_DEFS = [
+    { id: "scheda", label: "Scheda della Regione", icon: "📊", nav: "Scheda", render: function () { return renderRegionalSchedaPage(); } },
+    { id: "giunta", label: "Giunta Regionale", icon: "👥", nav: "Giunta", render: function () { return renderRegionalGiuntaPage(); } },
+    { id: "leggi", label: "Leggi Regionali", icon: "⚖️", nav: "Leggi", render: function () { return renderRegionalLeggiPage(); } },
+    { id: "mozioni", label: "Mozioni Regionali", icon: "📜", nav: "Mozioni", render: function () { return renderRegionalMozioniPage(); } },
+    { id: "citta", label: "Città della Regione", icon: "🏙️", nav: "Città", render: function () { return renderRegionalCittaPage(); } },
+    { id: "notizie", label: "Notizie Regionali", icon: "📰", nav: "Notizie", render: function () { return renderRegionalNotiziePage(); } },
+    { id: "nazionale", label: "Politica Nazionale", icon: "🏛️", nav: "Italia", render: function () { return renderRegionalNationalWatchPage(); } }
+  ];
+  function activeRegionalPageDef() {
+    var current = state.regionalUiPage || REGIONAL_PAGE_DEFS[0].id;
+    return REGIONAL_PAGE_DEFS.filter(function (pg) { return pg.id === current; })[0] || REGIONAL_PAGE_DEFS[0];
+  }
+  function renderRegionalPageNav() {
+    var current = activeRegionalPageDef().id;
+    var items = REGIONAL_PAGE_DEFS.map(function (pg) {
+      return '<button type="button" class="page-nav-btn' + (pg.id === current ? " active" : "") + '" data-regional-nav-page="' + pg.id + '" title="' + pg.label.replace(/"/g, "&quot;") + '">' +
+        '<span class="page-nav-icon">' + pg.icon + '</span><span class="page-nav-label">' + pg.nav + '</span></button>';
+    }).join("");
+    return '<nav aria-label="Sezioni della Regione" class="page-nav-bar">' + items + "</nav>";
+  }
+  function bindRegionalPageNavDrawer() {
+    app.querySelectorAll("[data-regional-nav-page]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.regionalUiPage = btn.getAttribute("data-regional-nav-page");
+        save();
+        render();
+      });
+    });
+  }
+  // ---------- Pagina: Scheda della Regione ----------
+  function renderRegionalSchedaPage() {
+    // Difensivo: garantisce che r.metrics abbia sempre tutti e 20 i temi (vedi ensureRegionsInit), così
+    // la scheda non va mai in crash su un salvataggio in qualunque stato intermedio.
+    ensureRegionsInit();
     var rp = state.regionalPresidency;
     var regionId = rp.regionId;
     var region = regionById(regionId);
     var r = state.regions[regionId];
     var years = Math.round((state.turn - rp.electedTurn) / 52 * 10) / 10;
     var weeksLeft = Math.max(0, r.nextElectionTurn - state.turn);
+    var alignment = nationalRegionalAlignment(regionId);
+    var alignmentLabel = alignment === "allineato" ? "Allineata al Governo nazionale" : alignment === "opposto" ? "In rotta con il Governo nazionale" : "Nessuna particolare sintonia con Roma";
     var html = '<section aria-label="La tua presidenza regionale"><p class="eyebrow">Presidente della Regione ' + regionId + '</p><div class="stat-grid">';
     html += '<div class="stat-tile"><div class="label">Anni di mandato</div><div class="row"><span class="value">' + years + "</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Settimane alla prossima elezione regionale</div><div class="row"><span class="value">' + weeksLeft + "</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Gradimento locale</div><div class="row"><span class="value">' + Math.round(r.approvalLocal === undefined ? 50 : r.approvalLocal) + "%</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Casse della regione</div><div class="row"><span class="value">' + fmtEuro(Math.round(r.fondiRegionali || 0)) + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Rapporti con Roma</div><div class="row"><span class="value" style="font-size:0.95rem">' + alignmentLabel + "</span></div></div>";
     html += "</div>" +
       '<p class="ci-hint" style="margin-top:0.6rem">Hai lasciato la guida nazionale di ' + rp.formerPartyName + " a " + (state.player.interimLeaderName || "un dirigente di fiducia") +
-      ": da qui in avanti ti occupi solo del governo di " + regionId + ", non più della politica nazionale, finché non finirà questo mandato.</p></section>";
-    html += '<section aria-label="Scheda della Regione"><p class="eyebrow">Scheda della Regione — ' + regionId + '</p><div class="stat-grid">';
-    regionTrackedThemes(region).forEach(function (themeId) {
+      ": da qui in avanti ti occupi solo del governo di " + regionId + ", non più della politica nazionale, finché non finirà questo mandato.</p>" +
+      '<button type="button" class="staff-btn fire" id="regional-resign-btn" style="margin-top:0.6rem">Dimettiti dalla presidenza della Regione</button>' +
+      '</section>';
+    html += '<section aria-label="Scheda della Regione"><p class="eyebrow">Scheda della Regione — ' + regionId + '</p>' +
+      '<p class="ci-hint">Tutti gli indicatori reali della regione, da 1 (pessimo) a 10 (ottimo): i 2 problemi e i 2 punti di forza identitari di ' + regionId + ' restano agli estremi, gli altri cambiano più lentamente ma non restano mai fermi.</p>';
+    var allIds = regionAllThemeIds().slice().sort(function (a, b) { return r.metrics[a] - r.metrics[b]; });
+    html += '<div class="stat-grid">' + allIds.map(function (themeId) {
       var theme = SITUATION_THEME_BY_ID[themeId];
-      var isStrength = region.strengths.indexOf(themeId) !== -1;
-      html += '<div class="stat-tile"><div class="label">' + theme.label.replace("Politica — ", "") + (isStrength ? " (punto di forza)" : " (nodo critico)") + '</div><div class="row"><span class="value">' + fmt1(r.metrics[themeId]) + " / 10</span></div></div>";
-    });
-    html += "</div></section>";
+      var isIssue = region.issues.indexOf(themeId) !== -1, isStrength = region.strengths.indexOf(themeId) !== -1;
+      var tag = isIssue ? " (nodo critico)" : isStrength ? " (punto di forza)" : "";
+      return '<div class="stat-tile"><div class="label">' + theme.label.replace("Politica — ", "") + tag + '</div><div class="row"><span class="value">' + fmt1(r.metrics[themeId]) + " / 10</span></div></div>";
+    }).join("") + "</div></section>";
     return html;
+  }
+  // ---------- Pagina: Giunta Regionale ----------
+  function renderRegionalGiuntaPage() {
+    var regionId = state.regionalPresidency.regionId;
+    var r = state.regions[regionId];
+    if (!r.giunta || !r.giunta.length) r.giunta = generateRegionalGiunta();
+    var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
+    var html = '<section aria-label="Giunta Regionale"><p class="eyebrow">Giunta Regionale — ' + regionId + '</p>' +
+      '<p class="ci-hint">La tua squadra di governo regionale: ogni assessore porta con sé una fedeltà (0-100%) che ne riflette il rapporto con te. Puoi revocare e nominarne uno nuovo, con un piccolo costo politico.</p>';
+    r.giunta.forEach(function (a) {
+      html += '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + a.name + '</strong><span class="chip">' + a.assessorato + '</span></div>' +
+        '<div class="party-row-sub">Fedeltà: ' + Math.round(a.loyalty) + '%</div>' +
+        '<button type="button" class="staff-btn fire" data-regional-assessore-revoke="' + a.assessorato + '"' + (onCooldown ? " disabled" : "") + '>Revoca e nomina un nuovo assessore</button>' +
+        "</div></div>";
+    });
+    html += "</section>";
+    return html;
+  }
+  // ---------- Pagina: Leggi Regionali ----------
+  function renderRegionalLeggiPage() {
+    var regionId = state.regionalPresidency.regionId;
+    var r = state.regions[regionId];
+    var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
+    var html = '<section aria-label="Leggi Regionali"><p class="eyebrow">Leggi Regionali — ' + regionId + '</p>';
+    if (r.pendingRegionalLaw) {
+      html += '<p class="ci-hint">In discussione al Consiglio Regionale: <strong>' + r.pendingRegionalLaw.noun + '</strong> (esito atteso entro la settimana ' + r.pendingRegionalLaw.resolveTurn + ').</p>';
+    } else {
+      html += '<p class="ci-hint">Proponi una vera legge regionale su un tema specifico: il Consiglio Regionale discute per alcune settimane, con un effetto forte se passa, un costo in credibilità se cade.' +
+        (onCooldown ? " Hai già agito di recente: la prossima azione sarà possibile dalla settimana " + r.regionalActionCooldownTurn + "." : "") + '</p><div class="option-grid">';
+      SITUATION_THEMES.forEach(function (t) {
+        html += '<button type="button" class="option-card" data-regional-law-theme="' + t.id + '"' + (onCooldown ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+      });
+      html += "</div>";
+    }
+    if (r.lawsHistory && r.lawsHistory.length) {
+      html += '<p class="eyebrow" style="margin-top:0.8rem">Storico leggi regionali</p><ul class="enacted-policy-list">' +
+        r.lawsHistory.slice(0, 15).map(function (l) {
+          return '<li><strong>' + l.noun + '</strong> <span class="ci-hint">(settimana ' + l.week + ')</span> ' + (l.outcome === "passed" ? '<span class="chip good">Approvata</span>' : '<span class="chip">Bocciata</span>') + "</li>";
+        }).join("") + "</ul>";
+    }
+    html += "</section>";
+    return html;
+  }
+  // ---------- Pagina: Mozioni Regionali ----------
+  function renderRegionalMozioniPage() {
+    var regionId = state.regionalPresidency.regionId;
+    var r = state.regions[regionId];
+    var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
+    var html = '<section aria-label="Mozioni Regionali"><p class="eyebrow">Mozioni Regionali — ' + regionId + '</p>' +
+      '<p class="ci-hint">Una mozione simbolica è rapida e quasi certa, ma con un effetto limitato sul tema scelto.' + (onCooldown ? " Hai già agito di recente." : "") + '</p><div class="option-grid">';
+    SITUATION_THEMES.forEach(function (t) {
+      html += '<button type="button" class="option-card" data-regional-motion-theme="' + t.id + '"' + (onCooldown ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+    });
+    html += "</div>";
+    if (r.motionsHistory && r.motionsHistory.length) {
+      html += '<p class="eyebrow" style="margin-top:0.8rem">Storico mozioni</p><ul class="enacted-policy-list">' +
+        r.motionsHistory.slice(0, 15).map(function (m) { return '<li><strong>' + m.noun + '</strong> <span class="ci-hint">(settimana ' + m.week + ')</span></li>'; }).join("") + "</ul>";
+    }
+    html += "</section>";
+    return html;
+  }
+  // ---------- Pagina: Città della Regione ----------
+  function renderRegionalCittaPage() {
+    var regionId = state.regionalPresidency.regionId;
+    var r = state.regions[regionId];
+    var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
+    var html = '<section aria-label="Città della Regione"><p class="eyebrow">Città della Regione — ' + regionId + '</p>';
+    (r.cities || []).forEach(function (c) {
+      var theme = SITUATION_THEME_BY_ID[c.focusThemeId];
+      html += '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + c.name + '</strong></div>' +
+        '<div class="party-row-sub">Soddisfazione: ' + Math.round(c.satisfaction) + '% — tema caldo: ' + theme.label.replace("Politica — ", "") + '</div>' +
+        '<div class="gauge" style="margin:0.3rem 0"><span style="width:' + Math.round(c.satisfaction) + '%;background:var(--accent)"></span></div>' +
+        '<button type="button" class="staff-btn hire" data-regional-city-visit="' + c.name + '"' + (onCooldown ? " disabled" : "") + '>Visita ' + c.name + " (investimento mirato)</button>" +
+        "</div></div>";
+    });
+    html += "</section>";
+    return html;
+  }
+  // ---------- Pagina: Notizie Regionali ----------
+  function renderRegionalNotiziePage() {
+    var regionId = state.regionalPresidency.regionId;
+    var r = state.regions[regionId];
+    var html = '<section aria-label="Notizie Regionali"><p class="eyebrow">Notizie Regionali — ' + regionId + '</p>';
+    if (!r.newsLog || !r.newsLog.length) html += '<p class="ci-hint">Nessuna notizia regionale ancora.</p>';
+    else html += '<ul class="enacted-policy-list">' + r.newsLog.map(function (n) { return '<li><span class="ci-hint">Settimana ' + n.week + '</span><br>' + n.text + "</li>"; }).join("") + "</ul>";
+    html += "</section>";
+    return html;
+  }
+  // ---------- Pagina: Politica Nazionale (solo consultazione) ----------
+  // Richiesto esplicitamente da un giocatore: anche da presidente di regione, deve restare possibile
+  // vedere cosa succede a livello nazionale (è il partito del giocatore, solo guidato ad interim) — in
+  // sola lettura, nessuna azione possibile: quel ruolo, per il giocatore, non esiste più finché dura il
+  // mandato regionale.
+  function renderRegionalNationalWatchPage() {
+    var p = state.player;
+    var rp = state.regionalPresidency;
+    var govLabel = govEntityLabel();
+    var html = '<section aria-label="Politica Nazionale"><p class="eyebrow">Politica Nazionale — solo in osservazione</p>' +
+      '<p class="ci-hint">' + (p.interimLeaderName || "Un dirigente di fiducia") + " guida " + rp.formerPartyName + " a livello nazionale mentre tu governi " + rp.regionId + ": puoi seguire cosa succede a Roma, ma non puoi più intervenire.</p><div class=\"stat-grid\">";
+    html += '<div class="stat-tile"><div class="label">Governo in carica</div><div class="row"><span class="value" style="font-size:0.95rem">' + govLabel + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Sondaggi di ' + rp.formerPartyName + '</div><div class="row"><span class="value">' + fmt1(p.sondaggi) + "%</span></div></div>";
+    if (p.inParliament) {
+      html += '<div class="stat-tile"><div class="label">Seggi in Parlamento</div><div class="row"><span class="value">' + (p.seatsCamera || 0) + " Camera / " + (p.seatsSenato || 0) + " Senato</span></div></div>";
+      html += '<div class="stat-tile"><div class="label">Ruolo in Parlamento</div><div class="row"><span class="value" style="font-size:0.95rem">' + (p.parliamentRole === "governo" ? "Al governo" : "All'opposizione") + "</span></div></div>";
+    }
+    html += '<div class="stat-tile"><div class="label">Deficit/PIL</div><div class="row"><span class="value">' + fmt1(state.deficitPil) + "%</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Debito/PIL</div><div class="row"><span class="value">' + fmt1(state.debitoPil) + "%</span></div></div>";
+    html += "</div>";
+    var recentNews = (state.worldNews || []).slice(0, 6);
+    if (recentNews.length) {
+      html += '<p class="eyebrow" style="margin-top:0.8rem">Ultime notizie nazionali</p><ul class="enacted-policy-list">' +
+        recentNews.map(function (n) { return "<li><strong>" + n.cat + "</strong><br>" + n.text + "</li>"; }).join("") + "</ul>";
+    }
+    html += "</section>";
+    return html;
+  }
+  // ---------- Pulsanti ad azione diretta della Modalità Presidente di Regione ----------
+  // Richiesto da un giocatore: oltre al dossier della settimana, le schede di Leggi/Mozioni/Città/Giunta
+  // devono permettere azioni VERE in ogni momento (con un raffreddamento comune, r.regionalActionCooldownTurn,
+  // perché non si può fare tutto insieme ogni settimana) — non solo reagire a quello che propone il gioco.
+  function bindRegionalActionButtons() {
+    var rp = state.regionalPresidency;
+    if (!rp) return;
+    var regionId = rp.regionId;
+    var resignBtn = document.getElementById("regional-resign-btn");
+    if (resignBtn) {
+      resignBtn.addEventListener("click", function () {
+        if (!window.confirm("Sei sicuro/a di volerti dimettere dalla presidenza della " + regionId + "? Il partito affiderà la regione a un esponente locale, e tornerai subito alla guida nazionale.")) return;
+        resignFromRegionalPresidencyNow();
+        state.phase = "result";
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-regional-law-theme]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (state.turn < (r.regionalActionCooldownTurn || 0) || r.pendingRegionalLaw) return;
+        var themeId = btn.getAttribute("data-regional-law-theme");
+        var theme = SITUATION_THEME_BY_ID[themeId];
+        var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+        r.pendingRegionalLaw = { themeId: themeId, noun: noun, resolveTurn: state.turn + 4 + Math.floor(Math.random() * 4) };
+        r.regionalActionCooldownTurn = state.turn + 3;
+        addRegionalNews(regionId, "Depositata una proposta di legge regionale su " + noun + ": il Consiglio Regionale ne discuterà nelle prossime settimane.");
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-regional-motion-theme]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
+        var themeId = btn.getAttribute("data-regional-motion-theme");
+        var theme = SITUATION_THEME_BY_ID[themeId];
+        var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+        r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
+        if (r.metrics[themeId] !== undefined) r.metrics[themeId] = clamp(r.metrics[themeId] + rand(0.2, 0.4), 1, 10);
+        r.regionalActionCooldownTurn = state.turn + 3;
+        if (!r.motionsHistory) r.motionsHistory = [];
+        r.motionsHistory.unshift({ week: state.turn, themeId: themeId, noun: noun });
+        if (r.motionsHistory.length > 30) r.motionsHistory.length = 30;
+        addRegionalNews(regionId, "Il Consiglio Regionale approva una mozione simbolica su " + noun + ".");
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-regional-city-visit]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
+        var cityName = btn.getAttribute("data-regional-city-visit");
+        var city = (r.cities || []).filter(function (c) { return c.name === cityName; })[0];
+        if (!city) return;
+        var cost = rand(400, 700);
+        if ((r.fondiRegionali || 0) < cost) return;
+        r.fondiRegionali = Math.max(0, (r.fondiRegionali || 0) - cost);
+        city.satisfaction = clamp(city.satisfaction + rand(8, 14), 0, 100);
+        if (r.metrics[city.focusThemeId] !== undefined) r.metrics[city.focusThemeId] = clamp(r.metrics[city.focusThemeId] + rand(0.2, 0.4), 1, 10);
+        r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(1, 3), 0, 100);
+        r.regionalActionCooldownTurn = state.turn + 3;
+        addRegionalNews(regionId, "Una visita istituzionale a " + cityName + " porta un investimento mirato su " + SITUATION_THEME_BY_ID[city.focusThemeId].label.replace("Politica — ", "").toLowerCase() + ".");
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-regional-assessore-revoke]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
+        var assessorato = btn.getAttribute("data-regional-assessore-revoke");
+        if (!window.confirm("Revocare l'assessore " + assessorato + " e nominarne uno nuovo?")) return;
+        var idx = (r.giunta || []).findIndex(function (a) { return a.assessorato === assessorato; });
+        if (idx !== -1) r.giunta[idx] = { assessorato: assessorato, name: generateStaffName(), loyalty: Math.round(rand(55, 80)) };
+        r.regionalActionCooldownTurn = state.turn + 3;
+        addRegionalNews(regionId, "Rimpasto in Giunta: nuovo assessore " + assessorato + ".");
+        save();
+        render();
+      });
+    });
   }
 
   // ---------- Apertura mirata di sezioni locali, con coalizioni civiche locali ----------
@@ -23606,10 +24227,11 @@
       body += '<div id="page-content-anchor"></div>';
       body += renderPresidentModePage();
     } else if (state.mode === "regional_president") {
-      // Speculare alla Modalità Presidente: niente barra di navigazione né pannelli di partito, solo il
-      // dossier della settimana (sempre sulla regione, vedi advanceRegionalPresidentTurnLogic) e il
-      // cruscotto dedicato al mandato regionale in corso.
-      body = "";
+      // Speculare alla Modalità Presidente, ma con una vera barra di navigazione a più schede (richiesto
+      // con forza da un giocatore: non un unico cruscotto piatto, vedi REGIONAL_PAGE_DEFS) — nessun
+      // pannello di PARTITO (mozioni/leggi/primarie nazionali), solo il dossier della settimana sempre
+      // sulla regione e le sezioni dedicate al mandato regionale in corso.
+      body = renderRegionalPageNav();
       if (state.phase === "building") {
         var regPresDossier = currentDossier();
         if (!regPresDossier) { advanceRegionalPresidentTurnLogic(); regPresDossier = currentDossier(); }
@@ -23619,7 +24241,7 @@
         body += renderHeadlines(state.resultData.headlines);
       }
       body += '<div id="page-content-anchor"></div>';
-      body += renderRegionalPresidencyPage();
+      body += activeRegionalPageDef().render();
     } else {
       body = renderPageNav();
       if (state.phase === "building") {
@@ -24171,27 +24793,90 @@
           lawRegion.pendingRegionalLaw = { themeId: choice.regionalLawThemeId, noun: choice.regionalLawNoun, resolveTurn: state.turn + 4 + Math.floor(Math.random() * 4) };
         }
         state.resultData = applyChoice(dossier, choice);
-      } else if (dossier.regionalGovernanceId && (choice.regionalApprovalDelta !== undefined || choice.regionalMetricDelta !== undefined)) {
+      } else if (dossier.regionalGovernanceId && !choice.regionalScandalChoice && (choice.regionalApprovalDelta !== undefined || choice.regionalMetricDelta !== undefined || choice.regionalCityDelta !== undefined)) {
         var govRegion = state.regions && state.regions[dossier.regionalGovernanceId];
         if (govRegion) {
           if (choice.regionalApprovalDelta) govRegion.approvalLocal = clamp((govRegion.approvalLocal === undefined ? 50 : govRegion.approvalLocal) + choice.regionalApprovalDelta, 0, 100);
           if (choice.regionalMetricDelta && dossier.regionalMetricThemeId && govRegion.metrics && govRegion.metrics[dossier.regionalMetricThemeId] !== undefined) {
             govRegion.metrics[dossier.regionalMetricThemeId] = clamp(govRegion.metrics[dossier.regionalMetricThemeId] + choice.regionalMetricDelta, 1, 10);
+            // Effetto farfalla leggero (richiesto da un giocatore): tagliare ripetutamente sull'ambiente
+            // alza nel tempo il rischio reale di un'emergenza seria, vedi checkRegionalEmergencyTrigger.
+            // Investire o migliorare il tema, invece, allenta la tensione accumulata.
+            if (dossier.regionalMetricThemeId === "ambiente") {
+              govRegion.ambienteCutStreak = choice.regionalMetricDelta < 0 ? (govRegion.ambienteCutStreak || 0) + 1 : Math.max(0, (govRegion.ambienteCutStreak || 0) - 1);
+            }
           }
+          // Una crisi legata a una città specifica (vedi buildCityCrisisDossier) sposta la soddisfazione
+          // di QUELLA città, non solo il gradimento regionale complessivo.
+          if (choice.regionalCityDelta !== undefined && dossier.regionalCityName && govRegion.cities) {
+            var cityHit = govRegion.cities.filter(function (c) { return c.name === dossier.regionalCityName; })[0];
+            if (cityHit) cityHit.satisfaction = clamp(cityHit.satisfaction + choice.regionalCityDelta, 0, 100);
+          }
+          if (govRegion.playerIsGovernor) addRegionalNews(dossier.regionalGovernanceId, choice.result);
         }
         // Richiesto da un giocatore: in "Modalità Presidente di Regione" il costo/ricavo di una scelta di
         // governo regionale deve pesare sulle CASSE DELLA REGIONE (r.fondiRegionali), non sui fondi del
         // partito a livello nazionale — due portafogli distinti, proprio come nella realtà. Il resto degli
-        // effetti (reputazione, Scheda Paese...) passa comunque per applyChoice come sempre.
+        // effetti (reputazione, Scheda Paese...) passa comunque per applyChoice come sempre. fondiRegionaliBonus
+        // (usato da emergenze/rapporti con Roma) è una leva diretta sulle casse regionali, già in valuta
+        // assoluta — non passa per lo style-mult di applyChoice come farebbe un fondi di partito.
+        if (govRegion && choice.effects && choice.effects.fondiRegionaliBonus !== undefined) {
+          if (govRegion.fondiRegionali === undefined || govRegion.fondiRegionali === null) govRegion.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
+          govRegion.fondiRegionali = Math.max(0, govRegion.fondiRegionali + choice.effects.fondiRegionaliBonus);
+        }
         if (govRegion && govRegion.playerIsGovernor && choice.effects && choice.effects.fondi) {
           if (govRegion.fondiRegionali === undefined || govRegion.fondiRegionali === null) govRegion.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
           govRegion.fondiRegionali = Math.max(0, govRegion.fondiRegionali + choice.effects.fondi);
           var regionalEffects = {};
-          Object.keys(choice.effects).forEach(function (k) { if (k !== "fondi") regionalEffects[k] = choice.effects[k]; });
+          Object.keys(choice.effects).forEach(function (k) { if (k !== "fondi" && k !== "fondiRegionaliBonus") regionalEffects[k] = choice.effects[k]; });
           state.resultData = applyChoice(dossier, { label: choice.label, hint: choice.hint, result: choice.result, effects: regionalEffects });
+        } else if (choice.effects && choice.effects.fondiRegionaliBonus !== undefined) {
+          var regionalEffects2 = {};
+          Object.keys(choice.effects).forEach(function (k) { if (k !== "fondiRegionaliBonus") regionalEffects2[k] = choice.effects[k]; });
+          state.resultData = applyChoice(dossier, { label: choice.label, hint: choice.hint, result: choice.result, effects: regionalEffects2 });
         } else {
           state.resultData = applyChoice(dossier, choice);
         }
+      } else if (dossier.regionalConfidenceCrisisId && choice.regionalConfidenceChoice) {
+        // Mozione di sfiducia regionale: "affronta" rischia davvero la caduta (probabilità legata al
+        // gradimento locale, speculare al crollo del consenso di governo nazionale), "anticipa" porta
+        // comunque al voto ma con un costo reputazionale minore. In entrambi i casi, impostare
+        // nextElectionTurn = ora riusa l'intero ciclo elettorale già esistente (vedi
+        // advanceRegionalPresidentTurnLogic/buildRegionalReelectionChoiceDossier) invece di duplicarlo.
+        var crisisRegionId = dossier.regionalConfidenceCrisisId;
+        var crisisRegion = state.regions[crisisRegionId];
+        if (choice.regionalConfidenceChoice === "affronta") {
+          var surviveChance = clamp((crisisRegion.approvalLocal === undefined ? 50 : crisisRegion.approvalLocal) / 100 * 2.2, 0.08, 0.7);
+          var survived = Math.random() < surviveChance;
+          if (survived) {
+            crisisRegion.approvalLocal = clamp(crisisRegion.approvalLocal + rand(3, 6), 0, 100);
+            addRegionalNews(crisisRegionId, "Il presidente regge il voto di sfiducia in Consiglio Regionale: una vittoria di Pirro, ma il mandato continua.");
+            state.resultData = { resultText: "Il voto di sfiducia in Consiglio Regionale si chiude a tuo favore, per un pugno di voti: il mandato continua, ma la tensione politica resta altissima.", headlines: [] };
+          } else {
+            crisisRegion.nextElectionTurn = state.turn;
+            addRegionalNews(crisisRegionId, "Il Consiglio Regionale approva la mozione di sfiducia: si torna al voto anticipato.");
+            state.resultData = { resultText: "Il Consiglio Regionale approva la mozione di sfiducia: il tuo mandato cade, e si torna al voto regionale anticipato.", headlines: [] };
+          }
+        } else {
+          crisisRegion.nextElectionTurn = state.turn;
+          crisisRegion.approvalLocal = clamp((crisisRegion.approvalLocal === undefined ? 50 : crisisRegion.approvalLocal) - 2, 0, 100);
+          addRegionalNews(crisisRegionId, "Il presidente anticipa le elezioni regionali, prima del voto di sfiducia in Consiglio.");
+          state.resultData = { resultText: "Decidi di anticipare tu stesso le elezioni regionali, prima che il Consiglio voti la sfiducia: un gesto che eviti l'onta del voto perso, ma che porta comunque al voto anticipato.", headlines: [] };
+        }
+      } else if (dossier.regionalGiuntaAssessorato && choice.regionalScandalChoice) {
+        var scandalRegion = state.regions[dossier.regionalGovernanceId];
+        if (scandalRegion && scandalRegion.giunta) {
+          if (choice.regionalScandalChoice === "dimissioni") {
+            var idx = scandalRegion.giunta.findIndex(function (a) { return a.assessorato === dossier.regionalGiuntaAssessorato; });
+            if (idx !== -1) scandalRegion.giunta[idx] = { assessorato: dossier.regionalGiuntaAssessorato, name: generateStaffName(), loyalty: Math.round(rand(55, 80)) };
+          } else if (choice.regionalScandalChoice === "protegge") {
+            var protected_ = scandalRegion.giunta.filter(function (a) { return a.assessorato === dossier.regionalGiuntaAssessorato; })[0];
+            if (protected_) protected_.loyalty = clamp(protected_.loyalty + 15, 0, 100);
+          }
+          if (choice.regionalApprovalDelta) scandalRegion.approvalLocal = clamp((scandalRegion.approvalLocal === undefined ? 50 : scandalRegion.approvalLocal) + choice.regionalApprovalDelta, 0, 100);
+          addRegionalNews(dossier.regionalGovernanceId, choice.result);
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "trial_open") {
         var p = state.player;
         if (choice.trialStrategy) {
@@ -24504,6 +25189,8 @@
 
   function bindInteractions() {
     bindPageNavDrawer(null);
+    bindRegionalPageNavDrawer();
+    bindRegionalActionButtons();
     var explorationHintDismissBtn = document.getElementById("exploration-hint-dismiss-btn");
     if (explorationHintDismissBtn) {
       explorationHintDismissBtn.addEventListener("click", function () {
