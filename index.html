@@ -3451,6 +3451,27 @@
       choices: choices
     };
   }
+  // Richiesto da un giocatore: l'incompatibilità vale in ENTRAMBE le direzioni — non ci si può candidare
+  // di persona a una regione se già al governo nazionale (vedi canPlayerRunForRegion), e specularmente
+  // chi governa già una regione di persona deve dimettersi da lì se viene eletto al governo nazionale (o
+  // sale al Colle). La regione non resta vacante: un esponente di partito generato prende il posto del
+  // giocatore, esattamente come nella delega volontaria (stesso regionalLeaderName, stesso
+  // playerIsGovernor=false) — il partito la mantiene, il giocatore no. Chiamata da resolveElection (nuovo
+  // governo nazionale), dalla riuscita di un mandato esplorativo con sostegno, e da beginPlayerPresidency.
+  function resignPlayerFromGovernedRegions(reasonText) {
+    if (!state.regions) return;
+    Object.keys(state.regions).forEach(function (id) {
+      var r = state.regions[id];
+      if (!r.playerIsGovernor) return;
+      r.playerIsGovernor = false;
+      r.regionalLeaderName = generateStaffName();
+      var text = "Incompatibilità tra le due cariche: " + reasonText + ", e le dimissioni dalla presidenza della " + id + " sono immediate. " + r.regionalLeaderName + " prende il posto del giocatore alla guida della regione, per conto del partito.";
+      state.log.unshift({ week: state.turn, title: "Dimissioni dalla presidenza della " + id, choiceLabel: id, result: text, headlines: [], type: "locale", cat: "Elezioni Regionali" });
+      if (!state.worldNews) state.worldNews = [];
+      state.worldNews.unshift({ cat: "Elezioni Regionali", text: text });
+    });
+    if (state.worldNews && state.worldNews.length > 6) state.worldNews.length = 6;
+  }
   // La versione che coinvolge davvero il giocatore: scatta solo per una regione dove ha almeno una
   // sezione aperta. A differenza della cronaca di sottofondo, qui l'esito diventa il dossier della
   // settimana — il giocatore può anche conquistare la presidenza della regione, non solo qualche
@@ -12602,6 +12623,7 @@
     var yearsCareer = Math.floor(state.turn / 52), yearsGov = Math.floor((p.cumulativeGovWeeks || 0) / 52);
     p.playerIsLeader = false;
     p.interimLeaderName = successor;
+    resignPlayerFromGovernedRegions("sei stato/a appena eletto/a Presidente della Repubblica");
     state.president = { name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn, popular: popular, termCount: 1, isPlayer: true };
     state.presidentTerm = {
       playerName: winner.name, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: state.turn + 364,
@@ -17840,6 +17862,7 @@
     }
     if (prevParliamentRole !== "governo" && p.parliamentRole === "governo") {
       addDiaryEntry("Andiamo al governo", "Non ci speravo fino all'ultimo. Da questa settimana " + p.name + " è al governo: ora tocca a noi rispondere delle scelte, non solo criticare quelle degli altri.");
+      resignPlayerFromGovernedRegions("il partito è appena entrato al governo nazionale");
     } else if (prevParliamentRole === "governo" && p.parliamentRole !== "governo") {
       addDiaryEntry("Torniamo all'opposizione", "Il governo è finito, e con esso il nostro tempo al comando. Si ricomincia dai banchi dell'opposizione — non è la fine, solo un capitolo diverso.");
     }
@@ -23945,7 +23968,10 @@
         var mandatoText;
         if (mandatoSuccess) {
           state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
-          if (choice.mandatoStance === "sostegno" && state.player.inParliament) state.player.parliamentRole = "governo";
+          if (choice.mandatoStance === "sostegno" && state.player.inParliament) {
+            state.player.parliamentRole = "governo";
+            resignPlayerFromGovernedRegions("il partito è appena entrato nel nuovo governo nato dal mandato esplorativo");
+          }
           mandatoText = "Il mandato esplorativo va a buon fine: nasce un nuovo governo, sostenuto da una maggioranza diversa da quella uscita dalle urne, senza bisogno di elezioni anticipate." +
             (choice.mandatoStance === "sostegno" ? " Il tuo partito, avendo offerto sostegno fin dall'inizio, ne fa parte." : "");
           state.log.unshift({ week: state.turn, title: "Mandato Esplorativo riuscito", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
