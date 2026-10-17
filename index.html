@@ -9510,6 +9510,21 @@
           result: "La riforma ambiziosa dei programmi scolastici viene salutata come un passo avanti, pur tra le resistenze di chi preferiva la continuità." },
         { label: "Limita la riforma a piccoli aggiustamenti", hint: "Meno scontri, meno impatto reale", effects: { reputazione: 1, national: { scuola: 0.1 } },
           result: "I piccoli aggiustamenti ai programmi scolastici evitano polemiche, ma lasciano sostanzialmente invariato l'impianto esistente." }
+      ] },
+    // Richiesto da un giocatore: un deficit alto restava un numero che driftava da solo in sottofondo
+    // (vedi driftBilancioStato/driftMacroeconomy), senza mai arrivare come una vera decisione sul tavolo
+    // del governo. Compare solo quando il deficit è davvero fuori controllo (vedi il filtro più sotto, su
+    // deficitPil/debitoPil), con un lungo raffreddamento dopo ogni apparizione (deficitDossierCooldownTurn)
+    // apposta per non diventare un tormentone settimanale: un avviso raro ma con conseguenze vere.
+    { id: "gov_deficit_eccessivo", kind: "notizia", cat: "Governo", title: "Allarme sui Conti Pubblici",
+      brief: "Il deficit corre ben oltre i parametri concordati con Bruxelles, e le agenzie di rating iniziano a parlarne apertamente: il governo deve decidere come rispondere, prima che la situazione gli sfugga di mano.",
+      choices: [
+        { label: "Vara una manovra correttiva, anche se impopolare", hint: "Riporta i conti sotto controllo, ma costa caro in consenso", effects: { reputazione: -3, iscritti: -rand(25, 55), spreadDelta: -8, deficitPilDelta: -rand(1.5, 2.5) },
+          result: "La manovra correttiva taglia davvero il deficit e rassicura i mercati, ma i tagli si fanno sentire: l'impopolarità della misura costa caro in consenso." },
+        { label: "Negozia a Bruxelles una correzione parziale e più lenta", hint: "Via di mezzo: meno scontro, correzione modesta", effects: { reputazione: 1, spreadDelta: -3, deficitPilDelta: -rand(0.5, 1) },
+          result: "L'accordo con Bruxelles concede più tempo in cambio di una correzione modesta ma concreta: nessuno scontro aperto, nessun risultato clamoroso." },
+        { label: "Ignora i richiami, mantieni la spesa pubblica com'è", hint: "Nessun sacrificio oggi, ma i mercati iniziano a innervosirsi", effects: { iscritti: rand(15, 35), spreadDelta: rand(10, 18) },
+          result: "La spesa pubblica resta invariata, e la base ne è sollevata: ma i mercati notano l'assenza di una vera correzione, e lo spread comincia a muoversi." }
       ] }
   ];
   var OPPOSIZIONE_DOSSIERS = [
@@ -13212,9 +13227,23 @@
   function governingFamilyId(p) {
     return currentGoverningFamilyId();
   }
+  // Un governo nato da un compromesso post-elettorale (vedi resolveElection, extraAllyIds/forcedAllyIds
+  // su state.govEntity) non vota compatto come una maggioranza monocolore: ogni alleato affine in più
+  // porta le proprie richieste, ogni alleato reclutato per necessità oltre lo spettro ideologico può
+  // davvero bloccare qualcosa che non gli piace, e un governo di minoranza non ha nemmeno i numeri veri
+  // alle spalle. Richiesto da un giocatore: il compromesso che serve a FORMARE il governo deve pesare
+  // anche DOPO, su cosa quel governo riesce davvero a far passare — non solo il giorno dell'insediamento.
+  function governmentCohesionPenalty() {
+    var ge = state.govEntity;
+    if (!ge) return 0;
+    var forcedCount = (ge.forcedAllyIds || []).length;
+    var compatibleCount = (ge.extraAllyIds || []).length - forcedCount;
+    var penalty = compatibleCount * 0.04 + forcedCount * 0.1 + (ge.minority ? 0.15 : 0);
+    return clamp(penalty, 0, 0.5);
+  }
   var MOZIONE_COOLDOWN_TURNS = 25;
   function mozioneAcceptProbability(p) {
-    if (p.parliamentRole === "governo") return 0.82 + Math.random() * 0.1;
+    if (p.parliamentRole === "governo") return clamp(0.82 + Math.random() * 0.1 - governmentCohesionPenalty(), 0.3, 0.92);
     var govFam = governingFamilyId(p);
     var myPos = LEFT_RIGHT_POSITION[p.family], govPos = LEFT_RIGHT_POSITION[govFam];
     if (myPos === undefined || govPos === undefined) return 0.35;
@@ -13319,7 +13348,7 @@
   // all'opposizione: tetto più basso per chi non governa (0.55 contro lo 0.78 delle mozioni).
   var LEGGE_COOLDOWN_TURNS = 25;
   function leggeAcceptProbability(p) {
-    if (p.parliamentRole === "governo") return 0.75 + Math.random() * 0.12;
+    if (p.parliamentRole === "governo") return clamp(0.75 + Math.random() * 0.12 - governmentCohesionPenalty(), 0.25, 0.87);
     var govFam = governingFamilyId(p);
     var myPos = LEFT_RIGHT_POSITION[p.family], govPos = LEFT_RIGHT_POSITION[govFam];
     if (myPos === undefined || govPos === undefined) return 0.2;
@@ -13470,7 +13499,7 @@
   // governa lui): non serve maggioranza per proporle, solo per farle davvero passare.
   var AMENDMENT_COOLDOWN_TURNS = 35;
   function amendmentAcceptProbability(p) {
-    if (p.parliamentRole === "governo") return 0.72 + Math.random() * 0.15;
+    if (p.parliamentRole === "governo") return clamp(0.72 + Math.random() * 0.15 - governmentCohesionPenalty(), 0.2, 0.87);
     var govFam = governingFamilyId(p);
     var myPos = LEFT_RIGHT_POSITION[p.family], govPos = LEFT_RIGHT_POSITION[govFam];
     if (myPos === undefined || govPos === undefined) return 0.18;
@@ -15491,6 +15520,10 @@
     if (eff.formationSignatures) p.formationSignatures = Math.max(0, (p.formationSignatures || 0) + eff.formationSignatures);
     if (eff.spreadDelta) state.spreadBps = clamp(state.spreadBps + jitter(eff.spreadDelta), 40, 400);
     if (eff.consensoGoverno) state.consensoGoverno = clamp(state.consensoGoverno + jitter(eff.consensoGoverno), 0, 100);
+    // Leva diretta sul deficit (vedi gov_deficit_eccessivo): a differenza del lento drift automatico di
+    // driftBilancioStato, una vera manovra correttiva scelta dal giocatore taglia il deficit subito, non
+    // settimana dopo settimana.
+    if (eff.deficitPilDelta) state.deficitPil = clamp(state.deficitPil + eff.deficitPilDelta, -1, 12);
     if (eff.rivalExtra) {
       var rival = familyById(p.family).rival;
       state.parties[rival] = Math.max(0.3, state.parties[rival] + eff.rivalExtra);
@@ -17217,33 +17250,123 @@
       return { id: e.id, label: e.label, votes: e.votes, isCoalition: e.isCoalition, seats: e.totalSeats };
     }).sort(function (a, b) { return b.seats - a.seats; });
 
-    // Il governo è chi ha davvero vinto: l'entità qualificata (coalizione, partito solo, o il giocatore
-    // stesso) con più seggi complessivi tra Camera e Senato, ricalcolata a ogni elezione — mai più fissa
-    // sul Centrodestra a prescindere dal risultato reale.
+    // Il governo parte da chi ha davvero vinto: l'entità qualificata (coalizione, partito solo, o il
+    // giocatore stesso) con più seggi complessivi tra Camera e Senato. Ma avere più seggi di chiunque
+    // altro non basta da solo a governare, nella realtà come qui: serve una VERA maggioranza assoluta,
+    // in ENTRAMBE le Camere (art. 94 Cost.: la fiducia va conquistata in Camera e Senato separatamente).
+    // Segnalato da un giocatore: prima bastava essere il blocco più grande anche fermandosi al 30%, e si
+    // perdeva tutto il "bello del Parlamento" — i compromessi. Ora, se il blocco vincitore da solo non
+    // arriva a 201 seggi alla Camera e 101 al Senato, il governo nasce DAVVERO da una trattativa: si
+    // allargano le intese ad altre forze qualificate, le più grandi per prime, finché i numeri non ci
+    // sono in entrambe le Camere — proprio come un vero post-elettorale italiano con più partiti sotto
+    // la stessa maggioranza. Ogni alleato in più aggiunto così costa una fetta di fiducia iniziale (vedi
+    // extraAllies sotto): il prezzo politico del compromesso, non un dettaglio di colore.
+    var CAMERA_MAJORITY_SEATS = 201, SENATO_MAJORITY_SEATS = 101;
+    function blocChamberSeats(memberIds) {
+      return memberIds.reduce(function (acc, mid) {
+        var s = seatsById[mid] || { camera: 0, senato: 0 };
+        acc.camera += s.camera; acc.senato += s.senato;
+        return acc;
+      }, { camera: 0, senato: 0 });
+    }
+    // Famiglie ideologiche di un gruppo di membri (riusa familyId dei partiti e p.family per il
+    // giocatore): serve a decidere CHI reclutare per primo, non solo quanti seggi porta. Riusa lo stesso
+    // asse sinistra-destra (LEFT_RIGHT_POSITION) e lo stesso limite (COALITION_IDEOLOGY_GAP_LIMIT) già
+    // usati per bloccare gli inviti di coalizione incoerenti del giocatore e della CPU durante la
+    // legislatura (vedi wouldExceedCoalitionSpread) — qui applicato alla formazione INIZIALE del governo.
+    function entityFamilyIds(memberIds) {
+      return memberIds.map(function (mid) {
+        if (mid === "player") return p.family;
+        var pt = partyById(mid);
+        return pt ? pt.familyId : null;
+      }).filter(Boolean);
+    }
+    function entityWouldFit(currentFamilyIds, candidateMemberIds) {
+      var positions = currentFamilyIds.concat(entityFamilyIds(candidateMemberIds))
+        .map(function (f) { return LEFT_RIGHT_POSITION[f]; }).filter(function (v) { return v !== undefined; });
+      if (!positions.length) return true;
+      return (Math.max.apply(null, positions) - Math.min.apply(null, positions)) <= COALITION_IDEOLOGY_GAP_LIMIT;
+    }
     var winner = qualified.length ? qualified.reduce(function (best, e) {
       return e.totalSeats > best.totalSeats ? e : best;
     }, qualified[0]) : null;
+    var extraAllies = [];
     if (winner) {
-      var winnerMemberIds = winner.members.filter(function (id) { return id !== "player"; });
+      var governingMemberIds = winner.members.slice();
+      var blocSeats = blocChamberSeats(governingMemberIds);
+      if (blocSeats.camera < CAMERA_MAJORITY_SEATS || blocSeats.senato < SENATO_MAJORITY_SEATS) {
+        var otherEntities = qualified.filter(function (e) { return e.id !== winner.id; })
+          .sort(function (a, b) { return b.totalSeats - a.totalSeats; });
+        var currentFamilyIds = entityFamilyIds(governingMemberIds);
+        function recruitAlly(ally, forced) {
+          ally.wasIdeologicallyForced = forced;
+          extraAllies.push(ally);
+          governingMemberIds = governingMemberIds.concat(ally.members);
+          currentFamilyIds = currentFamilyIds.concat(entityFamilyIds(ally.members));
+          var allySeats = blocChamberSeats(ally.members);
+          blocSeats.camera += allySeats.camera; blocSeats.senato += allySeats.senato;
+        }
+        // Fase 1: prima si allarga l'intesa SOLO a forze ideologicamente vicine a chi è già dentro — un
+        // vero post-elettorale italiano cerca prima alleati affini, non chiunque abbia più seggi.
+        otherEntities.forEach(function (ally) {
+          if (blocSeats.camera >= CAMERA_MAJORITY_SEATS && blocSeats.senato >= SENATO_MAJORITY_SEATS) return;
+          if (entityWouldFit(currentFamilyIds, ally.members)) recruitAlly(ally, false);
+        });
+        // Fase 2 (rara): se nemmeno allargando a tutte le forze compatibili si raggiunge la maggioranza,
+        // nasce per necessità un governo che oltrepassa lo spettro ideologico — una vera "unità
+        // nazionale" forzata dai numeri, non una scelta, meglio di un Parlamento senza alcun governo.
+        if (blocSeats.camera < CAMERA_MAJORITY_SEATS || blocSeats.senato < SENATO_MAJORITY_SEATS) {
+          otherEntities.forEach(function (ally) {
+            if (blocSeats.camera >= CAMERA_MAJORITY_SEATS && blocSeats.senato >= SENATO_MAJORITY_SEATS) return;
+            if (extraAllies.indexOf(ally) !== -1) return;
+            recruitAlly(ally, true);
+          });
+        }
+      }
+      var hasRealMajority = blocSeats.camera >= CAMERA_MAJORITY_SEATS && blocSeats.senato >= SENATO_MAJORITY_SEATS;
+      var forcedAlliesCount = extraAllies.filter(function (a) { return a.wasIdeologicallyForced; }).length;
+      var compatibleAlliesCount = extraAllies.length - forcedAlliesCount;
+      var winnerMemberIds = governingMemberIds.filter(function (id) { return id !== "player"; });
       // Quanti seggi porta in dote ciascun partito della coalizione di governo: serve a ripartire i
       // ministeri in modo proporzionale (vedi computeCabinetAllocation), non solo a sapere chi c'è dentro.
       var seatSplit = {};
       winnerMemberIds.forEach(function (mid) { seatSplit[mid] = seatsById[mid] || { camera: 0, senato: 0 }; });
-      state.govEntity = { id: winner.id, memberIds: winnerMemberIds, seatSplit: seatSplit };
-      // Un nuovo governo (vinca chi vinca) riparte sempre da una fiducia standard del 50%, non dal
-      // valore ereditato dalla legislatura precedente: la fiducia racconta il rapporto tra QUESTO
-      // governo e il paese, non un contatore che continua a scendere elezione dopo elezione.
-      state.consensoGoverno = 50;
+      // forcedAllyIds (sottoinsieme di extraAllyIds) persiste qui quali alleati sono stati reclutati solo
+      // per necessità, oltre lo spettro ideologico: serve dopo, settimana per settimana, a rendere più
+      // difficile far passare mozioni/leggi/modifiche quando il governo è un'intesa tenuta insieme a
+      // fatica (vedi governmentCohesionPenalty) — un compromesso vero deve pesare anche DOPO la
+      // formazione del governo, non solo nel giorno dell'insediamento.
+      state.govEntity = { id: winner.id, memberIds: winnerMemberIds, seatSplit: seatSplit, minority: !hasRealMajority, extraAllyIds: extraAllies.map(function (a) { return a.id; }), forcedAllyIds: extraAllies.filter(function (a) { return a.wasIdeologicallyForced; }).map(function (a) { return a.id; }) };
+      // Un nuovo governo riparte da una fiducia standard del 50% SOLO se nasce con una maggioranza vera e
+      // senza dover allargare l'intesa oltre il blocco uscito naturalmente dalle urne: ogni alleato affine
+      // in più negoziato dopo il voto costa un po' di fiducia iniziale, un alleato ideologicamente
+      // lontano (reclutato solo per necessità, vedi Fase 2 sopra) costa il doppio — il prezzo politico
+      // reale del compromesso, non un dettaglio cosmetico. Un governo che nemmeno sommando tutte le
+      // forze qualificate tocca la maggioranza vera parte come minoranza, fragile fin dal primo giorno:
+      // è il punto di partenza per la crisi di fiducia già esistente (consensoGoverno sotto 20, vedi
+      // mandatoEsplorativoDossier).
+      state.consensoGoverno = hasRealMajority ? clamp(50 - compatibleAlliesCount * 5 - forcedAlliesCount * 10, 20, 50) : 20;
       openNewEpoch();
+      if (extraAllies.length) {
+        var alliesLabel = extraAllies.map(function (a) { return a.label; }).join(", ");
+        var compromiseText = !hasRealMajority
+          ? ("Nemmeno allargando l'intesa a " + alliesLabel + " " + winner.label + " raggiunge una vera maggioranza in entrambe le Camere: nasce comunque un governo, ma di minoranza, già fragile al primo giorno.")
+          : forcedAlliesCount
+            ? (winner.label + " non trova abbastanza alleati affini per governare: solo un'intesa di necessità con " + alliesLabel + ", anche oltre le normali distanze ideologiche, porta a una maggioranza vera in entrambe le Camere. Un governo di unità imposto dai numeri, non da un'affinità reale: parte su basi fragilissime.")
+            : (winner.label + " non ha da sola i numeri per governare: solo allargando l'intesa a " + alliesLabel + " nasce una maggioranza vera in entrambe le Camere. Ogni alleato in più porta consenso, ma anche pretese sul programma: il governo parte su basi più caute del solito.");
+        state.log.unshift({ week: state.turn, title: !hasRealMajority ? "Un governo di minoranza, senza i numeri veri" : forcedAlliesCount ? "Un governo di unità imposto dai numeri" : "Il governo nasce da un compromesso", choiceLabel: alliesLabel, result: compromiseText, headlines: [], type: "istituzioni", cat: "Formazione del Governo" });
+      }
       // Consultazioni al Quirinale: in Italia una coalizione di più forze non diventa governo dall'oggi
       // al domani, servono settimane di trattativa prima ancora di poter scegliere i ministri (vedi
       // pendingCabinetFormation, già calcolato più sotto ma tenuto in attesa da questo blocco finché le
-      // consultazioni non si concludono). Solo per il giocatore che fa DAVVERO parte della coalizione
-      // vincitrice, e solo se è una vera coalizione di più forze: una maggioranza monocolore non ha
-      // bisogno di settimane di trattative, né nella realtà né qui.
-      var playerInWinningEntity = (p.allianceId || "player") === winner.id;
-      if (playerInWinningEntity && winner.isCoalition && winner.members.length >= 2) {
-        var consultRounds = Math.min(5, 2 + Math.floor(winner.members.length / 2));
+      // consultazioni non si concludono). Solo per il giocatore che fa DAVVERO parte della coalizione di
+      // governo finale (vincitrice naturale o reclutata come alleato extra), e solo se è una vera
+      // coalizione di più forze: una maggioranza monocolore non ha bisogno di settimane di trattative, né
+      // nella realtà né qui. Più forze dentro, più round di consultazioni: un'intesa a 4-5 partiti
+      // richiede davvero più tempo di una a 2.
+      var playerInGoverningBloc = governingMemberIds.indexOf("player") !== -1;
+      if (playerInGoverningBloc && governingMemberIds.length >= 2) {
+        var consultRounds = Math.min(6, 2 + Math.floor(governingMemberIds.length / 2));
         state.pendingConsultazioni = { roundsLeft: consultRounds, totalRounds: consultRounds, coalitionLabel: winner.label };
       } else {
         state.pendingConsultazioni = null;
@@ -17265,9 +17388,12 @@
     var wasEverElectedBefore = p.everElected;
     p.everElected = p.everElected || p.inParliament;
     // registrato ora perché allianceId viene azzerato qui sotto in vista del prossimo ciclo elettorale
-    var playerEntityId = p.allianceId || "player";
     var prevParliamentRole = p.parliamentRole;
-    p.parliamentRole = p.inParliament ? (winner && playerEntityId === winner.id ? "governo" : "opposizione") : null;
+    // "governo" ora significa davvero far parte del blocco che ha raggiunto la maggioranza (naturale o
+    // allargata con alleati extra, vedi playerInGoverningBloc sopra), non solo essere nell'entità che ha
+    // preso più voti di chiunque altro: un piccolo partito del giocatore può finire reclutato come
+    // alleato extra in un governo guidato da altri, proprio come nella realtà.
+    p.parliamentRole = p.inParliament ? (playerInGoverningBloc ? "governo" : "opposizione") : null;
     if (!wasEverElectedBefore && p.inParliament) {
       addDiaryEntry("Entriamo in Parlamento", p.name + " ce l'ha fatta: " + fmt1(p.seatsCamera + p.seatsSenato) + " seggi tra Camera e Senato. Non è la vittoria finale, ma da oggi la nostra voce conta davvero in Aula.");
     }
@@ -20211,11 +20337,21 @@
   function buildConsultazioniDossier() {
     var c = state.pendingConsultazioni;
     var roundNum = c.totalRounds - c.roundsLeft + 1;
+    var ge = state.govEntity;
+    // Se la maggioranza naturale non bastava da sola (vedi resolveElection), lo si dice qui: il
+    // giocatore che sta vivendo in prima persona la trattativa deve sapere SUBITO che non sta solo
+    // scegliendo ministri, sta tenendo insieme un'intesa più larga del previsto — o, nei casi più rari,
+    // un governo che parte comunque senza una vera maggioranza.
+    var compromiseNote = (ge && ge.extraAllyIds && ge.extraAllyIds.length)
+      ? (ge.minority
+        ? " Nemmeno allargando l'intesa si è trovata una vera maggioranza in entrambe le Camere: il governo che nascerà sarà di minoranza, fragile fin dal primo giorno."
+        : " Da sola " + c.coalitionLabel + " non aveva i numeri: l'intesa si è dovuta allargare ad altre forze per arrivare a una vera maggioranza, e ognuna di queste porta le proprie richieste al tavolo.")
+      : "";
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
       eyebrow: "Consultazioni per il nuovo Governo",
       cat: "Formazione del Governo", title: roundNum + "ª tornata di consultazioni",
-      brief: "Il voto ha premiato " + c.coalitionLabel + ", ma in Italia una coalizione di più partiti non diventa governo dall'oggi al domani: al Quirinale sono in corso le consultazioni tra le forze della maggioranza per definire nomi e programma, prima ancora di poter giurare. Mancano ancora circa " + c.roundsLeft + " settiman" + (c.roundsLeft === 1 ? "a" : "e") + " prima che il nuovo governo possa insediarsi davvero.",
+      brief: "Il voto ha premiato " + c.coalitionLabel + ", ma in Italia una coalizione di più partiti non diventa governo dall'oggi al domani: al Quirinale sono in corso le consultazioni tra le forze della maggioranza per definire nomi e programma, prima ancora di poter giurare. Mancano ancora circa " + c.roundsLeft + " settiman" + (c.roundsLeft === 1 ? "a" : "e") + " prima che il nuovo governo possa insediarsi davvero." + compromiseNote,
       choices: [
         { label: "Spingi per chiudere in fretta la trattativa", hint: "Meno attrito nella coalizione, ma meno peso specifico nel programma finale", effects: { reputazione: 1 }, result: "La linea della rapidità aiuta a smussare gli attriti nella coalizione, anche se lascia sul tavolo qualche richiesta di programma." },
         { label: "Insisti sui tuoi punti programmatici", hint: "Più peso nel programma, ma negoziato più lungo e teso", effects: { reputazione: 2, visibilita: 2 }, result: "L'insistenza sui propri punti programmatici allunga la trattativa, ma porta a casa qualcosa in più per il proprio elettorato." },
@@ -23278,6 +23414,11 @@
       } else if (dossier.id === "gov_federalizza_ue") {
         if (choice.euFederalize) state.euFederalized = true;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_deficit_eccessivo") {
+        // Lungo raffreddamento dopo ogni apparizione, scelta a parte: anche se il deficit resta alto
+        // (es. si è scelto di ignorare i richiami), non deve ripresentarsi la settimana dopo.
+        state.deficitDossierCooldownTurn = state.turn + 16;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "eu_alternative_choice") {
         resolveEuAlternativeChoice(dossier, choice);
       } else if (dossier.cat === "Referendum Nazionale" && choice.stance !== undefined && state.pendingNationalReferendum) {
@@ -25167,6 +25308,11 @@
         }
         if (d.id === "gov_federalizza_ue") {
           return p.family === "europeista" && !state.euFederalized && !state.leftEu && !state.euExitDecided;
+        }
+        // Compare solo quando il deficit è davvero fuori controllo (non per ogni lieve sforamento), e
+        // solo dopo il lungo raffreddamento impostato alla risoluzione precedente (vedi sopra).
+        if (d.id === "gov_deficit_eccessivo") {
+          return (state.deficitPil >= 6 || state.debitoPil >= 150) && state.turn >= (state.deficitDossierCooldownTurn || 0);
         }
         return true;
       }));
