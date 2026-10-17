@@ -3286,6 +3286,10 @@
   // Lombardia e moda/finanza...). Entrambi gli elenchi alimentano r.metrics in ensureRegionsInit: un
   // problema parte basso, un punto di forza parte alto, e la differenza si vede davvero solo se quella
   // regione viene gestita bene o male nel tempo (vedi buildRegionalGovernanceDossier/driftRegionalMetrics).
+  // specialStatute (richiesto da un giocatore): le 5 regioni a statuto speciale reali (Sicilia, Sardegna,
+  // Valle d'Aosta, Trentino-Alto Adige, Friuli-Venezia Giulia) godono di una vera autonomia finanziaria
+  // più ampia — più fondi di partenza e meno esposte ai tagli ai trasferimenti da Roma, vedi
+  // buildRegionalNationalAlignmentDossier/enterRegionalPresidency.
   var ITALIAN_REGIONS = [
     { id: "Lazio", area: "centro", issues: ["sanita", "trasporti"], strengths: ["cultura", "digitale"] },
     { id: "Lombardia", area: "nord", issues: ["economia", "trasporti"], strengths: ["digitale", "sport"] },
@@ -3296,17 +3300,17 @@
     { id: "Puglia", area: "sud", issues: ["energia", "lavoro"], strengths: ["agricoltura", "cultura"] },
     { id: "Veneto", area: "nord", issues: ["economia", "immigrazione"], strengths: ["cultura", "agricoltura"] },
     { id: "Liguria", area: "nord", issues: ["trasporti", "lavoro"], strengths: ["cultura", "economia"] },
-    { id: "Sicilia", area: "isole", issues: ["lavoro", "immigrazione"], strengths: ["cultura", "agricoltura"] },
-    { id: "Sardegna", area: "isole", issues: ["energia", "infrastrutture"], strengths: ["cultura", "ambiente"] },
+    { id: "Sicilia", area: "isole", issues: ["lavoro", "immigrazione"], strengths: ["cultura", "agricoltura"], specialStatute: true },
+    { id: "Sardegna", area: "isole", issues: ["energia", "infrastrutture"], strengths: ["cultura", "ambiente"], specialStatute: true },
     { id: "Marche", area: "centro", issues: ["economia", "lavoro"], strengths: ["cultura", "agricoltura"] },
     { id: "Umbria", area: "centro", issues: ["economia", "giovani"], strengths: ["cultura", "agricoltura"] },
     { id: "Abruzzo", area: "sud", issues: ["trasporti", "infrastrutture"], strengths: ["ambiente", "agricoltura"] },
     { id: "Basilicata", area: "sud", issues: ["lavoro", "ambiente"], strengths: ["cultura", "energia"] },
     { id: "Calabria", area: "sud", issues: ["sanita", "lavoro"], strengths: ["agricoltura", "cultura"] },
-    { id: "Trentino-Alto Adige", area: "nord", issues: ["ambiente", "economia"], strengths: ["sport", "agricoltura"] },
-    { id: "Friuli-Venezia Giulia", area: "nord", issues: ["sicurezza", "economia"], strengths: ["economia", "agricoltura"] },
+    { id: "Trentino-Alto Adige", area: "nord", issues: ["ambiente", "economia"], strengths: ["sport", "agricoltura"], specialStatute: true },
+    { id: "Friuli-Venezia Giulia", area: "nord", issues: ["sicurezza", "economia"], strengths: ["economia", "agricoltura"], specialStatute: true },
     { id: "Molise", area: "sud", issues: ["lavoro", "sanita"], strengths: ["ambiente", "agricoltura"] },
-    { id: "Valle d'Aosta", area: "nord", issues: ["energia", "ambiente"], strengths: ["sport", "cultura"] }
+    { id: "Valle d'Aosta", area: "nord", issues: ["energia", "ambiente"], strengths: ["sport", "cultura"], specialStatute: true }
   ];
   function regionTrackedThemes(region) { return region.issues.concat(region.strengths); }
   function regionById(id) { return ITALIAN_REGIONS.filter(function (r) { return r.id === id; })[0] || null; }
@@ -3410,6 +3414,10 @@
         if (r.cityEventCooldownTurn === undefined) r.cityEventCooldownTurn = 0;
         if (r.issueEventCooldownTurn === undefined) r.issueEventCooldownTurn = 0;
         if (r.opportunityEventCooldownTurn === undefined) r.opportunityEventCooldownTurn = 0;
+        if (r.debitoRegionale === undefined) r.debitoRegionale = 0;
+        if (r.commissariatoUntilTurn === undefined) r.commissariatoUntilTurn = 0;
+        if (r.debtCrisisCooldownTurn === undefined) r.debtCrisisCooldownTurn = 0;
+        if (r.waveEventCooldownTurn === undefined) r.waveEventCooldownTurn = 0;
       });
       return;
     }
@@ -4045,6 +4053,55 @@
   // (r.metrics), vedi renderRegionalPresidencyPage. Il resto del paese continua a vivere in sottofondo
   // con le stesse funzioni periodiche di sempre, proprio come durante il settennato al Quirinale.
   var REGIONAL_TREASURY_SEED_MIN = 15000, REGIONAL_TREASURY_SEED_MAX = 40000;
+  // Le regioni a statuto speciale (vedi ITALIAN_REGIONS.specialStatute) trattengono per Statuto una quota
+  // maggiore delle proprie entrate fiscali: casse di partenza più ricche, non un semplice bonus arbitrario.
+  function regionalTreasurySeed(regionId) {
+    var region = regionById(regionId);
+    var mult = region && region.specialStatute ? 1.6 : 1;
+    return rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX) * mult;
+  }
+  // ---------- Debito Regionale e Piano di Rientro ----------
+  // Richiesto da un giocatore: le casse della regione non possono restare sempre e solo un numero che si
+  // ferma a zero — una spesa eccessiva deve accumulare un vero debito regionale, con il rischio reale di
+  // un Piano di Rientro imposto da Roma (e, se si resiste, di un commissariamento), proprio come nella
+  // realtà delle regioni italiane in difficoltà sui conti della sanità.
+  function applyRegionalTreasuryDelta(r, delta, regionId) {
+    if (!delta) return;
+    if (r.fondiRegionali === undefined || r.fondiRegionali === null) r.fondiRegionali = Math.round(regionalTreasurySeed(regionId));
+    var newVal = r.fondiRegionali + delta;
+    if (newVal < 0) {
+      r.debitoRegionale = (r.debitoRegionale || 0) + (-newVal);
+      r.fondiRegionali = 0;
+    } else {
+      r.fondiRegionali = newVal;
+      if (r.debitoRegionale) {
+        var payoff = Math.min(r.debitoRegionale, r.fondiRegionali * 0.2);
+        r.debitoRegionale -= payoff;
+        r.fondiRegionali -= payoff;
+      }
+    }
+  }
+  var REGIONAL_DEBT_ALARM_THRESHOLD = 9000;
+  function checkRegionalDebtCrisisTrigger(regionId) {
+    var r = state.regions[regionId];
+    if (r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return false;
+    if (state.turn < (r.debtCrisisCooldownTurn || 0)) return false;
+    return (r.debitoRegionale || 0) > REGIONAL_DEBT_ALARM_THRESHOLD && Math.random() < 0.4;
+  }
+  function buildRegionalDebtCrisisDossier(regionId) {
+    var r = state.regions[regionId];
+    r.debtCrisisCooldownTurn = state.turn + 20;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Piano di Rientro — " + regionId,
+      cat: "Governo Regionale", title: "Il Governo nazionale impone un Piano di Rientro dal debito",
+      brief: "Il debito accumulato dalla Regione (" + fmtEuro(Math.round(r.debitoRegionale)) + ") supera la soglia di allarme: il Governo nazionale impone un Piano di Rientro. Accetti i tagli concordati, o resisti rischiando il commissariamento della sanità regionale?",
+      regionalDebtCrisisId: regionId,
+      choices: [
+        { label: "Accetta il Piano di Rientro", hint: "Tagli dolorosi ma concordati: il debito si riduce, il gradimento ne risente", regionalDebtChoice: "accetta", effects: {}, result: "Accetti il Piano di Rientro imposto da Roma: tagli dolorosi, ma concordati." },
+        { label: "Resisti al Piano imposto da Roma", hint: "Rischi il commissariamento della sanità regionale, se il debito resta troppo alto", regionalDebtChoice: "resiste", effects: {}, result: "Decidi di resistere al Piano di Rientro imposto da Roma." }
+      ]
+    };
+  }
   function enterRegionalPresidency(regionId) {
     var p = state.player;
     var successor = primariesChallengerName(p);
@@ -4052,7 +4109,7 @@
     var r = state.regions[regionId];
     p.playerIsLeader = false;
     p.interimLeaderName = successor;
-    if (r.fondiRegionali === undefined || r.fondiRegionali === null) r.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
+    if (r.fondiRegionali === undefined || r.fondiRegionali === null) r.fondiRegionali = Math.round(regionalTreasurySeed(regionId));
     if (!r.giunta || !r.giunta.length) r.giunta = generateRegionalGiunta();
     state.regionalPresidency = { regionId: regionId, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: r.nextElectionTurn };
     state.mode = "regional_president";
@@ -4257,6 +4314,14 @@
       state.phase = "building";
       return;
     }
+    // Un debito regionale fuori controllo (vedi applyRegionalTreasuryDelta) ha una conseguenza
+    // istituzionale vera, non solo un numero negativo che resta lì: Roma impone un Piano di Rientro.
+    if (checkRegionalDebtCrisisTrigger(regionId)) {
+      state.aiDynamicDossier = buildRegionalDebtCrisisDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
     // Varietà settimanale vera, non solo un singolo generatore di routine (richiesto con forza da un
     // giocatore): emergenze di Protezione Civile, scandali in Giunta, pressioni di lobby e il rapporto
     // con Roma hanno la priorità, ciascuno con il proprio raffreddamento — solo se nessuno di questi
@@ -4284,6 +4349,12 @@
     }
     if (checkRegionalLobbyTrigger(regionId)) {
       state.aiDynamicDossier = buildRegionalLobbyDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    if (checkRegionalNationalWaveTrigger(regionId)) {
+      state.aiDynamicDossier = buildRegionalNationalWaveDossier(regionId);
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
@@ -4364,19 +4435,46 @@
       };
     }
     if (alignment === "opposto") {
+      // Le regioni a statuto speciale trattengono per Statuto una quota maggiore delle proprie entrate:
+      // meno esposte ai tagli ai trasferimenti ordinari da Roma, non immuni, ma attenuate.
+      var region = regionById(regionId);
+      var cutMult = region && region.specialStatute ? 0.5 : 1;
+      var statuteNote = region && region.specialStatute ? " Lo Statuto Speciale della regione attutisce parzialmente il colpo." : "";
       return {
         id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Rapporti con Roma — " + regionId,
         cat: "Governo Regionale", title: "Il Governo nazionale taglia i trasferimenti a " + regionId,
-        brief: govLabel + ", ideologicamente opposto al tuo governo regionale, taglia i trasferimenti a " + regionId + " e minaccia di impugnare una tua legge regionale davanti alla Corte Costituzionale. Come rispondi?",
+        brief: govLabel + ", ideologicamente opposto al tuo governo regionale, taglia i trasferimenti a " + regionId + " e minaccia di impugnare una tua legge regionale davanti alla Corte Costituzionale." + statuteNote + " Come rispondi?",
         regionalGovernanceId: regionId,
         choices: [
-          { label: "Fai ricorso alla Corte Costituzionale", hint: "Battaglia legale lunga, ma difende l'autonomia regionale", regionalApprovalDelta: rand(3, 6), effects: { fondiRegionaliBonus: -Math.round(rand(800, 1500)), reputazione: rand(1, 3) }, result: "Il ricorso alla Consulta diventa un simbolo di resistenza all'ingerenza di Roma, pur senza risolvere subito il taglio ai fondi." },
-          { label: "Protesta pubblicamente, senza vie legali", hint: "Visibilità politica, nessun costo diretto", regionalApprovalDelta: rand(2, 4), effects: { fondiRegionaliBonus: -Math.round(rand(1000, 1800)) }, result: "La protesta pubblica contro il taglio ai trasferimenti trova eco sui media, ma i fondi restano tagliati." },
-          { label: "Accetta il taglio senza reagire", hint: "Nessuno scontro politico, ma le casse regionali ne risentono", regionalApprovalDelta: -rand(2, 5), effects: { fondiRegionaliBonus: -Math.round(rand(1500, 2500)) }, result: "Il taglio ai trasferimenti viene accettato senza reazioni pubbliche: le casse regionali ne risentono." }
+          { label: "Fai ricorso alla Corte Costituzionale", hint: "Battaglia legale lunga, ma difende l'autonomia regionale", regionalApprovalDelta: rand(3, 6), effects: { fondiRegionaliBonus: -Math.round(rand(800, 1500) * cutMult), reputazione: rand(1, 3) }, result: "Il ricorso alla Consulta diventa un simbolo di resistenza all'ingerenza di Roma, pur senza risolvere subito il taglio ai fondi." },
+          { label: "Protesta pubblicamente, senza vie legali", hint: "Visibilità politica, nessun costo diretto", regionalApprovalDelta: rand(2, 4), effects: { fondiRegionaliBonus: -Math.round(rand(1000, 1800) * cutMult) }, result: "La protesta pubblica contro il taglio ai trasferimenti trova eco sui media, ma i fondi restano tagliati." },
+          { label: "Accetta il taglio senza reagire", hint: "Nessuno scontro politico, ma le casse regionali ne risentono", regionalApprovalDelta: -rand(2, 5), effects: { fondiRegionaliBonus: -Math.round(rand(1500, 2500) * cutMult) }, result: "Il taglio ai trasferimenti viene accettato senza reazioni pubbliche: le casse regionali ne risentono." }
         ]
       };
     }
     return null;
+  }
+  // ---------- Onde elettorali nazionali ----------
+  // Richiesto da un giocatore: un crollo nazionale del partito deve farsi sentire anche in periferia, non
+  // restare un fatto puramente parlamentare — gli alleati regionali iniziano a tentennare.
+  function checkRegionalNationalWaveTrigger(regionId) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.waveEventCooldownTurn || 0)) return false;
+    return (state.player.sondaggi || 0) < 4 && Math.random() < 0.15;
+  }
+  function buildRegionalNationalWaveDossier(regionId) {
+    var r = state.regions[regionId];
+    r.waveEventCooldownTurn = state.turn + 16;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Onda Elettorale Nazionale — " + regionId,
+      cat: "Governo Regionale", title: "Il crollo nazionale del partito si fa sentire anche in " + regionId,
+      brief: "I sondaggi di " + state.player.name + " sono in caduta libera a livello nazionale, sotto la guida ad interim di " + (state.player.interimLeaderName || "un dirigente di fiducia") + ": anche in " + regionId + " gli alleati di maggioranza regionale iniziano a tentennare, pronti a chiedere un rimpasto o a voltarti le spalle se la situazione non si stabilizza.",
+      regionalGovernanceId: regionId,
+      choices: [
+        { label: "Prendi pubblicamente le distanze dalla linea nazionale del partito", hint: "Protegge la tua posizione regionale, ma indebolisce il partito a Roma", regionalApprovalDelta: rand(3, 6), effects: { reputazione: -rand(1, 2) }, result: "Prendere le distanze dalla linea nazionale rassicura gli alleati regionali, ma il gesto non passa inosservato a Roma." },
+        { label: "Resta leale alla linea nazionale del partito", hint: "Coerenza politica, ma rischi di essere travolto dalla stessa onda", regionalApprovalDelta: -rand(3, 6), effects: { reputazione: rand(1, 2) }, result: "La lealtà alla linea nazionale premia la coerenza, ma il crollo dei sondaggi si fa sentire anche sul gradimento regionale." }
+      ]
+    };
   }
   // ---------- Protezione Civile: emergenze regionali ----------
   // Richiesto da un giocatore: anche un vero "effetto farfalla" leggero — tagliare ripetutamente la spesa
@@ -4540,9 +4638,13 @@
     html += '<div class="stat-tile"><div class="label">Settimane alla prossima elezione regionale</div><div class="row"><span class="value">' + weeksLeft + "</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Gradimento locale</div><div class="row"><span class="value">' + Math.round(r.approvalLocal === undefined ? 50 : r.approvalLocal) + "%</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Casse della regione</div><div class="row"><span class="value">' + fmtEuro(Math.round(r.fondiRegionali || 0)) + "</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Rapporti con Roma</div><div class="row"><span class="value" style="font-size:0.95rem">' + alignmentLabel + "</span></div></div>";
-    html += "</div>" +
-      '<p class="ci-hint" style="margin-top:0.6rem">Hai lasciato la guida nazionale di ' + rp.formerPartyName + " a " + (state.player.interimLeaderName || "un dirigente di fiducia") +
+    if (r.debitoRegionale) html += '<div class="stat-tile"><div class="label">Debito regionale accumulato</div><div class="row"><span class="value">' + fmtEuro(Math.round(r.debitoRegionale)) + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Rapporti con Roma</div><div class="row"><span class="value" style="font-size:0.95rem">' + alignmentLabel + (region.specialStatute ? " (Statuto Speciale)" : "") + "</span></div></div>";
+    html += "</div>";
+    if (r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) {
+      html += '<p class="ci-hint chip negative" style="margin-top:0.4rem">La sanità regionale è commissariata da Roma fino alla settimana ' + r.commissariatoUntilTurn + ': niente leggi o mozioni su quel fronte finché dura.</p>';
+    }
+    html += '<p class="ci-hint" style="margin-top:0.6rem">Hai lasciato la guida nazionale di ' + rp.formerPartyName + " a " + (state.player.interimLeaderName || "un dirigente di fiducia") +
       ": da qui in avanti ti occupi solo del governo di " + regionId + ", non più della politica nazionale, finché non finirà questo mandato.</p>" +
       '<button type="button" class="staff-btn fire" id="regional-resign-btn" style="margin-top:0.6rem">Dimettiti dalla presidenza della Regione</button>' +
       '</section>';
@@ -4583,10 +4685,13 @@
     if (r.pendingRegionalLaw) {
       html += '<p class="ci-hint">In discussione al Consiglio Regionale: <strong>' + r.pendingRegionalLaw.noun + '</strong> (esito atteso entro la settimana ' + r.pendingRegionalLaw.resolveTurn + ').</p>';
     } else {
+      var sanitaCommissariata = r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn;
       html += '<p class="ci-hint">Proponi una vera legge regionale su un tema specifico: il Consiglio Regionale discute per alcune settimane, con un effetto forte se passa, un costo in credibilità se cade.' +
-        (onCooldown ? " Hai già agito di recente: la prossima azione sarà possibile dalla settimana " + r.regionalActionCooldownTurn + "." : "") + '</p><div class="option-grid">';
+        (onCooldown ? " Hai già agito di recente: la prossima azione sarà possibile dalla settimana " + r.regionalActionCooldownTurn + "." : "") +
+        (sanitaCommissariata ? " La sanità è commissariata da Roma: nessuna legge regionale possibile su quel fronte finché dura." : "") + '</p><div class="option-grid">';
       SITUATION_THEMES.forEach(function (t) {
-        html += '<button type="button" class="option-card" data-regional-law-theme="' + t.id + '"' + (onCooldown ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+        var disabled = onCooldown || (sanitaCommissariata && t.id === "sanita");
+        html += '<button type="button" class="option-card" data-regional-law-theme="' + t.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
       });
       html += "</div>";
     }
@@ -4604,10 +4709,13 @@
     var regionId = state.regionalPresidency.regionId;
     var r = state.regions[regionId];
     var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
+    var sanitaCommissariataMozioni = r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn;
     var html = '<section aria-label="Mozioni Regionali"><p class="eyebrow">Mozioni Regionali — ' + regionId + '</p>' +
-      '<p class="ci-hint">Una mozione simbolica è rapida e quasi certa, ma con un effetto limitato sul tema scelto.' + (onCooldown ? " Hai già agito di recente." : "") + '</p><div class="option-grid">';
+      '<p class="ci-hint">Una mozione simbolica è rapida e quasi certa, ma con un effetto limitato sul tema scelto.' + (onCooldown ? " Hai già agito di recente." : "") +
+      (sanitaCommissariataMozioni ? " La sanità è commissariata da Roma: nessuna mozione possibile su quel fronte finché dura." : "") + '</p><div class="option-grid">';
     SITUATION_THEMES.forEach(function (t) {
-      html += '<button type="button" class="option-card" data-regional-motion-theme="' + t.id + '"' + (onCooldown ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+      var disabled = onCooldown || (sanitaCommissariataMozioni && t.id === "sanita");
+      html += '<button type="button" class="option-card" data-regional-motion-theme="' + t.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
     });
     html += "</div>";
     if (r.motionsHistory && r.motionsHistory.length) {
@@ -4695,6 +4803,7 @@
         var r = state.regions[regionId];
         if (state.turn < (r.regionalActionCooldownTurn || 0) || r.pendingRegionalLaw) return;
         var themeId = btn.getAttribute("data-regional-law-theme");
+        if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return;
         var theme = SITUATION_THEME_BY_ID[themeId];
         var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
         r.pendingRegionalLaw = { themeId: themeId, noun: noun, resolveTurn: state.turn + 4 + Math.floor(Math.random() * 4) };
@@ -4709,6 +4818,7 @@
         var r = state.regions[regionId];
         if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
         var themeId = btn.getAttribute("data-regional-motion-theme");
+        if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return;
         var theme = SITUATION_THEME_BY_ID[themeId];
         var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
         r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
@@ -24821,12 +24931,10 @@
         // (usato da emergenze/rapporti con Roma) è una leva diretta sulle casse regionali, già in valuta
         // assoluta — non passa per lo style-mult di applyChoice come farebbe un fondi di partito.
         if (govRegion && choice.effects && choice.effects.fondiRegionaliBonus !== undefined) {
-          if (govRegion.fondiRegionali === undefined || govRegion.fondiRegionali === null) govRegion.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
-          govRegion.fondiRegionali = Math.max(0, govRegion.fondiRegionali + choice.effects.fondiRegionaliBonus);
+          applyRegionalTreasuryDelta(govRegion, choice.effects.fondiRegionaliBonus, dossier.regionalGovernanceId);
         }
         if (govRegion && govRegion.playerIsGovernor && choice.effects && choice.effects.fondi) {
-          if (govRegion.fondiRegionali === undefined || govRegion.fondiRegionali === null) govRegion.fondiRegionali = Math.round(rand(REGIONAL_TREASURY_SEED_MIN, REGIONAL_TREASURY_SEED_MAX));
-          govRegion.fondiRegionali = Math.max(0, govRegion.fondiRegionali + choice.effects.fondi);
+          applyRegionalTreasuryDelta(govRegion, choice.effects.fondi, dossier.regionalGovernanceId);
           var regionalEffects = {};
           Object.keys(choice.effects).forEach(function (k) { if (k !== "fondi" && k !== "fondiRegionaliBonus") regionalEffects[k] = choice.effects[k]; });
           state.resultData = applyChoice(dossier, { label: choice.label, hint: choice.hint, result: choice.result, effects: regionalEffects });
@@ -24862,6 +24970,30 @@
           crisisRegion.approvalLocal = clamp((crisisRegion.approvalLocal === undefined ? 50 : crisisRegion.approvalLocal) - 2, 0, 100);
           addRegionalNews(crisisRegionId, "Il presidente anticipa le elezioni regionali, prima del voto di sfiducia in Consiglio.");
           state.resultData = { resultText: "Decidi di anticipare tu stesso le elezioni regionali, prima che il Consiglio voti la sfiducia: un gesto che eviti l'onta del voto perso, ma che porta comunque al voto anticipato.", headlines: [] };
+        }
+      } else if (dossier.regionalDebtCrisisId && choice.regionalDebtChoice) {
+        // Piano di Rientro: accettarlo dimezza subito il debito a prezzo del gradimento; resistere rischia
+        // il commissariamento (vedi r.commissariatoUntilTurn, che disabilita le azioni sulla sanità finché
+        // dura, vedi renderRegionalLeggiPage/renderRegionalMozioniPage).
+        var debtRegionId = dossier.regionalDebtCrisisId;
+        var debtRegion = state.regions[debtRegionId];
+        if (choice.regionalDebtChoice === "accetta") {
+          debtRegion.debitoRegionale = Math.max(0, (debtRegion.debitoRegionale || 0) * 0.5);
+          debtRegion.approvalLocal = clamp((debtRegion.approvalLocal === undefined ? 50 : debtRegion.approvalLocal) - rand(5, 9), 0, 100);
+          addRegionalNews(debtRegionId, "Il Piano di Rientro dal debito viene accettato: tagli dolorosi, ma concordati con Roma.");
+          state.resultData = { resultText: "Il Piano di Rientro dal debito viene accettato: i tagli concordati con Roma dimezzano il debito regionale, ma pesano sul gradimento locale.", headlines: [] };
+        } else {
+          var avoidsCommissariamento = Math.random() < 0.5;
+          if (avoidsCommissariamento) {
+            debtRegion.approvalLocal = clamp((debtRegion.approvalLocal === undefined ? 50 : debtRegion.approvalLocal) + rand(2, 5), 0, 100);
+            addRegionalNews(debtRegionId, "La resistenza al Piano di Rientro imposto da Roma paga: il commissariamento viene evitato, almeno per ora.");
+            state.resultData = { resultText: "La resistenza al Piano di Rientro imposto da Roma paga: il commissariamento viene evitato, almeno per ora — il debito però resta tutto sulle casse regionali.", headlines: [] };
+          } else {
+            debtRegion.commissariatoUntilTurn = state.turn + 30;
+            debtRegion.approvalLocal = clamp((debtRegion.approvalLocal === undefined ? 50 : debtRegion.approvalLocal) - rand(2, 4), 0, 100);
+            addRegionalNews(debtRegionId, "Il Governo nazionale commissaria la sanità regionale: per i prossimi mesi, le decisioni su questo fronte passano da Roma.");
+            state.resultData = { resultText: "La resistenza al Piano di Rientro non basta: il Governo nazionale commissaria la sanità regionale, togliendoti temporaneamente il controllo su quel fronte.", headlines: [] };
+          }
         }
       } else if (dossier.regionalGiuntaAssessorato && choice.regionalScandalChoice) {
         var scandalRegion = state.regions[dossier.regionalGovernanceId];
