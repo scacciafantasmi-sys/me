@@ -1626,12 +1626,18 @@
     if (state.geopoliticalTension < REGIONAL_WAR_TENSION_THRESHOLD) return false;
     return Math.random() < 0.05;
   }
+  // Un conflitto regionale durava per sempre: compariva, il giocatore sceglieva una postura una volta
+  // sola, e poi restava inerte nell'elenco di state.activeConflicts fino a quando (se mai) una guerra
+  // mondiale non azzerava l'intero elenco in un colpo solo. Non si risolveva MAI da solo — segnalato da
+  // un giocatore. Ora ogni conflitto porta con sé una vera data di fine (resolveTurn, 20-40 settimane) e
+  // ricorda la postura scelta (regionalConflictStance sul choice, salvata su conflict.supportedSide),
+  // usata per orientare l'esito quando si risolve davvero (vedi resolveRegionalConflictsIfDue).
   function buildRegionalWarDossier() {
     state.regionalWarCooldownTurn = state.turn + REGIONAL_WAR_COOLDOWN_TURNS;
     var region = CONFLICT_REGIONS[Math.floor(Math.random() * CONFLICT_REGIONS.length)];
     var involvedA = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
     var involvedB = WORLD_NATIONS.filter(function (n) { return n.id !== involvedA.id; })[Math.floor(Math.random() * (WORLD_NATIONS.length - 1))];
-    var conflict = { id: "conflict_" + state.turn, region: region, sideA: involvedA.name, sideB: involvedB.name, startWeek: state.turn };
+    var conflict = { id: "conflict_" + state.turn, region: region, sideA: involvedA.name, sideB: involvedB.name, startWeek: state.turn, resolveTurn: state.turn + 20 + Math.floor(Math.random() * 20), supportedSide: null };
     state.activeConflicts.push(conflict);
     state.geopoliticalTension = clamp(state.geopoliticalTension + rand(5, 12), 0, 100);
     return {
@@ -1640,16 +1646,44 @@
       brief: "La crisi in " + region + " degenera in un conflitto armato aperto tra " + involvedA.name + " e " + involvedB.name + ". Il mondo osserva con apprensione: come si posiziona il governo italiano?",
       geoConflictId: conflict.id,
       choices: [
-        { label: "Invia aiuti umanitari alla popolazione civile", hint: "Postura equilibrata, costo contenuto", effects: { fondi: -400, reputazione: 2, national: { relazioniDiplomatiche: 0.4, felicita: 0.2 } },
+        { label: "Invia aiuti umanitari alla popolazione civile", hint: "Postura equilibrata, costo contenuto", regionalConflictStance: "umanitaria", effects: { fondi: -400, reputazione: 2, national: { relazioniDiplomatiche: 0.4, felicita: 0.2 } },
           result: "L'Italia invia aiuti umanitari alla popolazione colpita dal conflitto, senza schierarsi apertamente con una delle parti." },
-        { label: "Fornisci supporto militare a " + involvedA.name, hint: "Schieramento netto, rischio di ritorsioni", effects: { fondi: -900, national: { relazioniDiplomatiche: -0.3, difesa: 0.3, economia: -0.3 } },
+        { label: "Fornisci supporto militare a " + involvedA.name, hint: "Schieramento netto, rischio di ritorsioni", regionalConflictStance: "sideA", effects: { fondi: -900, national: { relazioniDiplomatiche: -0.3, difesa: 0.3, economia: -0.3 } },
           result: "Il governo sceglie di fornire supporto militare a " + involvedA.name + ": un passo che rafforza quell'alleanza ma espone l'Italia a possibili ritorsioni diplomatiche ed economiche." },
-        { label: "Contribuisci a una missione di pace NATO/ONU", hint: "Linea multilaterale, costo maggiore", effects: { fondi: -1500, reputazione: 3, national: { relazioniDiplomatiche: 0.7, difesa: 0.2 } },
+        { label: "Contribuisci a una missione di pace NATO/ONU", hint: "Linea multilaterale, costo maggiore", regionalConflictStance: "peacekeeping", effects: { fondi: -1500, reputazione: 3, national: { relazioniDiplomatiche: 0.7, difesa: 0.2 } },
           result: "L'Italia partecipa a una missione di pace internazionale nella regione, rafforzando il proprio ruolo multilaterale." },
-        { label: "Mantieni una neutralità assoluta", hint: "Nessun coinvolgimento, nessun rischio immediato", effects: { national: { relazioniDiplomatiche: -0.2 } },
+        { label: "Mantieni una neutralità assoluta", hint: "Nessun coinvolgimento, nessun rischio immediato", regionalConflictStance: "neutrale", effects: { national: { relazioniDiplomatiche: -0.2 } },
           result: "Il governo sceglie di non intervenire in alcun modo: una postura prudente, che però lascia il paese ai margini della crisi." }
       ]
     };
+  }
+  // Risolve in sottofondo (nessun dossier dedicato: con più conflitti aperti insieme rischierebbe di
+  // monopolizzare settimane intere) ogni conflitto regionale la cui data di fine è arrivata: esce
+  // dall'elenco per sempre, con un esito orientato dalla postura italiana scelta alla sua apertura
+  // (missione di pace/aiuti umanitari rendono più probabile una tregua negoziata; supporto militare a un
+  // lato rende più probabile una sua vittoria sul campo; neutralità lascia l'esito del tutto aperto).
+  function resolveRegionalConflictsIfDue() {
+    if (!state.activeConflicts || !state.activeConflicts.length) return;
+    var due = state.activeConflicts.filter(function (c) { return state.turn >= (c.resolveTurn || Infinity); });
+    if (!due.length) return;
+    state.activeConflicts = state.activeConflicts.filter(function (c) { return state.turn < (c.resolveTurn || Infinity); });
+    due.forEach(function (c) {
+      var roll = Math.random();
+      var ceasefireChance = c.supportedSide === "peacekeeping" || c.supportedSide === "umanitaria" ? 0.5 : 0.3;
+      var text;
+      if (roll < ceasefireChance) {
+        text = "Dopo mesi di combattimenti, " + c.sideA + " e " + c.sideB + " raggiungono una tregua negoziata in " + c.region + ": il conflitto si chiude senza un vincitore netto.";
+      } else if (c.supportedSide === "sideA" || roll < ceasefireChance + (1 - ceasefireChance) * 0.55) {
+        text = "Il conflitto in " + c.region + " si conclude con la prevalenza di " + c.sideA + " su " + c.sideB + ", dopo mesi di combattimenti.";
+      } else {
+        text = "Il conflitto in " + c.region + " si conclude con la prevalenza di " + c.sideB + " su " + c.sideA + ", dopo mesi di combattimenti.";
+      }
+      state.geopoliticalTension = clamp(state.geopoliticalTension - rand(3, 8), 0, 100);
+      state.log.unshift({ week: state.turn, title: "Si chiude la guerra in " + c.region, choiceLabel: c.sideA + " contro " + c.sideB, result: text, headlines: [], type: "cronaca", cat: "Politica Estera" });
+      if (!state.worldNews) state.worldNews = [];
+      state.worldNews.unshift({ cat: "Politica Estera", text: text });
+    });
+    if (state.worldNews && state.worldNews.length > 6) state.worldNews.length = 6;
   }
   var WORLD_WAR_TENSION_THRESHOLD = 88;
   var WORLD_WAR_MIN_ACTIVE_CONFLICTS = 2;
@@ -1683,6 +1717,55 @@
       choices: choices
     };
   }
+  // Richiesto da un giocatore: prima, una volta scelta la postura iniziale, le 70 settimane di guerra
+  // mondiale passavano in totale silenzio fino all'unico esito finale — "scegli una volta, aspetta zitto,
+  // scopri come va" come i vecchi referendum/missioni spaziali prima dell'Arco Narrativo. Qui due vere
+  // tornate di aggiornamento durante il conflitto (circa a un quarto e due terzi della sua durata), con
+  // scelte reali che spostano il "momentum" bellico — usato poi nell'esito finale insieme alla forza del
+  // paese, non solo un effetto immediato e via. Non è un arco a episodi fissi come STORY_ARC_TEMPLATES
+  // (qui la "trama" è già data dalla guerra stessa, non da un template a parte): più semplicemente, la
+  // guerra in corso smette di essere un timer muto.
+  var WORLD_WAR_CHECKIN_OFFSETS = [20, 45];
+  function checkWorldWarCheckinDue() {
+    var w = state.worldWar;
+    if (!w) return false;
+    var idx = w.nextCheckinIdx || 0;
+    if (idx >= WORLD_WAR_CHECKIN_OFFSETS.length) return false;
+    return state.turn >= w.startTurn + WORLD_WAR_CHECKIN_OFFSETS[idx];
+  }
+  function buildWorldWarCheckinDossier() {
+    var w = state.worldWar;
+    var idx = w.nextCheckinIdx || 0;
+    var isBelligerante = w.stance === "belligerante";
+    var stanceLabel = isBelligerante ? "il fronte" : w.stance === "neutrale" ? "la neutralità" : "la linea non allineata";
+    var weeksLeft = w.resolveTurn - state.turn;
+    var choices = isBelligerante ? [
+      { label: "Intensifica lo sforzo bellico: più truppe, più spesa per la difesa", hint: "Più chance di uscirne bene, ma costa caro subito", worldWarMomentumDelta: 2,
+        effects: { national: { economia: -0.5, difesa: 0.3 } },
+        result: "Il governo intensifica lo sforzo bellico: nuovi contingenti e spesa militare in aumento, con un costo immediato per l'economia." },
+      { label: "Mantieni l'impegno attuale, senza escalation", hint: "Nessun rischio aggiuntivo, nessun vantaggio in più", worldWarMomentumDelta: 0, effects: {},
+        result: "Il governo mantiene l'impegno attuale sul fronte, senza ulteriori escalation." },
+      { label: "Avvia colloqui riservati per un ritiro anticipato", hint: "Allevia la pressione interna, ma rischia di apparire come un cedimento agli alleati", worldWarMomentumDelta: -2,
+        effects: { national: { felicita: 0.3, relazioniDiplomatiche: -0.3 } },
+        result: "Colloqui riservati esplorano un ritiro anticipato: la pressione interna si allenta, ma la mossa non passa inosservata agli alleati." }
+    ] : [
+      { label: "Rafforza i confini e la difesa civile, senza entrare nel conflitto", hint: "Più sicurezza interna, qualche costo economico", worldWarMomentumDelta: 1,
+        effects: { national: { economia: -0.3, sicurezza: 0.3 } },
+        result: "Il governo rafforza i confini e la difesa civile, restando fuori dal conflitto attivo." },
+      { label: "Mantieni la linea attuale, senza cambiare nulla", hint: "Nessun rischio aggiuntivo, nessun vantaggio in più", worldWarMomentumDelta: 0, effects: {},
+        result: "Il governo mantiene " + stanceLabel + " così com'è, senza cambiare registro." },
+      { label: "Apri un canale di mediazione riservato tra i blocchi", hint: "Prestigio internazionale se funziona, costa risorse diplomatiche", worldWarMomentumDelta: 1,
+        effects: { fondi: -rand(200, 400), national: { relazioniDiplomatiche: 0.3 } },
+        result: "Un canale di mediazione riservato tra i blocchi in guerra si apre, nel tentativo di ritagliarsi un ruolo di credibilità internazionale." }
+    ];
+    choices.forEach(function (c) { c.worldWarCheckin = true; });
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Aggiornamento dal fronte",
+      cat: "Politica Estera", title: "La Guerra Mondiale continua",
+      brief: "Sono passate " + (state.turn - w.startTurn) + " settimane dall'inizio della guerra mondiale, con " + stanceLabel + " italiana mantenuta fin qui. Mancano ancora circa " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + " prima che il conflitto possa concludersi. Come procede il governo da qui in avanti?",
+      choices: choices
+    };
+  }
   function resolveWorldWarIfDue() {
     var w = state.worldWar;
     if (!w) return null;
@@ -1691,7 +1774,7 @@
     state.worldWarActive = false;
     var cp = state.countryProfile;
     var strengthScore = (cp.difesa + cp.relazioniDiplomatiche + cp.economia) / 3;
-    var favorable = Math.random() < clamp(0.3 + (strengthScore - 5) / 12, 0.15, 0.8);
+    var favorable = Math.random() < clamp(0.3 + (strengthScore - 5) / 12 + (w.momentum || 0) * 0.03, 0.1, 0.85);
     var esito;
     if (w.stance === "neutrale") {
       esito = "Dopo mesi durissimi, la guerra mondiale si conclude con un armistizio generale: la neutralità italiana ha retto, il paese non ha versato sangue in battaglia, ma l'isolamento economico e diplomatico lascia cicatrici profonde nel tessuto produttivo del paese.";
@@ -3243,7 +3326,12 @@
   // regioni lo stesso identico turno, cosi' le elezioni regionali diventano un evento che torna a
   // scadenze diverse tutto l'anno, non un'unica tornata annunciata una volta sola.
   function ensureRegionsInit() {
-    if (state.regions && Object.keys(state.regions).length >= ITALIAN_REGIONS.length) return;
+    if (state.regions && Object.keys(state.regions).length >= ITALIAN_REGIONS.length) {
+      // Riparazione dei salvataggi creati prima del gradimento locale: le regioni esistono già, ma senza
+      // questo campo (il ramo "crea da zero" sotto non verrebbe mai eseguito per loro).
+      Object.keys(state.regions).forEach(function (id) { if (state.regions[id].approvalLocal === undefined) state.regions[id].approvalLocal = 50; });
+      return;
+    }
     if (!state.regions) state.regions = {};
     ITALIAN_REGIONS.forEach(function (region, idx) {
       if (state.regions[region.id]) return;
@@ -3251,7 +3339,12 @@
       state.regions[region.id] = {
         governorFamilyId: famId, governorPartyId: pickPartyForFamily(famId), playerGoverns: false,
         lastElectionTurn: null,
-        nextElectionTurn: state.turn + 10 + Math.floor((idx / ITALIAN_REGIONS.length) * REGIONAL_ELECTION_CYCLE_WEEKS) + Math.floor(Math.random() * 15)
+        nextElectionTurn: state.turn + 10 + Math.floor((idx / ITALIAN_REGIONS.length) * REGIONAL_ELECTION_CYCLE_WEEKS) + Math.floor(Math.random() * 15),
+        // Gradimento locale (0-100): richiesto da un giocatore, prima vincere la presidenza di una
+        // regione era solo un'etichetta — nessuna interazione vera da governatore, nessuna conseguenza
+        // sulla rielezione. Parte da 50 e si muove solo con le scelte di governo regionale vere e proprie
+        // (vedi buildRegionalGovernanceDossier), non con il drift nazionale.
+        approvalLocal: 50
       };
     });
   }
@@ -3281,6 +3374,7 @@
     r.lastElectionTurn = state.turn;
     r.nextElectionTurn = state.turn + REGIONAL_ELECTION_CYCLE_WEEKS + Math.floor(Math.random() * 15) - 7;
     if (!stays) {
+      r.approvalLocal = 50;
       var famLabel = (familyById(newFamId) || {}).label || newFamId;
       var text = "In " + regionId + " le elezioni regionali cambiano la maggioranza: vince l'area " + famLabel.toLowerCase() + ".";
       state.log.unshift({ week: state.turn, title: "Elezioni Regionali — " + regionId, choiceLabel: famLabel, result: text, headlines: [], type: "locale", cat: "Elezioni Regionali" });
@@ -3295,8 +3389,13 @@
     var p = state.player;
     var region = regionById(regionId);
     var r = state.regions[regionId];
+    // Se il giocatore sta già governando questa regione, il suo gradimento locale (costruito con le
+    // scelte vere di governo regionale, vedi buildRegionalGovernanceDossier) pesa sulla rielezione: un
+    // presidente apprezzato parte avvantaggiato, uno impopolare no — esattamente come dovrebbe essere.
+    var wasIncumbent = !!r.playerGoverns;
+    var incumbentBonus = wasIncumbent ? ((r.approvalLocal === undefined ? 50 : r.approvalLocal) - 50) / 100 : 0;
     var won = Math.round(clamp(computeRegionalCampaignStrength(regionId), 0, 40));
-    var becomesGovernor = won >= 22 && Math.random() < clamp((won - 18) / 30, 0.05, 0.6);
+    var becomesGovernor = won >= 22 && Math.random() < clamp((won - 18) / 30 + incumbentBonus, 0.03, 0.75);
     r.lastElectionTurn = state.turn;
     r.nextElectionTurn = state.turn + REGIONAL_ELECTION_CYCLE_WEEKS + Math.floor(Math.random() * 15) - 7;
     if (!p.regionsWon) p.regionsWon = {};
@@ -3306,15 +3405,22 @@
       r.governorFamilyId = p.family;
       r.governorPartyId = "player";
       r.playerGoverns = true;
+      // Riparte da un gradimento "da insediamento" solo per un NUOVO mandato: una rielezione da uscente
+      // apprezzato mantiene invece il gradimento già costruito, non lo azzera a ogni voto.
+      if (!wasIncumbent) r.approvalLocal = 55;
       p.regionsWon[regionId] = true;
       p.amministratoriLocali = (p.amministratoriLocali || 0) + won;
       p.reputazione = clamp(p.reputazione + rand(5, 9), 0, 100);
       p.visibilita = clamp(p.visibilita + rand(6, 11), 0, 100);
       p.iscritti = Math.max(0, p.iscritti + won * 15);
-      title = "Vittoria storica: " + p.name + " guida la " + regionId;
-      text = "Il partito vince le elezioni regionali in " + regionId + " ed esprime il nuovo presidente di regione: un risultato che pesa, ben oltre il perimetro di " + city + ".";
+      title = wasIncumbent ? (p.name + " viene riconfermata/o alla guida della " + regionId) : ("Vittoria storica: " + p.name + " guida la " + regionId);
+      text = wasIncumbent
+        ? ("Il partito viene riconfermato alla presidenza della " + regionId + ": il gradimento costruito in questi anni di governo regionale paga."
+          )
+        : ("Il partito vince le elezioni regionali in " + regionId + " ed esprime il nuovo presidente di regione: un risultato che pesa, ben oltre il perimetro di " + city + ".");
     } else if (won >= 5) {
       r.playerGoverns = false;
+      if (wasIncumbent) r.approvalLocal = 50;
       p.amministratoriLocali = (p.amministratoriLocali || 0) + won;
       p.reputazione = clamp(p.reputazione + Math.min(5, won * 0.35), 0, 100);
       p.visibilita = clamp(p.visibilita + Math.min(7, won * 0.5), 0, 100);
@@ -3323,6 +3429,7 @@
       text = "Il partito elegge " + won + " consiglieri regionali in " + regionId + ": un ingresso in Consiglio Regionale, ma la presidenza resta ad altri.";
     } else {
       r.playerGoverns = false;
+      if (wasIncumbent) r.approvalLocal = 50;
       title = "Elezioni Regionali in " + regionId;
       text = "In " + regionId + " il partito si presenta ma non riesce a entrare davvero in Consiglio Regionale questa volta.";
     }
@@ -3390,6 +3497,51 @@
       choices: choices
     };
   }
+  // ---------- Governo regionale vero e proprio ----------
+  // Richiesto da un giocatore: prima, vincere la presidenza di una regione (resolveRegionalElectionForPlayer
+  // sopra) era solo un'etichetta — "Governi tu" nel pannello, e poi più nulla di diverso da una qualunque
+  // altra sezione territoriale. Qui diventa un vero ruolo da gestire: periodicamente, da presidente di una
+  // regione che governi, arriva una scelta reale su uno dei due temi-simbolo di QUELLA regione (le stesse
+  // ITALIAN_REGIONS.issues già usate da buildRegionalIssueDossier), che sposta il gradimento locale
+  // (approvalLocal, 0-100) — a sua volta determinante quando arriva la prossima elezione regionale (vedi
+  // il bonus/malus da incumbent in resolveRegionalElectionForPlayer): governare bene aiuta a essere
+  // rieletti, governare male no, esattamente come dovrebbe essere.
+  var REGIONAL_GOVERNANCE_COOLDOWN_TURNS = 18;
+  function checkRegionalGovernanceTrigger() {
+    var p = state.player;
+    if (!p || state.turn < (p.regionalGovernanceCooldownTurn || 0)) return false;
+    var governedIds = Object.keys(state.regions || {}).filter(function (id) { return state.regions[id].playerGoverns; });
+    if (!governedIds.length) return false;
+    return Math.random() < 0.3;
+  }
+  function buildRegionalGovernanceDossier() {
+    var p = state.player;
+    p.regionalGovernanceCooldownTurn = state.turn + REGIONAL_GOVERNANCE_COOLDOWN_TURNS;
+    var governedIds = Object.keys(state.regions).filter(function (id) { return state.regions[id].playerGoverns; });
+    var regionId = governedIds[Math.floor(Math.random() * governedIds.length)];
+    var region = regionById(regionId);
+    var themeId = region.issues[Math.floor(Math.random() * region.issues.length)];
+    var theme = SITUATION_THEME_BY_ID[themeId];
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var natMetric = THEME_TO_NATIONAL_METRIC[themeId];
+    var investEffects = { fondi: -rand(400, 700) };
+    var cutEffects = { fondi: rand(300, 500) };
+    if (natMetric) { investEffects.national = {}; investEffects.national[natMetric] = 0.15; cutEffects.national = {}; cutEffects.national[natMetric] = -0.15; }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Governo Regionale — " + regionId,
+      cat: "Governo Regionale", title: "Come gestisci " + noun + " in " + regionId + "?",
+      brief: "Da presidente di " + regionId + ", tocca a te decidere come affrontare " + noun + ": le scelte da governatore regionale pesano sul gradimento locale, in vista della prossima elezione per quella poltrona.",
+      regionalGovernanceId: regionId,
+      choices: [
+        { label: "Investi con decisione sulle priorità regionali", hint: "Più gradimento locale, costa ai fondi di partito", regionalApprovalDelta: rand(5, 9), effects: investEffects,
+          result: "L'investimento deciso su " + noun + " viene notato e apprezzato in " + regionId + ", anche se pesa sui fondi di partito." },
+        { label: "Gestisci con equilibrio, senza strappi", hint: "Piccolo effetto, nessun rischio particolare", regionalApprovalDelta: rand(1, 3), effects: {},
+          result: "Una gestione equilibrata di " + noun + " non entusiasma nessuno in " + regionId + ", ma non scontenta nessuno nemmeno." },
+        { label: "Taglia la spesa regionale su questo fronte", hint: "Libera risorse, ma il gradimento locale ne risente", regionalApprovalDelta: -rand(4, 8), effects: cutEffects,
+          result: "Il taglio alla spesa regionale su " + noun + " libera risorse per il partito, ma in " + regionId + " la misura non piace." }
+      ]
+    };
+  }
   // Pannello sempre visibile nella pagina Territorio: la mappa politica delle 20 regioni, chi le governa
   // oggi e, per quelle dove il partito ha già radicamento, il conto alla rovescia alla prossima elezione
   // regionale — così "le regioni" smettono di essere invisibili fuori dal giorno del voto.
@@ -3406,7 +3558,7 @@
       var govColor = isPlayerGov ? (p ? p.color : "#888") : (govParty ? govParty.color : "#888");
       var weeksLeft = r.nextElectionTurn - state.turn;
       var presentHere = !!playerRegionIds[region.id];
-      return { name: region.id, govLabel: govLabel, govColor: govColor, isPlayerGov: isPlayerGov, weeksLeft: weeksLeft, presentHere: presentHere };
+      return { name: region.id, govLabel: govLabel, govColor: govColor, isPlayerGov: isPlayerGov, weeksLeft: weeksLeft, presentHere: presentHere, approvalLocal: r.approvalLocal };
     }).sort(function (a, b) {
       if (a.isPlayerGov !== b.isPlayerGov) return a.isPlayerGov ? -1 : 1;
       if (a.presentHere !== b.presentHere) return a.presentHere ? -1 : 1;
@@ -3415,10 +3567,14 @@
     var items = rows.map(function (r) {
       var chip = r.isPlayerGov ? '<span class="chip good">Governi tu</span>' : "";
       var countdown = r.presentHere ? '<span class="ci-hint">Prossime elezioni regionali tra ' + Math.max(0, r.weeksLeft) + " settiman" + (Math.abs(r.weeksLeft) === 1 ? "a" : "e") + "</span>" : "";
+      // Il gradimento locale (costruito dalle scelte vere di governo regionale, vedi
+      // buildRegionalGovernanceDossier) conta solo per la regione che il giocatore governa davvero: è
+      // quello che decide se verrà riconfermato, non un numero decorativo.
+      var approvalLine = r.isPlayerGov ? '<div class="party-row-sub">Gradimento locale: ' + Math.round(r.approvalLocal === undefined ? 50 : r.approvalLocal) + '%</div>' : "";
       return '<div class="party-row"><span class="sw" style="background:' + r.govColor + '"></span>' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + '</strong>' + chip + '</div>' +
         '<div class="party-row-sub">Governatore: ' + r.govLabel + (r.presentHere ? " — presenza del tuo partito" : "") + '</div>' +
-        countdown + '</div></div>';
+        approvalLine + countdown + '</div></div>';
     }).join("");
     return '<section aria-label="Le Regioni d\'Italia"><details class="log"><summary>Le Regioni d\'Italia<span>▾</span></summary>' +
       '<p class="ci-hint">Chi governa oggi ciascuna delle 20 regioni, e quando torna a votare. Ogni regione ha un proprio calendario elettorale, sfalsato dalle altre, e due temi che ne caratterizzano davvero i problemi.</p>' +
@@ -12376,6 +12532,7 @@
     resolveMonthlyPartyTax();
     triggerWorldNews();
     triggerRealConflictNews();
+    resolveRegionalConflictsIfDue();
     triggerMinorCountryEvent();
     triggerCountryShock();
     triggerStrikeUnrest();
@@ -23297,9 +23454,21 @@
         if (choice.stance) {
           state.worldWarActive = true;
           state.italyMilitaryStance = choice.stance;
-          state.worldWar = { stance: choice.stance, startTurn: state.turn, resolveTurn: state.turn + WORLD_WAR_DURATION_TURNS };
+          state.worldWar = { stance: choice.stance, startTurn: state.turn, resolveTurn: state.turn + WORLD_WAR_DURATION_TURNS, momentum: 0, nextCheckinIdx: 0 };
           addDiaryEntry("Il mondo è in guerra", "Oggi il governo ha scelto la collocazione dell'Italia nella guerra mondiale: " + choice.label.toLowerCase() + ". Qualunque cosa succeda da qui in avanti, questa scelta segnerà il paese per una generazione.");
         }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (choice.worldWarCheckin && state.worldWar) {
+        state.worldWar.momentum = (state.worldWar.momentum || 0) + (choice.worldWarMomentumDelta || 0);
+        state.worldWar.nextCheckinIdx = (state.worldWar.nextCheckinIdx || 0) + 1;
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "geo_regional_war" && choice.regionalConflictStance) {
+        var targetConflict = (state.activeConflicts || []).filter(function (c) { return c.id === dossier.geoConflictId; })[0];
+        if (targetConflict) targetConflict.supportedSide = choice.regionalConflictStance;
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.regionalGovernanceId && choice.regionalApprovalDelta !== undefined) {
+        var govRegion = state.regions && state.regions[dossier.regionalGovernanceId];
+        if (govRegion) govRegion.approvalLocal = clamp((govRegion.approvalLocal === undefined ? 50 : govRegion.approvalLocal) + choice.regionalApprovalDelta, 0, 100);
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "trial_open") {
         var p = state.player;
@@ -24763,6 +24932,7 @@
       triggerRivalPartyEvent();
       triggerWorldNews();
       triggerRealConflictNews();
+      resolveRegionalConflictsIfDue();
       // Segnalato da un giocatore: anche con il resto del paese che si muove (vedi sopra), le elezioni
       // vere e proprie restavano sospese finché durava la raccolta firme — il Governo in carica non
       // cambiava mai, nessuna classifica dei voti, nessuna legislatura che avanzasse, anche dopo decine
@@ -24812,6 +24982,7 @@
     resolveMonthlyPartyTax();
     triggerWorldNews();
     triggerRealConflictNews();
+    resolveRegionalConflictsIfDue();
     triggerMinorCountryEvent();
     triggerCountryShock();
     triggerStrikeUnrest();
@@ -25074,6 +25245,13 @@
       return;
     }
 
+    if (checkWorldWarCheckinDue()) {
+      state.aiDynamicDossier = buildWorldWarCheckinDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
     if (checkWorldWarTrigger()) {
       state.aiDynamicDossier = buildWorldWarDossier();
       state.currentDossierId = "ai_dynamic";
@@ -25294,6 +25472,13 @@
         state.phase = "building";
         return;
       }
+    }
+
+    if (checkRegionalGovernanceTrigger()) {
+      state.aiDynamicDossier = buildRegionalGovernanceDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
     }
 
     if (checkEndorsementTrigger()) {
