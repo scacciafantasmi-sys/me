@@ -13154,14 +13154,31 @@
     var wasRegime = !!state.regime;
     var regimeLabel = wasRegime ? REGIME_LABELS[state.regime.type].name : null;
     var govLabelBefore = govEntityLabel() || "Il governo in carica";
+    // Richiesto da un giocatore: a differenza di un normale crollo di consenso (vedi
+    // applyGovernmentCollapseLeadershipShock sotto, già abbastanza morbido da sé), il partito o la
+    // coalizione travolti da una vera rivoluzione popolare perdono metà dei voti nei sondaggi, di netto —
+    // sia che si tratti del giocatore sia della CPU, stessa regola per entrambi. Il dimezzamento vero e
+    // proprio NON si applica qui (altri meccanismi più in alto nella stessa catena di turno potrebbero
+    // ancora muovere i sondaggi prima che questa funzione finisca): si limita a segnalare QUALI id erano
+    // al governo quando è scattata la rivoluzione, applicato poi da advanceTurnLogic sul valore di inizio
+    // turno — l'unico punto che garantisce di partire dal vero valore "di prima", non da uno già alterato.
+    var revoltGovMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var revoltActiveIds = activeParties().map(function (party) { return party.id; });
+    state.popularRevolutionFallenGovIds = revoltGovMemberIds.filter(function (id) { return revoltActiveIds.indexOf(id) !== -1; });
+    if (state.player.parliamentRole === "governo") state.popularRevolutionFallenGovIds.push("player");
     if (wasRegime) state.regime = null;
     applyGovernmentCollapseLeadershipShock();
+    // Un dimezzamento è per forza di cose un balzo enorme in una settimana: senza questo segnale,
+    // la "rete di sicurezza finale" su WEEKLY_SWING_HARD_CAP (vedi advanceTurnLogic) lo riporterebbe
+    // indietro quasi del tutto, esattamente come già succede per le vere elezioni (che infatti ne sono
+    // escluse tramite state.lastElectionTurn) — qui usiamo lo stesso principio con un segnale dedicato.
+    state.popularRevolutionJustHappened = true;
     state.govEntity = null;
     state.snapElectionPending = true;
     state.nextElectionTurn = state.turn + 8;
     var text = "Con il benessere sociale crollato a " + fmt1(state.countryProfile.felicita) + "/10, una vera e propria rivoluzione popolare attraversa il paese: scioperi generali, cortei permanenti e piazze occupate per settimane. " +
       (wasRegime ? regimeLabel + " viene travolto: il regime cade e la democrazia torna in vigore" : govLabelBefore + " non regge alla pressione della piazza e cade") +
-      ". Si torna al voto, con una campagna lampo nel pieno di una crisi sociale senza precedenti.";
+      ". Chi era al governo ne esce dimezzato nei sondaggi: l'opinione pubblica non perdona chi ha lasciato precipitare il paese a questo punto. Si torna al voto, con una campagna lampo nel pieno di una crisi sociale senza precedenti.";
     state.log.unshift({ week: state.turn, title: "Rivoluzione Popolare: il governo cade", choiceLabel: "Crisi sociale", result: text, headlines: [], type: "istituzioni", cat: "Istituzioni" });
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Istituzioni", text: text });
@@ -27482,7 +27499,27 @@
       parties: Object.assign({}, state.parties)
     };
     await advanceTurnLogicCore();
-    if (state.lastElectionTurn === capBefore.lastElectionTurn) {
+    // Stessa eccezione volutamente concessa alle vere elezioni (vedi il commento su WEEKLY_SWING_HARD_CAP
+    // sopra): anche il dimezzamento nei sondaggi del partito travolto da una Rivoluzione Popolare (vedi
+    // triggerPopularRevolutionIfDue) è un balzo enorme voluto, non un effetto a catena da contenere.
+    var revolutionBypassedCap = !!state.popularRevolutionJustHappened;
+    state.popularRevolutionJustHappened = false;
+    // Il dimezzamento vero e proprio (vedi triggerPopularRevolutionIfDue) si applica qui, non dentro quella
+    // funzione: capBefore è l'UNICO valore garantito "di prima", preso prima che qualunque altro meccanismo
+    // di questo stesso turno (compresi quelli eseguiti prima della rivoluzione nella catena) possa averlo
+    // già mosso — partire da un valore intermedio avrebbe prodotto un doppio colpo ben più severo di un
+    // vero dimezzamento.
+    if (state.popularRevolutionFallenGovIds && state.popularRevolutionFallenGovIds.length) {
+      state.popularRevolutionFallenGovIds.forEach(function (id) {
+        if (id === "player") {
+          if (state.player && capBefore.playerSondaggi !== null) state.player.sondaggi = Math.max(0.3, capBefore.playerSondaggi * 0.5);
+        } else if (state.parties && capBefore.parties[id] !== undefined) {
+          state.parties[id] = Math.max(0.3, capBefore.parties[id] * 0.5);
+        }
+      });
+      state.popularRevolutionFallenGovIds = null;
+    }
+    if (state.lastElectionTurn === capBefore.lastElectionTurn && !revolutionBypassedCap) {
       if (state.player && capBefore.playerSondaggi !== null) {
         var pDelta = state.player.sondaggi - capBefore.playerSondaggi;
         if (Math.abs(pDelta) > WEEKLY_SWING_HARD_CAP) {
