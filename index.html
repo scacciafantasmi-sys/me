@@ -3341,10 +3341,19 @@
     var pool = Math.random() < cdChance ? cdPool : clPool;
     return pool[Math.floor(Math.random() * pool.length)];
   }
+  // Bug segnalato da un giocatore: sceglieva un partito a CASO tra tutti quelli della stessa famiglia
+  // ideologica, dando a un partito marginale (es. "Ora!", poche frazioni di punto nei sondaggi nazionali)
+  // esattamente le stesse probabilità di vincere una regione di un partito che guida davvero quell'area
+  // politica a livello nazionale — e, visto che pescava dalla lista statica PARTIES invece che da
+  // activeParties(), poteva perfino assegnare la regione a un partito nel frattempo sciolto/abolito.
+  // Ora pesca da chi è realmente ancora in gioco, con probabilità proporzionale al peso nei sondaggi
+  // nazionali (un minimo floor per non azzerare mai del tutto le chance di un partito piccolo: può
+  // sempre succedere che un radicamento locale non rispecchi i numeri nazionali).
   function pickPartyForFamily(famId) {
-    var candidates = PARTIES.filter(function (pt) { return pt.familyId === famId; });
+    var candidates = activeParties().filter(function (pt) { return pt.familyId === famId; });
+    if (!candidates.length) candidates = activeParties();
     if (!candidates.length) candidates = PARTIES;
-    return candidates[Math.floor(Math.random() * candidates.length)].id;
+    return pickWeighted(candidates, function (pt) { return Math.max(0.3, state.parties[pt.id] || 0); }).id;
   }
   // Inizializza (o ripara, per i salvataggi precedenti a questa funzionalità) lo stato di tutte e 20 le
   // regioni: chiamata difensivamente da ogni funzione regionale, sullo stesso modello già usato altrove
@@ -3434,7 +3443,28 @@
         if (r.commissariatoUntilTurn === undefined) r.commissariatoUntilTurn = 0;
         if (r.debtCrisisCooldownTurn === undefined) r.debtCrisisCooldownTurn = 0;
         if (r.waveEventCooldownTurn === undefined) r.waveEventCooldownTurn = 0;
+        // Bug segnalato da un giocatore: un partito che si scioglie (abolito da un regime, assorbito da
+        // una fusione, morto per crollo organico dei consensi) smette di esistere a livello NAZIONALE, ma
+        // restava comunque "presidente" di qualunque regione avesse vinto in passato, per sempre — fino
+        // alla prossima tornata regionale, anche 5 anni di gioco più avanti (REGIONAL_ELECTION_CYCLE_WEEKS).
+        // Su una partita avviata da molto tempo questo significava regioni governate da un partito ormai
+        // sparito dalla scena nazionale, come se non ci fosse alcuna relazione tra i due livelli. Qui si
+        // ripara subito, appena un partito dissolto viene notato al governo di una regione (non tocca mai
+        // le regioni governate dal giocatore in prima persona, governorPartyId resta "player" per quelle).
+        if (!r.playerIsGovernor && r.governorPartyId && r.governorPartyId !== "player"
+          && (state.dissolvedPartyIds || []).indexOf(r.governorPartyId) !== -1) {
+          var oldGovParty = partyById(r.governorPartyId);
+          var newGovPartyId = pickPartyForFamily(r.governorFamilyId);
+          r.governorPartyId = newGovPartyId;
+          var newGovParty = partyById(newGovPartyId);
+          var swapText = (oldGovParty ? oldGovParty.name : "Il partito che governava " + id) + " non esiste più a livello nazionale: " +
+            (newGovParty ? newGovParty.name : "un nuovo esponente dell'area") + " ne raccoglie l'eredità alla guida della regione.";
+          state.log.unshift({ week: state.turn, title: "Ricambio politico in " + id, choiceLabel: id, result: swapText, headlines: [], type: "locale", cat: "Elezioni Regionali" });
+          if (!state.worldNews) state.worldNews = [];
+          state.worldNews.unshift({ cat: "Elezioni Regionali", text: swapText });
+        }
       });
+      if (state.worldNews && state.worldNews.length > 6) state.worldNews.length = 6;
       return;
     }
     if (!state.regions) state.regions = {};
@@ -16466,6 +16496,11 @@
   var EU_SEATS_ITALY = 76;
   var EU_THRESHOLD = 4;
   function resolveEuropeanElection() {
+    // Bug segnalato da un giocatore: dopo un'uscita dall'UE (state.leftEu) continuavano a svolgersi vere
+    // elezioni europee e a comparire periodicamente la scelta del gruppo parlamentare — un paese fuori
+    // dall'Unione non ha più eurodeputati da eleggere. Vedi anche applyEuExitConsequences, che ora pulisce
+    // subito seggi/gruppo/euGroupPending residui al momento dell'uscita.
+    if (state.leftEu) return;
     if (state.turn < state.nextEuropeanElectionTurn) return;
     state.nextEuropeanElectionTurn = state.turn + 90 + Math.floor(Math.random() * 40);
     var p = state.player;
@@ -17668,7 +17703,10 @@
         var legacyCorrentiOptions = CORRENTI_BY_FAMILY[parsed.player.family] || CORRENTI_BY_FAMILY.sovranista;
         parsed.player.currents.forEach(function (c, i) { c.id = legacyCorrentiOptions[i] ? legacyCorrentiOptions[i].id : legacyCorrentiOptions[0].id; });
       }
-      if (parsed.player.seggiEuropei > 0 && !parsed.player.euGroup && !parsed.euGroupPending) parsed.euGroupPending = true;
+      if (parsed.player.seggiEuropei > 0 && !parsed.player.euGroup && !parsed.euGroupPending && !parsed.leftEu) parsed.euGroupPending = true;
+      // Salvataggi da prima di questo fix possono avere seggi/gruppo europeo residui nonostante un'uscita
+      // dall'UE già avvenuta: ripulisce al caricamento, stessa logica di applyEuExitConsequences.
+      if (parsed.leftEu) { parsed.player.seggiEuropei = 0; parsed.player.euGroup = null; parsed.euParliamentSeats = null; parsed.euGroupPending = false; }
       if (!parsed.partyRelations) parsed.partyRelations = initPartyRelations(parsed.player);
     }
     // Ripristina la membership salvata dei due blocchi storici (vedi save()): senza questo, COALITIONS
@@ -19425,6 +19463,13 @@
     if (state.spreadHistory.length > 12) state.spreadHistory.shift();
     state.leftEu = true;
     state.euExitDecided = true;
+    // Un paese fuori dall'UE non ha più eurodeputati: ripulisce subito seggi/gruppo/scelta pendente,
+    // così non resta nessun residuo di prima dell'uscita a far comparire ancora dossier sul Parlamento
+    // Europeo (vedi anche il guard su state.leftEu aggiunto in resolveEuropeanElection).
+    state.player.seggiEuropei = 0;
+    state.player.euGroup = null;
+    state.euParliamentSeats = null;
+    state.euGroupPending = false;
     announceLiraReturn();
   }
   // Subito dopo un'uscita dall'UE effettiva, il governo deve scegliere la nuova collocazione
@@ -27984,7 +28029,7 @@
       return;
     }
 
-    if (state.euGroupPending) {
+    if (state.euGroupPending && !state.leftEu) {
       state.euGroupPending = false;
       state.currentDossierId = "eu_group_choice";
       state.phase = "building";
