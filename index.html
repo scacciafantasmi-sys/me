@@ -1802,7 +1802,7 @@
     state.regionalWarCooldownTurn = state.turn + 150;
     addDiaryEntry("La fine della Guerra Mondiale", esito);
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "la fine della guerra mondiale", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "relazioniDiplomatiche", themeId: METRIC_TO_THEME_ID.relazioniDiplomatiche, inParliament: !!state.player.inParliament }, 5);
     return {
@@ -2030,7 +2030,7 @@
     var brief = esito + " Nel frattempo anche " + rival + " avanza nella propria corsa allo spazio: la competizione internazionale resta serrata." +
       (success ? " Come reagisce il paese a questo traguardo?" : " Come reagisce il paese a questa battuta d'arresto?");
     var rivalPool = activeParties();
-    var rivalParty = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rivalParty = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "il Programma Spaziale Nazionale", city: city, rivalName: rivalParty.name, rivalId: rivalParty.id, coherent: true, nationalMetric: "ricercaSviluppo", themeId: METRIC_TO_THEME_ID.ricercaSviluppo, inParliament: !!state.player.inParliament }, 5);
     return {
@@ -3718,7 +3718,7 @@
     state.worldNews.unshift({ cat: "Elezioni Regionali", text: text });
     var themeId = region.issues[Math.floor(Math.random() * region.issues.length)];
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var choices = buildSituationChoices({ noun: "il risultato ottenuto in " + regionId, city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: THEME_TO_NATIONAL_METRIC[themeId], themeId: themeId, inParliament: !!p.inParliament }, 5);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Elezioni Regionali — " + regionId,
@@ -3775,7 +3775,7 @@
     var theme = SITUATION_THEME_BY_ID[themeId];
     var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var choices = buildSituationChoices({ noun: noun, city: loc.name, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: THEME_TO_NATIONAL_METRIC[themeId], themeId: themeId, inParliament: !!p.inParliament }, 5);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Problema Regionale — " + loc.region,
@@ -3826,8 +3826,11 @@
     // sta davvero facendo male il suo lavoro.
     var protestChance = clamp((55 - (r.approvalLocal === undefined ? 50 : r.approvalLocal)) / 80, 0.08, 0.55);
     var roll = Math.random();
+    // Stessa regola della Modalità Presidente di Regione vera e propria (vedi buildRegionalGovernanceDossierFor):
+    // niente più leggi/mozioni proposte da un dossier settimanale generico — restano solo nelle pagine
+    // dedicate. Questo ramo resta comunque solo come compatibilità per salvataggi molto vecchi in cui
+    // playerIsGovernor risultava vero senza che state.mode fosse mai diventato "regional_president".
     if (roll < protestChance) return buildRegionalProtestDossier(regionId);
-    if (roll < protestChance + 0.4) return buildRegionalProposalDossier(regionId);
     return buildRegionalInvestmentDossier(regionId);
   }
   function buildRegionalInvestmentDossier(regionId, themeIdOverride) {
@@ -3961,6 +3964,15 @@
       // alcun intervento mirato (vedi renderRegionalCittaPage) nessuna città resta ferma per sempre.
       if (r.cities) {
         r.cities.forEach(function (c) { c.satisfaction = clamp(c.satisfaction + (55 - c.satisfaction) * 0.015 + (Math.random() - 0.5) * 2, 0, 100); });
+      }
+      // Bug segnalato da un giocatore: il gradimento locale di una regione governata di persona saliva a
+      // 100% e ci restava per sempre, perché nulla lo tirava mai indietro (solo le scelte dei dossier lo
+      // spostavano, quasi sempre verso l'alto per chi gioca bene). Una leggera deriva verso un valore
+      // "fisiologico" (65: alto ma non perfetto) con un po' di rumore mantiene il numero vivo nel tempo —
+      // un presidente che governa bene lo tiene comunque alto, ma non bloccato al tetto per sempre.
+      if (r.playerGoverns && r.playerIsGovernor) {
+        var approvalNow = r.approvalLocal === undefined ? 50 : r.approvalLocal;
+        r.approvalLocal = clamp(approvalNow + (65 - approvalNow) * 0.015 + (Math.random() - 0.5) * 1.2, 0, 100);
       }
       // Una regione delegata a un esponente di partito (non il giocatore, non la CPU di un'altra
       // famiglia) vive anche lei di fortuna propria sul gradimento, visto che nessuno la gestisce dal di
@@ -4110,7 +4122,10 @@
     p.playerIsLeader = false;
     p.interimLeaderName = successor;
     if (r.fondiRegionali === undefined || r.fondiRegionali === null) r.fondiRegionali = Math.round(regionalTreasurySeed(regionId));
-    if (!r.giunta || !r.giunta.length) r.giunta = generateRegionalGiunta();
+    // Richiesto da un giocatore: gli assessori non devono essere generati a caso, li scegli tu, uno per
+    // uno, appena inizia il mandato (vedi buildRegionalGiuntaFormationDossier/advanceRegionalPresidentTurnLogic).
+    r.giunta = [];
+    state.pendingRegionalGiuntaFormation = { regionId: regionId, remainingAssessorati: REGIONAL_ASSESSORATI.slice() };
     state.regionalPresidency = { regionId: regionId, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: r.nextElectionTurn };
     state.mode = "regional_president";
     state.regionalUiPage = "scheda";
@@ -4131,6 +4146,17 @@
     p.playerIsLeader = true;
     p.interimLeaderName = null;
     state.mode = "party";
+    // Se il mandato finisce (dimissioni, mancata rielezione) a metà della formazione della Giunta (vedi
+    // state.pendingRegionalGiuntaFormation), gli assessorati non ancora scelti non devono restare vuoti
+    // per sempre: vengono completati al volo con un profilo generico, esattamente come generateRegionalGiunta.
+    if (state.pendingRegionalGiuntaFormation && rp && state.regions[rp.regionId]) {
+      var leftoverRegion = state.regions[rp.regionId];
+      if (!leftoverRegion.giunta) leftoverRegion.giunta = [];
+      state.pendingRegionalGiuntaFormation.remainingAssessorati.forEach(function (a) {
+        leftoverRegion.giunta.push({ assessorato: a, name: generateStaffName(), loyalty: Math.round(rand(50, 80)) });
+      });
+      state.pendingRegionalGiuntaFormation = null;
+    }
     var text = "Il mandato da presidente della " + (rp ? rp.regionId : "regione") + " si chiude: " + reasonText + ". Riprendi subito la guida nazionale di " + p.name + ", dopo che " + (formerLeader || "un dirigente di fiducia") + " l'aveva retta ad interim.";
     state.regionalPresidency = null;
     state.log.unshift({ week: state.turn, title: "Fine del mandato regionale: torni alla guida del partito", choiceLabel: rp ? rp.regionId : "", result: text, headlines: [], type: "dossier", cat: "Istituzioni" });
@@ -4222,9 +4248,11 @@
       r.opportunityEventCooldownTurn = state.turn + 10;
       return buildRegionalOpportunityDossier(regionId, bestTheme);
     }
-    // Nessuna condizione critica o eccellente in questo momento: routine amministrativa, ma puntata sul
-    // tema davvero più debole tra quelli "identitari" della regione, non su uno scelto a caso.
-    if (Math.random() < 0.35) return buildRegionalProposalDossier(regionId);
+    // Richiesto da un giocatore: il dossier della settimana non deve più proporre leggi o mozioni — quelle
+    // si gestiscono ora solo dalle schede dedicate (Leggi Regionali/Mozioni Regionali), con scelte vere e
+    // proprie e non più come una delle tante uscite casuali del dossier settimanale. Nessuna condizione
+    // critica o eccellente in questo momento: routine amministrativa, puntata sul tema davvero più debole
+    // tra quelli "identitari" della regione, non su uno scelto a caso.
     return buildRegionalInvestmentDossier(regionId, worstRegionTheme(regionId));
   }
   // A fine mandato (r.nextElectionTurn raggiunto), il presidente di regione in carica decide PRIMA se
@@ -4257,6 +4285,14 @@
       state.aiDynamicDossier = state.pendingRegionalElectionResult;
       state.currentDossierId = "ai_dynamic";
       state.pendingRegionalElectionResult = null;
+      state.phase = "building";
+      return;
+    }
+    // Formazione della Giunta (vedi enterRegionalPresidency): finché restano assessorati da assegnare,
+    // nessun'altra logica di turno scatta — il tempo di gioco non avanza mentre scegli la tua squadra.
+    if (state.pendingRegionalGiuntaFormation && state.pendingRegionalGiuntaFormation.remainingAssessorati.length) {
+      state.aiDynamicDossier = buildRegionalGiuntaFormationDossier();
+      state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
     }
@@ -4399,6 +4435,50 @@
   var REGIONAL_ASSESSORATI = ["Sanità", "Bilancio", "Trasporti e Infrastrutture", "Ambiente e Territorio", "Lavoro e Sviluppo Economico", "Istruzione e Formazione"];
   function generateRegionalGiunta() {
     return REGIONAL_ASSESSORATI.map(function (a) { return { assessorato: a, name: generateStaffName(), loyalty: Math.round(rand(50, 80)) }; });
+  }
+  // A quale tema della Scheda Regione è legato ciascun assessorato: usato per dare un piccolo effetto
+  // reale e immediato alla scelta del candidato in buildRegionalGiuntaFormationDossier, non solo lealtà.
+  var REGIONAL_ASSESSORATO_THEME_MAP = {
+    "Sanità": "sanita", "Bilancio": "economia", "Trasporti e Infrastrutture": "trasporti",
+    "Ambiente e Territorio": "ambiente", "Lavoro e Sviluppo Economico": "lavoro", "Istruzione e Formazione": "scuola"
+  };
+  // Richiesto da un giocatore: gli assessori non devono più essere generati a caso, li scegli tu uno per
+  // uno all'inizio del mandato (vedi enterRegionalPresidency/state.pendingRegionalGiuntaFormation), tra 3
+  // profili reali con un compromesso vero (lealtà verso di te contro peso tecnico sul fronte), non solo
+  // nomi intercambiabili.
+  var REGIONAL_ASSESSORE_ARCHETYPES = [
+    { tag: "tecnico di area, molto competente ma freddo con la stampa e poco legato a te", loyalty: [38, 55], skillBonus: [0.35, 0.65] },
+    { tag: "fedelissimo di partito, ti deve tutto ma ha poca esperienza di governo", loyalty: [75, 92], skillBonus: [-0.2, 0.1] },
+    { tag: "figura di area civica, equilibrata tra competenza e fedeltà", loyalty: [55, 70], skillBonus: [0.05, 0.3] },
+    { tag: "espressione di un alleato di coalizione, da tenere buono per non rompere la maggioranza", loyalty: [42, 58], skillBonus: [0.1, 0.4] }
+  ];
+  function buildRegionalGiuntaFormationDossier() {
+    var pending = state.pendingRegionalGiuntaFormation;
+    var regionId = pending.regionId;
+    var assessorato = pending.remainingAssessorati[0];
+    var usedIdx = {};
+    var pool = [];
+    while (pool.length < 3) {
+      var idx = Math.floor(Math.random() * REGIONAL_ASSESSORE_ARCHETYPES.length);
+      if (usedIdx[idx]) continue;
+      usedIdx[idx] = true;
+      pool.push({ name: generateStaffName(), archetype: REGIONAL_ASSESSORE_ARCHETYPES[idx] });
+    }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Formazione della Giunta — " + regionId,
+      cat: "Governo Regionale", title: "Chi nomini Assessore a " + assessorato + "?",
+      brief: "La Giunta regionale si forma ora, incarico per incarico: scegli chi affidare all'assessorato " + assessorato + ". Ogni candidato porta con sé una lealtà di partenza diversa verso di te e un peso tecnico diverso sul fronte di cui si occuperà.",
+      regionalGiuntaFormationAssessorato: assessorato,
+      choices: pool.map(function (c) {
+        var loyalty = Math.round(rand(c.archetype.loyalty[0], c.archetype.loyalty[1]));
+        var skillBonus = rand(c.archetype.skillBonus[0], c.archetype.skillBonus[1]);
+        return {
+          label: c.name, hint: c.archetype.tag.charAt(0).toUpperCase() + c.archetype.tag.slice(1) + " (lealtà di partenza: " + loyalty + "%)",
+          regionalGiuntaPick: { assessorato: assessorato, name: c.name, loyalty: loyalty, skillBonus: skillBonus },
+          effects: {}, result: c.name + " è il nuovo assessore a " + assessorato + ": " + c.archetype.tag + "."
+        };
+      })
+    };
   }
   // ---------- Rapporto con il Governo nazionale ----------
   // Richiesto da un giocatore: ciò che succede a Roma deve pesare davvero sulla regione — un governo
@@ -4677,6 +4757,10 @@
     return html;
   }
   // ---------- Pagina: Leggi Regionali ----------
+  // Richiesto da un giocatore: i blocchi dei temi non devono più proporre un singolo bottone generico,
+  // ma aprirsi per mostrare delle scelte specifiche (una per voce reale del tema, da SITUATION_THEMES[].nouns)
+  // — più una proposta scritta di proprio pugno, classificata sul tema giusto dallo stesso motore per
+  // sottostringa già usato da Iniziativa Libera/Dichiarazioni (classifyRegionalFreeText).
   function renderRegionalLeggiPage() {
     var regionId = state.regionalPresidency.regionId;
     var r = state.regions[regionId];
@@ -4688,10 +4772,20 @@
       var sanitaCommissariata = r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn;
       html += '<p class="ci-hint">Proponi una vera legge regionale su un tema specifico: il Consiglio Regionale discute per alcune settimane, con un effetto forte se passa, un costo in credibilità se cade.' +
         (onCooldown ? " Hai già agito di recente: la prossima azione sarà possibile dalla settimana " + r.regionalActionCooldownTurn + "." : "") +
-        (sanitaCommissariata ? " La sanità è commissariata da Roma: nessuna legge regionale possibile su quel fronte finché dura." : "") + '</p><div class="option-grid">';
+        (sanitaCommissariata ? " La sanità è commissariata da Roma: nessuna legge regionale possibile su quel fronte finché dura." : "") + '</p>';
+      html += '<div class="field"><label class="field-label" for="regional-law-custom-input">Scrivi tu la proposta di legge (facoltativo)</label>' +
+        '<textarea id="regional-law-custom-input" class="autogrow-textarea" rows="4" placeholder="Scrivi con parole tue il contenuto della legge: il Consiglio Regionale e la CPU riconoscono il tema dal testo…"' + (onCooldown ? " disabled" : "") + '></textarea></div>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="regional-law-custom-submit-btn"' + (onCooldown ? " disabled" : "") + '><span class="clabel">Deposita la tua proposta</span></button></div>' +
+        '<p class="eyebrow" style="margin-top:0.8rem">Oppure scegli un tema specifico</p><div class="option-grid">';
       SITUATION_THEMES.forEach(function (t) {
         var disabled = onCooldown || (sanitaCommissariata && t.id === "sanita");
-        html += '<button type="button" class="option-card" data-regional-law-theme="' + t.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+        var isOpen = expandedRegionalLawThemeId === t.id;
+        html += '<button type="button" class="option-card" data-regional-law-tile="' + t.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + (isOpen ? " ▴" : " ▾") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+        if (isOpen && !disabled) {
+          html += '<div class="option-grid" style="margin:0.3rem 0 0.6rem">' + t.nouns.map(function (noun, idx) {
+            return '<button type="button" class="option-card" data-regional-law-theme-noun="' + t.id + "::" + idx + '"><span class="olabel">' + noun.charAt(0).toUpperCase() + noun.slice(1) + "</span></button>";
+          }).join("") + "</div>";
+        }
       });
       html += "</div>";
     }
@@ -4712,10 +4806,20 @@
     var sanitaCommissariataMozioni = r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn;
     var html = '<section aria-label="Mozioni Regionali"><p class="eyebrow">Mozioni Regionali — ' + regionId + '</p>' +
       '<p class="ci-hint">Una mozione simbolica è rapida e quasi certa, ma con un effetto limitato sul tema scelto.' + (onCooldown ? " Hai già agito di recente." : "") +
-      (sanitaCommissariataMozioni ? " La sanità è commissariata da Roma: nessuna mozione possibile su quel fronte finché dura." : "") + '</p><div class="option-grid">';
+      (sanitaCommissariataMozioni ? " La sanità è commissariata da Roma: nessuna mozione possibile su quel fronte finché dura." : "") + '</p>';
+    html += '<div class="field"><label class="field-label" for="regional-motion-custom-input">Scrivi tu la mozione (facoltativo)</label>' +
+      '<textarea id="regional-motion-custom-input" class="autogrow-textarea" rows="4" placeholder="Scrivi con parole tue il testo della mozione…"' + (onCooldown ? " disabled" : "") + '></textarea></div>' +
+      '<div class="choices"><button type="button" class="choice-btn" id="regional-motion-custom-submit-btn"' + (onCooldown ? " disabled" : "") + '><span class="clabel">Presenta la tua mozione</span></button></div>' +
+      '<p class="eyebrow" style="margin-top:0.8rem">Oppure scegli un tema specifico</p><div class="option-grid">';
     SITUATION_THEMES.forEach(function (t) {
       var disabled = onCooldown || (sanitaCommissariataMozioni && t.id === "sanita");
-      html += '<button type="button" class="option-card" data-regional-motion-theme="' + t.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+      var isOpen = expandedRegionalMotionThemeId === t.id;
+      html += '<button type="button" class="option-card" data-regional-motion-tile="' + t.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + (isOpen ? " ▴" : " ▾") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
+      if (isOpen && !disabled) {
+        html += '<div class="option-grid" style="margin:0.3rem 0 0.6rem">' + t.nouns.map(function (noun, idx) {
+          return '<button type="button" class="option-card" data-regional-motion-theme-noun="' + t.id + "::" + idx + '"><span class="olabel">' + noun.charAt(0).toUpperCase() + noun.slice(1) + "</span></button>";
+        }).join("") + "</div>";
+      }
     });
     html += "</div>";
     if (r.motionsHistory && r.motionsHistory.length) {
@@ -4772,6 +4876,9 @@
     html += '<div class="stat-tile"><div class="label">Deficit/PIL</div><div class="row"><span class="value">' + fmt1(state.deficitPil) + "%</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Debito/PIL</div><div class="row"><span class="value">' + fmt1(state.debitoPil) + "%</span></div></div>";
     html += "</div>";
+    // Segnalato da un giocatore: mancavano i sondaggi di TUTTI i partiti, non solo del proprio — stesso
+    // pannello già usato nella modalità normale, nessun duplicato da mantenere a parte.
+    html += renderPollGrid(null);
     var recentNews = (state.worldNews || []).slice(0, 6);
     if (recentNews.length) {
       html += '<p class="eyebrow" style="margin-top:0.8rem">Ultime notizie nazionali</p><ul class="enacted-policy-list">' +
@@ -4784,6 +4891,31 @@
   // Richiesto da un giocatore: oltre al dossier della settimana, le schede di Leggi/Mozioni/Città/Giunta
   // devono permettere azioni VERE in ogni momento (con un raffreddamento comune, r.regionalActionCooldownTurn,
   // perché non si può fare tutto insieme ogni settimana) — non solo reagire a quello che propone il gioco.
+  // Logica condivisa tra il click su una voce specifica (data-regional-law/motion-theme-noun) e il
+  // deposito di un testo scritto di proprio pugno (classificato da classifyRegionalFreeText): entrambe le
+  // strade finiscono per usare esattamente lo stesso effetto di gioco, cambia solo da dove viene il "noun".
+  function submitRegionalLaw(regionId, themeId, noun) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.regionalActionCooldownTurn || 0) || r.pendingRegionalLaw) return false;
+    if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return false;
+    r.pendingRegionalLaw = { themeId: themeId, noun: noun, resolveTurn: state.turn + 4 + Math.floor(Math.random() * 4) };
+    r.regionalActionCooldownTurn = state.turn + 3;
+    addRegionalNews(regionId, "Depositata una proposta di legge regionale su " + noun + ": il Consiglio Regionale ne discuterà nelle prossime settimane.");
+    return true;
+  }
+  function submitRegionalMotion(regionId, themeId, noun) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.regionalActionCooldownTurn || 0)) return false;
+    if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return false;
+    r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
+    if (r.metrics[themeId] !== undefined) r.metrics[themeId] = clamp(r.metrics[themeId] + rand(0.2, 0.4), 1, 10);
+    r.regionalActionCooldownTurn = state.turn + 3;
+    if (!r.motionsHistory) r.motionsHistory = [];
+    r.motionsHistory.unshift({ week: state.turn, themeId: themeId, noun: noun });
+    if (r.motionsHistory.length > 30) r.motionsHistory.length = 30;
+    addRegionalNews(regionId, "Il Consiglio Regionale approva una mozione simbolica su " + noun + ".");
+    return true;
+  }
   function bindRegionalActionButtons() {
     var rp = state.regionalPresidency;
     if (!rp) return;
@@ -4798,40 +4930,70 @@
         render();
       });
     }
-    app.querySelectorAll("[data-regional-law-theme]").forEach(function (btn) {
+    app.querySelectorAll("[data-regional-law-tile]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var r = state.regions[regionId];
-        if (state.turn < (r.regionalActionCooldownTurn || 0) || r.pendingRegionalLaw) return;
-        var themeId = btn.getAttribute("data-regional-law-theme");
-        if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return;
-        var theme = SITUATION_THEME_BY_ID[themeId];
-        var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
-        r.pendingRegionalLaw = { themeId: themeId, noun: noun, resolveTurn: state.turn + 4 + Math.floor(Math.random() * 4) };
-        r.regionalActionCooldownTurn = state.turn + 3;
-        addRegionalNews(regionId, "Depositata una proposta di legge regionale su " + noun + ": il Consiglio Regionale ne discuterà nelle prossime settimane.");
+        var themeId = btn.getAttribute("data-regional-law-tile");
+        expandedRegionalLawThemeId = expandedRegionalLawThemeId === themeId ? null : themeId;
+        render();
+      });
+    });
+    app.querySelectorAll("[data-regional-law-theme-noun]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var parts = btn.getAttribute("data-regional-law-theme-noun").split("::");
+        var themeId = parts[0];
+        var noun = SITUATION_THEME_BY_ID[themeId].nouns[parseInt(parts[1], 10)];
+        if (!submitRegionalLaw(regionId, themeId, noun)) return;
+        expandedRegionalLawThemeId = null;
         save();
         render();
       });
     });
-    app.querySelectorAll("[data-regional-motion-theme]").forEach(function (btn) {
+    var lawCustomBtn = document.getElementById("regional-law-custom-submit-btn");
+    if (lawCustomBtn) {
+      bindAutoGrowTextarea("regional-law-custom-input");
+      lawCustomBtn.addEventListener("click", function () {
+        var input = document.getElementById("regional-law-custom-input");
+        var text = (input ? input.value : "").trim();
+        if (!text) { showSaveStatus("Scrivi qualcosa prima di depositare la proposta.", true); return; }
+        var themeId = classifyRegionalFreeText(text) || worstRegionTheme(regionId);
+        if (!submitRegionalLaw(regionId, themeId, text)) return;
+        if (input) input.value = "";
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-regional-motion-tile]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var r = state.regions[regionId];
-        if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
-        var themeId = btn.getAttribute("data-regional-motion-theme");
-        if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return;
-        var theme = SITUATION_THEME_BY_ID[themeId];
-        var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
-        r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
-        if (r.metrics[themeId] !== undefined) r.metrics[themeId] = clamp(r.metrics[themeId] + rand(0.2, 0.4), 1, 10);
-        r.regionalActionCooldownTurn = state.turn + 3;
-        if (!r.motionsHistory) r.motionsHistory = [];
-        r.motionsHistory.unshift({ week: state.turn, themeId: themeId, noun: noun });
-        if (r.motionsHistory.length > 30) r.motionsHistory.length = 30;
-        addRegionalNews(regionId, "Il Consiglio Regionale approva una mozione simbolica su " + noun + ".");
+        var themeId = btn.getAttribute("data-regional-motion-tile");
+        expandedRegionalMotionThemeId = expandedRegionalMotionThemeId === themeId ? null : themeId;
+        render();
+      });
+    });
+    app.querySelectorAll("[data-regional-motion-theme-noun]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var parts = btn.getAttribute("data-regional-motion-theme-noun").split("::");
+        var themeId = parts[0];
+        var noun = SITUATION_THEME_BY_ID[themeId].nouns[parseInt(parts[1], 10)];
+        if (!submitRegionalMotion(regionId, themeId, noun)) return;
+        expandedRegionalMotionThemeId = null;
         save();
         render();
       });
     });
+    var motionCustomBtn = document.getElementById("regional-motion-custom-submit-btn");
+    if (motionCustomBtn) {
+      bindAutoGrowTextarea("regional-motion-custom-input");
+      motionCustomBtn.addEventListener("click", function () {
+        var input = document.getElementById("regional-motion-custom-input");
+        var text = (input ? input.value : "").trim();
+        if (!text) { showSaveStatus("Scrivi qualcosa prima di presentare la mozione.", true); return; }
+        var themeId = classifyRegionalFreeText(text) || worstRegionTheme(regionId);
+        if (!submitRegionalMotion(regionId, themeId, text)) return;
+        if (input) input.value = "";
+        save();
+        render();
+      });
+    }
     app.querySelectorAll("[data-regional-city-visit]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var r = state.regions[regionId];
@@ -6615,7 +6777,7 @@
     var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var sentence = shape.brief(noun, { city: city, rivalName: rival.name });
     var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
     var brief = sentence + (framing ? " " + framing : "");
@@ -6638,7 +6800,7 @@
     var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var sentence = shape.brief(noun, { city: city, rivalName: rival.name });
     var framing = LEADERSHIP_FRAMING_HINTS[p.leadership] || "";
     var brief = sentence + (framing ? " " + framing : "");
@@ -6668,7 +6830,7 @@
       var coherent = !!(themeObj && signature.indexOf(themeObj.id) !== -1);
       var fuCity = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
       var fuRivalPool = activeParties();
-      var fuRival = fuRivalPool[Math.floor(Math.random() * fuRivalPool.length)];
+      var fuRival = pickRivalParty(fuRivalPool);
       var choices = buildSituationChoices({ noun: "quanto hai fatto la scorsa settimana", city: fuCity, rivalName: fuRival.name, rivalId: fuRival.id, coherent: coherent, nationalMetric: themeObj ? THEME_TO_NATIONAL_METRIC[themeObj.id] : undefined, themeId: themeObj ? themeObj.id : undefined, inParliament: !!p.inParliament }, 5);
       return { id: "ai_dynamic", kind: "situazione", localDynamic: true, cat: cat, title: tpl.title, brief: brief, choices: choices };
     }
@@ -7780,7 +7942,7 @@
     var kindLabel = kind === "interrogazione" ? "Interrogazione Parlamentare" : kind === "mozione" ? "Mozione Parlamentare" : (isGoverno ? "Iniziativa di Maggioranza" : "Iniziativa di Contrasto al Governo");
     var title = kindLabel + " — " + topic.themeObj.label.replace("Politica — ", "");
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var choices = buildParliamentChoices({ noun: topic.noun, nationalMetric: THEME_TO_NATIONAL_METRIC[topic.themeObj.id], isGoverno: isGoverno, rivalId: rival.id, themeId: topic.themeObj.id }, 5);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: kindLabel + " — pesa di più perché sei in Parlamento",
@@ -9884,6 +10046,43 @@
     energia: ["energia", "bollette", "gas", "elettricita", "rinnovabili", "nucleare", "petrolio", "fotovoltaico",
       "eolico", "pannelli solari", "caro energia", "bolletta della luce", "metano", "fonti fossili", "idrogeno"]
   };
+  // Stesso principio di STATEMENT_THEME_KEYWORDS/detectStatementTheme sopra, ma sui 20 temi regionali
+  // (SITUATION_THEMES) invece che sugli indicatori nazionali: usato dalle proposte di legge/mozione
+  // scritte di proprio pugno nelle pagine Leggi/Mozioni Regionali, così la CPU non applica l'effetto a un
+  // tema scelto a caso ma a quello che il testo lascia davvero intendere.
+  var REGIONAL_THEME_KEYWORDS = {
+    sanita: STATEMENT_THEME_KEYWORDS.sanita,
+    scuola: STATEMENT_THEME_KEYWORDS.scuola,
+    sicurezza: STATEMENT_THEME_KEYWORDS.sicurezza,
+    casa: STATEMENT_THEME_KEYWORDS.casa,
+    lavoro: STATEMENT_THEME_KEYWORDS.disoccupazione.concat(STATEMENT_THEME_KEYWORDS.salari),
+    ambiente: STATEMENT_THEME_KEYWORDS.ambientalismo,
+    immigrazione: STATEMENT_THEME_KEYWORDS.immigrazione,
+    giustizia: STATEMENT_THEME_KEYWORDS.giustizia,
+    trasporti: STATEMENT_THEME_KEYWORDS.trasporti,
+    energia: STATEMENT_THEME_KEYWORDS.energia,
+    economia: STATEMENT_THEME_KEYWORDS.economia.concat(STATEMENT_THEME_KEYWORDS.aziende, STATEMENT_THEME_KEYWORDS.pil, STATEMENT_THEME_KEYWORDS.inflazione, STATEMENT_THEME_KEYWORDS.commercio),
+    digitale: STATEMENT_THEME_KEYWORDS.ricercaSviluppo,
+    europa: STATEMENT_THEME_KEYWORDS.relazioniDiplomatiche.concat(["unione europea", "fondi europei", "bruxelles", "pnrr", "europa"]),
+    famiglia: STATEMENT_THEME_KEYWORDS.welfare,
+    giovani: ["giovani", "under 30", "neet", "fuga dei cervelli", "studenti fuori sede", "servizio civile", "sport giovanile", "dipendenza dai social"],
+    pensioni: ["pensione", "pensioni", "pensionati", "eta pensionabile", "assegno sociale", "previdenza", "inps", "lavori usuranti"],
+    cultura: ["cultura", "museo", "musei", "teatro", "cinema", "patrimonio artistico", "festival", "biblioteca", "biblioteche", "spettacolo"],
+    sport: ["sport", "impianti sportivi", "palestra", "palestre", "squadra", "atleti", "piscina", "piscine", "doping"],
+    infrastrutture: ["ponte", "ponti", "cantiere", "cantieri", "opera pubblica", "opere pubbliche", "viadotto", "manutenzione stradale", "project financing"],
+    agricoltura: ["agricoltura", "agricoltori", "campagna", "campi", "raccolto", "allevamento", "allevatori", "zootecnia", "agroalimentare", "fauna selvatica"]
+  };
+  function classifyRegionalFreeText(text) {
+    var norm = normalizeStatementText(text);
+    if (!norm.trim()) return null;
+    var best = null, bestScore = 0;
+    Object.keys(REGIONAL_THEME_KEYWORDS).forEach(function (themeId) {
+      REGIONAL_THEME_KEYWORDS[themeId].forEach(function (kw) {
+        if (norm.indexOf(kw) !== -1 && kw.length > bestScore) { bestScore = kw.length; best = themeId; }
+      });
+    });
+    return best;
+  }
   // Liste per RADICE (non parola intera) dove sicuro, cosicché il confronto per sottostringa già usato
   // da detectStatementTone riconosca da solo le variazioni più comuni (plurali, coniugazioni, genere) senza
   // dover elencare ogni singola forma: "vergogn" intercetta sia "vergogna" sia "vergognoso", "cresc"
@@ -11280,7 +11479,7 @@
   function buildFormationMilestone50Dossier() {
     var p = state.player;
     var rivalPool = activeParties();
-    var rival = rivalPool.length ? rivalPool[Math.floor(Math.random() * rivalPool.length)] : null;
+    var rival = rivalPool.length ? pickRivalParty(rivalPool) : null;
     var rivalName = rival ? rival.name : "un partito già radicato nel territorio";
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Comitato Promotore — Il Giro di Boa",
@@ -11708,6 +11907,12 @@
   function triggerRivalPartyEvent() {
     if (Math.random() > 0.4) return;
     var pool = activeParties();
+    // Bug segnalato da un giocatore: sotto un regime a partito unico (vedi gov_abolisci_partito usato
+    // ripetutamente) questo elenco può restare vuoto — qui non c'è alcun rivale di cui generare cronaca,
+    // quindi si salta semplicemente l'evento invece di far crashare il turno (come accadeva prima,
+    // interrompendo silenziosamente l'intera catena di dossier della settimana: leggi, mozioni e
+    // referendum "smettevano di passare" perché il turno non arrivava mai a risolverli).
+    if (!pool.length) return;
     var party = pool[Math.floor(Math.random() * pool.length)];
     var tpl = RIVAL_EVENTS[Math.floor(Math.random() * RIVAL_EVENTS.length)];
     var rawDelta = tpl.delta[0] + Math.random() * (tpl.delta[1] - tpl.delta[0]);
@@ -12883,7 +13088,7 @@
     state.worldNews.unshift({ cat: kind.label, text: text });
     if (won < 3) return null;
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var choices = buildSituationChoices({ noun: "il risultato ottenuto a " + loc.name, city: loc.name, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "corruzione" }, 5);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: kind.label + " — risultato",
@@ -13448,7 +13653,7 @@
       if (topic.electoralSystem) state.electoralSystem = topic.electoralSystem;
     }
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "questo esito referendario", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum nazionale", repDelta: 0, isGoverno: p.parliamentRole === "governo" });
@@ -14179,7 +14384,7 @@
     if (governmentCrisisDossier) return governmentCrisisDossier;
     if (isEuExit && passed) return euAlternativeChoiceDossier();
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo referendum", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum", repDelta: passed ? 2 : -2, isGoverno: isGoverno });
@@ -14396,7 +14601,7 @@
     }
     state.log.unshift({ week: state.turn, title: law.name, choiceLabel: "Esito del voto in Aula", result: esito, headlines: [], type: "legge", cat: "Legge Elettorale" });
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "la tua proposta di legge elettorale", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "corruzione", themeId: METRIC_TO_THEME_ID.corruzione, inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge Elettorale", repDelta: repDelta, isGoverno: true });
@@ -14809,7 +15014,7 @@
       if (isFiscalTopic(topic.noun) || isFiscalTopic(topic.title)) applyIndirectFiscalNudge(p.family, 0.6);
     }
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: isGoverno });
@@ -14961,7 +15166,7 @@
       checkConstitutionalReview(topic, delta * mult);
     }
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno });
@@ -15033,7 +15238,7 @@
       recordEnactedPolicy(topic.title, "Modifica approvata: " + topic.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
     }
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: isGoverno });
@@ -16914,6 +17119,22 @@
     return PARTIES.concat(state.dynamicParties || []).filter(function (p) { return dissolved.indexOf(p.id) === -1; })
       .map(function (p) { return overrides[p.id] ? Object.assign({}, p, { leader: overrides[p.id] }) : p; });
   }
+  // Bug segnalato da un giocatore: sotto un regime che ha reso illegali (vedi gov_abolisci_partito)
+  // TUTTI gli altri partiti, activeParties() può restituire un elenco vuoto — e decine di punti del
+  // gioco pescano un "rivale" a caso da quell'elenco solo per dare un nome/colore di contorno a un
+  // dossier (referendum, leggi, mozioni, situazioni varie), senza mai controllare che l'elenco non
+  // fosse vuoto: `pool[Math.floor(Math.random()*0)]` è undefined, e leggere .name/.id su undefined
+  // interrompeva il render a metà, con l'effetto osservato dal giocatore ("i referendum e le leggi non
+  // passano più" — in realtà il risultato veniva calcolato e applicato correttamente, ma il crash
+  // subito dopo, nel costruire il dossier di reazione, impediva di vederne l'esito). Questo helper
+  // sostituisce ovunque il vecchio pattern "rivalPool[Math.floor(Math.random()*rivalPool.length)]":
+  // stesso identico comportamento quando ci sono rivali, un'entità fittizia sempre valida quando non
+  // ce ne sono più (un regime a partito unico resta comunque giocabile, non si blocca).
+  function pickRivalParty(pool) {
+    var list = pool || activeParties();
+    if (list && list.length) return list[Math.floor(Math.random() * list.length)];
+    return { id: "opposizione_clandestina", name: "una voce di opposizione clandestina", short: "Opp.", color: "#888", familyId: null };
+  }
   function weekLabel(turn) {
     var start = new Date(2026, 9, 6); // 6 ottobre 2026 = settimana 1
     var d0 = new Date(start.getTime() + (turn - 1) * 7 * 86400000);
@@ -18285,7 +18506,7 @@
     }
     addDiaryEntry(diaryTitle, diaryText);
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito del processo", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "corruzione", themeId: METRIC_TO_THEME_ID.corruzione, inParliament: !!p.inParliament }, 5);
     return {
@@ -20082,7 +20303,7 @@
   function campaignActivityFlavor(id) {
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     if (id === "comizio_chiusura") return "Il comizio di chiusura a " + city + " scalda la base militante nel rush finale della campagna.";
     if (id === "porta_a_porta") return "Il porta a porta a " + city + " e in altre città intercetta gli indecisi con un contatto diretto.";
     if (id === "spot_elettorale") return "Lo spot elettorale in TV porta il simbolo del partito in milioni di case italiane.";
@@ -20221,7 +20442,7 @@
   function euCampaignActivityFlavor(id) {
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
-    var rival = rivalPool[Math.floor(Math.random() * rivalPool.length)];
+    var rival = pickRivalParty(rivalPool);
     if (id === "comizio_europeo") return "Il comizio sui temi europei a " + city + " scalda la base militante nel pieno della campagna per l'Europarlamento.";
     if (id === "porta_a_porta_eu") return "Il porta a porta a " + city + " e in altre città spiega agli indecisi perché contare anche il voto europeo.";
     if (id === "spot_europeo") return "Lo spot per le europee porta il simbolo della lista in milioni di case italiane.";
@@ -20493,6 +20714,7 @@
     var p = state.player;
     if (!p || !p.inParliament) return false;
     if (state.turn < (p.rivalMpNewsCooldownTurn || 0)) return false;
+    if (!activeParties().length) return false;
     return Math.random() < 0.045;
   }
   function buildRivalMpNewsDossier() {
@@ -21619,30 +21841,325 @@
     if (state.turn < (p.ministerActionCooldownTurn || 0)) return false;
     return Math.random() < 0.4;
   }
+  // ---------- Scenari ministeriali veri e propri (richiesto da un giocatore) ----------
+  // Prima ogni dicastero riciclava lo stesso identico schema "investi/procedi con cautela/rinvia/taglia"
+  // su un sostantivo generico: qui ogni ministero ha vere situazioni nominate, specifiche di quel
+  // dicastero — non intercambiabili con un altro — con scelte che non sono sempre la stessa quaterna.
+  // Ogni funzione riceve m1/m2 (le due voci della Scheda Paese di competenza, vedi MINISTRY_FOCUS) e
+  // restituisce {title, brief, choices}, poi incapsulato da buildMinisterActionDossier.
+  var MINISTRY_SCENARIOS = {
+    "Economia e Finanze": [
+      function () { return {
+        title: "Una manovra di bilancio contestata dai sindacati",
+        brief: "La manovra allo studio al Ministero dell'Economia scontenta i sindacati, che minacciano uno sciopero generale. Come procedi?",
+        choices: [
+          { label: "Apri un tavolo di trattativa e fai concessioni", hint: "Costa in fondi pubblici, disinnesca la protesta", effects: { fondi: -rand(600, 1000), reputazione: rand(1, 3), national: { economia: 0.3, pil: 0.1 } }, result: "Le concessioni ai sindacati disinnescano lo sciopero generale, a prezzo di un allentamento della manovra." },
+          { label: "Tieni la linea della manovra", hint: "Rischi lo sciopero generale, ma mantieni il rigore di bilancio", effects: { reputazione: -rand(1, 3), national: { economia: 0.4, pil: 0.2 } }, result: "La linea dura sulla manovra tiene i conti in ordine, ma lo sciopero generale si fa sentire." },
+          { label: "Rinvia la manovra di qualche settimana", hint: "Nessun effetto immediato, il problema resta aperto", effects: {}, result: "Il rinvio della manovra guadagna tempo, senza risolvere nulla." }
+        ]
+      }; },
+      function () { return {
+        title: "Un ministero alleato chiede fondi extra",
+        brief: "Un ministero di un partito alleato chiede al tuo dicastero uno stanziamento extra per un proprio progetto. Concederlo rafforza la coalizione, negarlo tutela i conti pubblici.",
+        choices: [
+          { label: "Concedi lo stanziamento extra", hint: "Rafforza la coalizione, pesa sul bilancio", effects: { fondi: -rand(700, 1200), national: { economia: -0.1 } }, result: "Lo stanziamento concesso rafforza i rapporti nella coalizione di governo." },
+          { label: "Nega lo stanziamento, i conti prima di tutto", hint: "Tensione con l'alleato, ma bilancio protetto", effects: { national: { economia: 0.2, pil: 0.1 } }, result: "Il rifiuto tutela i conti pubblici, ma l'alleato non la prende bene." }
+        ]
+      }; },
+      function () { return {
+        title: "Le agenzie di rating valutano il debito italiano",
+        brief: "Una delle grandi agenzie di rating internazionali sta per pubblicare la sua valutazione sul debito italiano: il Ministero prepara la linea di comunicazione.",
+        choices: [
+          { label: "Comunica rassicurazioni sui conti pubblici", hint: "Rischioso se poi i dati non confermano", effects: { national: { economia: 0.2 }, reputazione: rand(0.5, 1.5) }, result: "Le rassicurazioni pubbliche sui conti vengono accolte con cauto favore dai mercati." },
+          { label: "Resta prudente, senza dichiarazioni enfatiche", hint: "Nessun rischio, nessun guadagno di immagine", effects: {}, result: "La linea prudente evita passi falsi, senza produrre particolari effetti." }
+        ]
+      }; }
+    ],
+    "Interno": [
+      function () { return {
+        title: "Ondata di criminalità in una grande città",
+        brief: "Una serie di episodi di criminalità di strada in una grande città mette sotto pressione il Viminale. Come rispondi?",
+        choices: [
+          { label: "Invia rinforzi delle forze dell'ordine", hint: "Costoso, ma riporta l'ordine", effects: { fondi: -rand(500, 900), national: { sicurezza: 0.5 } }, result: "I rinforzi inviati riportano un clima di maggiore sicurezza in città." },
+          { label: "Annuncia un piano di prevenzione sociale", hint: "Effetto più lento, ma meno costoso", effects: { fondi: -rand(200, 400), national: { sicurezza: 0.2, immigrazione: 0.1 } }, result: "Il piano di prevenzione sociale produce risultati più lenti, ma duraturi." },
+          { label: "Minimizza il problema pubblicamente", hint: "Nessun costo, ma rischi di immagine se la situazione peggiora", effects: { reputazione: -rand(1, 3) }, result: "Minimizzare pubblicamente il problema non convince l'opinione pubblica." }
+        ]
+      }; },
+      function () { return {
+        title: "Sbarchi migranti in emergenza",
+        brief: "Un numero straordinario di sbarchi nelle ultime settimane mette sotto pressione il sistema di accoglienza. Il Viminale deve decidere come procedere.",
+        choices: [
+          { label: "Potenzia subito i centri di accoglienza", hint: "Costoso, ma gestisce davvero l'emergenza", effects: { fondi: -rand(800, 1300), national: { immigrazione: 0.5, felicita: 0.1 } }, result: "Il potenziamento dei centri di accoglienza gestisce l'emergenza, pur pesando sul bilancio." },
+          { label: "Chiedi un piano di redistribuzione europeo", hint: "Nessun costo diretto, esito incerto", effects: { national: { relazioniDiplomatiche: 0.2, immigrazione: 0.1 } }, result: "La richiesta di un piano europeo di redistribuzione apre un fronte diplomatico, con esito ancora da vedere." },
+          { label: "Inasprisci i controlli alle frontiere", hint: "Linea dura, divide l'opinione pubblica", effects: { national: { sicurezza: 0.2, immigrazione: -0.3, felicita: -0.1 } }, result: "L'inasprimento dei controlli divide l'opinione pubblica, pur rassicurando una parte dell'elettorato." }
+        ]
+      }; },
+      function () { return {
+        title: "Un corteo a rischio scontri",
+        brief: "Un grande corteo annunciato nella Capitale rischia di degenerare in scontri. Il Viminale deve decidere la linea di gestione dell'ordine pubblico.",
+        choices: [
+          { label: "Dispiega un ampio schieramento di sicurezza", hint: "Costoso, previene gli scontri", effects: { fondi: -rand(300, 600), national: { sicurezza: 0.3 } }, result: "Il massiccio dispiegamento di sicurezza previene gli scontri, senza incidenti di rilievo." },
+          { label: "Gestisci con un presidio minimo", hint: "Più economico, ma più rischioso", effects: { national: { sicurezza: -0.1 }, reputazione: -rand(0.5, 1.5) }, result: "Il presidio minimo non basta a prevenire alcuni incidenti isolati." }
+        ]
+      }; }
+    ],
+    "Esteri": [
+      function () { return {
+        title: "Un vertice diplomatico bilaterale",
+        brief: "La Farnesina organizza un vertice bilaterale con un partner strategico: un'occasione per rafforzare i rapporti, o per ottenere un vantaggio commerciale concreto.",
+        choices: [
+          { label: "Punta su un accordo commerciale concreto", hint: "Beneficio economico, meno enfasi simbolica", effects: { national: { commercio: 0.4, relazioniDiplomatiche: 0.1 } }, result: "L'accordo commerciale concreto porta benefici economici misurabili." },
+          { label: "Punta sul rafforzamento dei rapporti diplomatici", hint: "Più simbolico, utile sul lungo periodo", effects: { national: { relazioniDiplomatiche: 0.4 } }, result: "Il rafforzamento dei rapporti diplomatici paga sul lungo periodo, anche se non produce effetti immediati." }
+        ]
+      }; },
+      function () { return {
+        title: "Una crisi diplomatica da gestire",
+        brief: "Una dichiarazione infelice di un alto funzionario italiano scatena una crisi diplomatica con un paese terzo. La Farnesina deve gestire la situazione.",
+        choices: [
+          { label: "Presenta scuse ufficiali", hint: "Disinnesca la crisi, ma costa in orgoglio nazionale", effects: { national: { relazioniDiplomatiche: 0.3 }, reputazione: -rand(0.5, 1.5) }, result: "Le scuse ufficiali disinnescano la crisi diplomatica, pur costando qualcosa in orgoglio nazionale." },
+          { label: "Tieni la linea, nessuna scusa", hint: "Nessun costo di immagine interno, ma la crisi si incancrenisce", effects: { national: { relazioniDiplomatiche: -0.3 } }, result: "Il mancato passo indietro lascia la crisi diplomatica aperta, senza una soluzione a vista." }
+        ]
+      }; },
+      function () { return {
+        title: "Evacuazione di cittadini italiani all'estero",
+        brief: "Una crisi di sicurezza in un paese estero mette a rischio cittadini italiani residenti: la Farnesina deve organizzare un'evacuazione.",
+        choices: [
+          { label: "Organizza un'evacuazione aerea immediata", hint: "Costoso, ma protegge i connazionali", effects: { fondi: -rand(600, 1100), national: { relazioniDiplomatiche: 0.2 }, reputazione: rand(1, 3) }, result: "L'evacuazione aerea immediata porta in salvo i connazionali, con un costo organizzativo non banale." },
+          { label: "Coordina con le autorità locali, senza intervento diretto", hint: "Più economico, più lento", effects: { national: { relazioniDiplomatiche: -0.1 } }, result: "Il coordinamento con le autorità locali evita un intervento diretto, ma allunga i tempi per i connazionali coinvolti." }
+        ]
+      }; }
+    ],
+    "Difesa": [
+      function () { return {
+        title: "Richiesta di intervento in una missione NATO",
+        brief: "La NATO chiede un contributo italiano più consistente a una missione in corso. Il Ministero della Difesa deve decidere come rispondere.",
+        choices: [
+          { label: "Aumenta il contributo italiano alla missione", hint: "Costoso, rafforza il peso italiano nell'Alleanza", effects: { fondi: -rand(900, 1500), national: { difesa: 0.4, relazioniDiplomatiche: 0.3 } }, result: "L'aumento del contributo italiano rafforza il peso del paese nell'Alleanza Atlantica." },
+          { label: "Mantieni il contributo attuale", hint: "Nessun costo aggiuntivo, minore peso diplomatico", effects: { national: { relazioniDiplomatiche: -0.1 } }, result: "Il contributo invariato evita nuove spese, ma non rafforza la posizione italiana nell'Alleanza." }
+        ]
+      }; },
+      function () { return {
+        title: "Un nuovo programma di acquisto di armamenti",
+        brief: "Lo Stato Maggiore propone un nuovo programma di acquisto di sistemi d'arma per modernizzare le Forze Armate.",
+        choices: [
+          { label: "Approva il programma di acquisto", hint: "Costo elevato, modernizza davvero le Forze Armate", effects: { fondi: -rand(1200, 2000), national: { difesa: 0.6, economia: -0.2 } }, result: "Il programma di acquisto approvato modernizza sensibilmente le Forze Armate, a costo elevato." },
+          { label: "Rinvia il programma per motivi di bilancio", hint: "Nessun costo immediato, le Forze Armate restano indietro", effects: { national: { difesa: -0.1 } }, result: "Il rinvio del programma per motivi di bilancio lascia le Forze Armate con equipaggiamenti meno aggiornati." }
+        ]
+      }; },
+      function () { return {
+        title: "Un incidente durante un'esercitazione militare",
+        brief: "Un incidente durante un'esercitazione congiunta solleva interrogativi sulla sicurezza delle procedure militari italiane.",
+        choices: [
+          { label: "Ordina un'indagine interna trasparente", hint: "Costa in immagine nel breve periodo, ma rafforza la fiducia", effects: { reputazione: rand(1, 2), national: { difesa: 0.1 } }, result: "L'indagine interna trasparente rafforza, nel tempo, la fiducia nelle Forze Armate." },
+          { label: "Minimizza l'accaduto", hint: "Nessun costo immediato, rischio di nuove polemiche", effects: { reputazione: -rand(1, 3) }, result: "Minimizzare l'incidente non convince del tutto l'opinione pubblica." }
+        ]
+      }; }
+    ],
+    "Giustizia": [
+      function () { return {
+        title: "Uno scandalo giudiziario coinvolge un politico",
+        brief: "Un'inchiesta giudiziaria di rilievo coinvolge un politico di primo piano, non del tuo partito: il Ministero della Giustizia è sotto i riflettori sulla gestione del caso.",
+        choices: [
+          { label: "Garantisci piena autonomia alla magistratura", hint: "Coerente con lo Stato di diritto, nessun vantaggio politico diretto", effects: { reputazione: rand(1, 3), national: { giustizia: 0.2, corruzione: 0.2 } }, result: "La piena autonomia garantita alla magistratura rafforza la credibilità istituzionale del Ministero." },
+          { label: "Esprimi pubblicamente dubbi sull'inchiesta", hint: "Consenso presso una parte dell'elettorato, rischio di scontro con la magistratura", effects: { reputazione: -rand(1, 2), national: { giustizia: -0.2 } }, result: "I dubbi espressi pubblicamente sull'inchiesta aprono una frizione con la magistratura." }
+        ]
+      }; },
+      function () { return {
+        title: "Il sovraffollamento carcerario raggiunge livelli critici",
+        brief: "I dati sul sovraffollamento delle carceri italiane raggiungono livelli critici: il Ministero deve decidere come intervenire.",
+        choices: [
+          { label: "Investi in nuove strutture carcerarie", hint: "Costoso, ma risolve il problema sul lungo periodo", effects: { fondi: -rand(1000, 1700), national: { giustizia: 0.4 } }, result: "Il piano di nuove strutture carcerarie affronta il sovraffollamento, con un investimento ingente." },
+          { label: "Amplia le misure alternative alla detenzione", hint: "Meno costoso, dividerà l'opinione pubblica", effects: { national: { giustizia: 0.2, felicita: -0.1 }, reputazione: -rand(0.5, 1.5) }, result: "L'ampliamento delle misure alternative riduce il sovraffollamento, ma non piace a tutti." }
+        ]
+      }; },
+      function () { return {
+        title: "Una norma anticorruzione in discussione",
+        brief: "Il Ministero della Giustizia presenta una nuova norma anticorruzione: il testo divide la maggioranza di governo sulla sua reale efficacia.",
+        choices: [
+          { label: "Spingi per una versione severa della norma", hint: "Buona immagine, possibili tensioni in coalizione", effects: { national: { corruzione: 0.5 }, reputazione: rand(1, 2) }, result: "La versione severa della norma anticorruzione rafforza l'integrità istituzionale, pur creando qualche tensione in coalizione." },
+          { label: "Accetta una versione più morbida, per unità di coalizione", hint: "Meno efficace, ma tiene unita la maggioranza", effects: { national: { corruzione: 0.15 } }, result: "La versione più morbida della norma tiene unita la coalizione, con un effetto più contenuto." }
+        ]
+      }; }
+    ],
+    "Istruzione": [
+      function () { return {
+        title: "Sciopero nazionale del personale docente",
+        brief: "I sindacati della scuola annunciano uno sciopero nazionale per gli stipendi del personale docente: il Ministero deve decidere come rispondere.",
+        choices: [
+          { label: "Annuncia un aumento degli stipendi", hint: "Costoso, ma disinnesca lo sciopero", effects: { fondi: -rand(900, 1500), national: { scuola: 0.5 }, reputazione: rand(1, 2) }, result: "L'aumento degli stipendi disinnesca lo sciopero nazionale, con un costo rilevante per le casse pubbliche." },
+          { label: "Tieni la linea attuale sugli stipendi", hint: "Nessun costo aggiuntivo, lo sciopero procede", effects: { national: { scuola: -0.1 }, reputazione: -rand(1, 2) }, result: "La linea invariata sugli stipendi lascia che lo sciopero nazionale vada avanti." }
+        ]
+      }; },
+      function () { return {
+        title: "Edilizia scolastica fatiscente: un crollo evitato per poco",
+        brief: "Un cedimento strutturale in una scuola, evitato per poco, riporta l'attenzione sullo stato dell'edilizia scolastica italiana.",
+        choices: [
+          { label: "Avvia un piano straordinario di edilizia scolastica", hint: "Molto costoso, ma affronta il problema alla radice", effects: { fondi: -rand(1300, 2000), national: { scuola: 0.5 } }, result: "Il piano straordinario di edilizia scolastica affronta il problema alla radice, con un investimento notevole." },
+          { label: "Limitati a verifiche straordinarie sugli edifici più a rischio", hint: "Meno costoso, risolve solo in parte", effects: { fondi: -rand(300, 500), national: { scuola: 0.15 } }, result: "Le verifiche straordinarie riducono il rischio immediato, senza risolvere il problema di fondo." }
+        ]
+      }; },
+      function () { return {
+        title: "Fondi per la ricerca universitaria in discussione",
+        brief: "La legge di bilancio in preparazione dovrà stabilire quanto destinare alla ricerca universitaria: una scelta che pesa sul futuro del sistema accademico italiano.",
+        choices: [
+          { label: "Aumenta i fondi per la ricerca universitaria", hint: "Costoso, ma rafforza il sistema della ricerca", effects: { fondi: -rand(700, 1200), national: { ricercaSviluppo: 0.5 } }, result: "L'aumento dei fondi per la ricerca universitaria rafforza il sistema accademico italiano." },
+          { label: "Mantieni i fondi allo stesso livello", hint: "Nessun costo aggiuntivo, nessun progresso", effects: {}, result: "Il mantenimento dei fondi allo stesso livello non produce né progressi né arretramenti." }
+        ]
+      }; }
+    ],
+    "Salute": [
+      function () { return {
+        title: "Un'epidemia localizzata da contenere",
+        brief: "Un focolaio epidemico in una regione richiede una risposta rapida del Ministero della Salute.",
+        choices: [
+          { label: "Dichiara l'emergenza sanitaria e mobilita risorse", hint: "Molto costoso, ma contiene davvero il focolaio", effects: { fondi: -rand(1000, 1700), national: { sanita: 0.5, felicita: 0.1 } }, result: "La mobilitazione di risorse contiene efficacemente il focolaio epidemico." },
+          { label: "Gestisci con le risorse ordinarie già disponibili", hint: "Meno costoso, risposta più lenta", effects: { national: { sanita: -0.1 } }, result: "La gestione con le sole risorse ordinarie rallenta il contenimento del focolaio." }
+        ]
+      }; },
+      function () { return {
+        title: "Le liste d'attesa fuori controllo",
+        brief: "I dati sulle liste d'attesa negli ospedali pubblici raggiungono livelli allarmanti: il Ministero deve intervenire.",
+        choices: [
+          { label: "Finanzia prestazioni aggiuntive e nuovo personale", hint: "Costoso, riduce davvero le liste d'attesa", effects: { fondi: -rand(1100, 1800), national: { sanita: 0.5 } }, result: "Il finanziamento di prestazioni aggiuntive riduce sensibilmente le liste d'attesa." },
+          { label: "Rinvia il problema al prossimo bilancio", hint: "Nessun costo immediato, il problema resta", effects: { national: { sanita: -0.15 }, reputazione: -rand(1, 2) }, result: "Il rinvio del problema al prossimo bilancio lascia le liste d'attesa fuori controllo." }
+        ]
+      }; },
+      function () { return {
+        title: "Una nuova campagna di prevenzione sanitaria",
+        brief: "Il Ministero valuta il lancio di una grande campagna nazionale di prevenzione sanitaria.",
+        choices: [
+          { label: "Lancia la campagna su scala nazionale", hint: "Costo medio, beneficio diffuso nel tempo", effects: { fondi: -rand(500, 900), national: { sanita: 0.3, felicita: 0.1 } }, result: "La campagna nazionale di prevenzione produce benefici diffusi, anche se non immediati." },
+          { label: "Limita la campagna alle aree più a rischio", hint: "Meno costoso, effetto più contenuto", effects: { fondi: -rand(200, 400), national: { sanita: 0.15 } }, result: "La campagna mirata alle aree più a rischio produce un effetto più contenuto, ma a costo inferiore." }
+        ]
+      }; }
+    ],
+    "Ambiente e Transizione Ecologica": [
+      function () { return {
+        title: "Un disastro ambientale da gestire",
+        brief: "Uno sversamento industriale inquina un tratto di costa: il Ministero dell'Ambiente deve coordinare la bonifica.",
+        choices: [
+          { label: "Avvia subito una bonifica su larga scala", hint: "Molto costoso, ma risolve davvero il disastro", effects: { fondi: -rand(1200, 2000), national: { ambientalismo: 0.5 } }, result: "La bonifica su larga scala affronta efficacemente il disastro ambientale." },
+          { label: "Limita l'intervento alle aree più colpite", hint: "Meno costoso, effetto parziale", effects: { fondi: -rand(400, 700), national: { ambientalismo: 0.2 } }, result: "L'intervento limitato alle aree più colpite riduce il danno, senza risolverlo del tutto." }
+        ]
+      }; },
+      function () { return {
+        title: "Un piano nazionale per le rinnovabili",
+        brief: "Il Ministero presenta un piano per accelerare la transizione verso le energie rinnovabili: la sua ambizione divide la maggioranza.",
+        choices: [
+          { label: "Spingi per un piano ambizioso", hint: "Costoso, ma trasforma davvero il mix energetico", effects: { fondi: -rand(1000, 1700), national: { ambientalismo: 0.4, energia: 0.4 } }, result: "Il piano ambizioso per le rinnovabili accelera sensibilmente la transizione energetica italiana." },
+          { label: "Opta per un piano graduale e meno costoso", hint: "Più sostenibile per il bilancio, risultati più lenti", effects: { fondi: -rand(300, 600), national: { ambientalismo: 0.15, energia: 0.15 } }, result: "Il piano graduale per le rinnovabili procede con cautela, con risultati più lenti ma sostenibili." }
+        ]
+      }; },
+      function () { return {
+        title: "Una protesta ambientalista contro una grande opera",
+        brief: "Gli ambientalisti bloccano il cantiere di una grande opera infrastrutturale, contestandone l'impatto ambientale.",
+        choices: [
+          { label: "Sospendi l'opera per una nuova valutazione d'impatto", hint: "Rassicura gli ambientalisti, rallenta l'opera", effects: { national: { ambientalismo: 0.3 }, reputazione: rand(0.5, 1.5) }, result: "La sospensione per una nuova valutazione d'impatto rassicura gli ambientalisti, rallentando però l'opera." },
+          { label: "Prosegui i lavori con la scorta delle forze dell'ordine", hint: "L'opera prosegue, ma la protesta si inasprisce", effects: { national: { ambientalismo: -0.3, sicurezza: 0.1 } }, result: "La prosecuzione dei lavori sotto scorta inasprisce la protesta ambientalista." }
+        ]
+      }; }
+    ],
+    "Infrastrutture e Trasporti": [
+      function () { return {
+        title: "Un viadotto chiuso per verifiche di sicurezza",
+        brief: "Un viadotto autostradale viene chiuso d'urgenza per verifiche di sicurezza, creando enormi disagi al traffico regionale.",
+        choices: [
+          { label: "Finanzia una ristrutturazione completa e urgente", hint: "Molto costoso, risolve il problema alla radice", effects: { fondi: -rand(1300, 2100), national: { trasporti: 0.5 } }, result: "La ristrutturazione completa e urgente del viadotto risolve il problema, a costo elevato." },
+          { label: "Limitati a lavori di messa in sicurezza provvisoria", hint: "Meno costoso, soluzione temporanea", effects: { fondi: -rand(400, 700), national: { trasporti: 0.15 } }, result: "I lavori di messa in sicurezza provvisoria riaprono il viadotto, senza risolvere il problema di fondo." }
+        ]
+      }; },
+      function () { return {
+        title: "Sciopero nazionale dei trasporti",
+        brief: "I sindacati del trasporto pubblico annunciano uno sciopero nazionale per il rinnovo del contratto.",
+        choices: [
+          { label: "Apri un negoziato e concedi un aumento salariale", hint: "Costoso, ma disinnesca lo sciopero", effects: { fondi: -rand(700, 1200), national: { trasporti: 0.3 } }, result: "Il negoziato con un aumento salariale disinnesca lo sciopero nazionale dei trasporti." },
+          { label: "Tieni la linea contrattuale attuale", hint: "Nessun costo aggiuntivo, lo sciopero va avanti", effects: { national: { trasporti: -0.2 }, reputazione: -rand(1, 2) }, result: "La linea contrattuale invariata lascia che lo sciopero nazionale dei trasporti vada avanti." }
+        ]
+      }; },
+      function () { return {
+        title: "Un grande cantiere infrastrutturale bloccato da ricorsi",
+        brief: "Una grande opera pubblica resta bloccata da anni di ricorsi amministrativi: il Ministero valuta come sbloccarla.",
+        choices: [
+          { label: "Usa una norma speciale per accelerare l'iter", hint: "Sblocca l'opera, ma espone a critiche sulla trasparenza", effects: { national: { trasporti: 0.4, casa: 0.1 }, reputazione: -rand(0.5, 1.5) }, result: "La norma speciale sblocca finalmente il cantiere, pur sollevando critiche sulla trasparenza della procedura." },
+          { label: "Attendi l'esito ordinario dei ricorsi", hint: "Nessun rischio di immagine, l'opera resta bloccata", effects: {}, result: "L'attesa dell'esito ordinario dei ricorsi lascia il cantiere bloccato per altro tempo." }
+        ]
+      }; }
+    ],
+    "Lavoro e Politiche Sociali": [
+      function () { return {
+        title: "Una crisi aziendale minaccia migliaia di posti di lavoro",
+        brief: "Una grande azienda industriale annuncia migliaia di licenziamenti: il Ministero del Lavoro apre un tavolo di crisi.",
+        choices: [
+          { label: "Finanzia la cassa integrazione e cerca un piano industriale", hint: "Costoso, ma protegge i posti di lavoro nel breve periodo", effects: { fondi: -rand(1000, 1700), national: { disoccupazione: 0.4, welfare: 0.2 } }, result: "Il finanziamento della cassa integrazione e la ricerca di un piano industriale proteggono i posti di lavoro, almeno nel breve periodo." },
+          { label: "Lascia che l'azienda gestisca la crisi da sola", hint: "Nessun costo pubblico, ma i licenziamenti procedono", effects: { national: { disoccupazione: -0.3 }, reputazione: -rand(1, 2) }, result: "La scelta di non intervenire lascia che i licenziamenti procedano senza alcun sostegno pubblico." }
+        ]
+      }; },
+      function () { return {
+        title: "La riforma del salario minimo in discussione",
+        brief: "Il Ministero del Lavoro valuta una riforma del salario minimo: un tema che divide sindacati e imprese.",
+        choices: [
+          { label: "Introduci un salario minimo legale", hint: "Consenso presso i lavoratori, contrarietà delle imprese", effects: { national: { welfare: 0.4 }, reputazione: rand(0.5, 1.5) }, result: "L'introduzione del salario minimo legale viene accolta con favore dai lavoratori, meno dalle imprese." },
+          { label: "Lascia la contrattazione ai soli accordi collettivi", hint: "Consenso presso le imprese, nessun cambiamento per i lavoratori", effects: { national: { welfare: 0.1 } }, result: "Il mantenimento della sola contrattazione collettiva non cambia la situazione dei lavoratori meno tutelati." }
+        ]
+      }; },
+      function () { return {
+        title: "Un nuovo decreto sugli ammortizzatori sociali",
+        brief: "Il Ministero prepara un decreto per estendere gli ammortizzatori sociali a nuove categorie di lavoratori.",
+        choices: [
+          { label: "Estendi gli ammortizzatori a tutte le nuove categorie", hint: "Molto costoso, protegge più lavoratori", effects: { fondi: -rand(900, 1500), national: { welfare: 0.5, disoccupazione: 0.2 } }, result: "L'estensione degli ammortizzatori sociali a nuove categorie protegge più lavoratori, con un costo pubblico rilevante." },
+          { label: "Estendi gli ammortizzatori solo in parte", hint: "Meno costoso, protezione parziale", effects: { fondi: -rand(300, 500), national: { welfare: 0.2 } }, result: "L'estensione parziale degli ammortizzatori sociali offre una protezione limitata, a costo più contenuto." }
+        ]
+      }; }
+    ]
+  };
   function buildMinisterActionDossier() {
     var p = state.player;
     p.ministerActionCooldownTurn = state.turn + MINISTER_ACTION_COOLDOWN_TURNS;
     var ministry = state.playerMinistry.ministry;
-    var focus = MINISTRY_FOCUS[ministry] || { metrics: ["economia"], nouns: ["una questione del dicastero"] };
-    var noun = focus.nouns[Math.floor(Math.random() * focus.nouns.length)];
     var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
-    var m1 = focus.metrics[0], m2 = focus.metrics[1] || focus.metrics[0];
-    function natEff(v1, v2) { var n = {}; n[m1] = v1; if (m2 !== m1) n[m2] = v2; return n; }
+    var scenarios = MINISTRY_SCENARIOS[ministry];
+    var picked = scenarios && scenarios.length ? scenarios[Math.floor(Math.random() * scenarios.length)]() : null;
+    if (!picked) {
+      var focus = MINISTRY_FOCUS[ministry] || { metrics: ["economia"], nouns: ["una questione del dicastero"] };
+      var noun = focus.nouns[Math.floor(Math.random() * focus.nouns.length)];
+      var m1 = focus.metrics[0], m2 = focus.metrics[1] || focus.metrics[0];
+      var natEffFallback = {}; natEffFallback[m1] = 0.3; if (m2 !== m1) natEffFallback[m2] = 0.2;
+      picked = {
+        title: "Da Ministro " + articled + ": " + noun,
+        brief: "Come titolare del Ministero " + articled + ", tocca a te decidere come affrontare " + noun + ".",
+        choices: [
+          { label: "Investi con decisione", effects: { fondi: -rand(400, 800), national: natEffFallback }, result: "L'intervento deciso produce risultati concreti nel tuo dicastero." },
+          { label: "Non intervenire per ora", effects: {}, result: "Decidi di non intervenire per ora." }
+        ]
+      };
+    }
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Ministero " + articled,
-      cat: "Governo — Ministero", title: "Da Ministro " + articled + ": " + noun,
-      brief: "Come titolare del Ministero " + articled + ", tocca a te decidere come affrontare " + noun + ": una scelta che pesa sulla Scheda Paese, nell'area di tua diretta competenza ministeriale.",
-      choices: [
-        { label: "Investi con decisione", hint: "Costa ai fondi pubblici, effetto pieno sul dicastero", effects: { fondi: -rand(400, 800), reputazione: rand(1, 3), national: natEff(0.5, 0.3) },
-          result: "L'intervento deciso su " + noun + " produce risultati concreti nel tuo dicastero, pur pesando sulle casse pubbliche." },
-        { label: "Procedi con cautela, senza grandi investimenti", hint: "Effetto contenuto, nessun rischio particolare", effects: { national: natEff(0.15, 0.1) },
-          result: "Una linea prudente su " + noun + " produce un piccolo passo avanti nel tuo dicastero, senza scosse." },
-        { label: "Rinvia la decisione", hint: "Nessun effetto, nessun rischio immediato", effects: {},
-          result: "Decidi di rinviare la decisione su " + noun + ": per ora, nel tuo dicastero, nulla cambia." },
-        { label: "Taglia la spesa su questo fronte", hint: "Libera fondi pubblici, ma il dicastero ne risente", effects: { fondi: rand(300, 600), reputazione: -rand(1, 2), national: natEff(-0.4, -0.25) },
-          result: "Il taglio alla spesa su " + noun + " libera risorse pubbliche, ma il tuo dicastero ne esce con un passo indietro." }
-      ]
+      cat: "Governo — Ministero", title: picked.title, brief: picked.brief, choices: picked.choices
     };
+  }
+  // ---------- Iniziativa ministeriale proattiva (richiesto da un giocatore) ----------
+  // Oltre a reagire ai dossier settimanali sopra, il Ministro può anche agire di propria iniziativa in
+  // ogni momento (con un raffreddamento, p.ministerInitiativeCooldownTurn, per non poterlo fare ogni
+  // settimana) — stesso principio delle azioni dirette già disponibili in Modalità Presidente di Regione
+  // (leggi/mozioni/visite a una città).
+  var MINISTER_INITIATIVE_COOLDOWN_TURNS = 6;
+  function renderMinisterInitiativePanel() {
+    var p = state.player;
+    if (!p || !state.playerMinistry || !state.cabinet || state.cabinet.premierId === "player") return "";
+    var ministry = state.playerMinistry.ministry;
+    var focus = MINISTRY_FOCUS[ministry];
+    if (!focus) return "";
+    var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
+    var onCooldown = state.turn < (p.ministerInitiativeCooldownTurn || 0);
+    var html = '<section aria-label="Iniziativa Ministeriale"><p class="eyebrow">Ministero ' + articled + ': prendi l\'iniziativa</p>' +
+      '<p class="ci-hint">Non devi aspettare che ti si presenti un dossier: puoi avviare tu stesso un\'iniziativa sul tuo dicastero in ogni momento.' +
+      (onCooldown ? " Hai già agito di recente: la prossima iniziativa sarà possibile dalla settimana " + p.ministerInitiativeCooldownTurn + "." : "") + '</p><div class="option-grid">';
+    focus.metrics.forEach(function (metricKey) {
+      html += '<button type="button" class="option-card" data-minister-initiative="' + metricKey + '"' + (onCooldown ? " disabled" : "") + '><span class="olabel">Investi su ' + countryMetricLabel(metricKey) + '</span><span class="odesc">Costa ai fondi pubblici, effetto mirato sul dicastero</span></button>';
+    });
+    html += "</div></section>";
+    return html;
   }
   // Prima funzionava solo per governi di coalizione (2+ membri): un governo di un SOLO partito (o del
   // giocatore da solo) non aveva alcuna ripartizione dei ministeri, e il pannello restava vuoto. Ora
@@ -23003,6 +23520,29 @@
         return '<span class="impact-chip ' + cls + '">' + countryMetricLabel(k) + " " + sign + Math.abs(v).toFixed(1) + "</span>";
       }).join("");
     }
+    // Segnalato da un giocatore: dopo una scelta in Modalità Presidente di Regione non si vedeva MAI quali
+    // indicatori regionali fossero cambiati (gradimento locale, il tema specifico, una città, le casse
+    // della regione) — solo gli eventuali effetti nazionali. Stesso identico trattamento a chip di sopra,
+    // applicato alle voci regionali (vedi deltas.regional, popolato in resolveDossierChoice).
+    if (deltas.regional) {
+      var rg = deltas.regional;
+      if (rg.approvalLocal && Math.abs(rg.approvalLocal) >= 0.1) {
+        var aCls = rg.approvalLocal > 0 ? "up" : "down", aSign = rg.approvalLocal > 0 ? "+" : "−";
+        chips += '<span class="impact-chip ' + aCls + '">Gradimento locale ' + aSign + Math.abs(rg.approvalLocal).toFixed(1) + "</span>";
+      }
+      if (rg.metric && rg.metric.delta && Math.abs(rg.metric.delta) >= 0.05) {
+        var mCls = rg.metric.delta > 0 ? "up" : "down", mSign = rg.metric.delta > 0 ? "+" : "−";
+        chips += '<span class="impact-chip ' + mCls + '">' + rg.metric.label + " " + mSign + Math.abs(rg.metric.delta).toFixed(1) + "</span>";
+      }
+      if (rg.city && rg.city.delta && Math.abs(rg.city.delta) >= 0.1) {
+        var cCls = rg.city.delta > 0 ? "up" : "down", cSign = rg.city.delta > 0 ? "+" : "−";
+        chips += '<span class="impact-chip ' + cCls + '">Soddisfazione ' + rg.city.name + " " + cSign + Math.abs(rg.city.delta).toFixed(1) + "</span>";
+      }
+      if (rg.treasury && Math.abs(rg.treasury) >= 1) {
+        var tCls = rg.treasury > 0 ? "up" : "down", tSign = rg.treasury > 0 ? "+" : "−";
+        chips += '<span class="impact-chip ' + tCls + '">Casse regionali ' + tSign + "€" + Math.round(Math.abs(rg.treasury)) + "</span>";
+      }
+    }
     if (!chips) return "";
     return '<div class="impact-chips">' + chips + "</div>";
   }
@@ -23542,6 +24082,10 @@
   // Quale settore economico è espanso in questo momento nel pannello "Economia Settoriale": stesso
   // pattern di expandedNationId sopra, puro stato di interfaccia.
   var expandedSectorId = null;
+  // Quale tema è espanso nelle pagine Leggi Regionali/Mozioni Regionali (vedi renderRegionalLeggiPage/
+  // renderRegionalMozioniPage): stesso pattern di expandedMetricTile sopra, puro stato di interfaccia.
+  var expandedRegionalLawThemeId = null;
+  var expandedRegionalMotionThemeId = null;
   // La navigazione tra le pagine è una barra orizzontale di pulsanti tondi, sempre visibile in cima alla
   // pagina (anche dentro le scene a schermo intero: question time, intervista, salotto, ecc., che prima
   // non includevano affatto la navigazione — il giocatore restava bloccato in quella scena senza alcun
@@ -24397,6 +24941,7 @@
       // più di consultazione occasionale — raccolto in blocchi richiudibili per non allungare la pagina
       // di default (vedi wrapCollapsed).
       body += renderPlayerStats();
+      body += renderMinisterInitiativePanel();
       body += renderPollGrid(state.prevSnapshot);
       body += renderPublicOpinionPanel();
       // Punto di aggancio per lo scroll dopo un cambio di pagina dalla barra in cima (vedi
@@ -24905,10 +25450,22 @@
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.regionalGovernanceId && !choice.regionalScandalChoice && (choice.regionalApprovalDelta !== undefined || choice.regionalMetricDelta !== undefined || choice.regionalCityDelta !== undefined)) {
         var govRegion = state.regions && state.regions[dossier.regionalGovernanceId];
+        // Segnalato da un giocatore: dopo una scelta regionale non si vedeva mai quali indicatori fossero
+        // cambiati — qui catturiamo prima/dopo per ogni voce regionale toccata, da mostrare come chip
+        // esattamente come le voci nazionali (vedi renderDeltaChips/deltas.regional).
+        var regionalDeltaInfo = {};
+        var treasuryBefore = govRegion ? (govRegion.fondiRegionali || 0) : 0;
         if (govRegion) {
-          if (choice.regionalApprovalDelta) govRegion.approvalLocal = clamp((govRegion.approvalLocal === undefined ? 50 : govRegion.approvalLocal) + choice.regionalApprovalDelta, 0, 100);
+          if (choice.regionalApprovalDelta) {
+            var approvalBefore = govRegion.approvalLocal === undefined ? 50 : govRegion.approvalLocal;
+            govRegion.approvalLocal = clamp(approvalBefore + choice.regionalApprovalDelta, 0, 100);
+            regionalDeltaInfo.approvalLocal = govRegion.approvalLocal - approvalBefore;
+          }
           if (choice.regionalMetricDelta && dossier.regionalMetricThemeId && govRegion.metrics && govRegion.metrics[dossier.regionalMetricThemeId] !== undefined) {
-            govRegion.metrics[dossier.regionalMetricThemeId] = clamp(govRegion.metrics[dossier.regionalMetricThemeId] + choice.regionalMetricDelta, 1, 10);
+            var metricBefore = govRegion.metrics[dossier.regionalMetricThemeId];
+            govRegion.metrics[dossier.regionalMetricThemeId] = clamp(metricBefore + choice.regionalMetricDelta, 1, 10);
+            var metricTheme = SITUATION_THEME_BY_ID[dossier.regionalMetricThemeId];
+            regionalDeltaInfo.metric = { label: metricTheme ? metricTheme.label.replace("Politica — ", "") : dossier.regionalMetricThemeId, delta: govRegion.metrics[dossier.regionalMetricThemeId] - metricBefore };
             // Effetto farfalla leggero (richiesto da un giocatore): tagliare ripetutamente sull'ambiente
             // alza nel tempo il rischio reale di un'emergenza seria, vedi checkRegionalEmergencyTrigger.
             // Investire o migliorare il tema, invece, allenta la tensione accumulata.
@@ -24920,7 +25477,11 @@
           // di QUELLA città, non solo il gradimento regionale complessivo.
           if (choice.regionalCityDelta !== undefined && dossier.regionalCityName && govRegion.cities) {
             var cityHit = govRegion.cities.filter(function (c) { return c.name === dossier.regionalCityName; })[0];
-            if (cityHit) cityHit.satisfaction = clamp(cityHit.satisfaction + choice.regionalCityDelta, 0, 100);
+            if (cityHit) {
+              var cityBefore = cityHit.satisfaction;
+              cityHit.satisfaction = clamp(cityBefore + choice.regionalCityDelta, 0, 100);
+              regionalDeltaInfo.city = { name: cityHit.name, delta: cityHit.satisfaction - cityBefore };
+            }
           }
           if (govRegion.playerIsGovernor) addRegionalNews(dossier.regionalGovernanceId, choice.result);
         }
@@ -24944,6 +25505,14 @@
           state.resultData = applyChoice(dossier, { label: choice.label, hint: choice.hint, result: choice.result, effects: regionalEffects2 });
         } else {
           state.resultData = applyChoice(dossier, choice);
+        }
+        if (govRegion) {
+          var treasuryAfter = govRegion.fondiRegionali || 0;
+          if (treasuryAfter !== treasuryBefore) regionalDeltaInfo.treasury = treasuryAfter - treasuryBefore;
+        }
+        if (Object.keys(regionalDeltaInfo).length) {
+          if (!state.resultData.deltas) state.resultData.deltas = {};
+          state.resultData.deltas.regional = regionalDeltaInfo;
         }
       } else if (dossier.regionalConfidenceCrisisId && choice.regionalConfidenceChoice) {
         // Mozione di sfiducia regionale: "affronta" rischia davvero la caduta (probabilità legata al
@@ -25007,6 +25576,26 @@
           }
           if (choice.regionalApprovalDelta) scandalRegion.approvalLocal = clamp((scandalRegion.approvalLocal === undefined ? 50 : scandalRegion.approvalLocal) + choice.regionalApprovalDelta, 0, 100);
           addRegionalNews(dossier.regionalGovernanceId, choice.result);
+        }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (choice.regionalGiuntaPick) {
+        // Formazione della Giunta, un assessorato alla volta (vedi buildRegionalGiuntaFormationDossier):
+        // il candidato scelto entra davvero in r.giunta, col peso tecnico promesso applicato una sola volta
+        // al tema di cui si occuperà (vedi REGIONAL_ASSESSORATO_THEME_MAP).
+        var pendingGiunta = state.pendingRegionalGiuntaFormation;
+        var giuntaRegionId = (pendingGiunta && pendingGiunta.regionId) || (state.regionalPresidency && state.regionalPresidency.regionId);
+        var giuntaRegion = giuntaRegionId ? state.regions[giuntaRegionId] : null;
+        if (giuntaRegion) {
+          if (!giuntaRegion.giunta) giuntaRegion.giunta = [];
+          giuntaRegion.giunta.push({ assessorato: choice.regionalGiuntaPick.assessorato, name: choice.regionalGiuntaPick.name, loyalty: choice.regionalGiuntaPick.loyalty });
+          var giuntaThemeId = REGIONAL_ASSESSORATO_THEME_MAP[choice.regionalGiuntaPick.assessorato];
+          if (giuntaThemeId && giuntaRegion.metrics && giuntaRegion.metrics[giuntaThemeId] !== undefined) {
+            giuntaRegion.metrics[giuntaThemeId] = clamp(giuntaRegion.metrics[giuntaThemeId] + choice.regionalGiuntaPick.skillBonus, 1, 10);
+          }
+        }
+        if (pendingGiunta) {
+          pendingGiunta.remainingAssessorati.shift();
+          if (!pendingGiunta.remainingAssessorati.length) state.pendingRegionalGiuntaFormation = null;
         }
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "trial_open") {
@@ -25323,6 +25912,24 @@
     bindPageNavDrawer(null);
     bindRegionalPageNavDrawer();
     bindRegionalActionButtons();
+    app.querySelectorAll("[data-minister-initiative]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var p = state.player;
+        if (!p || state.turn < (p.ministerInitiativeCooldownTurn || 0) || !state.playerMinistry) return;
+        var metricKey = btn.getAttribute("data-minister-initiative");
+        var ministry = state.playerMinistry.ministry;
+        var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
+        p.ministerInitiativeCooldownTurn = state.turn + MINISTER_INITIATIVE_COOLDOWN_TURNS;
+        var natEff = {}; natEff[metricKey] = 0.35;
+        var dossier = { title: "Iniziativa ministeriale " + articled, cat: "Governo — Ministero" };
+        var choice = { label: "Investi su " + countryMetricLabel(metricKey), effects: { fondi: -rand(500, 900), national: natEff },
+          result: "Prendi l'iniziativa come Ministro " + articled + ": un investimento mirato su " + countryMetricLabel(metricKey).toLowerCase() + " produce un piccolo progresso concreto." };
+        state.resultData = applyChoice(dossier, choice);
+        state.phase = "result";
+        save();
+        render();
+      });
+    });
     var explorationHintDismissBtn = document.getElementById("exploration-hint-dismiss-btn");
     if (explorationHintDismissBtn) {
       explorationHintDismissBtn.addEventListener("click", function () {
