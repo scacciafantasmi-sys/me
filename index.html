@@ -4133,6 +4133,7 @@
     // Richiesto da un giocatore: gli assessori non devono essere generati a caso, li scegli tu, uno per
     // uno, appena inizia il mandato (vedi buildRegionalGiuntaFormationDossier/advanceRegionalPresidentTurnLogic).
     r.giunta = [];
+    r.giuntaFormationRedoneThisTerm = false;
     state.pendingRegionalGiuntaFormation = { regionId: regionId, remainingAssessorati: REGIONAL_ASSESSORATI.slice() };
     state.regionalPresidency = { regionId: regionId, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: r.nextElectionTurn };
     state.mode = "regional_president";
@@ -4333,6 +4334,11 @@
     resolveRegionalConflictsIfDue();
     ensureRegionsInit();
     driftRegionalMetrics();
+    // Il cantiere di una Grande Opera (vedi startRegionalBigWork) avanza SEMPRE di una settimana, a
+    // prescindere da quale dossier vinca questo turno — solo l'eventuale complicazione (sotto) compete
+    // per il turno, il progresso in sé no, altrimenti un cantiere non avanzerebbe mai nelle settimane in
+    // cui scatta un qualunque altro evento.
+    advanceRegionalBigWork(regionId);
     resolveRegionalLawsIfDue();
     triggerMinorCountryEvent();
     triggerCountryShock();
@@ -4399,6 +4405,12 @@
     }
     if (checkRegionalNationalWaveTrigger(regionId)) {
       state.aiDynamicDossier = buildRegionalNationalWaveDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    if (checkRegionalBigWorkComplication(regionId)) {
+      state.aiDynamicDossier = buildRegionalBigWorkComplicationDossier(regionId);
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
@@ -4484,6 +4496,111 @@
           label: c.name, hint: c.archetype.tag.charAt(0).toUpperCase() + c.archetype.tag.slice(1) + " (lealtà di partenza: " + loyalty + "%)",
           regionalGiuntaPick: { assessorato: assessorato, name: c.name, loyalty: loyalty, skillBonus: skillBonus },
           effects: {}, result: c.name + " è il nuovo assessore a " + assessorato + ": " + c.archetype.tag + "."
+        };
+      })
+    };
+  }
+  // ---------- Grandi Opere Regionali ----------
+  // Richiesto da un giocatore: più varietà vera nella regione, non solo dossier/scelte che si risolvono
+  // in una settimana — qui un cantiere vero e proprio dura molti mesi, con un progresso visibile, un
+  // rischio reale di intoppi lungo la strada (sciopero, ritrovamento archeologico, inchiesta) da gestire
+  // con una scelta vera, e una ricompensa forte solo a cantiere finito: un meccanismo di gioco DIVERSO
+  // da investimento/protesta/legge/mozione, non un'ennesima variante dello stesso schema.
+  var REGIONAL_BIG_WORKS = [
+    { key: "ospedale", label: "Nuovo ospedale regionale", themeId: "sanita", cost: [6000, 9000], weeks: [40, 60], boost: [1.8, 2.6] },
+    { key: "autostrada", label: "Autostrada regionale", themeId: "trasporti", cost: [7000, 10000], weeks: [45, 65], boost: [1.6, 2.4] },
+    { key: "polo_tecnologico", label: "Polo tecnologico regionale", themeId: "digitale", cost: [5000, 7500], weeks: [35, 50], boost: [1.8, 2.6] },
+    { key: "stadio", label: "Nuovo stadio regionale", themeId: "sport", cost: [4500, 7000], weeks: [30, 45], boost: [1.8, 2.6] },
+    { key: "rinnovabili", label: "Centrale a fonti rinnovabili", themeId: "energia", cost: [5500, 8000], weeks: [35, 50], boost: [1.6, 2.4] },
+    { key: "museo", label: "Grande museo regionale", themeId: "cultura", cost: [4000, 6000], weeks: [25, 40], boost: [1.8, 2.6] },
+    { key: "bonifica", label: "Piano di bonifica ambientale", themeId: "ambiente", cost: [5000, 7500], weeks: [30, 45], boost: [1.8, 2.6] },
+    { key: "tram", label: "Nuova linea tranviaria", themeId: "infrastrutture", cost: [6000, 8500], weeks: [35, 50], boost: [1.6, 2.4] }
+  ];
+  // Complicazioni possibili DURANTE il cantiere: un piccolo rischio ogni settimana (vedi
+  // checkRegionalBigWorkComplication), con un vero bivio da risolvere, non solo testo di colore.
+  var REGIONAL_BIG_WORK_COMPLICATIONS = [
+    { title: "Sciopero degli operai nel cantiere",
+      brief: "Gli operai del cantiere scioperano per sicurezza e salari: il lavoro si ferma.",
+      choices: [
+        { label: "Accetta le richieste e paga di più", hint: "Costoso, ma il cantiere riparte subito", extraCost: [800, 1400], extraWeeks: 0, approvalDelta: rand(1, 3) },
+        { label: "Aspetta che lo sciopero finisca da solo", hint: "Nessun costo extra, ma il cantiere ritarda", extraCost: [0, 0], extraWeeks: 6, approvalDelta: 0 }
+      ] },
+    { title: "Ritrovamento archeologico nel cantiere",
+      brief: "Durante gli scavi emerge un ritrovamento archeologico: la Soprintendenza blocca temporaneamente i lavori.",
+      choices: [
+        { label: "Finanzia uno scavo archeologico rapido", hint: "Costoso ma limita il ritardo", extraCost: [1000, 1800], extraWeeks: 4, approvalDelta: rand(1, 3) },
+        { label: "Lascia che la Soprintendenza segua i suoi tempi", hint: "Nessun costo extra, ma un ritardo lungo", extraCost: [0, 0], extraWeeks: 10, approvalDelta: 0 }
+      ] },
+    { title: "Un'inchiesta sugli appalti del cantiere",
+      brief: "La Procura apre un'inchiesta sugli appalti legati al cantiere: l'opinione pubblica segue con attenzione.",
+      choices: [
+        { label: "Collabora pienamente e rendi tutto trasparente", hint: "Il cantiere continua, qualche settimana di ritardo per i controlli", extraCost: [0, 0], extraWeeks: 5, approvalDelta: rand(1, 2) },
+        { label: "Minimizza pubblicamente e tira dritto", hint: "Nessun ritardo, ma rischi un danno d'immagine se l'inchiesta si aggrava", extraCost: [0, 0], extraWeeks: 0, approvalDelta: -rand(2, 5) }
+      ] },
+    { title: "Rincaro dei materiali da costruzione",
+      brief: "Il costo dei materiali da costruzione sale improvvisamente: l'impresa chiede un adeguamento del contratto.",
+      choices: [
+        { label: "Rinegozia e paga il rincaro", hint: "Costoso, ma il cantiere resta nei tempi", extraCost: [900, 1600], extraWeeks: 0, approvalDelta: 0 },
+        { label: "Rifiuta e imponi il prezzo originale", hint: "Nessun costo extra, ma l'impresa rallenta i lavori per protesta", extraCost: [0, 0], extraWeeks: 7, approvalDelta: -rand(1, 2) }
+      ] }
+  ];
+  function startRegionalBigWork(regionId, workKey) {
+    var r = state.regions[regionId];
+    if (r.activeBigWork) return false;
+    var work = REGIONAL_BIG_WORKS.filter(function (w) { return w.key === workKey; })[0];
+    if (!work) return false;
+    var cost = Math.round(rand(work.cost[0], work.cost[1]));
+    if ((r.fondiRegionali || 0) < cost) return false;
+    r.fondiRegionali -= cost;
+    r.activeBigWork = { key: work.key, label: work.label, themeId: work.themeId, totalWeeks: Math.round(rand(work.weeks[0], work.weeks[1])), weeksDone: 0, boost: rand(work.boost[0], work.boost[1]), startedTurn: state.turn, totalCost: cost };
+    addRegionalNews(regionId, "Al via il cantiere per " + work.label.toLowerCase() + ": un investimento di " + fmtEuro(cost) + " dalle casse regionali.");
+    return true;
+  }
+  function cancelRegionalBigWork(regionId) {
+    var r = state.regions[regionId];
+    if (!r.activeBigWork) return false;
+    var label = r.activeBigWork.label;
+    r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) - rand(2, 5), 0, 100);
+    addRegionalNews(regionId, "Il cantiere per " + label.toLowerCase() + " viene cancellato a metà lavori: un colpo all'immagine del governo regionale.");
+    r.activeBigWork = null;
+    return true;
+  }
+  // Avanza il cantiere attivo di una settimana e, a cantiere finito, applica la ricompensa — chiamata
+  // da advanceRegionalPresidentTurnLogic ad ogni turno in cui non scatta una complicazione.
+  function advanceRegionalBigWork(regionId) {
+    var r = state.regions[regionId];
+    if (!r.activeBigWork) return;
+    r.activeBigWork.weeksDone++;
+    if (r.activeBigWork.weeksDone >= r.activeBigWork.totalWeeks) {
+      var work = r.activeBigWork;
+      if (r.metrics && r.metrics[work.themeId] !== undefined) r.metrics[work.themeId] = clamp(r.metrics[work.themeId] + work.boost, 1, 10);
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(5, 9), 0, 100);
+      addRegionalNews(regionId, "Inaugurato " + work.label.toLowerCase() + ": un risultato concreto del governo regionale, atteso da anni.");
+      r.lastCompletedBigWork = { label: work.label, turn: state.turn };
+      r.activeBigWork = null;
+    }
+  }
+  function checkRegionalBigWorkComplication(regionId) {
+    var r = state.regions[regionId];
+    if (!r.activeBigWork) return false;
+    if (state.turn < (r.activeBigWork.complicationCooldownTurn || 0)) return false;
+    return Math.random() < 0.1;
+  }
+  function buildRegionalBigWorkComplicationDossier(regionId) {
+    var r = state.regions[regionId];
+    r.activeBigWork.complicationCooldownTurn = state.turn + 6;
+    var template = REGIONAL_BIG_WORK_COMPLICATIONS[Math.floor(Math.random() * REGIONAL_BIG_WORK_COMPLICATIONS.length)];
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Cantiere — " + r.activeBigWork.label,
+      cat: "Governo Regionale", title: template.title,
+      brief: template.brief,
+      regionalBigWorkId: regionId,
+      choices: template.choices.map(function (c) {
+        var extraCost = Math.round(rand(c.extraCost[0], c.extraCost[1]));
+        return {
+          label: c.label, hint: c.hint,
+          regionalBigWorkChoice: { extraCost: extraCost, extraWeeks: c.extraWeeks, approvalDelta: c.approvalDelta },
+          effects: {}, result: "Sul cantiere per " + r.activeBigWork.label.toLowerCase() + ": " + c.label.toLowerCase() + "."
         };
       })
     };
@@ -4709,6 +4826,33 @@
     });
   }
   // ---------- Pagina: Scheda della Regione ----------
+  // Pannello delle Grandi Opere Regionali (vedi REGIONAL_BIG_WORKS/startRegionalBigWork sopra): se c'è
+  // un cantiere attivo mostra l'avanzamento, altrimenti la lista di cantieri avviabili con costo e durata.
+  function renderRegionalBigWorkPanel(regionId, r) {
+    var html = '<section aria-label="Grandi Opere Regionali"><p class="eyebrow">Grandi Opere Regionali</p>';
+    if (r.activeBigWork) {
+      var bw = r.activeBigWork;
+      var pct = Math.min(100, Math.round((bw.weeksDone / bw.totalWeeks) * 100));
+      html += '<p class="ci-hint">Cantiere in corso: <strong>' + bw.label + '</strong> — ' + bw.weeksDone + " di " + bw.totalWeeks + ' settimane.</p>' +
+        '<div class="gauge" style="margin:0.3rem 0"><span style="width:' + pct + '%;background:var(--accent)"></span></div>' +
+        '<button type="button" class="staff-btn fire" id="regional-bigwork-cancel-btn">Cancella il cantiere (costa in gradimento)</button>';
+    } else {
+      html += '<p class="ci-hint">Un cantiere vero e proprio, con un costo iniziale alto e molti mesi di lavori: durante il cantiere possono capitare intoppi (scioperi, ritrovamenti, inchieste) da gestire, ma a fine lavori la ricompensa è forte e duratura — non un investimento settimanale come gli altri.</p><div class="option-grid">';
+      REGIONAL_BIG_WORKS.forEach(function (w) {
+        var theme = SITUATION_THEME_BY_ID[w.themeId];
+        var costLabel = fmtEuro(w.cost[0]) + "–" + fmtEuro(w.cost[1]);
+        var weeksLabel = Math.round(w.weeks[0] / 4.3) + "–" + Math.round(w.weeks[1] / 4.3) + " mesi";
+        var affordable = (r.fondiRegionali || 0) >= w.cost[0];
+        html += '<button type="button" class="option-card" data-regional-bigwork-start="' + w.key + '"' + (affordable ? "" : " disabled") + '><span class="olabel">' + w.label + '</span><span class="odesc">' + theme.label.replace("Politica — ", "") + " · " + costLabel + " · " + weeksLabel + "</span></button>";
+      });
+      html += "</div>";
+    }
+    if (r.lastCompletedBigWork) {
+      html += '<p class="ci-hint" style="margin-top:0.6rem">Ultima grande opera completata: <strong>' + r.lastCompletedBigWork.label + "</strong> (settimana " + r.lastCompletedBigWork.turn + ").</p>";
+    }
+    html += "</section>";
+    return html;
+  }
   function renderRegionalSchedaPage() {
     // Difensivo: garantisce che r.metrics abbia sempre tutti e 20 i temi (vedi ensureRegionsInit), così
     // la scheda non va mai in crash su un salvataggio in qualunque stato intermedio.
@@ -4736,6 +4880,7 @@
       ": da qui in avanti ti occupi solo del governo di " + regionId + ", non più della politica nazionale, finché non finirà questo mandato.</p>" +
       '<button type="button" class="staff-btn fire" id="regional-resign-btn" style="margin-top:0.6rem">Dimettiti dalla presidenza della Regione</button>' +
       '</section>';
+    html += renderRegionalBigWorkPanel(regionId, r);
     html += '<section aria-label="Scheda della Regione"><p class="eyebrow">Scheda della Regione — ' + regionId + '</p>' +
       '<p class="ci-hint">Tutti gli indicatori reali della regione, da 1 (pessimo) a 10 (ottimo): i 2 problemi e i 2 punti di forza identitari di ' + regionId + ' restano agli estremi, gli altri cambiano più lentamente ma non restano mai fermi.</p>';
     var allIds = regionAllThemeIds().slice().sort(function (a, b) { return r.metrics[a] - r.metrics[b]; });
@@ -4751,16 +4896,36 @@
   function renderRegionalGiuntaPage() {
     var regionId = state.regionalPresidency.regionId;
     var r = state.regions[regionId];
-    if (!r.giunta || !r.giunta.length) r.giunta = generateRegionalGiunta();
-    var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
-    var html = '<section aria-label="Giunta Regionale"><p class="eyebrow">Giunta Regionale — ' + regionId + '</p>' +
-      '<p class="ci-hint">La tua squadra di governo regionale: ogni assessore porta con sé una fedeltà (0-100%) che ne riflette il rapporto con te. Puoi revocare e nominarne uno nuovo, con un piccolo costo politico.</p>';
+    // Mentre la Formazione della Giunta è in corso (il dossier mostrato sopra, un assessorato alla
+    // volta), questa scheda NON deve riempire da sola gli incarichi ancora da scegliere: altrimenti la
+    // scelta del giocatore arriverebbe su una Giunta già completata a caso, duplicando l'incarico.
+    var formationPending = !!(state.pendingRegionalGiuntaFormation && state.pendingRegionalGiuntaFormation.regionId === regionId && state.pendingRegionalGiuntaFormation.remainingAssessorati.length);
+    if (!formationPending && (!r.giunta || !r.giunta.length)) r.giunta = generateRegionalGiunta();
+    var html = '<section aria-label="Giunta Regionale"><p class="eyebrow">Giunta Regionale — ' + regionId + '</p>';
+    if (formationPending) {
+      html += '<p class="ci-hint">Stai ancora scegliendo la tua Giunta, un assessorato alla volta: rispondi al dossier qui sopra per completare la nomina (' + state.pendingRegionalGiuntaFormation.remainingAssessorati.length + ' incaric' + (state.pendingRegionalGiuntaFormation.remainingAssessorati.length === 1 ? "o" : "hi") + ' ancora da assegnare).</p>';
+      if (r.giunta && r.giunta.length) {
+        r.giunta.forEach(function (a) {
+          html += '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + a.name + '</strong><span class="chip">' + a.assessorato + '</span></div>' +
+            '<div class="party-row-sub">Fedeltà: ' + Math.round(a.loyalty) + '%</div></div></div>';
+        });
+      }
+      html += "</section>";
+      return html;
+    }
+    var onCooldown = state.turn < (r.giuntaRevokeCooldownTurn || 0);
+    html += '<p class="ci-hint">La tua squadra di governo regionale: ogni assessore porta con sé una fedeltà (0-100%) che ne riflette il rapporto con te. Puoi revocare e nominarne uno nuovo, con un piccolo costo politico.' +
+      (onCooldown ? " Hai già fatto un rimpasto di recente: il prossimo sarà possibile dalla settimana " + r.giuntaRevokeCooldownTurn + "." : "") + '</p>';
     r.giunta.forEach(function (a) {
       html += '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + a.name + '</strong><span class="chip">' + a.assessorato + '</span></div>' +
         '<div class="party-row-sub">Fedeltà: ' + Math.round(a.loyalty) + '%</div>' +
         '<button type="button" class="staff-btn fire" data-regional-assessore-revoke="' + a.assessorato + '"' + (onCooldown ? " disabled" : "") + '>Revoca e nomina un nuovo assessore</button>' +
         "</div></div>";
     });
+    if (!r.giuntaFormationRedoneThisTerm) {
+      html += '<p class="ci-hint" style="margin-top:0.8rem">Vuoi scegliere di persona, incarico per incarico, tutta la squadra di governo invece di un rimpasto alla volta? Puoi farlo una sola volta per mandato.</p>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="regional-giunta-redo-btn"><span class="clabel">Scioglie la Giunta e scegli tu ogni assessore</span></button></div>';
+    }
     html += "</section>";
     return html;
   }
@@ -5021,20 +5186,59 @@
         render();
       });
     });
+    // Segnalato da un giocatore: revocare un assessore condivideva lo stesso raffreddamento di
+    // leggi/mozioni/visite in città (r.regionalActionCooldownTurn) — chi usa regolarmente quelle azioni
+    // (ora molto più ricche, vedi Leggi/Mozioni Regionali) non trovava praticamente MAI il bottone
+    // sbloccato, sembrando un bug. Ora ha un proprio raffreddamento indipendente.
     app.querySelectorAll("[data-regional-assessore-revoke]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var r = state.regions[regionId];
-        if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
+        if (state.turn < (r.giuntaRevokeCooldownTurn || 0)) return;
         var assessorato = btn.getAttribute("data-regional-assessore-revoke");
         if (!window.confirm("Revocare l'assessore " + assessorato + " e nominarne uno nuovo?")) return;
         var idx = (r.giunta || []).findIndex(function (a) { return a.assessorato === assessorato; });
         if (idx !== -1) r.giunta[idx] = { assessorato: assessorato, name: generateStaffName(), loyalty: Math.round(rand(55, 80)) };
-        r.regionalActionCooldownTurn = state.turn + 3;
+        r.giuntaRevokeCooldownTurn = state.turn + 3;
         addRegionalNews(regionId, "Rimpasto in Giunta: nuovo assessore " + assessorato + ".");
         save();
         render();
       });
     });
+    // Richiesto da un giocatore: anche chi è già a metà mandato (giunta nominata a caso dal vecchio
+    // comportamento, o da una partita salvata prima di questa funzione) deve poter scegliere di proprio
+    // pugno tutta la Giunta, non solo i nuovi presidenti eletti da ora in avanti — una volta per mandato,
+    // per non trasformarlo in un modo per rigenerare all'infinito assessori fedeli a comando.
+    var redoGiuntaBtn = document.getElementById("regional-giunta-redo-btn");
+    if (redoGiuntaBtn) {
+      redoGiuntaBtn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (r.giuntaFormationRedoneThisTerm) return;
+        if (!window.confirm("Sciogliere l'intera Giunta regionale e scegliere di persona un nuovo assessore per ciascun incarico? Puoi farlo una sola volta per mandato.")) return;
+        r.giunta = [];
+        r.giuntaFormationRedoneThisTerm = true;
+        state.pendingRegionalGiuntaFormation = { regionId: regionId, remainingAssessorati: REGIONAL_ASSESSORATI.slice() };
+        addRegionalNews(regionId, "L'intera Giunta regionale viene sciolta: il presidente scieglie di persona, incarico per incarico, la nuova squadra di governo.");
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-regional-bigwork-start]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var workKey = btn.getAttribute("data-regional-bigwork-start");
+        if (!startRegionalBigWork(regionId, workKey)) return;
+        save();
+        render();
+      });
+    });
+    var cancelBigWorkBtn = document.getElementById("regional-bigwork-cancel-btn");
+    if (cancelBigWorkBtn) {
+      cancelBigWorkBtn.addEventListener("click", function () {
+        if (!window.confirm("Cancellare il cantiere a metà lavori? I fondi già investiti sono persi e il gradimento ne risentirà.")) return;
+        if (!cancelRegionalBigWork(regionId)) return;
+        save();
+        render();
+      });
+    }
   }
 
   // ---------- Apertura mirata di sezioni locali, con coalizioni civiche locali ----------
@@ -25648,6 +25852,18 @@
         if (pendingGiunta) {
           pendingGiunta.remainingAssessorati.shift();
           if (!pendingGiunta.remainingAssessorati.length) state.pendingRegionalGiuntaFormation = null;
+        }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (choice.regionalBigWorkChoice) {
+        // Complicazione di un cantiere in corso (vedi buildRegionalBigWorkComplicationDossier): costo
+        // extra e/o settimane extra applicati direttamente al progetto attivo della regione.
+        var bwRegion = state.regions[dossier.regionalBigWorkId];
+        if (bwRegion && bwRegion.activeBigWork) {
+          var bw = choice.regionalBigWorkChoice;
+          if (bw.extraCost) applyRegionalTreasuryDelta(bwRegion, -bw.extraCost, dossier.regionalBigWorkId);
+          if (bw.extraWeeks) bwRegion.activeBigWork.totalWeeks += bw.extraWeeks;
+          if (bw.approvalDelta) bwRegion.approvalLocal = clamp((bwRegion.approvalLocal === undefined ? 50 : bwRegion.approvalLocal) + bw.approvalDelta, 0, 100);
+          if (bwRegion.playerIsGovernor) addRegionalNews(dossier.regionalBigWorkId, choice.result);
         }
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "trial_open") {
