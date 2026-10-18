@@ -13129,6 +13129,50 @@
     state.worldNews.unshift({ cat: "Governo", text: text });
   }
 
+  // ---------- Rivoluzione Popolare ----------
+  // Richiesto da un giocatore: se "Felicità e qualità della vita" (state.countryProfile.felicita) crolla
+  // sotto 2.0/10, il paese insorge — SEMPRE, sia che a governare sia il giocatore sia che sia la CPU, con
+  // un'unica regola identica per entrambi (stesso principio già usato per consensoGoverno<20, vedi
+  // sopra). A differenza del crollo di consenso (che prima tenta un mandato esplorativo per evitare le
+  // urne), una rivoluzione popolare non si negozia: il governo cade subito e si torna al voto, esattamente
+  // come un golpe riuscito o un tentativo di guerra civile vittorioso (stesso pattern di stato riusato qui
+  // sotto). Se il paese era sotto un regime, la rivoluzione lo travolge e riporta la democrazia.
+  function checkPopularRevolutionTrigger() {
+    if (!state.countryProfile || state.countryProfile.felicita === undefined) return false;
+    if (state.countryProfile.felicita >= 2) return false;
+    if (state.snapElectionPending) return false;
+    if (state.turn < (state.popularRevolutionCooldownTurn || 0)) return false;
+    return true;
+  }
+  function triggerPopularRevolutionIfDue() {
+    if (!checkPopularRevolutionTrigger()) return null;
+    // Raffreddamento lungo (non solo per evitare un doppio scatto nella stessa settimana): il nuovo
+    // governo uscito dalle urne merita un po' di tempo per invertire la rotta prima che il paese possa
+    // insorgere di nuovo, altrimenti un benessere sociale rimasto basso scatenerebbe una rivoluzione dietro
+    // l'altra ad ogni elezione.
+    state.popularRevolutionCooldownTurn = state.turn + 30;
+    var wasRegime = !!state.regime;
+    var regimeLabel = wasRegime ? REGIME_LABELS[state.regime.type].name : null;
+    var govLabelBefore = govEntityLabel() || "Il governo in carica";
+    if (wasRegime) state.regime = null;
+    applyGovernmentCollapseLeadershipShock();
+    state.govEntity = null;
+    state.snapElectionPending = true;
+    state.nextElectionTurn = state.turn + 8;
+    var text = "Con il benessere sociale crollato a " + fmt1(state.countryProfile.felicita) + "/10, una vera e propria rivoluzione popolare attraversa il paese: scioperi generali, cortei permanenti e piazze occupate per settimane. " +
+      (wasRegime ? regimeLabel + " viene travolto: il regime cade e la democrazia torna in vigore" : govLabelBefore + " non regge alla pressione della piazza e cade") +
+      ". Si torna al voto, con una campagna lampo nel pieno di una crisi sociale senza precedenti.";
+    state.log.unshift({ week: state.turn, title: "Rivoluzione Popolare: il governo cade", choiceLabel: "Crisi sociale", result: text, headlines: [], type: "istituzioni", cat: "Istituzioni" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    return {
+      id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Rivoluzione Popolare",
+      cat: "Istituzioni", title: "Il paese insorge: il governo cade", brief: text,
+      choices: [{ label: "Prendo atto", hint: "Si torna subito al voto", effects: {}, result: "Il paese si prepara a una campagna elettorale lampo, nel pieno di una crisi sociale senza precedenti." }]
+    };
+  }
+
   // ---------- Mandato esplorativo del Presidente della Repubblica ----------
   // Finora un governo sotto il 20% di consenso cadeva e portava dritto alle urne, nella stessa identica
   // settimana: nella realtà italiana, prima di sciogliere le Camere il Capo dello Stato tenta quasi
@@ -14400,6 +14444,17 @@
     triggerLocalElectionCycle();
     triggerRegionalElectionCycle();
     resolveEuropeanElection();
+
+    // Stessa priorità assoluta della catena di turno normale (vedi triggerPopularRevolutionIfDue): il
+    // Presidente della Repubblica resta in carica per il proprio mandato, ma il Governo in Parlamento può
+    // comunque cadere sotto di lui, esattamente come già succede per il crollo di consenso qui sotto.
+    var presRevolutionDossier = triggerPopularRevolutionIfDue();
+    if (presRevolutionDossier) {
+      state.aiDynamicDossier = presRevolutionDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
 
     if (state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
       state.mandatoEsplorativoCooldownTurn = state.turn + 6;
@@ -27533,6 +27588,16 @@
     var localElectionSpotlight = triggerLocalElectionCycle();
     var regionalElectionSpotlight = triggerRegionalElectionCycle();
     resolveEuropeanElection();
+
+    // Priorità ancora più alta del crollo di consenso sotto: una rivoluzione popolare non si negozia con
+    // un mandato esplorativo, il governo cade subito (vedi triggerPopularRevolutionIfDue sopra).
+    var revolutionDossier = triggerPopularRevolutionIfDue();
+    if (revolutionDossier) {
+      state.aiDynamicDossier = revolutionDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
 
     // Il governo cade per un'unica ragione, sempre la stessa, sia che a governare sia il giocatore sia
     // che sia la CPU: la fiducia di governo scende sotto il 20%. Non è più un tiro di dado indipendente
