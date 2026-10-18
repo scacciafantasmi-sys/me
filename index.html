@@ -1018,11 +1018,28 @@
     var sizeWeight = clamp((p.sondaggi || 0) / 20, 0, 2);
     return clamp(base + seatWeight + euWeight + sizeWeight, 0.6, 8);
   }
+  // Segnalato da un giocatore: anche a livello nazionale, soprattutto da Governo (dove institutionalPower-
+  // Multiplier può arrivare fino a 8x), le azioni del giocatore spingevano un indicatore della Scheda
+  // Paese verso il 10 troppo in fretta — niente lo rendeva via via più difficile avvicinarsi al tetto.
+  // Stesso principio già applicato alla Scheda Regione (vedi applyRegionalMetricDelta): più un indicatore
+  // è già alto, meno rende un'ulteriore spinta nella stessa direzione; un peggioramento pesa sempre uguale.
+  function applyCountryMetricDelta(metricKey, rawDelta) {
+    if (!metricKey || state.countryProfile[metricKey] === undefined || !rawDelta) return 0;
+    var current = state.countryProfile[metricKey];
+    var effective = rawDelta;
+    if (rawDelta > 0) {
+      var headroom = clamp((10 - current) / 5, 0.12, 1);
+      effective = rawDelta * headroom;
+    }
+    var before = current;
+    state.countryProfile[metricKey] = clamp(current + effective, 1, 10);
+    return state.countryProfile[metricKey] - before;
+  }
   function applyNationalEffects(national, mult) {
     if (!national) return;
     Object.keys(national).forEach(function (k) {
       if (state.countryProfile[k] === undefined) return;
-      state.countryProfile[k] = clamp(state.countryProfile[k] + national[k] * mult, 1, 10);
+      applyCountryMetricDelta(k, national[k] * mult);
     });
   }
   // Sotto un governo davvero comunista, il settore privato non resta semplicemente "sfavorito" dai bias
@@ -2363,8 +2380,7 @@
       lines.push({ catLabel: info.cat.label, subLabel: info.sub.label, amount: amount, outcome: res.outcome, note: note });
     });
     Object.keys(metricDeltas).forEach(function (metric) {
-      if (state.countryProfile[metric] === undefined) return;
-      state.countryProfile[metric] = clamp(state.countryProfile[metric] + metricDeltas[metric], 1, 10);
+      applyCountryMetricDelta(metric, metricDeltas[metric]);
     });
     // Finora gli stanziamenti/tagli decisi qui muovevano SOLO gli indicatori della Scheda Paese: il
     // Bilancio dello Stato vero e proprio (state.bilancioStato.uscite, la stessa spesa pubblica da cui
@@ -9939,7 +9955,7 @@
         if (arc.pressure <= -2) {
           p.reputazione = clamp(p.reputazione + rand(5, 9), 0, 100);
           p.visibilita = clamp(p.visibilita + rand(4, 8), 0, 100);
-          if (d.metric) state.countryProfile[d.metric] = clamp(state.countryProfile[d.metric] + rand(0.1, 0.3), 1, 10);
+          if (d.metric) applyCountryMetricDelta(d.metric, rand(0.1, 0.3));
           return { title: "La tua reazione lampo viene premiata", result: "La rapidità con cui hai reagito a " + d.noun + " viene ampiamente premiata dall'opinione pubblica: in un'emergenza vera, essere i primi a esserci ha contato più di ogni altra cosa." };
         }
         if (arc.pressure >= 2) {
@@ -13975,7 +13991,7 @@
     var passProb = 0.5 + (r.stance === "si" ? nudge : r.stance === "no" ? -nudge : 0);
     var passed = Math.random() < passProb;
     var delta = passed ? topic.passDelta : topic.failDelta;
-    state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
+    applyCountryMetricDelta(topic.metric, delta);
     var esito = "Ha votato il " + fmt1(turnout) + "% degli aventi diritto, quorum raggiunto. " + (passed ? topic.passText : topic.failText);
     var stanceNote = r.stance === "si"
       ? (passed ? " Il partito aveva fatto campagna per il SÌ: la vittoria è anche un po' sua." : " Il partito aveva fatto campagna per il SÌ, ma il NO prevale comunque.")
@@ -14665,12 +14681,12 @@
     var passProb = isEuExit ? euExitReferendumPassProb(p) : clamp(0.35 + p.reputazione / 400 + p.visibilita / 500, 0.15, 0.85);
     var passed = Math.random() < passProb;
     var mult = institutionalPowerMultiplier(p);
-    var delta = passed ? rand(0.3, 0.6) : -rand(0.1, 0.3);
+    var delta = passed ? rand(0.15, 0.3) : -rand(0.1, 0.3);
     if (isEuExit) {
       if (passed) applyEuExitConsequences();
       else state.euExitCooldownTurn = state.turn + 80;
     } else if (topic.metric) {
-      state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+      applyCountryMetricDelta(topic.metric, delta * mult);
     }
     p.reputazione = clamp(p.reputazione + (passed ? rand(2, 5) : -rand(1, 4)), 0, 100);
     // Un referendum promosso dal governo che vince rafforza (un po') la maggioranza; se lo perde, mette
@@ -15330,8 +15346,8 @@
     var passed = Math.random() < topic.acceptProb;
     var mult = institutionalPowerMultiplier(p);
     var isGoverno = p.parliamentRole === "governo";
-    var delta = passed ? rand(0.2, 0.45) : rand(-0.05, 0.05);
-    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+    var delta = passed ? rand(0.09, 0.2) : rand(-0.05, 0.05);
+    if (topic.metric) applyCountryMetricDelta(topic.metric, delta * mult);
     var repDelta = passed ? rand(0.8, 2) : (isGoverno ? -rand(0.5, 1.5) : rand(0.2, 0.8));
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     applyVoteOutcomeSondaggi(p, passed);
@@ -15481,8 +15497,17 @@
     }
     var mult = institutionalPowerMultiplier(p);
     var isGoverno = p.parliamentRole === "governo";
-    var delta = passed ? rand(0.5, 1.0) : rand(-0.1, 0.1);
-    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+    // Segnalato da un giocatore: una sola legge, per un partito forte al governo (institutionalPower-
+    // Multiplier può arrivare a 8x), poteva spostare un indicatore di diversi punti in una sola settimana
+    // — troppo, anche prima che i rendimenti decrescenti di applyCountryMetricDelta iniziassero a farsi
+    // sentire (che agiscono solo avvicinandosi al 10, non su un balzo enorme da un valore medio-basso).
+    // Base ridotta a circa metà rispetto a prima.
+    var delta = passed ? rand(0.22, 0.45) : rand(-0.1, 0.1);
+    // Il valore DAVVERO applicato (dopo i rendimenti decrescenti di applyCountryMetricDelta) va
+    // conservato per checkConstitutionalReview sotto: se la Corte Costituzionale annulla la legge deve
+    // togliere esattamente quello che è stato aggiunto, non il valore grezzo pre-smorzamento, altrimenti
+    // toglierebbe più di quanto dato.
+    var appliedLeggeDelta = topic.metric ? applyCountryMetricDelta(topic.metric, delta * mult) : 0;
     var repDelta = passed ? rand(1.5, 3.5) : (isGoverno ? -rand(1, 3) : rand(0.3, 1.2));
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     applyVoteOutcomeSondaggi(p, passed);
@@ -15503,7 +15528,7 @@
       recordEnactedPolicy(topic.title, "Legge approvata: " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
       markTopicNounResolved(topic.noun);
       if (isFiscalTopic(topic.noun) || isFiscalTopic(topic.title)) applyIndirectFiscalNudge(p.family, 1);
-      checkConstitutionalReview(topic, delta * mult);
+      checkConstitutionalReview(topic, appliedLeggeDelta);
     }
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
@@ -15557,8 +15582,8 @@
     var passed = Math.random() < topic.acceptProb;
     var mult = institutionalPowerMultiplier(p);
     var isGoverno = p.parliamentRole === "governo";
-    var delta = passed ? rand(0.4, 0.85) : rand(-0.1, 0.1);
-    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta * mult, 1, 10);
+    var delta = passed ? rand(0.18, 0.38) : rand(-0.1, 0.1);
+    if (topic.metric) applyCountryMetricDelta(topic.metric, delta * mult);
     var repDelta = passed ? rand(1.2, 3) : (isGoverno ? -rand(1, 2.5) : rand(0.3, 1));
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     if (state.consensoGoverno !== undefined) {
@@ -26172,9 +26197,7 @@
         var termAct = state.presidentTerm;
         if (choice.presidentAct === "firma") {
           termAct.actsSigned = (termAct.actsSigned || 0) + 1;
-          if (dossier.presidentMetric && state.countryProfile[dossier.presidentMetric] !== undefined) {
-            state.countryProfile[dossier.presidentMetric] = clamp(state.countryProfile[dossier.presidentMetric] + rand(0.05, 0.2), 1, 10);
-          }
+          if (dossier.presidentMetric) applyCountryMetricDelta(dossier.presidentMetric, rand(0.05, 0.2));
         } else if (choice.presidentAct === "rinvio") {
           termAct.vetoesUsed = (termAct.vetoesUsed || 0) + 1;
         }
