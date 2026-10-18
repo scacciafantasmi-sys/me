@@ -3806,6 +3806,25 @@
   // punto, mantenendo intatto il rapporto tra le scelte (una buona scelta resta sempre meglio di una
   // cattiva, solo con un'ampiezza più ragionevole).
   var REGIONAL_IMPACT_SCALE = 0.45;
+  // Segnalato ancora da un giocatore dopo il primo taglio sopra: restava troppo facile "spammare" azioni
+  // a basso rischio (mozioni, visite in città) e portare un indicatore regionale a 10/10 in poco tempo,
+  // perché la scala sopra riduce l'AMPIEZZA di ogni singolo colpo ma non impedisce che tanti colpi piccoli
+  // si sommino comunque fino al tetto. Qui si aggiungono rendimenti decrescenti veri: più un indicatore è
+  // già alto, meno rende un'ulteriore spinta nella stessa direzione — un peggioramento invece pesa sempre
+  // allo stesso modo, non è mai attenuato. Punto unico di applicazione per ogni fonte che tocca r.metrics,
+  // così il tetto vale davvero per qualunque strada il giocatore usi per spingere un indicatore in alto.
+  function applyRegionalMetricDelta(r, themeId, rawDelta) {
+    if (!r.metrics || r.metrics[themeId] === undefined || !rawDelta) return 0;
+    var current = r.metrics[themeId];
+    var effective = rawDelta;
+    if (rawDelta > 0) {
+      var headroom = clamp((10 - current) / 5, 0.12, 1);
+      effective = rawDelta * headroom;
+    }
+    var before = current;
+    r.metrics[themeId] = clamp(current + effective, 1, 10);
+    return r.metrics[themeId] - before;
+  }
   function checkRegionalGovernanceTrigger() {
     var p = state.player;
     if (!p || state.turn < (p.regionalGovernanceCooldownTurn || 0)) return false;
@@ -3932,18 +3951,20 @@
       r.pendingRegionalLaw = null;
       var passProb = clamp(0.35 + ((r.approvalLocal === undefined ? 50 : r.approvalLocal) - 50) / 150, 0.15, 0.75);
       var passed = Math.random() < passProb;
-      var metricDelta = passed ? rand(1.2, 1.8) : -rand(0.2, 0.5);
+      var metricDelta = passed ? rand(0.9, 1.4) : -rand(0.2, 0.5);
       var approvalDelta = passed ? rand(7, 12) : -rand(3, 6);
-      if (r.metrics && r.metrics[law.themeId] !== undefined) r.metrics[law.themeId] = clamp(r.metrics[law.themeId] + metricDelta, 1, 10);
+      applyRegionalMetricDelta(r, law.themeId, metricDelta);
       r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + approvalDelta, 0, 100);
+      var resolveTheme = SITUATION_THEME_BY_ID[law.themeId];
+      var resolveThemeTag = resolveTheme ? " (tema: " + resolveTheme.label.replace("Politica — ", "") + ")" : "";
       var text = passed
-        ? "Il Consiglio Regionale di " + id + " approva la legge regionale su " + law.noun + ": un risultato concreto per il governo regionale."
-        : "Il Consiglio Regionale di " + id + " boccia la proposta di legge regionale su " + law.noun + ": una battuta d'arresto per il governo regionale.";
+        ? "Il Consiglio Regionale di " + id + " approva la legge regionale su " + law.noun + resolveThemeTag + ": un risultato concreto per il governo regionale."
+        : "Il Consiglio Regionale di " + id + " boccia la proposta di legge regionale su " + law.noun + resolveThemeTag + ": una battuta d'arresto per il governo regionale.";
       state.log.unshift({ week: state.turn, title: (passed ? "Approvata" : "Bocciata") + " una legge regionale in " + id, choiceLabel: law.noun, result: text, headlines: [], type: "locale", cat: "Governo Regionale" });
       if (!state.worldNews) state.worldNews = [];
       state.worldNews.unshift({ cat: "Governo Regionale", text: text });
       if (!r.lawsHistory) r.lawsHistory = [];
-      r.lawsHistory.unshift({ week: state.turn, noun: law.noun, outcome: passed ? "passed" : "failed" });
+      r.lawsHistory.unshift({ week: state.turn, noun: law.noun, outcome: passed ? "passed" : "failed", themeId: law.themeId });
       if (r.lawsHistory.length > 30) r.lawsHistory.length = 30;
       if (r.playerIsGovernor) addRegionalNews(id, text);
     });
@@ -4573,7 +4594,7 @@
     r.activeBigWork.weeksDone++;
     if (r.activeBigWork.weeksDone >= r.activeBigWork.totalWeeks) {
       var work = r.activeBigWork;
-      if (r.metrics && r.metrics[work.themeId] !== undefined) r.metrics[work.themeId] = clamp(r.metrics[work.themeId] + work.boost, 1, 10);
+      applyRegionalMetricDelta(r, work.themeId, work.boost);
       r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(5, 9), 0, 100);
       addRegionalNews(regionId, "Inaugurato " + work.label.toLowerCase() + ": un risultato concreto del governo regionale, atteso da anni.");
       r.lastCompletedBigWork = { label: work.label, turn: state.turn };
@@ -4940,7 +4961,10 @@
     var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
     var html = '<section aria-label="Leggi Regionali"><p class="eyebrow">Leggi Regionali — ' + regionId + '</p>';
     if (r.pendingRegionalLaw) {
-      html += '<p class="ci-hint">In discussione al Consiglio Regionale: <strong>' + r.pendingRegionalLaw.noun + '</strong> (esito atteso entro la settimana ' + r.pendingRegionalLaw.resolveTurn + ').</p>';
+      var pendingLawTheme = SITUATION_THEME_BY_ID[r.pendingRegionalLaw.themeId];
+      html += '<p class="ci-hint">In discussione al Consiglio Regionale: <strong>' + r.pendingRegionalLaw.noun + '</strong>' +
+        (pendingLawTheme ? ' <span class="chip">' + pendingLawTheme.label.replace("Politica — ", "") + '</span>' : "") +
+        ' (esito atteso entro la settimana ' + r.pendingRegionalLaw.resolveTurn + ').</p>';
     } else {
       var sanitaCommissariata = r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn;
       html += '<p class="ci-hint">Proponi una vera legge regionale su un tema specifico: il Consiglio Regionale discute per alcune settimane, con un effetto forte se passa, un costo in credibilità se cade.' +
@@ -4965,7 +4989,8 @@
     if (r.lawsHistory && r.lawsHistory.length) {
       html += '<p class="eyebrow" style="margin-top:0.8rem">Storico leggi regionali</p><ul class="enacted-policy-list">' +
         r.lawsHistory.slice(0, 15).map(function (l) {
-          return '<li><strong>' + l.noun + '</strong> <span class="ci-hint">(settimana ' + l.week + ')</span> ' + (l.outcome === "passed" ? '<span class="chip good">Approvata</span>' : '<span class="chip">Bocciata</span>') + "</li>";
+          var histTheme = SITUATION_THEME_BY_ID[l.themeId];
+          return '<li><strong>' + l.noun + '</strong> <span class="ci-hint">(settimana ' + l.week + (histTheme ? " — " + histTheme.label.replace("Politica — ", "") : "") + ')</span> ' + (l.outcome === "passed" ? '<span class="chip good">Approvata</span>' : '<span class="chip">Bocciata</span>') + "</li>";
         }).join("") + "</ul>";
     }
     html += "</section>";
@@ -5003,6 +5028,9 @@
     return html;
   }
   // ---------- Pagina: Città della Regione ----------
+  // Richiesto da un giocatore: più interattività nella scheda Città, non un solo bottone "investi" per
+  // ciascuna — tre azioni reali, con un vero compromesso tra loro (costo certo/esito certo, gratis/esito
+  // incerto, guadagno subito/costo politico), non varianti dello stesso schema.
   function renderRegionalCittaPage() {
     var regionId = state.regionalPresidency.regionId;
     var r = state.regions[regionId];
@@ -5013,7 +5041,9 @@
       html += '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + c.name + '</strong></div>' +
         '<div class="party-row-sub">Soddisfazione: ' + Math.round(c.satisfaction) + '% — tema caldo: ' + theme.label.replace("Politica — ", "") + '</div>' +
         '<div class="gauge" style="margin:0.3rem 0"><span style="width:' + Math.round(c.satisfaction) + '%;background:var(--accent)"></span></div>' +
-        '<button type="button" class="staff-btn hire" data-regional-city-visit="' + c.name + '"' + (onCooldown ? " disabled" : "") + '>Visita ' + c.name + " (investimento mirato)</button>" +
+        '<button type="button" class="staff-btn hire" data-regional-city-visit="' + c.name + '"' + (onCooldown ? " disabled" : "") + '>Investimento mirato (costa alle casse, esito certo)</button>' +
+        '<button type="button" class="staff-btn hire" data-regional-city-meet="' + c.name + '"' + (onCooldown ? " disabled" : "") + '>Incontra il Sindaco (gratis, esito incerto)</button>' +
+        '<button type="button" class="staff-btn fire" data-regional-city-cut="' + c.name + '"' + (onCooldown ? " disabled" : "") + '>Taglia i fondi (incassi subito, scontenta la città)</button>' +
         "</div></div>";
     });
     html += "</section>";
@@ -5080,8 +5110,8 @@
     var r = state.regions[regionId];
     if (state.turn < (r.regionalActionCooldownTurn || 0)) return false;
     if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return false;
-    r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
-    if (r.metrics[themeId] !== undefined) r.metrics[themeId] = clamp(r.metrics[themeId] + rand(0.2, 0.4), 1, 10);
+    r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(1.5, 3), 0, 100);
+    applyRegionalMetricDelta(r, themeId, rand(0.12, 0.25));
     r.regionalActionCooldownTurn = state.turn + 3;
     if (!r.motionsHistory) r.motionsHistory = [];
     r.motionsHistory.unshift({ week: state.turn, themeId: themeId, noun: noun });
@@ -5131,6 +5161,11 @@
         var themeId = classifyRegionalFreeText(text) || worstRegionTheme(regionId);
         if (!submitRegionalLaw(regionId, themeId, text)) return;
         if (input) input.value = "";
+        // Segnalato da un giocatore: dopo aver depositato una legge scritta di proprio pugno non si capiva
+        // né che fosse stata presa in carico né su quale tema fosse stata riconosciuta — ora un messaggio
+        // esplicito lo conferma subito, oltre alla voce "In discussione" che compare nella stessa pagina.
+        var lawTheme = SITUATION_THEME_BY_ID[themeId];
+        showSaveStatus("Depositata: il Consiglio Regionale l'ha riconosciuta come proposta su " + (lawTheme ? lawTheme.label.replace("Politica — ", "").toLowerCase() : themeId) + ". Esito atteso entro la settimana " + state.regions[regionId].pendingRegionalLaw.resolveTurn + ".", false);
         save();
         render();
       });
@@ -5163,6 +5198,8 @@
         var themeId = classifyRegionalFreeText(text) || worstRegionTheme(regionId);
         if (!submitRegionalMotion(regionId, themeId, text)) return;
         if (input) input.value = "";
+        var motionTheme = SITUATION_THEME_BY_ID[themeId];
+        showSaveStatus("Mozione approvata: riconosciuta dal Consiglio Regionale come proposta su " + (motionTheme ? motionTheme.label.replace("Politica — ", "").toLowerCase() : themeId) + ".", false);
         save();
         render();
       });
@@ -5177,11 +5214,58 @@
         var cost = rand(400, 700);
         if ((r.fondiRegionali || 0) < cost) return;
         r.fondiRegionali = Math.max(0, (r.fondiRegionali || 0) - cost);
-        city.satisfaction = clamp(city.satisfaction + rand(8, 14), 0, 100);
-        if (r.metrics[city.focusThemeId] !== undefined) r.metrics[city.focusThemeId] = clamp(r.metrics[city.focusThemeId] + rand(0.2, 0.4), 1, 10);
-        r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(1, 3), 0, 100);
+        city.satisfaction = clamp(city.satisfaction + rand(5, 9), 0, 100);
+        applyRegionalMetricDelta(r, city.focusThemeId, rand(0.12, 0.25));
+        r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(1, 2), 0, 100);
         r.regionalActionCooldownTurn = state.turn + 3;
         addRegionalNews(regionId, "Una visita istituzionale a " + cityName + " porta un investimento mirato su " + SITUATION_THEME_BY_ID[city.focusThemeId].label.replace("Politica — ", "").toLowerCase() + ".");
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-regional-city-meet]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
+        var cityName = btn.getAttribute("data-regional-city-meet");
+        var city = (r.cities || []).filter(function (c) { return c.name === cityName; })[0];
+        if (!city) return;
+        var roll = Math.random();
+        var citySatDelta, approvalDelta, text;
+        if (roll < 0.4) {
+          citySatDelta = rand(3, 6); approvalDelta = rand(1, 2.5);
+          text = "L'incontro con il Sindaco di " + cityName + " è cordiale e produttivo: un passo avanti nei rapporti istituzionali.";
+        } else if (roll < 0.75) {
+          citySatDelta = rand(0, 2); approvalDelta = 0;
+          text = "L'incontro con il Sindaco di " + cityName + " resta su un piano interlocutorio: nessuna vera svolta, ma nessun danno.";
+        } else {
+          citySatDelta = -rand(2, 5); approvalDelta = -rand(0.5, 1.5);
+          text = "L'incontro con il Sindaco di " + cityName + " è teso: le rispettive richieste restano lontane.";
+        }
+        city.satisfaction = clamp(city.satisfaction + citySatDelta, 0, 100);
+        if (approvalDelta) r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + approvalDelta, 0, 100);
+        r.regionalActionCooldownTurn = state.turn + 3;
+        addRegionalNews(regionId, text);
+        showSaveStatus(text, roll >= 0.75);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-regional-city-cut]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (state.turn < (r.regionalActionCooldownTurn || 0)) return;
+        var cityName = btn.getAttribute("data-regional-city-cut");
+        var city = (r.cities || []).filter(function (c) { return c.name === cityName; })[0];
+        if (!city) return;
+        if (!window.confirm("Tagliare i fondi a " + cityName + "? Incasserai subito, ma la città ne risentirà.")) return;
+        var gain = rand(300, 550);
+        r.fondiRegionali = (r.fondiRegionali || 0) + gain;
+        city.satisfaction = clamp(city.satisfaction - rand(5, 10), 0, 100);
+        applyRegionalMetricDelta(r, city.focusThemeId, -rand(0.1, 0.25));
+        r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) - rand(1, 2.5), 0, 100);
+        r.regionalActionCooldownTurn = state.turn + 3;
+        addRegionalNews(regionId, "Un taglio ai fondi destinati a " + cityName + " libera risorse per le casse regionali, ma la città non lo dimentica.");
         save();
         render();
       });
@@ -25719,7 +25803,7 @@
           }
           if (choice.regionalMetricDelta && dossier.regionalMetricThemeId && govRegion.metrics && govRegion.metrics[dossier.regionalMetricThemeId] !== undefined) {
             var metricBefore = govRegion.metrics[dossier.regionalMetricThemeId];
-            govRegion.metrics[dossier.regionalMetricThemeId] = clamp(metricBefore + choice.regionalMetricDelta * REGIONAL_IMPACT_SCALE, 1, 10);
+            applyRegionalMetricDelta(govRegion, dossier.regionalMetricThemeId, choice.regionalMetricDelta * REGIONAL_IMPACT_SCALE);
             var metricTheme = SITUATION_THEME_BY_ID[dossier.regionalMetricThemeId];
             regionalDeltaInfo.metric = { label: metricTheme ? metricTheme.label.replace("Politica — ", "") : dossier.regionalMetricThemeId, delta: govRegion.metrics[dossier.regionalMetricThemeId] - metricBefore };
             // Effetto farfalla leggero (richiesto da un giocatore): tagliare ripetutamente sull'ambiente
@@ -25845,9 +25929,7 @@
           if (!giuntaRegion.giunta) giuntaRegion.giunta = [];
           giuntaRegion.giunta.push({ assessorato: choice.regionalGiuntaPick.assessorato, name: choice.regionalGiuntaPick.name, loyalty: choice.regionalGiuntaPick.loyalty });
           var giuntaThemeId = REGIONAL_ASSESSORATO_THEME_MAP[choice.regionalGiuntaPick.assessorato];
-          if (giuntaThemeId && giuntaRegion.metrics && giuntaRegion.metrics[giuntaThemeId] !== undefined) {
-            giuntaRegion.metrics[giuntaThemeId] = clamp(giuntaRegion.metrics[giuntaThemeId] + choice.regionalGiuntaPick.skillBonus, 1, 10);
-          }
+          if (giuntaThemeId) applyRegionalMetricDelta(giuntaRegion, giuntaThemeId, choice.regionalGiuntaPick.skillBonus);
         }
         if (pendingGiunta) {
           pendingGiunta.remainingAssessorati.shift();
