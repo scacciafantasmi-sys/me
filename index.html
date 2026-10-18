@@ -3798,6 +3798,14 @@
   // regionale (con tanto di attesa prima dell'esito, vedi resolveRegionalLawsIfDue) o una mozione
   // simbolica più rapida.
   var REGIONAL_GOVERNANCE_COOLDOWN_TURNS = 18;
+  // Segnalato da un giocatore: gli effetti di ogni singola scelta regionale (gradimento locale,
+  // indicatore toccato, soddisfazione di una città) erano troppo forti per una cadenza settimanale —
+  // bastavano poche settimane per saturare un indicatore. Applicato in resolveDossierChoice, nel ramo
+  // generico condiviso da quasi tutti i dossier regionali di routine (investimento, protesta, opportunità,
+  // crisi locale, rapporti con Roma, emergenza, lobby): scala TUTTI quei numeri verso il basso in un solo
+  // punto, mantenendo intatto il rapporto tra le scelte (una buona scelta resta sempre meglio di una
+  // cattiva, solo con un'ampiezza più ragionevole).
+  var REGIONAL_IMPACT_SCALE = 0.45;
   function checkRegionalGovernanceTrigger() {
     var p = state.player;
     if (!p || state.turn < (p.regionalGovernanceCooldownTurn || 0)) return false;
@@ -10061,10 +10069,14 @@
     giustizia: STATEMENT_THEME_KEYWORDS.giustizia,
     trasporti: STATEMENT_THEME_KEYWORDS.trasporti,
     energia: STATEMENT_THEME_KEYWORDS.energia,
-    economia: STATEMENT_THEME_KEYWORDS.economia.concat(STATEMENT_THEME_KEYWORDS.aziende, STATEMENT_THEME_KEYWORDS.pil, STATEMENT_THEME_KEYWORDS.inflazione, STATEMENT_THEME_KEYWORDS.commercio),
+    // "caro bollette" è nella lista nazionale di inflazione, ma qui creerebbe un conflitto diretto col
+    // tema regionale "energia" (che possiede già le bollette): escluso esplicitamente da economia.
+    economia: STATEMENT_THEME_KEYWORDS.economia.concat(STATEMENT_THEME_KEYWORDS.aziende, STATEMENT_THEME_KEYWORDS.pil, STATEMENT_THEME_KEYWORDS.inflazione, STATEMENT_THEME_KEYWORDS.commercio).filter(function (kw) { return kw !== "caro bollette"; }),
     digitale: STATEMENT_THEME_KEYWORDS.ricercaSviluppo,
     europa: STATEMENT_THEME_KEYWORDS.relazioniDiplomatiche.concat(["unione europea", "fondi europei", "bruxelles", "pnrr", "europa"]),
-    famiglia: STATEMENT_THEME_KEYWORDS.welfare,
+    // Idem: "pensioni"/"pensione"/"pensionati"/"anziani"/"terza eta" restano nella lista nazionale di
+    // welfare, ma qui vanno al tema regionale dedicato "pensioni", non confusi con "famiglia".
+    famiglia: STATEMENT_THEME_KEYWORDS.welfare.filter(function (kw) { return ["pensioni", "pensione", "pensionati", "terza eta", "anziani"].indexOf(kw) === -1; }),
     giovani: ["giovani", "under 30", "neet", "fuga dei cervelli", "studenti fuori sede", "servizio civile", "sport giovanile", "dipendenza dai social"],
     pensioni: ["pensione", "pensioni", "pensionati", "eta pensionabile", "assegno sociale", "previdenza", "inps", "lavori usuranti"],
     cultura: ["cultura", "museo", "musei", "teatro", "cinema", "patrimonio artistico", "festival", "biblioteca", "biblioteche", "spettacolo"],
@@ -10072,14 +10084,54 @@
     infrastrutture: ["ponte", "ponti", "cantiere", "cantieri", "opera pubblica", "opere pubbliche", "viadotto", "manutenzione stradale", "project financing"],
     agricoltura: ["agricoltura", "agricoltori", "campagna", "campi", "raccolto", "allevamento", "allevatori", "zootecnia", "agroalimentare", "fauna selvatica"]
   };
+  // Segnalato da un giocatore: il classificatore non riconosceva troppi testi scritti liberamente. Due
+  // cause reali trovate con un test a batch: (1) alcune liste coprivano solo poche parole chiave singole,
+  // mentre SITUATION_THEMES[].nouns contiene già decine di frasi reali su ciascun tema — qui le riusiamo,
+  // scomposte in parole significative (5+ lettere, niente articoli/preposizioni), per allargare parecchio
+  // il vocabolario riconosciuto senza scriverlo a mano una seconda volta; (2) il confronto per sottostringa
+  // esigeva la parola esatta ("casa" non riconosceva "case"): ora classifyRegionalFreeText confronta anche
+  // la radice (ultima vocale finale tolta) di ogni parola chiave di almeno 5 lettere.
+  var REGIONAL_TEXT_STOPWORDS = { il: 1, lo: 1, la: 1, gli: 1, le: 1, un: 1, una: 1, uno: 1, di: 1, da: 1, in: 1, con: 1, su: 1, per: 1, tra: 1, fra: 1, al: 1, ai: 1, agli: 1, alla: 1, alle: 1, allo: 1, nel: 1, nella: 1, nelle: 1, nello: 1, negli: 1, dei: 1, delle: 1, degli: 1, del: 1, dello: 1, della: 1, che: 1, non: 1, dell: 1, all: 1, sull: 1, nell: 1 };
+  SITUATION_THEMES.forEach(function (t) {
+    var extra = {};
+    (t.nouns || []).forEach(function (n) {
+      normalizeStatementText(n).replace(/[^a-z0-9]+/g, " ").split(/\s+/).forEach(function (w) {
+        if (w.length >= 5 && !REGIONAL_TEXT_STOPWORDS[w]) extra[w] = true;
+      });
+    });
+    REGIONAL_THEME_KEYWORDS[t.id] = (REGIONAL_THEME_KEYWORDS[t.id] || []).concat(Object.keys(extra));
+  });
+  function regionalKeywordMatches(norm, kw) {
+    if (norm.indexOf(kw) !== -1) return true;
+    // Radice: tolta la vocale finale di una parola singola di almeno 5 lettere, intercetta plurali e
+    // declinazioni comuni (casa/case, ospedale/ospedali, ponte/ponti) senza doverli elencare a mano.
+    if (kw.indexOf(" ") === -1 && kw.length >= 5 && /[aeiou]$/.test(kw)) {
+      return norm.indexOf(kw.slice(0, -1)) !== -1;
+    }
+    return false;
+  }
   function classifyRegionalFreeText(text) {
     var norm = normalizeStatementText(text);
     if (!norm.trim()) return null;
     var best = null, bestScore = 0;
+    // Somma delle lunghezze di TUTTE le parole chiave trovate per tema, non solo la più lunga: un testo
+    // con più indizi coerenti verso un tema (es. "classi" + "insegnanti" per scuola) deve prevalere su un
+    // singolo indizio isolato più lungo ma di un altro tema (es. "sovraffollato", che capita anche in una
+    // frase della sanità), e una singola parola ambigua condivisa tra due temi non decide da sola.
     Object.keys(REGIONAL_THEME_KEYWORDS).forEach(function (themeId) {
+      var score = 0;
+      // Deduplica per RADICE, non per stringa esatta: "nuovo" e "nuovi" (entrambi finiti nella lista per
+      // temi diversi via SITUATION_THEMES[].nouns) sono la stessa parola e non devono contare due volte,
+      // altrimenti una parola generica doppiamente presente gonfia il punteggio più di un indizio vero.
+      var matchedStems = {};
       REGIONAL_THEME_KEYWORDS[themeId].forEach(function (kw) {
-        if (norm.indexOf(kw) !== -1 && kw.length > bestScore) { bestScore = kw.length; best = themeId; }
+        if (!regionalKeywordMatches(norm, kw)) return;
+        var stemKey = (kw.length >= 5 && /[aeiou]$/.test(kw)) ? kw.slice(0, -1) : kw;
+        if (matchedStems[stemKey]) return;
+        matchedStems[stemKey] = true;
+        score += kw.length;
       });
+      if (score > bestScore) { bestScore = score; best = themeId; }
     });
     return best;
   }
@@ -25458,12 +25510,12 @@
         if (govRegion) {
           if (choice.regionalApprovalDelta) {
             var approvalBefore = govRegion.approvalLocal === undefined ? 50 : govRegion.approvalLocal;
-            govRegion.approvalLocal = clamp(approvalBefore + choice.regionalApprovalDelta, 0, 100);
+            govRegion.approvalLocal = clamp(approvalBefore + choice.regionalApprovalDelta * REGIONAL_IMPACT_SCALE, 0, 100);
             regionalDeltaInfo.approvalLocal = govRegion.approvalLocal - approvalBefore;
           }
           if (choice.regionalMetricDelta && dossier.regionalMetricThemeId && govRegion.metrics && govRegion.metrics[dossier.regionalMetricThemeId] !== undefined) {
             var metricBefore = govRegion.metrics[dossier.regionalMetricThemeId];
-            govRegion.metrics[dossier.regionalMetricThemeId] = clamp(metricBefore + choice.regionalMetricDelta, 1, 10);
+            govRegion.metrics[dossier.regionalMetricThemeId] = clamp(metricBefore + choice.regionalMetricDelta * REGIONAL_IMPACT_SCALE, 1, 10);
             var metricTheme = SITUATION_THEME_BY_ID[dossier.regionalMetricThemeId];
             regionalDeltaInfo.metric = { label: metricTheme ? metricTheme.label.replace("Politica — ", "") : dossier.regionalMetricThemeId, delta: govRegion.metrics[dossier.regionalMetricThemeId] - metricBefore };
             // Effetto farfalla leggero (richiesto da un giocatore): tagliare ripetutamente sull'ambiente
@@ -25479,7 +25531,7 @@
             var cityHit = govRegion.cities.filter(function (c) { return c.name === dossier.regionalCityName; })[0];
             if (cityHit) {
               var cityBefore = cityHit.satisfaction;
-              cityHit.satisfaction = clamp(cityBefore + choice.regionalCityDelta, 0, 100);
+              cityHit.satisfaction = clamp(cityBefore + choice.regionalCityDelta * REGIONAL_IMPACT_SCALE, 0, 100);
               regionalDeltaInfo.city = { name: cityHit.name, delta: cityHit.satisfaction - cityBefore };
             }
           }
