@@ -11428,6 +11428,19 @@
         abolishPartyId: party.id, effects: {}, result: ""
       };
     });
+    // Richiesto da un giocatore: prima l'unico modo per arrivare al partito unico era ripetere questo
+    // dossier un partito alla volta, per quanti partiti restavano in piedi. Questa opzione fa il passo
+    // finale in un colpo solo — su TUTTI i target rimasti, non solo i 10 mostrati sopra come scelte
+    // singole — con conseguenze proporzionalmente più dure (vedi applyPartyAbolition more sotto, applicato
+    // una volta per ciascun partito abolito).
+    if (targets.length > 1) {
+      choices.push({
+        label: "Abolisci tutti i partiti rimasti (" + targets.length + ")",
+        hint: "Partito unico: il passo più drastico, massima repressione in un colpo solo",
+        abolishAllPartyIds: targets.map(function (party) { return party.id; }),
+        effects: {}, result: ""
+      });
+    }
     choices.push({ label: "Non abolire nessun partito, per ora", hint: "La possibilità resta aperta per più avanti nella partita", effects: {},
       result: "Il regime sceglie di non infierire, per ora: la possibilità resta aperta." });
     return {
@@ -11436,6 +11449,58 @@
       brief: "Senza più elezioni libere da affrontare, il regime può colpire direttamente chi resta sulla scena politica: sciogliere con la forza un partito, cancellandolo dalla vita pubblica. Consolida il potere, ma non senza costi — sull'opinione pubblica, sui rapporti internazionali, e sulla tenuta stessa del regime.",
       choices: choices
     };
+  }
+  // Applica a un singolo partito le conseguenze dell'abolizione forzata (usata sia per "Abolisci X" sia,
+  // in un ciclo, per "Abolisci tutti i partiti"): scioglimento, redistribuzione dei consensi, e il colpo
+  // su felicità/relazioni diplomatiche/reputazione del regime. Registra l'id anche in
+  // state.regimeBannedPartyIds — a differenza di state.dissolvedPartyIds (che include anche fusioni e
+  // morti organiche di un partito, mai da far tornare), questo elenco serve SOLO a sapere chi far
+  // ritornare sulla scena se il regime dovesse mai cadere o essere smantellato (vedi
+  // restoreRegimeBannedParties). Ritorna il nome del partito abolito, o null se non trovato.
+  function applyPartyAbolition(partyId) {
+    var targetParty = partyById(partyId);
+    var targetShare = state.parties[partyId] || 0;
+    if (!state.dissolvedPartyIds) state.dissolvedPartyIds = [];
+    state.dissolvedPartyIds.push(partyId);
+    if (!state.regimeBannedPartyIds) state.regimeBannedPartyIds = [];
+    state.regimeBannedPartyIds.push(partyId);
+    removePartyFromCoalitions(partyId);
+    delete state.partyArcs[partyId];
+    var toPlayer = targetShare * 0.3;
+    var toIndecisi = targetShare - toPlayer;
+    state.player.sondaggi = clamp(state.player.sondaggi + toPlayer, 0, 40);
+    state.indecisi = (state.indecisi || 0) + toIndecisi;
+    state.parties[partyId] = 0;
+    return targetParty ? targetParty.name : null;
+  }
+  // Richiesto da un giocatore: i partiti aboliti con la forza da un regime (gov_abolisci_partito) non
+  // sono spariti per sempre come un partito assorbito da una fusione o morto per crollo organico dei
+  // consensi — tornano sulla scena quando il regime che li aveva messi fuori legge cade o viene
+  // smantellato, proprio come succederebbe nella realtà con un ritorno alla democrazia. Richiamata da ogni
+  // punto del gioco in cui state.regime torna a null (rivoluzione popolare, guerra civile vinta dagli
+  // avversari, golpe riuscito contro il regime, smantellamento volontario). Il ritorno non è a pieni voti:
+  // dopo anni di clandestinità un partito riparte da una base ridotta, non dal consenso che aveva prima di
+  // essere messo fuori legge.
+  function restoreRegimeBannedParties() {
+    var banned = state.regimeBannedPartyIds || [];
+    if (!banned.length) return;
+    var names = [];
+    banned.forEach(function (id) {
+      var idx = state.dissolvedPartyIds ? state.dissolvedPartyIds.indexOf(id) : -1;
+      if (idx !== -1) state.dissolvedPartyIds.splice(idx, 1);
+      var party = partyById(id);
+      if (party) names.push(party.name);
+      state.parties[id] = rand(3, 8);
+    });
+    state.regimeBannedPartyIds = [];
+    if (!names.length) return;
+    var label = names.length === 1 ? names[0] + " torna" : names.join(", ") + " tornano";
+    state.log.unshift({
+      week: state.turn, title: "Torna il pluralismo politico",
+      result: label + " a far parte della scena politica legale, dopo essere stati messi fuori legge dal regime.",
+      headlines: [], type: "politica"
+    });
+    addDiaryEntry("Tornano le voci messe a tacere", "Con la fine del regime, " + (names.length === 1 ? "un partito che era stato messo fuori legge torna" : names.length + " partiti che erano stati messi fuori legge tornano") + " a far parte della vita pubblica. Non si cancella il passato, ma almeno si riapre la porta.");
   }
   // Il traguardo finale di un regime comunista maturo: l'abolizione della moneta. Non basta essere al
   // potere né aver instaurato il regime da poco — serve che il settore privato sia stato quasi del tutto
@@ -13328,7 +13393,7 @@
     var revoltActiveIds = activeParties().map(function (party) { return party.id; });
     state.popularRevolutionFallenGovIds = revoltGovMemberIds.filter(function (id) { return revoltActiveIds.indexOf(id) !== -1; });
     if (state.player.parliamentRole === "governo") state.popularRevolutionFallenGovIds.push("player");
-    if (wasRegime) state.regime = null;
+    if (wasRegime) { state.regime = null; restoreRegimeBannedParties(); }
     applyGovernmentCollapseLeadershipShock();
     // Un dimezzamento è per forza di cose un balzo enorme in una settimana: senza questo segnale,
     // la "rete di sicurezza finale" su WEEKLY_SWING_HARD_CAP (vedi advanceTurnLogic) lo riporterebbe
@@ -17329,7 +17394,7 @@
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0, lastYearBudgetAllocations: {},
     usedFamilySituations: [], recentSituationNouns: [], recentSituationShapes: [], worldNews: [], nucleiUpdates: [], partyArcs: {}, realConflictNewsCooldowns: {},
-    dynamicParties: [], dissolvedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [], regions: null,
+    dynamicParties: [], dissolvedPartyIds: [], regimeBannedPartyIds: [], dynamicCoalitions: [], europeanElectionResults: [], regions: null,
     trackMilestonesFired: {}, coalitionTrust: {}, inlineExpandedTopic: null, pendingNationalReferendum: null, activeArc: null, pendingCongressoFondativo: false,
     uiPage: "partito", uiLocalSectionLoc: null, partyPeakPolling: {}, govCrisisActive: false,
     visitedPages: {}, explorationHintDismissed: false,
@@ -18663,6 +18728,7 @@
       });
       var regimeLabel = REGIME_LABELS[state.regime.type].name;
       state.regime = null;
+      restoreRegimeBannedParties();
       state.govEntity = null;
       state.snapElectionPending = true;
       state.nextElectionTurn = state.turn + 8;
@@ -25935,6 +26001,7 @@
           // uscita da NATO/UE resta un fatto storico, non si "rientra" con un click): qui si smantella
           // solo l'assetto istituzionale, ripristinando libere elezioni dopo un periodo di transizione.
           state.regime = null;
+          restoreRegimeBannedParties();
           state.snapElectionPending = true;
           state.nextElectionTurn = state.turn + 52;
         }
@@ -25969,27 +26036,29 @@
         }
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_abolisci_partito") {
-        if (choice.abolishPartyId) {
-          var targetParty = partyById(choice.abolishPartyId);
-          var targetShare = state.parties[choice.abolishPartyId] || 0;
-          if (!state.dissolvedPartyIds) state.dissolvedPartyIds = [];
-          state.dissolvedPartyIds.push(choice.abolishPartyId);
-          removePartyFromCoalitions(choice.abolishPartyId);
-          delete state.partyArcs[choice.abolishPartyId];
-          // Il consenso del partito sciolto non sparisce nel nulla: una parte confluisce verso il regime
-          // per paura (repressione che intimidisce, non persuade davvero), il resto si ritira dalla vita
-          // pubblica invece di convergere altrove.
-          var toPlayer = targetShare * 0.3;
-          var toIndecisi = targetShare - toPlayer;
-          state.player.sondaggi = clamp(state.player.sondaggi + toPlayer, 0, 40);
-          state.indecisi = (state.indecisi || 0) + toIndecisi;
-          state.parties[choice.abolishPartyId] = 0;
-          var cpAbp = state.countryProfile;
+        var cpAbp = state.countryProfile;
+        if (choice.abolishAllPartyIds && choice.abolishAllPartyIds.length) {
+          // Il passo finale in un colpo solo: stesse conseguenze del singolo scioglimento, applicate a
+          // ciascun partito abolito — il colpo su felicità/relazioni/reputazione si somma partito per
+          // partito, proporzionalmente più duro di un'abolizione alla volta.
+          var abolishedNames = choice.abolishAllPartyIds.map(function (id) { return applyPartyAbolition(id); }).filter(Boolean);
+          choice.abolishAllPartyIds.forEach(function () {
+            cpAbp.felicita = clamp(cpAbp.felicita - rand(1, 2), 1, 10);
+            cpAbp.relazioniDiplomatiche = clamp(cpAbp.relazioniDiplomatiche - rand(1, 2.5), 1, 10);
+            state.player.reputazione = clamp(state.player.reputazione - rand(3, 7), 0, 100);
+          });
+          choice.result = abolishedNames.length
+            ? (abolishedNames.join(", ") + " vengono sciolti con la forza in un colpo solo: il partito unico è una realtà, i loro dirigenti messi a tacere."
+              + " Una parte della loro base si rifugia nel regime per paura, il resto si ritira dalla vita pubblica.")
+            : "Nessun partito da sciogliere.";
+          addDiaryEntry("Il partito unico", "Oggi abbiamo sciolto con la forza tutti i partiti rimasti: " + (abolishedNames.join(", ") || "nessuno") + ". Non c'è più opposizione legale nel paese — so cosa significa, e so che non sarà facile tornare indietro da qui.");
+        } else if (choice.abolishPartyId) {
+          var targetPartyName = applyPartyAbolition(choice.abolishPartyId);
           cpAbp.felicita = clamp(cpAbp.felicita - rand(1, 2), 1, 10);
           cpAbp.relazioniDiplomatiche = clamp(cpAbp.relazioniDiplomatiche - rand(1, 2.5), 1, 10);
           state.player.reputazione = clamp(state.player.reputazione - rand(3, 7), 0, 100);
-          choice.result = (targetParty ? targetParty.name : "Il partito") + " viene sciolto con la forza, i suoi dirigenti messi a tacere: una parte della sua base si rifugia nel regime per paura, il resto si ritira dalla vita pubblica.";
-          addDiaryEntry("Un'altra voce messa a tacere", "Oggi abbiamo sciolto con la forza " + (targetParty ? targetParty.name : "un partito") + ". So cosa significa mettere a tacere un avversario invece di batterlo alle urne — e so che non sarà facile tornare indietro da qui.");
+          choice.result = (targetPartyName || "Il partito") + " viene sciolto con la forza, i suoi dirigenti messi a tacere: una parte della sua base si rifugia nel regime per paura, il resto si ritira dalla vita pubblica.";
+          addDiaryEntry("Un'altra voce messa a tacere", "Oggi abbiamo sciolto con la forza " + (targetPartyName || "un partito") + ". So cosa significa mettere a tacere un avversario invece di batterlo alle urne — e so che non sarà facile tornare indietro da qui.");
         }
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "geo_world_war") {
@@ -26254,7 +26323,7 @@
           cpc.sicurezza = clamp(cpc.sicurezza - rand(1, 3), 1, 10);
           state.spreadBps = clamp(state.spreadBps + Math.round(rand(120, 220)), 40, 400);
           var wasRegime = !!state.regime;
-          if (wasRegime) state.regime = null;
+          if (wasRegime) { state.regime = null; restoreRegimeBannedParties(); }
           applyGovernmentCollapseLeadershipShock();
           state.govEntity = null;
           state.snapElectionPending = true;
