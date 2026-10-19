@@ -11441,6 +11441,53 @@
       ]
     };
   }
+  // Segnalato da un giocatore: non c'era alcun modo di lasciare volontariamente la guida del governo (né
+  // da Presidente del Consiglio né da ministro) — l'unica via d'uscita era subire un crollo di consenso o
+  // una crisi innescata da qualcos'altro. Come nella realtà, le dimissioni da premier aprono una vera
+  // crisi di governo: il Presidente della Repubblica avvia le consultazioni, e si cerca una nuova
+  // maggioranza nella stessa legislatura PRIMA di arrivare al voto anticipato (l'esito storicamente più
+  // frequente in Italia, non un automatismo verso le urne). Se c'è un alleato di coalizione e la
+  // maggioranza tiene, un alleato diventa il nuovo premier e si resta nella legislatura in corso; se governi
+  // da solo o il tentativo fallisce, il governo cade per davvero e si torna al voto — stesso schema già
+  // usato per golpe/guerra civile/rivoluzione popolare (vedi premierSuccessionChance sotto).
+  function premierSuccessionChance(allyIds) {
+    if (!allyIds.length) return 0;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var base = clamp(0.35 + cg / 160, 0.15, 0.85);
+    return clamp(base - governmentCohesionPenalty() * 0.6, 0.08, 0.85);
+  }
+  function generatePrimeMinisterResignationDossier() {
+    if (!state.cabinet || state.cabinet.premierId !== "player") return null;
+    var allyIds = ((state.govEntity && state.govEntity.memberIds) || []).filter(function (id) { return id !== "player"; });
+    var brief = allyIds.length
+      ? "Decidi di lasciare la guida del governo. Il Presidente della Repubblica avvierà le consultazioni: la coalizione potrebbe trovare un nuovo Presidente del Consiglio senza tornare al voto, oppure la crisi potrebbe portare dritta a elezioni anticipate."
+      : "Governi da solo, senza una vera coalizione alle spalle: le tue dimissioni non lasciano alcuna maggioranza alternativa pronta a subentrare. Si tornerebbe dritti al voto.";
+    return {
+      id: "gov_dimissioni_premier", kind: "notizia", cat: "Governo",
+      title: "Dimissioni da Presidente del Consiglio",
+      brief: brief,
+      choices: [
+        { label: "Dai le dimissioni da Presidente del Consiglio", hint: allyIds.length ? "Apre una crisi di governo: esito incerto" : "Senza alleati, porta dritto a elezioni anticipate", resignPremier: true, effects: {}, result: "" },
+        { label: "Resta al tuo posto, per ora", hint: "Nessun cambiamento", effects: {}, result: "Decidi di restare alla guida del governo: la possibilità di dimetterti resta sempre sul tavolo." }
+      ]
+    };
+  }
+  // Molto più semplice delle dimissioni da premier: lasciare un singolo dicastero non apre alcuna crisi di
+  // governo, né nella realtà né qui — il ministero passa a un esponente del partito (stesso meccanismo già
+  // usato per l'assegnazione iniziale dei ministeri CPU), il giocatore resta nel partito di governo.
+  function generateMinisterResignationDossier() {
+    if (!state.playerMinistry || !state.cabinet || state.cabinet.premierId === "player") return null;
+    var ministry = state.playerMinistry.ministry;
+    return {
+      id: "gov_dimissioni_ministro", kind: "notizia", cat: "Governo",
+      title: "Dimissioni da Ministro",
+      brief: "Potresti lasciare il ministero " + diLabel(ministry) + ": il dicastero passerebbe a un altro esponente del partito, senza alcuna crisi di governo.",
+      choices: [
+        { label: "Dai le dimissioni da ministro", hint: "Lasci il dicastero, resti comunque nel partito di governo", resignMinister: true, effects: {}, result: "" },
+        { label: "Resta al tuo posto, per ora", hint: "Nessun cambiamento", effects: {}, result: "Decidi di restare alla guida del ministero: la possibilità di dimetterti resta sempre sul tavolo." }
+      ]
+    };
+  }
   // Richiesto da un giocatore: senza più elezioni libere da affrontare sotto un regime, l'opposizione
   // restava comunque sulla scena per il resto della partita, senza che il regime potesse fare nulla di
   // concreto contro di lei fuori dal voto (che comunque non c'è più) — un'incoerenza evidente per chi sta
@@ -11619,6 +11666,12 @@
       var govIdsForAbolish = (state.govEntity && state.govEntity.memberIds) || [];
       var hasAbolishTargets = activeParties().some(function (party) { return govIdsForAbolish.indexOf(party.id) === -1; });
       items.push({ id: "gov_abolisci_partito", label: "Abolisci un Partito", desc: hasAbolishTargets ? "Sciogli con la forza un partito ancora attivo" : "Nessun partito da sciogliere resta sulla scena", disabled: !hasAbolishTargets });
+    }
+    if (state.cabinet && state.cabinet.premierId === "player") {
+      items.push({ id: "gov_dimissioni_premier", label: "Dimettiti da Presidente del Consiglio", desc: "Apri una crisi di governo: nuovo premier dalla coalizione, o elezioni anticipate", disabled: false });
+    }
+    if (state.playerMinistry && state.cabinet && state.cabinet.premierId !== "player") {
+      items.push({ id: "gov_dimissioni_ministro", label: "Dimettiti da Ministro", desc: "Lasci il dicastero " + diLabel(state.playerMinistry.ministry) + ", senza crisi di governo", disabled: false });
     }
     if (!items.length) return "";
     var coupRisk = isExtremistFamily(p.family) && state.consensoGoverno !== undefined && state.consensoGoverno < COUP_TRUST_THRESHOLD;
@@ -23277,7 +23330,11 @@
   // degli alleati.
   function isCoalitionGatedDossier(dossier) {
     if (!dossier) return false;
-    if (dossier.id === "cabinet_formation" || dossier.id === "government_oath" || dossier.id === "confidence_vote" || dossier.id === "coalition_ministry_demand") return false;
+    // Le dimissioni (da premier o da ministro) sono una scelta personale e unilaterale: non ha senso che
+    // la coalizione le "approvi" o le blocchi, come invece è giusto che accada per una vera proposta di
+    // policy (patrimoniale, uscita dalla NATO, abolizione di un partito...).
+    if (dossier.id === "cabinet_formation" || dossier.id === "government_oath" || dossier.id === "confidence_vote" || dossier.id === "coalition_ministry_demand"
+      || dossier.id === "gov_dimissioni_premier" || dossier.id === "gov_dimissioni_ministro") return false;
     return dossier.cat === "Governo" || dossier.cat === "Riforme di Governo";
   }
   // ---------- Controllo di legittimità della Corte dei Conti ----------
@@ -26120,6 +26177,42 @@
           addDiaryEntry("Un'altra voce messa a tacere", "Oggi abbiamo sciolto con la forza " + (targetPartyName || "un partito") + ". So cosa significa mettere a tacere un avversario invece di batterlo alle urne — e so che non sarà facile tornare indietro da qui.");
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_dimissioni_premier") {
+        if (choice.resignPremier) {
+          var resignAllyIds = ((state.govEntity && state.govEntity.memberIds) || []).filter(function (id) { return id !== "player"; });
+          var succession = premierSuccessionChance(resignAllyIds);
+          var newMajorityFound = resignAllyIds.length > 0 && Math.random() < succession;
+          if (newMajorityFound) {
+            var newPremierId = resignAllyIds[Math.floor(Math.random() * resignAllyIds.length)];
+            var newPremierParty = partyById(newPremierId);
+            state.cabinet.premierId = newPremierId;
+            state.player.reputazione = clamp(state.player.reputazione + rand(1, 3), 0, 100);
+            choice.result = "Ti dimetti da Presidente del Consiglio. Dopo le consultazioni al Quirinale la coalizione trova un'intesa senza tornare al voto: " +
+              (newPremierParty ? newPremierParty.name : "un alleato di coalizione") + " guida il nuovo governo, nella stessa legislatura.";
+            addDiaryEntry("Dimissioni da Presidente del Consiglio", "Mi sono dimesso dalla guida del governo. La coalizione ha retto: un nuovo premier prende il mio posto, e restiamo comunque al governo.");
+          } else {
+            state.govEntity = null;
+            state.snapElectionPending = true;
+            state.nextElectionTurn = state.turn + 8;
+            choice.result = resignAllyIds.length
+              ? "Ti dimetti da Presidente del Consiglio. Le consultazioni al Quirinale non trovano una maggioranza alternativa: il Presidente della Repubblica scioglie le Camere, si torna al voto anticipato."
+              : "Ti dimetti da Presidente del Consiglio. Senza una coalizione alle spalle, il Presidente della Repubblica scioglie le Camere: si torna al voto anticipato.";
+            addDiaryEntry("Dimissioni da Presidente del Consiglio", "Mi sono dimesso dalla guida del governo. Non si è trovata un'alternativa: si torna alle urne.");
+          }
+        }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_dimissioni_ministro") {
+        if (choice.resignMinister) {
+          var oldMinistry = state.playerMinistry ? state.playerMinistry.ministry : null;
+          if (oldMinistry && state.cabinet && state.cabinet.assignments) {
+            state.cabinet.assignments[oldMinistry] = { holderId: "player", name: generateStaffName(), source: "Esponente di partito designato dopo le dimissioni" };
+          }
+          state.playerMinistry = null;
+          state.player.reputazione = clamp(state.player.reputazione + rand(0, 1.5), 0, 100);
+          choice.result = "Ti dimetti dal ministero " + (oldMinistry ? diLabel(oldMinistry) : "") + ": il dicastero passa a un altro esponente del partito. Resti comunque nel partito di governo.";
+          addDiaryEntry("Dimissioni da Ministro", "Mi sono dimesso dal ministero. Una scelta personale, non una crisi: il governo va avanti, io resto nel mio partito.");
+        }
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "geo_world_war") {
         if (choice.stance) {
           state.worldWarActive = true;
@@ -27247,6 +27340,8 @@
         if (!dossier && id === "gov_ripristina_democrazia") dossier = generateRegimeRestoreDossier();
         if (!dossier && id === "gov_abolisci_moneta") dossier = generateAbolishCurrencyDossier();
         if (!dossier && id === "gov_abolisci_partito") dossier = generateAbolishPartyDossier();
+        if (!dossier && id === "gov_dimissioni_premier") dossier = generatePrimeMinisterResignationDossier();
+        if (!dossier && id === "gov_dimissioni_ministro") dossier = generateMinisterResignationDossier();
         if (!dossier) return;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
