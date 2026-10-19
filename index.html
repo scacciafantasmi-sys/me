@@ -17519,7 +17519,7 @@
   var STATE_FIELD_DEFAULTS = {
     allianceOffered: false, snapElectionPending: false, correntiOffered: false, scissionePending: false,
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
-    parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null,
+    parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null, lastElectionWinnerId: null,
     cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConfidenceVote: false, pendingConsultazioni: null,
     pendingGovFormationNegotiation: null,
     playerMinistry: null, regionalPresidency: null, pendingRegionalElectionResult: null,
@@ -19914,6 +19914,17 @@
     var winner = qualified.length ? qualified.reduce(function (best, e) {
       return e.totalSeats > best.totalSeats ? e : best;
     }, qualified[0]) : null;
+    // Segnalato da un giocatore: era alleato con Centrodestra/FdI e ha condotto lui la trattativa di
+    // governo, ma la schermata risultati mostrava "Vince le elezioni" su Campo Largo — perché quel
+    // badge (vedi renderElectionResult) veniva assegnato alla prima riga della CLASSIFICA VISUALIZZATA
+    // (state.lastElectionStandings, ordinata per seggi), che include anche raggruppamenti "di cortesia"
+    // per coalizioni che non hanno superato la soglia combinata del 10% (i cui membri corrono
+    // individualmente, ma vengono comunque mostrati insieme per leggibilità — vedi
+    // buildElectionStandingsRows). Quel raggruppamento può avere più seggi sommati della VERA entità
+    // qualificata che invece forma il governo (winner, sopra): le due classifiche non sono la stessa
+    // cosa. Salvare qui l'id del vincitore reale permette a renderElectionResult di marcare la riga
+    // corretta, non semplicemente la prima della lista.
+    state.lastElectionWinnerId = winner ? winner.id : null;
     var extraAllies = [];
     var governingMemberIds = winner ? winner.members.slice() : [];
     if (winner) {
@@ -23355,6 +23366,30 @@
   // resolveElection) tiene in sospeso pendingCabinetFormation, già calcolato ma non ancora mostrato,
   // finché queste settimane non sono passate: nessuna maggioranza monocolore le attraversa, solo le vere
   // coalizioni di più forze, proprio come nella realtà.
+  // Segnalato da un giocatore: le consultazioni erano "troppo piatte" — stesse identiche 3 scelte generiche
+  // ("chiudi in fretta" / "insisti sui tuoi punti" / "lascia decidere agli altri") ripetute identiche a ogni
+  // tornata, senza alcun legame con CHI è davvero nella coalizione o cosa chiede. Ora ogni tornata si
+  // concentra su un alleato REALE (state.govEntity.memberIds, non un nome generico) con una richiesta
+  // specifica pescata da un piccolo ventaglio — un ventaglio di 5-6 tornate (vedi consultRounds in
+  // finishGovernmentFormation) copre quasi sempre alleati diversi, mai lo stesso due volte se possibile
+  // (vedi usedFocusAllyIds, pulito a ogni tornata risolta nel gestore scelte).
+  var CONSULTAZIONI_DEMANDS = [
+    "chiede un ministero di peso per un proprio esponente, non una carica qualunque",
+    "chiede garanzie scritte su un proprio punto identitario, prima ancora di parlare di nomi",
+    "chiede che un proprio punto programmatico entri nero su bianco nell'accordo di governo",
+    "minaccia di rallentare tutto se non arriva un segnale chiaro già in questa fase",
+    "chiede più tempo per consultare la propria base prima di sciogliere la riserva",
+    "chiede che un proprio fedelissimo abbia un ruolo chiave nella squadra di governo"
+  ];
+  function pickConsultazioniFocusAlly() {
+    var ge = state.govEntity;
+    if (!ge || !ge.memberIds || !ge.memberIds.length) return null;
+    var c = state.pendingConsultazioni;
+    var usedIds = c.usedFocusAllyIds || [];
+    var candidates = ge.memberIds.filter(function (id) { return usedIds.indexOf(id) === -1; });
+    if (!candidates.length) candidates = ge.memberIds.slice();
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
   function buildConsultazioniDossier() {
     var c = state.pendingConsultazioni;
     var roundNum = c.totalRounds - c.roundsLeft + 1;
@@ -23368,12 +23403,21 @@
         ? " Nemmeno allargando l'intesa si è trovata una vera maggioranza in entrambe le Camere: il governo che nascerà sarà di minoranza, fragile fin dal primo giorno."
         : " Da sola " + c.coalitionLabel + " non aveva i numeri: l'intesa si è dovuta allargare ad altre forze per arrivare a una vera maggioranza, e ognuna di queste porta le proprie richieste al tavolo.")
       : "";
+    if (!c.focusAllyId) c.focusAllyId = pickConsultazioniFocusAlly();
+    var focusParty = c.focusAllyId ? partyById(c.focusAllyId) : null;
+    var focusName = focusParty ? focusParty.name : c.coalitionLabel;
+    if (!c.focusDemand) c.focusDemand = CONSULTAZIONI_DEMANDS[Math.floor(Math.random() * CONSULTAZIONI_DEMANDS.length)];
+    var demandText = focusParty ? (" " + focusName + " " + c.focusDemand + ": è il nodo da sciogliere in questa tornata.") : "";
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
       eyebrow: "Consultazioni per il nuovo Governo",
-      cat: "Formazione del Governo", title: roundNum + "ª tornata di consultazioni",
-      brief: "Il voto ha premiato " + c.coalitionLabel + ", ma in Italia una coalizione di più partiti non diventa governo dall'oggi al domani: al Quirinale sono in corso le consultazioni tra le forze della maggioranza per definire nomi e programma, prima ancora di poter giurare. Mancano ancora circa " + c.roundsLeft + " settiman" + (c.roundsLeft === 1 ? "a" : "e") + " prima che il nuovo governo possa insediarsi davvero." + compromiseNote,
-      choices: [
+      cat: "Formazione del Governo", title: roundNum + "ª tornata di consultazioni" + (focusParty ? " — " + focusName : ""),
+      brief: "Il voto ha premiato " + c.coalitionLabel + ", ma in Italia una coalizione di più partiti non diventa governo dall'oggi al domani: al Quirinale sono in corso le consultazioni tra le forze della maggioranza per definire nomi e programma, prima ancora di poter giurare. Mancano ancora circa " + c.roundsLeft + " settiman" + (c.roundsLeft === 1 ? "a" : "e") + " prima che il nuovo governo possa insediarsi davvero." + compromiseNote + demandText,
+      choices: focusParty ? [
+        { label: "Accontenta " + focusName, hint: "Cedi sul punto: rafforza il rapporto, ma indebolisce un po' la tua linea", effects: { reputazione: -rand(0.5, 1.5), relationDelta: { id: c.focusAllyId, delta: rand(6, 12) } }, result: focusName + " ottiene quello che chiedeva: il rapporto si rafforza, ma qualcuno nota la concessione." },
+        { label: "Tieni duro con " + focusName, hint: "Difendi la tua linea, ma rischi di raffreddare il rapporto", effects: { reputazione: rand(1, 2), relationDelta: { id: c.focusAllyId, delta: -rand(4, 9) } }, result: "Tieni la linea: " + focusName + " incassa senza entusiasmo, e il rapporto si raffredda un po'." },
+        { label: "Trova un compromesso con " + focusName, hint: "Via di mezzo: nessuno è pienamente soddisfatto, ma la coalizione tiene", effects: { reputazione: rand(0.3, 1), relationDelta: { id: c.focusAllyId, delta: rand(1, 4) } }, result: "Il compromesso con " + focusName + " non entusiasma nessuno, ma tiene insieme la coalizione senza strappi." }
+      ] : [
         { label: "Spingi per chiudere in fretta la trattativa", hint: "Meno attrito nella coalizione, ma meno peso specifico nel programma finale", effects: { reputazione: 1 }, result: "La linea della rapidità aiuta a smussare gli attriti nella coalizione, anche se lascia sul tavolo qualche richiesta di programma." },
         { label: "Insisti sui tuoi punti programmatici", hint: "Più peso nel programma, ma negoziato più lungo e teso", effects: { reputazione: 2, visibilita: 2 }, result: "L'insistenza sui propri punti programmatici allunga la trattativa, ma porta a casa qualcosa in più per il proprio elettorato." },
         { label: "Lascia che siano le forze maggiori a decidere", hint: "Nessuna esposizione, nessun guadagno particolare", effects: {}, result: "Scegli di non esporti nella trattativa, lasciando che siano le forze maggiori della coalizione a definire i dettagli." }
@@ -24650,11 +24694,20 @@
     // proprio per questa schermata — mostrata SOLO qui, al momento delle elezioni, non come pannello
     // permanente altrove.
     var standings = state.lastElectionStandings || [];
+    // Il badge "Vince le elezioni" deve seguire chi forma DAVVERO il governo (state.lastElectionWinnerId,
+    // la stessa entità "winner" di resolveElection), non la prima riga di questa classifica: qui una
+    // coalizione come Campo Largo può comparire come un unico raggruppamento anche se NON ha superato la
+    // soglia combinata del 10% (i suoi partiti corrono singolarmente — vedi buildElectionStandingsRows), e
+    // la somma dei loro seggi individuali può superare quella della vera entità qualificata che vince.
+    // Prima il badge finiva sulla riga più in alto per seggi, qualunque fosse: poteva mostrare "Campo Largo
+    // vince le elezioni" mentre il governo si formava con Centrodestra, generando l'esatta confusione
+    // segnalata da un giocatore.
     var standingsHtml = standings.length ? (
       '<p class="eyebrow" style="margin-top:1.1rem">Classifica delle coalizioni</p>' +
-      '<div class="party-directory">' + standings.map(function (e, i) {
+      '<div class="party-directory">' + standings.map(function (e) {
+        var isRealWinner = state.lastElectionWinnerId ? e.id === state.lastElectionWinnerId : false;
         return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + e.label + (e.isCoalition ? "" : " (corre da sola)") + '</strong><span class="value">' + fmt1(e.votes) + '%</span></div>' +
-          (i === 0 ? '<div class="party-row-sub"><span class="chip good">Vince le elezioni</span></div>' : "") +
+          (isRealWinner ? '<div class="party-row-sub"><span class="chip good">Vince le elezioni e forma il governo</span></div>' : "") +
           "</div></div>";
       }).join("") + "</div>"
     ) : "";
