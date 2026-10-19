@@ -7349,6 +7349,26 @@
     var fresh = nouns.filter(function (n) { return resolved.indexOf(n) === -1; });
     return fresh.length ? fresh : nouns;
   }
+  // Richiesto da un giocatore: le "Linee di Partito" leggevano come notizie esterne che il partito si
+  // limita a commentare (SITUATION_SHAPES: un'inchiesta, un sondaggio, un video virale...) — non è
+  // quello che chiedeva. Qui il partito è il SOGGETTO che affronta il tema in prima persona: lancia una
+  // campagna, deposita una proposta, organizza un'iniziativa — non reagisce a un fatto di qualcun altro.
+  var IDEOLOGY_INITIATIVE_SHAPES = [
+    { kind: "Campagna di partito", brief: function (noun, ctx) { return "Il partito lancia una campagna nazionale su " + noun + ", con gazebo e iniziative in tutto il paese."; } },
+    { kind: "Proposta di legge popolare", brief: function (noun, ctx) { return "Il partito deposita una propria proposta di legge su " + noun + ", frutto di mesi di lavoro interno."; } },
+    { kind: "Tour sul territorio", brief: function (noun, ctx) { return "La segreteria organizza un tour sul territorio, a partire da " + ctx.city + ", per portare la propria linea su " + noun + "."; } },
+    { kind: "Documento programmatico", brief: function (noun, ctx) { return "Il partito presenta un documento programmatico su " + noun + ", il risultato di settimane di confronto interno."; } },
+    { kind: "Conferenza stampa di lancio", brief: function (noun, ctx) { return "Il partito convoca una conferenza stampa per lanciare la propria proposta su " + noun + "."; } },
+    { kind: "Mobilitazione della base", brief: function (noun, ctx) { return "La segreteria chiama la base a mobilitarsi su " + noun + ", con banchetti e incontri pubblici a " + ctx.city + "."; } },
+    { kind: "Scuola quadri", brief: function (noun, ctx) { return "La scuola quadri del partito dedica un modulo intero a " + noun + ", per formare chi dovrà portarlo avanti sul territorio."; } },
+    { kind: "Petizione del partito", brief: function (noun, ctx) { return "Il partito lancia una propria petizione popolare su " + noun + ", puntando a raccogliere firme in tutto il paese."; } },
+    { kind: "Assemblea programmatica", brief: function (noun, ctx) { return "Un'assemblea programmatica convocata dal partito discute per un'intera giornata di " + noun + "."; } },
+    { kind: "Iniziativa sul territorio", brief: function (noun, ctx) { return "Militanti e dirigenti del partito portano un'iniziativa pubblica a " + ctx.city + " per parlare di " + noun + "."; } },
+    { kind: "Sfida diretta a un rivale", brief: function (noun, ctx) { return "Il partito sfida apertamente " + ctx.rivalName + " su " + noun + ", rivendicando una linea alternativa netta."; } },
+    { kind: "Manifesto tematico", brief: function (noun, ctx) { return "Il partito pubblica un manifesto tematico dedicato a " + noun + ", da discutere nei prossimi congressi territoriali."; } },
+    { kind: "Think tank del partito", brief: function (noun, ctx) { return "Il think tank interno al partito pubblica un piano dettagliato su " + noun + ", presentato direttamente dalla segreteria."; } },
+    { kind: "Vertenza aperta dal partito", brief: function (noun, ctx) { return "Il partito apre una vertenza pubblica su " + noun + ", intestandosi in prima persona la battaglia."; } }
+  ];
   // Motore combinatorio per le situazioni legate all'ideologia specifica del partito: stessa meccanica
   // di generateCombinatorialSituation qui sotto, ma pesca il "noun" da FAMILY_ANGLE_NOUNS invece che dal
   // sostantivo neutro di SITUATION_THEMES — così ogni situazione parla davvero il linguaggio di quella
@@ -7363,7 +7383,7 @@
     if (!nouns || !nouns.length) return null;
     var noun = pickFreshItem(filterUnresolvedNouns(nouns, p), "recentSituationNouns", 10);
     var themeObj = SITUATION_THEME_BY_ID[themeId];
-    var shape = pickFreshItem(SITUATION_SHAPES, "recentSituationShapes", 15, function (s) { return s.kind; });
+    var shape = pickFreshItem(IDEOLOGY_INITIATIVE_SHAPES, "recentIdeologyShapes", 10, function (s) { return s.kind; });
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
@@ -20009,6 +20029,23 @@
       var winnerAloneSeats = blocChamberSeats(governingMemberIds);
       var winnerHasMajorityAlone = winnerAloneSeats.camera >= CAMERA_MAJORITY_SEATS && winnerAloneSeats.senato >= SENATO_MAJORITY_SEATS;
       var playerInWinner = winner.members.indexOf("player") !== -1;
+      // Richiesto da un giocatore: il blocco arrivato secondo per seggi è il principale RIVALE politico
+      // del vincitore, non un alleato naturale — un "Campo Largo" che finisce al governo con il
+      // "Centrodestra" (o viceversa) è esattamente lo scenario segnalato come assurdo. Qui si esclude il
+      // rivale principale (sortedOthers[0], la lista è già ordinata per seggi) sia dal reclutamento
+      // automatico sia dalla trattativa interattiva, A MENO che, numeri alla mano, sia l'UNICA strada
+      // matematicamente possibile per una maggioranza vera: solo allora resta un'opzione, come ultima
+      // risorsa e non come scelta normale — i "rarissimi casi" richiesti, non la norma.
+      function excludeMainRivalUnlessNecessary(sortedOthers) {
+        if (!sortedOthers.length) return sortedOthers;
+        var rest = sortedOthers.slice(1);
+        var reachableWithoutRival = rest.reduce(function (acc, e) {
+          var s = blocChamberSeats(e.members);
+          return { camera: acc.camera + s.camera, senato: acc.senato + s.senato };
+        }, { camera: winnerAloneSeats.camera, senato: winnerAloneSeats.senato });
+        var rivalIsOnlyHope = reachableWithoutRival.camera < CAMERA_MAJORITY_SEATS || reachableWithoutRival.senato < SENATO_MAJORITY_SEATS;
+        return rivalIsOnlyHope ? sortedOthers : rest;
+      }
       // Richiesto da un giocatore: quando nessun blocco ha la maggioranza assoluta da solo, prima
       // l'allargamento dell'intesa era un algoritmo silenzioso (vedi recruitAlly sotto), anche quando il
       // blocco in trattativa era proprio quello del giocatore — nessuna vera scelta, solo un esito
@@ -20020,8 +20057,8 @@
       // algoritmo automatico di sempre: non avrebbe senso far "cliccare" il giocatore su trattative tra
       // CPU che non lo riguardano.
       if (!winnerHasMajorityAlone && playerInWinner) {
-        var otherEntitiesForNegotiation = qualified.filter(function (e) { return e.id !== winner.id; })
-          .sort(function (a, b) { return b.totalSeats - a.totalSeats; });
+        var otherEntitiesForNegotiation = excludeMainRivalUnlessNecessary(qualified.filter(function (e) { return e.id !== winner.id; })
+          .sort(function (a, b) { return b.totalSeats - a.totalSeats; }));
         var currentFamilyIdsForNegotiation = entityFamilyIds(governingMemberIds);
         state.pendingGovFormationNegotiation = {
           winnerId: winner.id, winnerLabel: winner.label,
@@ -20050,8 +20087,8 @@
       } else {
         var blocSeats = winnerAloneSeats;
         if (blocSeats.camera < CAMERA_MAJORITY_SEATS || blocSeats.senato < SENATO_MAJORITY_SEATS) {
-          var otherEntities = qualified.filter(function (e) { return e.id !== winner.id; })
-            .sort(function (a, b) { return b.totalSeats - a.totalSeats; });
+          var otherEntities = excludeMainRivalUnlessNecessary(qualified.filter(function (e) { return e.id !== winner.id; })
+            .sort(function (a, b) { return b.totalSeats - a.totalSeats; }));
           var currentFamilyIds = entityFamilyIds(governingMemberIds);
           function recruitAlly(ally, forced) {
             ally.wasIdeologicallyForced = forced;
@@ -27050,6 +27087,16 @@
         state.pendingNationalReferendum.stance = choice.stance;
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.cat === "Formazione del Governo" && state.pendingConsultazioni) {
+        // Bug reale: il commento originale diceva "pulito a ogni tornata risolta" ma la pulizia non era
+        // mai stata scritta — focusAllyId restava fisso per sempre, mostrando sempre lo stesso alleato
+        // in tutte le tornate di consultazioni (segnalato da un giocatore). Ora si libera davvero
+        // l'alleato appena trattato (aggiungendolo a usedFocusAllyIds) prima della tornata successiva.
+        if (state.pendingConsultazioni.focusAllyId) {
+          if (!state.pendingConsultazioni.usedFocusAllyIds) state.pendingConsultazioni.usedFocusAllyIds = [];
+          state.pendingConsultazioni.usedFocusAllyIds.push(state.pendingConsultazioni.focusAllyId);
+        }
+        state.pendingConsultazioni.focusAllyId = null;
+        state.pendingConsultazioni.focusDemand = null;
         state.pendingConsultazioni.roundsLeft -= 1;
         if (state.pendingConsultazioni.roundsLeft <= 0) state.pendingConsultazioni = null;
         state.resultData = applyChoice(dossier, choice);
