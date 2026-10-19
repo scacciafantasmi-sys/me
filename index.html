@@ -12082,15 +12082,7 @@
   // advanceTurnLogicCore). Una volta superata la soglia (vedi il controllo in resolveDossierChoice), il
   // ciclo normale del gioco prende il sopravvento da solo, a partire proprio dal Congresso Fondativo qui
   // sopra.
-  // Segnalato da un giocatore (e confermato con un test che segue il flusso di gioco reale, senza
-  // scorciatoie): a 300.000 la Raccolta Firme durava 70-80+ settimane prima di diventare un vero
-  // partito — e SOLO da lì in avanti scattano i dossier settimanali a tema ideologico (vedi
-  // generateWeeklySituation/generateParliamentaryAction più sotto, entrambi condizionati a
-  // p.formationComplete). Chi ricomincia sempre da zero, come segnalato, può restare per decine di
-  // settimane senza vederne mai uno, qualunque sia la probabilità impostata altrove: il motore a tema
-  // ideologico non si attiva ancora. Abbassata a 60.000 (1/5) per arrivare al ciclo normale di gioco
-  // in poche settimane, non in più di un anno.
-  var FORMATION_SIGNATURE_TARGET = 60000;
+  var FORMATION_SIGNATURE_TARGET = 300000;
   var FORMATION_ORGANIZER_COST = 900;
   var FORMATION_ORGANIZER_BOOST = 1.25;
   // Richiesto da un giocatore: più varietà di azioni durante la Raccolta Firme, oltre alle 4 di sempre
@@ -12412,6 +12404,25 @@
       progressPct: (signatures / FORMATION_SIGNATURE_TARGET) * 100,
       choices: choices
     };
+  }
+  // Richiesto da un giocatore: durante la Raccolta Firme (che dura quanto deve durare, 300.000 firme,
+  // NON va abbreviata) ogni settimana era SOLO tattica di campagna (comizio/banchetto/porta a porta...),
+  // mai un vero dossier a tema con la linea ideologica del partito — chi ricomincia sempre da zero può
+  // restare per decine di settimane senza vederne mai uno. Qui si riusa lo stesso identico motore già
+  // collaudato per il ciclo normale (pickFamilySituation/generateFamilySpecificSituation), aggiungendo
+  // solo una resa in firme più modesta alle sue scelte, così la settimana resta comunque utile alla
+  // raccolta e la durata naturale non cambia di una virgola.
+  function buildFormationIdeologySituation() {
+    var p = state.player;
+    var situation = (Math.random() < 0.2 && pickFamilySituation(p)) || generateFamilySpecificSituation(p);
+    if (!situation) return null;
+    var boost = p.formationOrganizerHired ? FORMATION_ORGANIZER_BOOST : 1;
+    situation.choices = situation.choices.map(function (c) {
+      var eff = Object.assign({}, c.effects, { formationSignatures: Math.round(rand(700, 1600) * boost) });
+      return Object.assign({}, c, { effects: eff });
+    });
+    situation.progressPct = ((Math.round(p.formationSignatures || 0)) / FORMATION_SIGNATURE_TARGET) * 100;
+    return situation;
   }
   // Chiamata da entrambi i punti in cui la Raccolta Firme può far scattare la soglia — la scelta
   // settimanale del dossier (resolveDossierChoice) e il post social libero (bindFormationSocialInteractions,
@@ -28376,7 +28387,7 @@
       // soglie di firme raggiunte (25%/50%/75%, vedi buildFormationMilestoneDossierIfDue) — quando una
       // soglia viene superata per la prima volta, quella scena sostituisce per una sola settimana il
       // normale dossier di raccolta firme.
-      state.aiDynamicDossier = buildFormationMilestoneDossierIfDue() || buildFormationDossier();
+      state.aiDynamicDossier = buildFormationMilestoneDossierIfDue() || (Math.random() < 0.35 ? buildFormationIdeologySituation() : null) || buildFormationDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
@@ -29016,10 +29027,17 @@
     // scissione che parte da sole 2 correnti (Generica + 1 ala), la Generica può restare l'unica
     // corrente rimasta (p.currents.length === 1, ma non null) — senza questo controllo il dossier
     // metteva in scena uno "scontro" tra la stessa corrente e se stessa.
-    if (p.currents && p.currents.length >= 2) {
-      CORRENTI_DOSSIER_TEMPLATES.forEach(function (tpl) {
-        if (Math.random() < 0.35) { pool.push({ id: tpl.id, kind: "correnti", cat: tpl.cat }); correntiTensionAdded = true; }
-      });
+    // Segnalato da un giocatore (confermato: 1 solo dossier "Linea di Partito" in 63 settimane reali):
+    // ciascuno dei 4 CORRENTI_DOSSIER_TEMPLATES veniva valutato IN MODO INDIPENDENTE al 35% — con 2+
+    // correnti attive (comune su una partita lunga) la probabilità che ALMENO uno scattasse era
+    // 1-0.65^4 ≈ 82% a settimana, e correntiTensionAdded=true blocca DEL TUTTO sia
+    // generateWeeklySituation sia generateParliamentaryAction (gli unici due generatori di contenuto a
+    // tema ideologico) per l'intera settimana — crollando quasi a zero sul lungo periodo. Ora si valuta
+    // un solo tentativo con probabilità fissa e bassa (8%, non più 4 tiri indipendenti al 35%).
+    if (p.currents && p.currents.length >= 2 && Math.random() < 0.08) {
+      var tensionTpl = CORRENTI_DOSSIER_TEMPLATES[Math.floor(Math.random() * CORRENTI_DOSSIER_TEMPLATES.length)];
+      pool.push({ id: tensionTpl.id, kind: "correnti", cat: tensionTpl.cat });
+      correntiTensionAdded = true;
     }
     if (p.inParliament) {
       var parlPool = p.parliamentRole === "governo" ? GOVERNO_DOSSIERS : OPPOSIZIONE_DOSSIERS;
