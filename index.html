@@ -3328,6 +3328,18 @@
   // openLocalSection), non più semplicemente alle prime N città dell'elenco in ordine fisso — quella
   // logica resta solo come RIPIEGO per le sezioni aperte prima che questa scelta esistesse (es. dal tour
   // territoriale, che assegna una sezione "generica" senza specificare dove).
+  // Bug segnalato da un giocatore: alle regionali veniva proposto SEMPRE e SOLO il Lazio, mai un'altra
+  // regione, a prescindere da quale avesse davvero le elezioni in corso. Causa: la maggior parte della
+  // crescita di p.sezioni arriva da effetti generici sparsi in decine di dossier ("effects: { sezioni: N
+  // }"), non dall'apertura esplicita di una sezione in un posto scelto dal giocatore (p.sezioniLocations,
+  // alimentato solo da "Apri una Sezione Locale"). Il "riempimento" per le sezioni non ancora assegnate a
+  // un posto preciso pescava da ITALY_LOCATIONS SEMPRE nello stesso ordine fisso — e Roma (Lazio) è la
+  // prima voce della lista: qualunque partita, se il giocatore non apriva sezioni a mano, risultava quindi
+  // "presente" prima di tutto e solo in Lazio, in ogni partita, sempre identica. Da qui dipendono sia la
+  // mappa del territorio sia playerSectionsInRegion (quindi anche quali regioni propongono la candidatura
+  // a presidente). Corretto mescolando l'ordine di riempimento UNA volta per partita (non per
+  // singola chiamata, altrimenti il "dove ha sezioni il partito" cambierebbe a ogni render): partite
+  // diverse ora hanno un radicamento di partenza diverso, non sempre e solo il Lazio.
   function openNuclei() {
     var p = state.player;
     if (!p) return [];
@@ -3335,7 +3347,19 @@
     if (!p.sezioniLocations) p.sezioniLocations = [];
     if (p.sezioniLocations.length >= n) return p.sezioniLocations.slice(0, n);
     var chosenNames = p.sezioniLocations.map(function (l) { return l.name; });
-    var fallbackPool = ITALY_LOCATIONS.filter(function (l) { return chosenNames.indexOf(l.name) === -1; });
+    if (!p.fallbackLocationOrder) {
+      var shuffled = ITALY_LOCATIONS.slice();
+      for (var i = shuffled.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = shuffled[i]; shuffled[i] = shuffled[j]; shuffled[j] = tmp;
+      }
+      p.fallbackLocationOrder = shuffled.map(function (l) { return l.name; });
+    }
+    var byName = {};
+    ITALY_LOCATIONS.forEach(function (l) { byName[l.name] = l; });
+    var fallbackPool = p.fallbackLocationOrder
+      .map(function (name) { return byName[name]; })
+      .filter(function (l) { return l && chosenNames.indexOf(l.name) === -1; });
     return p.sezioniLocations.concat(fallbackPool).slice(0, n);
   }
   function renderItalyMap() {
