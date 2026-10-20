@@ -4364,6 +4364,10 @@
     var template = CITIZEN_PETITION_TEMPLATES[Math.floor(Math.random() * CITIZEN_PETITION_TEMPLATES.length)];
     r.citizenPetitions.push({ id: "pet_" + state.turn + "_" + Math.round(Math.random() * 100000), text: template(noun), themeId: themeId, noun: noun, week: state.turn });
   }
+  // Richiesto da un giocatore: nemmeno "accogliere" la richiesta deve essere un esito garantito — può
+  // essere letto come favoritismo o spreco, così come archiviarla può anche passare inosservato, e una
+  // lettera può sembrare vuota retorica invece che un vero segno di ascolto. Tre esiti per ogni scelta,
+  // non un numero fisso.
   function resolveCitizenPetition(regionId, petitionId, action) {
     var r = state.regions[regionId];
     if (!r.citizenPetitions) return null;
@@ -4375,15 +4379,30 @@
     if (action === "accogli") {
       var cost = rand(250, 500);
       r.fondiRegionali = Math.max(0, (r.fondiRegionali || 0) - cost);
-      applyRegionalMetricDelta(r, petition.themeId, rand(0.15, 0.3));
-      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
-      text = "La richiesta dei cittadini su " + petition.noun + " viene accolta con un intervento concreto.";
+      var accOutcome = pickTourOutcome([
+        { weight: 0.15, approval: -rand(1, 3), metric: 0, text: "La richiesta dei cittadini su " + petition.noun + " viene accolta, ma qualcuno la legge come un favore mirato più che una vera priorità: non tutti apprezzano." },
+        { weight: 0.6, approval: rand(2, 4), metric: rand(0.15, 0.3), text: "La richiesta dei cittadini su " + petition.noun + " viene accolta con un intervento concreto." },
+        { weight: 0.25, approval: rand(4, 6), metric: rand(0.3, 0.5), text: "La richiesta dei cittadini su " + petition.noun + " viene accolta ben oltre le attese: un piccolo caso di buona amministrazione, ripreso anche dalla stampa locale." }
+      ]);
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + accOutcome.approval, 0, 100);
+      if (accOutcome.metric) applyRegionalMetricDelta(r, petition.themeId, accOutcome.metric);
+      text = accOutcome.text;
     } else if (action === "lettera") {
-      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(0.5, 1.5), 0, 100);
-      text = "Una lettera di risposta ai cittadini su " + petition.noun + " non risolve il problema, ma viene apprezzata come segno di ascolto.";
+      var letOutcome = pickTourOutcome([
+        { weight: 0.25, approval: -rand(0.5, 2), text: "Una lettera di risposta ai cittadini su " + petition.noun + " viene letta come pura retorica, senza alcun impegno concreto dietro: qualcuno lo nota." },
+        { weight: 0.55, approval: rand(0.5, 1.5), text: "Una lettera di risposta ai cittadini su " + petition.noun + " non risolve il problema, ma viene apprezzata come segno di ascolto." },
+        { weight: 0.2, approval: rand(2, 3), text: "La lettera di risposta su " + petition.noun + ", scritta con cura, colpisce più del previsto: un piccolo gesto che viene notato e apprezzato." }
+      ]);
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + letOutcome.approval, 0, 100);
+      text = letOutcome.text;
     } else {
-      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) - rand(1, 3), 0, 100);
-      text = "La richiesta dei cittadini su " + petition.noun + " viene archiviata senza risposta: qualcuno se ne accorge.";
+      var arcOutcome = pickTourOutcome([
+        { weight: 0.2, approval: 0, text: "La richiesta dei cittadini su " + petition.noun + " viene archiviata senza risposta: passa sotto silenzio, senza conseguenze visibili." },
+        { weight: 0.55, approval: -rand(1, 3), text: "La richiesta dei cittadini su " + petition.noun + " viene archiviata senza risposta: qualcuno se ne accorge." },
+        { weight: 0.25, approval: -rand(3, 6), text: "La richiesta dei cittadini su " + petition.noun + " viene archiviata senza risposta, e diventa un piccolo caso locale: 'un presidente che non ascolta', titola la stampa di zona." }
+      ]);
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + arcOutcome.approval, 0, 100);
+      text = arcOutcome.text;
     }
     if (!r.petitionsHistory) r.petitionsHistory = [];
     r.petitionsHistory.unshift({ week: state.turn, noun: petition.noun, action: action });
@@ -4625,6 +4644,19 @@
   // giocatore pianifica in anticipo una sequenza di 2-3 città (vedi il pannello su renderRegionalCittaPage,
   // r.pendingTourSelection/r.activeTour), e il tour occupa il dossier della settimana una tappa alla
   // volta, per quante settimane quante sono le città scelte — un vero itinerario, non un singolo bottone.
+  // Richiesto da un giocatore: nessuna scelta deve garantire per forza un esito positivo, nemmeno quella
+  // più "sicura" — ogni tappa estrae davvero un esito (male/normale/benissimo) con pesi diversi per
+  // opzione, invece di un intervallo sempre e solo positivo. L'opzione più esposta (il comizio) ha il
+  // margine più ampio in entrambe le direzioni, quella più prudente (la visita rapida) rischia comunque
+  // di apparire distante e costarti qualcosa, non è mai un vero porto sicuro.
+  function pickTourOutcome(tiers) {
+    var roll = Math.random(), acc = 0;
+    for (var i = 0; i < tiers.length; i++) {
+      acc += tiers[i].weight;
+      if (roll < acc) return tiers[i];
+    }
+    return tiers[tiers.length - 1];
+  }
   function buildRegionalTourStopDossier(regionId) {
     var r = state.regions[regionId];
     var cityName = r.activeTour.cities[r.activeTour.stopIndex];
@@ -4634,19 +4666,34 @@
     var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
     var stopNum = r.activeTour.stopIndex + 1;
     var totalStops = r.activeTour.cities.length;
+    var comizio = pickTourOutcome([
+      { weight: 0.25, approval: -rand(2, 6), metric: -rand(0, 0.2), city: -rand(3, 7), text: "Il comizio a " + cityName + " è disturbato da contestatori organizzati: la piazza si riempie, ma gran parte dell'attenzione finisce sugli scontri verbali, non sui contenuti." },
+      { weight: 0.5, approval: rand(3, 6), metric: rand(0.3, 0.6), city: rand(5, 10), text: "Il comizio pubblico a " + cityName + " richiama una buona folla: un impatto solido su questa tappa del tour, a fronte di un costo reale." },
+      { weight: 0.25, approval: rand(7, 11), metric: rand(0.5, 0.9), city: rand(12, 18), text: "Il comizio a " + cityName + " è un successo pieno: la piazza è piena, la stampa locale ne parla per giorni." }
+    ]);
+    var incontro = pickTourOutcome([
+      { weight: 0.2, approval: -rand(1, 3), metric: -rand(0, 0.15), city: -rand(2, 5), text: "L'incontro con le associazioni locali di " + cityName + " si fa teso: le richieste sul tavolo sono irricevibili, e lo si nota." },
+      { weight: 0.6, approval: rand(1, 3), metric: rand(0.1, 0.25), city: rand(3, 6), text: "L'incontro con le associazioni locali di " + cityName + " porta un impatto solido a questa tappa, senza la spesa di un evento in piazza." },
+      { weight: 0.2, approval: rand(4, 6), metric: rand(0.3, 0.5), city: rand(7, 10), text: "L'incontro con le associazioni locali di " + cityName + " va oltre le attese: nasce una vera intesa di collaborazione." }
+    ]);
+    var visita = pickTourOutcome([
+      { weight: 0.3, approval: -rand(1, 3), metric: 0, city: -rand(1, 3), text: "La visita rapida a " + cityName + " viene letta come un passaggio distratto, quasi di circostanza: qualcuno lo nota, e non in positivo." },
+      { weight: 0.55, approval: rand(-0.5, 0.5), metric: 0, city: rand(0, 2), text: "La visita rapida a " + cityName + " lascia il segno minimo che ci si aspetta da una semplice tappa di passaggio." },
+      { weight: 0.15, approval: rand(1, 2), metric: 0, city: rand(1, 3), text: "La visita rapida a " + cityName + ", senza clamore, viene apprezzata proprio per la sobrietà: non tutti si aspettavano un comizio." }
+    ]);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
       eyebrow: "Tour nelle Province — Tappa " + stopNum + "/" + totalStops,
       cat: "Governo Regionale", title: "Tappa a " + cityName + ": " + noun,
-      brief: "Il tour nelle province fa tappa a " + cityName + ", dove il tema più sentito in questo momento è " + noun + ". Come gestisci questa tappa del tour?",
+      brief: "Il tour nelle province fa tappa a " + cityName + ", dove il tema più sentito in questo momento è " + noun + ". Nessuna scelta è davvero sicura: come gestisci questa tappa del tour?",
       regionalGovernanceId: regionId, regionalMetricThemeId: city.focusThemeId, regionalCityName: cityName, regionalTourStop: true,
       choices: [
-        { label: "Comizio pubblico in piazza", hint: "Massimo impatto, costoso ed espone a contestazioni", regionalApprovalDelta: rand(4, 7), regionalMetricDelta: rand(0.3, 0.6), regionalCityDelta: rand(8, 14), effects: { fondi: -rand(400, 700) },
-          result: "Il comizio pubblico a " + cityName + " richiama una buona folla: un impatto forte su questa tappa del tour, a fronte di un costo reale." },
-        { label: "Incontro con le associazioni locali", hint: "Costo moderato, impatto solido e mirato", regionalApprovalDelta: rand(2, 4), regionalMetricDelta: rand(0.15, 0.3), regionalCityDelta: rand(4, 8), effects: { fondi: -rand(150, 300) },
-          result: "L'incontro con le associazioni locali di " + cityName + " porta un impatto solido a questa tappa, senza la spesa di un evento in piazza." },
-        { label: "Visita rapida, solo foto ufficiali", hint: "Gratis, impatto minimo", regionalApprovalDelta: rand(0, 1), regionalMetricDelta: 0, regionalCityDelta: rand(1, 3), effects: {},
-          result: "La visita rapida a " + cityName + " lascia il segno minimo che ci si aspetta da una semplice tappa di passaggio." }
+        { label: "Comizio pubblico in piazza", hint: "Massima esposizione: può andare benissimo o ritorcersi contro di te", regionalApprovalDelta: comizio.approval, regionalMetricDelta: comizio.metric, regionalCityDelta: comizio.city, effects: { fondi: -rand(400, 700) },
+          result: comizio.text },
+        { label: "Incontro con le associazioni locali", hint: "Più misurato, ma un confronto diretto può comunque andare storto", regionalApprovalDelta: incontro.approval, regionalMetricDelta: incontro.metric, regionalCityDelta: incontro.city, effects: { fondi: -rand(150, 300) },
+          result: incontro.text },
+        { label: "Visita rapida, solo foto ufficiali", hint: "Economica, ma non è un vero porto sicuro: può sembrare distanza", regionalApprovalDelta: visita.approval, regionalMetricDelta: visita.metric, regionalCityDelta: visita.city, effects: {},
+          result: visita.text }
       ]
     };
   }
@@ -5329,6 +5376,9 @@
     html += "</section>";
     return html;
   }
+  // Richiesto da un giocatore: non un semplice accetta/rifiuta con un esito sempre proporzionato — anche
+  // un'accettazione può partire in modo deludente, e un rifiuto può costare più di un semplice "no",
+  // se diventa un caso mediatico. Quattro esiti possibili, non due.
   function proposeRegionalPact(regionId) {
     var r = state.regions[regionId];
     if (state.turn < (r.pattoCooldownTurn || 0)) return null;
@@ -5341,22 +5391,23 @@
     var themeId = themes[Math.floor(Math.random() * themes.length)];
     var theme = SITUATION_THEME_BY_ID[themeId];
     var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
-    var accepted = Math.random() < 0.55;
-    var text;
-    if (accepted) {
-      applyRegionalMetricDelta(r, themeId, rand(0.3, 0.6));
-      if (targetR) applyRegionalMetricDelta(targetR, themeId, rand(0.3, 0.6));
-      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
-      text = "Patto interregionale con " + target.id + " su " + noun + ": l'intesa viene accolta, con benefici concreti per entrambe le regioni.";
-    } else {
-      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) - rand(0, 2), 0, 100);
-      text = "La proposta di patto interregionale con " + target.id + " su " + noun + " viene rifiutata: " + target.id + " preferisce procedere per conto proprio.";
+    var outcome = pickTourOutcome([
+      { weight: 0.18, accepted: false, approval: -rand(2, 5), rep: -rand(0.5, 2), text: "La proposta di patto interregionale con " + target.id + " su " + noun + " viene rifiutata con parole dure: " + target.id + " la bolla come un'iniziativa di facciata, e la stampa ne parla." },
+      { weight: 0.27, accepted: false, approval: -rand(0.5, 2), rep: 0, text: "La proposta di patto interregionale con " + target.id + " su " + noun + " viene rifiutata: " + target.id + " preferisce procedere per conto proprio." },
+      { weight: 0.2, accepted: true, metric: rand(0.05, 0.15), approval: rand(0, 1.5), rep: 0, text: "Il patto interregionale con " + target.id + " su " + noun + " viene accettato, ma parte in modo deludente: la collaborazione concreta tarda ad arrivare." },
+      { weight: 0.35, accepted: true, metric: rand(0.3, 0.6), approval: rand(2, 5), rep: 0, text: "Patto interregionale con " + target.id + " su " + noun + ": l'intesa viene accolta con entusiasmo, con benefici concreti per entrambe le regioni." }
+    ]);
+    if (outcome.accepted && outcome.metric) {
+      applyRegionalMetricDelta(r, themeId, outcome.metric);
+      if (targetR) applyRegionalMetricDelta(targetR, themeId, outcome.metric);
     }
+    r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + outcome.approval, 0, 100);
+    if (outcome.rep) state.player.reputazione = clamp(state.player.reputazione + outcome.rep, 0, 100);
     if (!r.pactsHistory) r.pactsHistory = [];
-    r.pactsHistory.unshift({ week: state.turn, targetId: target.id, noun: noun, accepted: accepted });
+    r.pactsHistory.unshift({ week: state.turn, targetId: target.id, noun: noun, accepted: outcome.accepted });
     if (r.pactsHistory.length > 30) r.pactsHistory.length = 30;
-    addRegionalNews(regionId, text);
-    return { accepted: accepted, text: text };
+    addRegionalNews(regionId, outcome.text);
+    return { accepted: outcome.accepted, text: outcome.text };
   }
   function renderRegionalSchedaPage() {
     // Difensivo: garantisce che r.metrics abbia sempre tutti e 20 i temi (vedi ensureRegionsInit), così
@@ -15236,7 +15287,15 @@
     var html = '<div class="enactment-banner' + (passed ? "" : " rejected") + '">' + bannerLabel + "</div>";
     html += buildVoteTallyHtml(passed);
 
-    var pos = p.family ? LEFT_RIGHT_POSITION[p.family] : undefined;
+    // Bug segnalato da un giocatore: una mozione/legge/modifica proposta da UN ALTRO PARTITO (vedi
+    // resolveCpuMozioneChoice, resolveCpuAmendmentChoice, resolveCpuLeggeChoice) usava comunque il
+    // family del GIOCATORE per decidere chi "festeggia" — risultato assurdo tipo "la mozione della
+    // Lega sulla genitorialità naturale passa, il centrosinistra festeggia" quando magari è proprio il
+    // giocatore (di centrosinistra) ad averla votata contro. opts.proposerFamily, quando passato,
+    // identifica la vera paternità politica del provvedimento; senza, si ricade sul family del
+    // giocatore (comportamento invariato per leggi/mozioni proposte direttamente da lui).
+    var proposerFamily = opts.proposerFamily !== undefined ? opts.proposerFamily : p.family;
+    var pos = proposerFamily ? LEFT_RIGHT_POSITION[proposerFamily] : undefined;
     var leanLabel = pos === undefined ? "una parte consistente dell'opinione pubblica" : pos <= -1 ? "il centrosinistra" : pos >= 1 ? "il centrodestra" : "il centro";
     var oppositeLabel = pos === undefined ? "le opposizioni" : pos <= -1 ? "il centrodestra" : pos >= 1 ? "il centrosinistra" : "le ali più estreme dello schieramento";
     var repDelta = opts.repDelta || 0;
@@ -17499,7 +17558,8 @@
       recordEnactedPolicy(dossier.title.split(" (")[0], "Modifica approvata (proposta da " + meta.proposerName + "): " + meta.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.", meta.metric);
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Modifica di Legge" });
-    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo" });
+    var amendmentProposer = partyById(meta.proposerId);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: amendmentProposer ? amendmentProposer.familyId : undefined });
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   // ---------- Proposte di legge presentate da altri partiti ----------
@@ -17586,7 +17646,8 @@
       }
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
-    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo" });
+    var leggeProposerParty = partyById(meta.proposerId);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: leggeProposerParty ? leggeProposerParty.familyId : undefined });
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   // ---------- Mozioni presentate da altri partiti ----------
@@ -17675,7 +17736,8 @@
       }
     }
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Mozione Parlamentare" });
-    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: p.parliamentRole === "governo" });
+    var mozioneCpuProposer = partyById(meta.proposerId);
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: mozioneCpuProposer ? mozioneCpuProposer.familyId : undefined });
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   function renderMozioniPanel() {
@@ -22539,7 +22601,11 @@
     if (eventId === "congresso") return { sondaggi: rand(0.16, 0.24) };
     if (eventId === "cena_partito") return { reputazione: rand(1, 3), iscritti: rand(8, 18) };
     if (eventId === "tour_territoriale") return { sondaggi: rand(0.22, 0.34), reputazione: rand(3, 6) };
-    if (eventId === "missione_diplomatica") return { sondaggi: rand(1.3, 1.9), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
+    // Bug segnalato da un giocatore ("balzi di sondaggi di oltre un punto in un colpo solo"): questo valore
+    // era rand(1.3, 1.9) — 8-10 volte più degli altri eventi di partito qui sopra (tutti tra 0.08 e 0.34),
+    // sproporzionato anche considerando il suo costo doppio e il cooldown più lungo rispetto al congresso
+    // (il secondo evento più potente). Riportato in scala con gli altri.
+    if (eventId === "missione_diplomatica") return { sondaggi: rand(0.3, 0.5), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
     if (eventId === "campagna_mediatica_nazionale") return { sondaggi: rand(0.08, 0.12) };
     return {};
   }
@@ -28810,6 +28876,9 @@
         render();
       });
     }
+    // Richiesto da un giocatore: anche l'iniziativa in commissione e l'audizione pubblica non devono
+    // garantire per forza un esito positivo — una proposta mal preparata può costare in reputazione,
+    // un'audizione può trasformarsi in un botta e risposta scomodo invece che in una vetrina di prestigio.
     app.querySelectorAll("[data-commissione-initiative]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var p = state.player;
@@ -28818,10 +28887,16 @@
         var label = COMMISSIONE_LABELS[p.commissione.ministry];
         var cooldown = p.commissione.isChair ? COMMISSIONE_CHAIR_INITIATIVE_COOLDOWN_TURNS : COMMISSIONE_INITIATIVE_COOLDOWN_TURNS;
         p.commissioneInitiativeCooldownTurn = state.turn + cooldown;
-        var natEff = {}; natEff[metricKey] = p.commissione.isChair ? 0.25 : 0.15;
+        var baseMag = p.commissione.isChair ? 0.25 : 0.15;
+        var initOutcome = pickTourOutcome([
+          { weight: 0.15, magMult: -0.4, rep: -rand(0.5, 1.5), text: "L'iniziativa in " + label + " arriva mal preparata: la proposta viene smontata punto per punto, e il tema resta dove stava." },
+          { weight: 0.65, magMult: 1, rep: 0, text: "Prendi l'iniziativa in " + label + ": un lavoro mirato su " + countryMetricLabel(metricKey).toLowerCase() + " produce un piccolo progresso concreto." },
+          { weight: 0.2, magMult: 1.8, rep: rand(1, 2), text: "L'iniziativa in " + label + " colpisce più del previsto: un lavoro solido su " + countryMetricLabel(metricKey).toLowerCase() + ", notato anche fuori dalla commissione." }
+        ]);
+        var natEff = {}; natEff[metricKey] = baseMag * initOutcome.magMult;
         var dossier = { title: "Iniziativa in " + label, cat: "Parlamento — Commissione" };
-        var choice = { label: "Investi su " + countryMetricLabel(metricKey), effects: { fondi: -rand(p.commissione.isChair ? 150 : 250, p.commissione.isChair ? 300 : 450), national: natEff },
-          result: "Prendi l'iniziativa in " + label + ": un lavoro mirato su " + countryMetricLabel(metricKey).toLowerCase() + " produce un piccolo progresso concreto." };
+        var choice = { label: "Investi su " + countryMetricLabel(metricKey), effects: { fondi: -rand(p.commissione.isChair ? 150 : 250, p.commissione.isChair ? 300 : 450), national: natEff, reputazione: initOutcome.rep },
+          result: initOutcome.text };
         state.resultData = applyChoice(dossier, choice);
         state.phase = "result";
         save();
@@ -28835,9 +28910,14 @@
         if (!p || !p.commissione || !p.commissione.isChair || state.turn < (p.commissioneAudizioneCooldownTurn || 0)) return;
         p.commissioneAudizioneCooldownTurn = state.turn + COMMISSIONE_AUDIZIONE_COOLDOWN_TURNS;
         var label = COMMISSIONE_LABELS[p.commissione.ministry];
+        var audOutcome = pickTourOutcome([
+          { weight: 0.2, visibilita: rand(3, 6), reputazione: -rand(1, 3), text: "L'audizione pubblica in " + label + " si trasforma in un botta e risposta scomodo: le domande degli esperti convocati mettono in difficoltà più di un passaggio." },
+          { weight: 0.55, visibilita: rand(6, 10), reputazione: rand(3, 6), text: "L'audizione pubblica convocata in " + label + " richiama esperti, stampa e addetti ai lavori: un evento che rafforza la tua credibilità tecnica sul tema." },
+          { weight: 0.25, visibilita: rand(10, 15), reputazione: rand(6, 10), text: "L'audizione pubblica in " + label + " è un vero successo: gli interventi vengono ripresi dai media nazionali, non solo da quelli di settore." }
+        ]);
         var dossier = { title: "Audizione pubblica — " + label, cat: "Parlamento — Commissione" };
-        var choice = { label: "Convoca l'audizione", effects: { visibilita: rand(6, 10), reputazione: rand(3, 6) },
-          result: "L'audizione pubblica convocata in " + label + " richiama esperti, stampa e addetti ai lavori: un evento che rafforza la tua credibilità tecnica sul tema." };
+        var choice = { label: "Convoca l'audizione", effects: { visibilita: audOutcome.visibilita, reputazione: audOutcome.reputazione },
+          result: audOutcome.text };
         state.resultData = applyChoice(dossier, choice);
         state.phase = "result";
         save();
