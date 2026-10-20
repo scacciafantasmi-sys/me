@@ -3334,10 +3334,18 @@
   // Non una mappa geografica reale (i governatori veri sono persone reali, mai riprodotte in questo
   // gioco dichiaratamente fittizio): solo un'inclinazione plausibile per macroarea, sulla stessa base
   // sinistra-destra già usata per le coalizioni (CENTRODESTRA_ALIGNED_FAMILIES/CAMPOLARGO_ALIGNED_FAMILIES).
-  function pickRegionalGoverningFamily(area) {
+  // Bug segnalato da un giocatore ("la Lega vince in Emilia-Romagna non ha senso"): l'area "nord" da
+  // sola dà il 68% di probabilità centrodestra a QUALSIASI regione del nord, Emilia-Romagna compresa —
+  // una delle regioni storicamente più solidamente di centrosinistra d'Italia, non assimilabile al resto
+  // del nord su questo asse. Override minimo, solo dove la macroarea è davvero fuori strada rispetto
+  // alla storia elettorale reale della regione: non una mappa completa dei 20 governatori reali (che
+  // resta volutamente fuori da questo gioco), solo una correzione puntuale dov'è stata segnalata.
+  var REGIONAL_LEAN_OVERRIDE = { "Emilia-Romagna": 0.15 };
+  function pickRegionalGoverningFamily(area, regionId) {
     var cdPool = Object.keys(CENTRODESTRA_ALIGNED_FAMILIES);
     var clPool = Object.keys(CAMPOLARGO_ALIGNED_FAMILIES);
-    var cdChance = area === "nord" ? 0.68 : area === "centro" ? 0.38 : 0.5;
+    var cdChance = REGIONAL_LEAN_OVERRIDE[regionId];
+    if (cdChance === undefined) cdChance = area === "nord" ? 0.68 : area === "centro" ? 0.38 : 0.5;
     var pool = Math.random() < cdChance ? cdPool : clPool;
     return pool[Math.floor(Math.random() * pool.length)];
   }
@@ -3470,7 +3478,7 @@
     if (!state.regions) state.regions = {};
     ITALIAN_REGIONS.forEach(function (region, idx) {
       if (state.regions[region.id]) return;
-      var famId = pickRegionalGoverningFamily(region.area);
+      var famId = pickRegionalGoverningFamily(region.area, region.id);
       state.regions[region.id] = {
         governorFamilyId: famId, governorPartyId: pickPartyForFamily(famId), playerGoverns: false,
         lastElectionTurn: null,
@@ -3525,7 +3533,7 @@
     var r = state.regions[regionId];
     var prevFamId = r.governorFamilyId;
     var stays = Math.random() < 0.65;
-    var newFamId = stays ? prevFamId : pickRegionalGoverningFamily(region.area);
+    var newFamId = stays ? prevFamId : pickRegionalGoverningFamily(region.area, regionId);
     r.governorFamilyId = newFamId;
     r.governorPartyId = pickPartyForFamily(newFamId);
     r.playerGoverns = false;
@@ -3744,7 +3752,12 @@
       p.reputazione = clamp(p.reputazione + Math.min(5, won * 0.35), 0, 100);
       p.visibilita = clamp(p.visibilita + Math.min(7, won * 0.5), 0, 100);
       p.iscritti = Math.max(0, p.iscritti + won * 10);
-      playerPct = clamp(won * 1.1 + 2, 4, 22);
+      // Bug segnalato da un giocatore: il tetto a 22 qui sotto rendeva la percentuale mostrata in
+      // classifica IDENTICA (sempre "intorno al 22%") qualunque fosse la vera forza della campagna
+      // (won arriva fino a 40) — un partito con "quasi tutte le sedi" di una regione, con un "won" ben
+      // sopra 22, veniva comunque schiacciato allo stesso 22% visualizzato di un partito molto più
+      // debole. Il tetto ora segue davvero won, non lo ignora.
+      playerPct = clamp(won * 1.1 + 2, 4, 38);
       ranking = buildRegionalElectionRankingHtml(regionId, p.name, p.color, playerPct, false);
       title = "Elezioni Regionali in " + regionId;
       text = "Il partito elegge " + won + " consiglieri regionali in " + regionId + ": un ingresso in Consiglio Regionale, ma la presidenza resta ad altri.";
@@ -14227,7 +14240,14 @@
     // giocatore (vedi wouldExceedCoalitionSpread), che quel controllo lo applicano già. Un'adesione
     // spontanea della CPU poteva così allargare un blocco anche verso una famiglia ideologicamente troppo
     // lontana dagli altri membri attuali. Ora usa la stessa identica regola, per entrambi i lati.
+    // Richiesto da un giocatore: solo i partiti VERI (PARTIES, quelli seminati all'inizio partita) possono
+    // aderire a un blocco storico — prima activeParties() includeva anche state.dynamicParties (scissioni
+    // e formazioni spontanee generate a caso durante la partita), e un partitino fittizio da 1% appena
+    // nato poteva ritrovarsi dentro "Campo Largo" come se fosse PD o M5S: stonava con l'idea stessa di
+    // blocco storico reale.
+    var realPartyIds = PARTIES.map(function (p) { return p.id; });
     var candidates = activeParties().filter(function (p) {
+      if (realPartyIds.indexOf(p.id) === -1) return false;
       if (takenIds.indexOf(p.id) !== -1 || !p.familyId || state.parties[p.id] < 0.8) return false;
       var blocId = CENTRODESTRA_ALIGNED_FAMILIES[p.familyId] ? "centrodestra" : CAMPOLARGO_ALIGNED_FAMILIES[p.familyId] ? "campolargo" : null;
       if (!blocId) return false;
