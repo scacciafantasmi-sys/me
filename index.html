@@ -4341,6 +4341,56 @@
       }
     });
   }
+  // ---------- Osservatorio dei Cittadini (richiesto da un giocatore) ----------
+  // Richieste dirette dei cittadini, una alla volta, distinte dai dossier settimanali e dalle azioni di
+  // routine: generate periodicamente (solo per la regione del giocatore, max 4 in coda), restano in
+  // attesa finché il giocatore non le gestisce dalla scheda dedicata (vedi renderRegionalOsservatorioPage).
+  var CITIZEN_PETITION_TEMPLATES = [
+    function (noun) { return "Un gruppo di residenti chiede interventi concreti su " + noun + "."; },
+    function (noun) { return "Una lettera firmata da decine di cittadini segnala la situazione di " + noun + "."; },
+    function (noun) { return "Un comitato spontaneo di cittadini si organizza per chiedere attenzione su " + noun + "."; },
+    function (noun) { return "Una petizione online raccoglie firme per chiedere di intervenire su " + noun + "."; }
+  ];
+  function maybeGenerateCitizenPetition(regionId) {
+    var r = state.regions[regionId];
+    if (!r.citizenPetitions) r.citizenPetitions = [];
+    if (r.citizenPetitions.length >= 4) return;
+    if (Math.random() > 0.22) return;
+    var region = regionById(regionId);
+    var themes = regionTrackedThemes(region);
+    var themeId = themes[Math.floor(Math.random() * themes.length)];
+    var theme = SITUATION_THEME_BY_ID[themeId];
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var template = CITIZEN_PETITION_TEMPLATES[Math.floor(Math.random() * CITIZEN_PETITION_TEMPLATES.length)];
+    r.citizenPetitions.push({ id: "pet_" + state.turn + "_" + Math.round(Math.random() * 100000), text: template(noun), themeId: themeId, noun: noun, week: state.turn });
+  }
+  function resolveCitizenPetition(regionId, petitionId, action) {
+    var r = state.regions[regionId];
+    if (!r.citizenPetitions) return null;
+    var idx = r.citizenPetitions.findIndex(function (p) { return p.id === petitionId; });
+    if (idx === -1) return null;
+    var petition = r.citizenPetitions[idx];
+    r.citizenPetitions.splice(idx, 1);
+    var text;
+    if (action === "accogli") {
+      var cost = rand(250, 500);
+      r.fondiRegionali = Math.max(0, (r.fondiRegionali || 0) - cost);
+      applyRegionalMetricDelta(r, petition.themeId, rand(0.15, 0.3));
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
+      text = "La richiesta dei cittadini su " + petition.noun + " viene accolta con un intervento concreto.";
+    } else if (action === "lettera") {
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(0.5, 1.5), 0, 100);
+      text = "Una lettera di risposta ai cittadini su " + petition.noun + " non risolve il problema, ma viene apprezzata come segno di ascolto.";
+    } else {
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) - rand(1, 3), 0, 100);
+      text = "La richiesta dei cittadini su " + petition.noun + " viene archiviata senza risposta: qualcuno se ne accorge.";
+    }
+    if (!r.petitionsHistory) r.petitionsHistory = [];
+    r.petitionsHistory.unshift({ week: state.turn, noun: petition.noun, action: action });
+    if (r.petitionsHistory.length > 30) r.petitionsHistory.length = 30;
+    addRegionalNews(regionId, text);
+    return text;
+  }
   // Pannello sempre visibile nella pagina Territorio: la mappa politica delle 20 regioni, chi le governa
   // oggi e, per quelle dove il partito ha già radicamento, il conto alla rovescia alla prossima elezione
   // regionale — così "le regioni" smettono di essere invisibili fuori dal giorno del voto.
@@ -4570,6 +4620,36 @@
       ]
     };
   }
+  // ---------- Tour nelle Province (richiesto da un giocatore) ----------
+  // Diverso dalle azioni dirette già esistenti sulla scheda Città (un clic, effetto immediato): qui il
+  // giocatore pianifica in anticipo una sequenza di 2-3 città (vedi il pannello su renderRegionalCittaPage,
+  // r.pendingTourSelection/r.activeTour), e il tour occupa il dossier della settimana una tappa alla
+  // volta, per quante settimane quante sono le città scelte — un vero itinerario, non un singolo bottone.
+  function buildRegionalTourStopDossier(regionId) {
+    var r = state.regions[regionId];
+    var cityName = r.activeTour.cities[r.activeTour.stopIndex];
+    var city = (r.cities || []).filter(function (c) { return c.name === cityName; })[0];
+    if (!city) { r.activeTour = null; return buildRegionalRoutineDossier(regionId); }
+    var theme = SITUATION_THEME_BY_ID[city.focusThemeId];
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var stopNum = r.activeTour.stopIndex + 1;
+    var totalStops = r.activeTour.cities.length;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: "Tour nelle Province — Tappa " + stopNum + "/" + totalStops,
+      cat: "Governo Regionale", title: "Tappa a " + cityName + ": " + noun,
+      brief: "Il tour nelle province fa tappa a " + cityName + ", dove il tema più sentito in questo momento è " + noun + ". Come gestisci questa tappa del tour?",
+      regionalGovernanceId: regionId, regionalMetricThemeId: city.focusThemeId, regionalCityName: cityName, regionalTourStop: true,
+      choices: [
+        { label: "Comizio pubblico in piazza", hint: "Massimo impatto, costoso ed espone a contestazioni", regionalApprovalDelta: rand(4, 7), regionalMetricDelta: rand(0.3, 0.6), regionalCityDelta: rand(8, 14), effects: { fondi: -rand(400, 700) },
+          result: "Il comizio pubblico a " + cityName + " richiama una buona folla: un impatto forte su questa tappa del tour, a fronte di un costo reale." },
+        { label: "Incontro con le associazioni locali", hint: "Costo moderato, impatto solido e mirato", regionalApprovalDelta: rand(2, 4), regionalMetricDelta: rand(0.15, 0.3), regionalCityDelta: rand(4, 8), effects: { fondi: -rand(150, 300) },
+          result: "L'incontro con le associazioni locali di " + cityName + " porta un impatto solido a questa tappa, senza la spesa di un evento in piazza." },
+        { label: "Visita rapida, solo foto ufficiali", hint: "Gratis, impatto minimo", regionalApprovalDelta: rand(0, 1), regionalMetricDelta: 0, regionalCityDelta: rand(1, 3), effects: {},
+          result: "La visita rapida a " + cityName + " lascia il segno minimo che ci si aspetta da una semplice tappa di passaggio." }
+      ]
+    };
+  }
   // Richiesto da un giocatore: il dossier della settimana non deve più essere un dado a 3 facce sempre
   // uguale — qui le condizioni REALI della regione decidono cosa succede, con una vera priorità (una città
   // in crisi conta più di un nodo critico regionale generico, che conta più di una routine amministrativa),
@@ -4646,6 +4726,15 @@
     }
     var rp = state.regionalPresidency;
     var regionId = rp.regionId;
+    // Il Tour nelle Province (vedi renderRegionalCittaPage/buildRegionalTourStopDossier), una volta
+    // avviato, occupa il dossier della settimana una tappa alla volta: priorità altissima, come la
+    // formazione della Giunta, finché tutte le città scelte non sono state visitate.
+    if (state.regions[regionId].activeTour) {
+      state.aiDynamicDossier = buildRegionalTourStopDossier(regionId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
     recomputePeriodic();
     updateCoalitionTrust();
     updateCpuOnlyCoalitionTrust();
@@ -4680,6 +4769,7 @@
     resolveRegionalConflictsIfDue();
     ensureRegionsInit();
     driftRegionalMetrics();
+    maybeGenerateCitizenPetition(regionId);
     // Il cantiere di una Grande Opera (vedi startRegionalBigWork) avanza SEMPRE di una settimana, a
     // prescindere da quale dossier vinca questo turno — solo l'eventuale complicazione (sotto) compete
     // per il turno, il progresso in sé no, altrimenti un cantiere non avanzerebbe mai nelle settimane in
@@ -5165,6 +5255,7 @@
     { id: "leggi", label: "Leggi Regionali", icon: "⚖️", nav: "Leggi", render: function () { return renderRegionalLeggiPage(); } },
     { id: "mozioni", label: "Mozioni Regionali", icon: "📜", nav: "Mozioni", render: function () { return renderRegionalMozioniPage(); } },
     { id: "citta", label: "Città della Regione", icon: "🏙️", nav: "Città", render: function () { return renderRegionalCittaPage(); } },
+    { id: "osservatorio", label: "Osservatorio dei Cittadini", icon: "🗣️", nav: "Cittadini", render: function () { return renderRegionalOsservatorioPage(); } },
     { id: "notizie", label: "Notizie Regionali", icon: "📰", nav: "Notizie", render: function () { return renderRegionalNotiziePage(); } },
     { id: "nazionale", label: "Politica Nazionale", icon: "🏛️", nav: "Italia", render: function () { return renderRegionalNationalWatchPage(); } }
   ];
@@ -5217,6 +5308,56 @@
     html += "</section>";
     return html;
   }
+  // ---------- Patto tra Regioni (richiesto da un giocatore) ----------
+  // Una vera relazione orizzontale tra presidenti di regione, non solo il rapporto verticale con Roma già
+  // esistente (vedi nationalRegionalAlignment): proponi un accordo di collaborazione a un'altra regione,
+  // scelta a caso tra le 19 rimanenti, su un tema che la tua regione sta già seguendo da vicino. Se accolta,
+  // l'investimento condiviso migliora quel tema in ENTRAMBE le regioni, non solo nella tua.
+  var REGIONAL_PACT_COOLDOWN_TURNS = 14;
+  function renderRegionalPactPanel(regionId, r) {
+    var onCooldown = state.turn < (r.pattoCooldownTurn || 0);
+    var html = '<section aria-label="Patto tra Regioni"><p class="eyebrow">Patto tra Regioni</p>' +
+      '<p class="ci-hint">Proponi un patto di collaborazione a un\'altra regione italiana, su un tema che la tua regione sta già seguendo da vicino: se l\'altra regione accetta, l\'investimento condiviso migliora quel tema in entrambe.' +
+      (onCooldown ? " Hai già proposto un patto di recente: la prossima proposta sarà possibile dalla settimana " + r.pattoCooldownTurn + "." : "") + '</p>' +
+      '<div class="choices"><button type="button" class="choice-btn" id="regional-pact-propose-btn"' + (onCooldown ? " disabled" : "") + '><span class="clabel">Proponi un Patto Interregionale</span></button></div>';
+    if (r.pactsHistory && r.pactsHistory.length) {
+      html += '<p class="eyebrow" style="margin-top:0.8rem">Storico patti interregionali</p><ul class="enacted-policy-list">' +
+        r.pactsHistory.slice(0, 15).map(function (pt) {
+          return '<li><strong>' + pt.targetId + '</strong> — ' + pt.noun + ' <span class="ci-hint">(settimana ' + pt.week + ')</span> ' + (pt.accepted ? '<span class="chip good">Accettato</span>' : '<span class="chip">Rifiutato</span>') + "</li>";
+        }).join("") + "</ul>";
+    }
+    html += "</section>";
+    return html;
+  }
+  function proposeRegionalPact(regionId) {
+    var r = state.regions[regionId];
+    if (state.turn < (r.pattoCooldownTurn || 0)) return null;
+    r.pattoCooldownTurn = state.turn + REGIONAL_PACT_COOLDOWN_TURNS;
+    var others = ITALIAN_REGIONS.filter(function (reg) { return reg.id !== regionId; });
+    var target = others[Math.floor(Math.random() * others.length)];
+    var targetR = state.regions[target.id];
+    var region = regionById(regionId);
+    var themes = regionTrackedThemes(region);
+    var themeId = themes[Math.floor(Math.random() * themes.length)];
+    var theme = SITUATION_THEME_BY_ID[themeId];
+    var noun = theme.nouns[Math.floor(Math.random() * theme.nouns.length)];
+    var accepted = Math.random() < 0.55;
+    var text;
+    if (accepted) {
+      applyRegionalMetricDelta(r, themeId, rand(0.3, 0.6));
+      if (targetR) applyRegionalMetricDelta(targetR, themeId, rand(0.3, 0.6));
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + rand(2, 4), 0, 100);
+      text = "Patto interregionale con " + target.id + " su " + noun + ": l'intesa viene accolta, con benefici concreti per entrambe le regioni.";
+    } else {
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) - rand(0, 2), 0, 100);
+      text = "La proposta di patto interregionale con " + target.id + " su " + noun + " viene rifiutata: " + target.id + " preferisce procedere per conto proprio.";
+    }
+    if (!r.pactsHistory) r.pactsHistory = [];
+    r.pactsHistory.unshift({ week: state.turn, targetId: target.id, noun: noun, accepted: accepted });
+    if (r.pactsHistory.length > 30) r.pactsHistory.length = 30;
+    addRegionalNews(regionId, text);
+    return { accepted: accepted, text: text };
+  }
   function renderRegionalSchedaPage() {
     // Difensivo: garantisce che r.metrics abbia sempre tutti e 20 i temi (vedi ensureRegionsInit), così
     // la scheda non va mai in crash su un salvataggio in qualunque stato intermedio.
@@ -5245,6 +5386,7 @@
       '<button type="button" class="staff-btn fire" id="regional-resign-btn" style="margin-top:0.6rem">Dimettiti dalla presidenza della Regione</button>' +
       '</section>';
     html += renderRegionalBigWorkPanel(regionId, r);
+    html += renderRegionalPactPanel(regionId, r);
     html += '<section aria-label="Scheda della Regione"><p class="eyebrow">Scheda della Regione — ' + regionId + '</p>' +
       '<p class="ci-hint">Tutti gli indicatori reali della regione, da 1 (pessimo) a 10 (ottimo): i 2 problemi e i 2 punti di forza identitari di ' + regionId + ' restano agli estremi, gli altri cambiano più lentamente ma non restano mai fermi.</p>';
     var allIds = regionAllThemeIds().slice().sort(function (a, b) { return r.metrics[a] - r.metrics[b]; });
@@ -5378,7 +5520,22 @@
     var regionId = state.regionalPresidency.regionId;
     var r = state.regions[regionId];
     var onCooldown = state.turn < (r.regionalActionCooldownTurn || 0);
-    var html = '<section aria-label="Città della Regione"><p class="eyebrow">Città della Regione — ' + regionId + '</p>';
+    var html = '<section aria-label="Tour nelle Province" style="margin-bottom:1.2rem"><p class="eyebrow">Tour nelle Province</p>';
+    if (r.activeTour) {
+      html += '<p class="ci-hint">Tour in corso: tappa ' + (r.activeTour.stopIndex + 1) + ' di ' + r.activeTour.cities.length +
+        ' — prossima città: <strong>' + r.activeTour.cities[r.activeTour.stopIndex] + '</strong>. Il dossier della settimana ti guida tappa per tappa, fino all\'ultima città dell\'itinerario.</p>';
+    } else {
+      var tourSelection = r.pendingTourSelection || [];
+      html += '<p class="ci-hint">Organizza un vero tour nelle province: scegli 2 o 3 città da visitare in sequenza nelle prossime settimane, ciascuna con una propria tappa da gestire (non un solo clic, un vero itinerario).</p>';
+      html += '<div class="option-grid">' + (r.cities || []).map(function (c) {
+        var selected = tourSelection.indexOf(c.name) !== -1;
+        return '<button type="button" class="option-card' + (selected ? " selected" : "") + '" data-regional-tour-toggle-city="' + c.name + '"><span class="olabel">' + c.name + '</span><span class="odesc">' + (selected ? "Nel tour ✓" : "Aggiungi al tour") + '</span></button>';
+      }).join("") + "</div>";
+      if (tourSelection.length >= 2) {
+        html += '<div class="choices" style="margin-top:0.6rem"><button type="button" class="choice-btn" id="regional-tour-start-btn"><span class="clabel">Avvia il Tour (' + tourSelection.length + ' città)</span></button></div>';
+      }
+    }
+    html += '</section><section aria-label="Città della Regione"><p class="eyebrow">Città della Regione — ' + regionId + '</p>';
     (r.cities || []).forEach(function (c) {
       var theme = SITUATION_THEME_BY_ID[c.focusThemeId];
       html += '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + c.name + '</strong></div>' +
@@ -5389,6 +5546,36 @@
         '<button type="button" class="staff-btn fire" data-regional-city-cut="' + c.name + '"' + (onCooldown ? " disabled" : "") + '>Taglia i fondi (incassi subito, scontenta la città)</button>' +
         "</div></div>";
     });
+    html += "</section>";
+    return html;
+  }
+  // ---------- Pagina: Osservatorio dei Cittadini ----------
+  function renderRegionalOsservatorioPage() {
+    var regionId = state.regionalPresidency.regionId;
+    var r = state.regions[regionId];
+    var html = '<section aria-label="Osservatorio dei Cittadini"><p class="eyebrow">Osservatorio dei Cittadini — ' + regionId + '</p>' +
+      '<p class="ci-hint">Richieste dirette dei cittadini della regione, una alla volta: puoi accoglierle con un intervento concreto, rispondere solo con una lettera, o archiviarle senza risposta.</p>';
+    var pending = r.citizenPetitions || [];
+    if (!pending.length) {
+      html += '<p class="ci-hint">Nessuna richiesta in attesa al momento: torna a controllare nelle prossime settimane.</p>';
+    } else {
+      pending.forEach(function (p) {
+        var theme = SITUATION_THEME_BY_ID[p.themeId];
+        html += '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + (theme ? theme.label.replace("Politica — ", "") : p.themeId) + '</strong></div>' +
+          '<div class="party-row-sub">' + p.text + '</div>' +
+          '<button type="button" class="staff-btn hire" data-regional-petition-resolve="' + p.id + '::accogli">Accogli (costa alle casse, esito certo)</button>' +
+          '<button type="button" class="staff-btn hire" data-regional-petition-resolve="' + p.id + '::lettera">Rispondi con una lettera (gratis, effetto minimo)</button>' +
+          '<button type="button" class="staff-btn fire" data-regional-petition-resolve="' + p.id + '::archivia">Archivia senza risposta</button>' +
+          "</div></div>";
+      });
+    }
+    if (r.petitionsHistory && r.petitionsHistory.length) {
+      html += '<p class="eyebrow" style="margin-top:0.8rem">Storico richieste</p><ul class="enacted-policy-list">' +
+        r.petitionsHistory.slice(0, 15).map(function (h) {
+          return '<li><strong>' + h.noun + '</strong> <span class="ci-hint">(settimana ' + h.week + ')</span> ' +
+            (h.action === "accogli" ? '<span class="chip good">Accolta</span>' : h.action === "lettera" ? '<span class="chip">Risposta formale</span>' : '<span class="chip negative">Archiviata</span>') + "</li>";
+        }).join("") + "</ul>";
+    }
     html += "</section>";
     return html;
   }
@@ -5472,6 +5659,52 @@
         if (!window.confirm("Sei sicuro/a di volerti dimettere dalla presidenza della " + regionId + "? Il partito affiderà la regione a un esponente locale, e tornerai subito alla guida nazionale.")) return;
         resignFromRegionalPresidencyNow();
         state.phase = "result";
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-regional-petition-resolve]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var parts = btn.getAttribute("data-regional-petition-resolve").split("::");
+        var text = resolveCitizenPetition(regionId, parts[0], parts[1]);
+        if (!text) return;
+        showSaveStatus(text, parts[1] === "archivia");
+        save();
+        render();
+      });
+    });
+    var pactBtn = document.getElementById("regional-pact-propose-btn");
+    if (pactBtn) {
+      pactBtn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        var result = proposeRegionalPact(regionId);
+        if (!result) return;
+        showSaveStatus(result.text, !result.accepted);
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-regional-tour-toggle-city]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (r.activeTour) return;
+        var cityName = btn.getAttribute("data-regional-tour-toggle-city");
+        if (!r.pendingTourSelection) r.pendingTourSelection = [];
+        var idx = r.pendingTourSelection.indexOf(cityName);
+        if (idx !== -1) r.pendingTourSelection.splice(idx, 1);
+        else if (r.pendingTourSelection.length < 3) r.pendingTourSelection.push(cityName);
+        save();
+        render();
+      });
+    });
+    var tourStartBtn = document.getElementById("regional-tour-start-btn");
+    if (tourStartBtn) {
+      tourStartBtn.addEventListener("click", function () {
+        var r = state.regions[regionId];
+        if (!r.pendingTourSelection || r.pendingTourSelection.length < 2) return;
+        r.activeTour = { cities: r.pendingTourSelection.slice(), stopIndex: 0 };
+        r.pendingTourSelection = [];
+        addRegionalNews(regionId, "Parte il tour nelle province: tappe a " + r.activeTour.cities.join(", ") + ".");
         save();
         render();
       });
@@ -24319,6 +24552,84 @@
     html += "</div></section>";
     return html;
   }
+  // ---------- Commissioni Parlamentari (richiesto da un giocatore) ----------
+  // Aperte a QUALUNQUE parlamentare, maggioranza o opposizione — a differenza dei Ministeri, riservati a
+  // chi è al governo, è un vero "cosa fare" anche per chi sta all'opposizione, non solo mozioni/leggi
+  // generiche. Riusa gli stessi focus tematici dei Ministeri (MINISTRY_FOCUS, stessa coerenza tema/
+  // metrica, niente sostantivi duplicati) ma con effetti più contenuti, coerenti con il peso reale di una
+  // commissione rispetto a un intero dicastero. Dopo abbastanza tempo da membro attivo e con una buona
+  // reputazione, si può essere eletti Presidente della Commissione: un ruolo che sblocca un'iniziativa
+  // propria più forte (l'audizione pubblica), oltre a un'iniziativa periodica potenziata.
+  var COMMISSIONE_SWITCH_COOLDOWN_TURNS = 20;
+  var COMMISSIONE_INITIATIVE_COOLDOWN_TURNS = 8;
+  var COMMISSIONE_CHAIR_INITIATIVE_COOLDOWN_TURNS = 5;
+  var COMMISSIONE_AUDIZIONE_COOLDOWN_TURNS = 15;
+  var COMMISSIONE_CHAIR_MIN_WEEKS = 25;
+  var COMMISSIONE_LABELS = {
+    "Economia e Finanze": "Commissione Economia e Finanze",
+    "Interno": "Commissione Affari Costituzionali e Interni",
+    "Esteri": "Commissione Affari Esteri",
+    "Difesa": "Commissione Difesa",
+    "Giustizia": "Commissione Giustizia",
+    "Istruzione": "Commissione Istruzione e Cultura",
+    "Salute": "Commissione Affari Sociali e Sanità",
+    "Ambiente e Transizione Ecologica": "Commissione Ambiente e Territorio",
+    "Infrastrutture e Trasporti": "Commissione Trasporti e Infrastrutture",
+    "Lavoro e Politiche Sociali": "Commissione Lavoro e Politiche Sociali"
+  };
+  function renderCommissioniPanel() {
+    var p = state.player;
+    if (!p || !p.inParliament) return "";
+    var html = '<section aria-label="Commissioni Parlamentari"><p class="eyebrow">Commissioni Parlamentari</p>';
+    if (!p.commissione) {
+      html += '<p class="ci-hint">Entra in una commissione parlamentare tematica: aperta sia a chi è al governo sia a chi è all\'opposizione, dà un canale di iniziativa continuo su quel tema, indipendente da leggi e mozioni.</p><div class="option-grid">';
+      Object.keys(COMMISSIONE_LABELS).forEach(function (ministryKey) {
+        html += '<button type="button" class="option-card" data-commissione-join="' + ministryKey + '"><span class="olabel">' + COMMISSIONE_LABELS[ministryKey] + '</span></button>';
+      });
+      html += "</div></section>";
+      return html;
+    }
+    var focus = MINISTRY_FOCUS[p.commissione.ministry];
+    var label = COMMISSIONE_LABELS[p.commissione.ministry];
+    var onSwitchCooldown = state.turn < (p.commissioneSwitchCooldownTurn || 0);
+    html += '<p class="ci-hint">Sei membro della <strong>' + label + '</strong>' + (p.commissione.isChair ? " — <strong>Presidente</strong> della commissione" : "") + ' dalla settimana ' + p.commissione.since + '.</p>' +
+      '<div class="choices"><button type="button" class="choice-btn" id="commissione-leave-btn"' + (onSwitchCooldown ? " disabled" : "") + '><span class="clabel">Lascia la commissione</span></button></div>' +
+      (onSwitchCooldown ? '<p class="ci-hint">Hai cambiato commissione di recente: potrai lasciarla dalla settimana ' + p.commissioneSwitchCooldownTurn + '.</p>' : "");
+    var onInitiativeCooldown = state.turn < (p.commissioneInitiativeCooldownTurn || 0);
+    html += '<p class="eyebrow" style="margin-top:0.6rem">Prendi l\'iniziativa in commissione</p><div class="option-grid">';
+    focus.metrics.forEach(function (metricKey) {
+      html += '<button type="button" class="option-card" data-commissione-initiative="' + metricKey + '"' + (onInitiativeCooldown ? " disabled" : "") + '><span class="olabel">Investi su ' + countryMetricLabel(metricKey) + '</span><span class="odesc">Costa ai fondi di partito, effetto mirato sul tema</span></button>';
+    });
+    html += "</div>";
+    if (onInitiativeCooldown) html += '<p class="ci-hint">Hai già agito di recente: la prossima iniziativa sarà possibile dalla settimana ' + p.commissioneInitiativeCooldownTurn + '.</p>';
+    if (p.commissione.isChair) {
+      var onAudizioneCooldown = state.turn < (p.commissioneAudizioneCooldownTurn || 0);
+      html += '<p class="eyebrow" style="margin-top:0.6rem">Da Presidente della Commissione</p>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="commissione-audizione-btn"' + (onAudizioneCooldown ? " disabled" : "") + '><span class="clabel">Convoca un\'audizione pubblica</span></button></div>' +
+        (onAudizioneCooldown ? '<p class="ci-hint">La prossima audizione sarà possibile dalla settimana ' + p.commissioneAudizioneCooldownTurn + '.</p>' : '<p class="ci-hint">Un evento raro e di forte rilievo: grande visibilità e credibilità tecnica sul tema della commissione.</p>');
+    }
+    html += "</section>";
+    return html;
+  }
+  // Promozione a Presidente di Commissione: controllata periodicamente (non un'azione del giocatore),
+  // solo dopo abbastanza tempo da membro attivo e con una reputazione solida — un riconoscimento guadagnato
+  // nel tempo, non una scelta immediata.
+  function checkCommissioneChairPromotion() {
+    var p = state.player;
+    if (!p || !p.commissione || p.commissione.isChair) return;
+    if (state.turn < p.commissione.since + COMMISSIONE_CHAIR_MIN_WEEKS) return;
+    if ((p.reputazione || 0) < 55) return;
+    if (Math.random() > 0.05) return;
+    p.commissione.isChair = true;
+    p.commissione.chairSince = state.turn;
+    var label = COMMISSIONE_LABELS[p.commissione.ministry];
+    var text = "Dopo mesi di lavoro in commissione, vieni eletto/a Presidente della " + label + ": un ruolo che amplifica la tua voce su quel tema, in Parlamento e sui media.";
+    state.log.unshift({ week: state.turn, title: "Eletto/a Presidente di Commissione", choiceLabel: label, result: text, headlines: [], type: "istituzioni", cat: "Istituzioni" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    p.reputazione = clamp(p.reputazione + rand(2, 4), 0, 100);
+  }
   // Prima funzionava solo per governi di coalizione (2+ membri): un governo di un SOLO partito (o del
   // giocatore da solo) non aveva alcuna ripartizione dei ministeri, e il pannello restava vuoto. Ora
   // gestisce in modo unificato sia il caso di un solo partito (che riceve tutti i ministeri) sia quello
@@ -26436,7 +26747,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", icon: "⚖️", nav: "Parlamento", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
       } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", icon: "🌍", nav: "Estero", render: function () {
         return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
@@ -28001,6 +28312,15 @@
             }
           }
           if (govRegion.playerIsGovernor) addRegionalNews(dossier.regionalGovernanceId, choice.result);
+          // Avanza il Tour nelle Province di una tappa (vedi buildRegionalTourStopDossier): quando l'ultima
+          // tappa è stata gestita, il tour si chiude da solo con un annuncio riepilogativo.
+          if (dossier.regionalTourStop && govRegion.activeTour) {
+            govRegion.activeTour.stopIndex++;
+            if (govRegion.activeTour.stopIndex >= govRegion.activeTour.cities.length) {
+              addRegionalNews(dossier.regionalGovernanceId, "Il tour nelle province si conclude a " + dossier.regionalCityName + ": un giro di incontri che ha toccato " + govRegion.activeTour.cities.length + " città della regione.");
+              govRegion.activeTour = null;
+            }
+          }
         }
         // Richiesto da un giocatore: in "Modalità Presidente di Regione" il costo/ricavo di una scelta di
         // governo regionale deve pesare sulle CASSE DELLA REGIONE (r.fondiRegionali), non sui fondi del
@@ -28465,6 +28785,65 @@
         render();
       });
     });
+    app.querySelectorAll("[data-commissione-join]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var p = state.player;
+        if (!p || !p.inParliament || p.commissione) return;
+        var ministryKey = btn.getAttribute("data-commissione-join");
+        p.commissione = { ministry: ministryKey, since: state.turn, isChair: false, chairSince: null };
+        var label = COMMISSIONE_LABELS[ministryKey];
+        addDiaryEntry("Entro in Commissione", "Oggi sono entrato/a nella " + label + ": un canale di lavoro continuo su quel tema, indipendente dalle leggi e dalle mozioni che già presento.");
+        save();
+        render();
+      });
+    });
+    var commissioneLeaveBtn = document.getElementById("commissione-leave-btn");
+    if (commissioneLeaveBtn) {
+      commissioneLeaveBtn.addEventListener("click", function () {
+        var p = state.player;
+        if (!p || !p.commissione || state.turn < (p.commissioneSwitchCooldownTurn || 0)) return;
+        var label = COMMISSIONE_LABELS[p.commissione.ministry];
+        p.commissione = null;
+        p.commissioneSwitchCooldownTurn = state.turn + COMMISSIONE_SWITCH_COOLDOWN_TURNS;
+        showSaveStatus("Hai lasciato la " + label + ".", false);
+        save();
+        render();
+      });
+    }
+    app.querySelectorAll("[data-commissione-initiative]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var p = state.player;
+        if (!p || !p.commissione || state.turn < (p.commissioneInitiativeCooldownTurn || 0)) return;
+        var metricKey = btn.getAttribute("data-commissione-initiative");
+        var label = COMMISSIONE_LABELS[p.commissione.ministry];
+        var cooldown = p.commissione.isChair ? COMMISSIONE_CHAIR_INITIATIVE_COOLDOWN_TURNS : COMMISSIONE_INITIATIVE_COOLDOWN_TURNS;
+        p.commissioneInitiativeCooldownTurn = state.turn + cooldown;
+        var natEff = {}; natEff[metricKey] = p.commissione.isChair ? 0.25 : 0.15;
+        var dossier = { title: "Iniziativa in " + label, cat: "Parlamento — Commissione" };
+        var choice = { label: "Investi su " + countryMetricLabel(metricKey), effects: { fondi: -rand(p.commissione.isChair ? 150 : 250, p.commissione.isChair ? 300 : 450), national: natEff },
+          result: "Prendi l'iniziativa in " + label + ": un lavoro mirato su " + countryMetricLabel(metricKey).toLowerCase() + " produce un piccolo progresso concreto." };
+        state.resultData = applyChoice(dossier, choice);
+        state.phase = "result";
+        save();
+        render();
+      });
+    });
+    var commissioneAudizioneBtn = document.getElementById("commissione-audizione-btn");
+    if (commissioneAudizioneBtn) {
+      commissioneAudizioneBtn.addEventListener("click", function () {
+        var p = state.player;
+        if (!p || !p.commissione || !p.commissione.isChair || state.turn < (p.commissioneAudizioneCooldownTurn || 0)) return;
+        p.commissioneAudizioneCooldownTurn = state.turn + COMMISSIONE_AUDIZIONE_COOLDOWN_TURNS;
+        var label = COMMISSIONE_LABELS[p.commissione.ministry];
+        var dossier = { title: "Audizione pubblica — " + label, cat: "Parlamento — Commissione" };
+        var choice = { label: "Convoca l'audizione", effects: { visibilita: rand(6, 10), reputazione: rand(3, 6) },
+          result: "L'audizione pubblica convocata in " + label + " richiama esperti, stampa e addetti ai lavori: un evento che rafforza la tua credibilità tecnica sul tema." };
+        state.resultData = applyChoice(dossier, choice);
+        state.phase = "result";
+        save();
+        render();
+      });
+    }
     var explorationHintDismissBtn = document.getElementById("exploration-hint-dismiss-btn");
     if (explorationHintDismissBtn) {
       explorationHintDismissBtn.addEventListener("click", function () {
@@ -29700,6 +30079,7 @@
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
     triggerLeaderSuccession();
+    checkCommissioneChairPromotion();
     updateForeignRelations();
     triggerEuMembershipShift();
     updateNatoEuStanding();
