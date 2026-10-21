@@ -19256,6 +19256,221 @@
     return html;
   }
 
+  // ---------- Grandi Opere Transnazionali (richieste da un giocatore) ----------
+  // Infrastrutture bilaterali di grande scala, gestite in pagina Esteri come le Organizzazioni
+  // Internazionali qui sopra: un solo cantiere alla volta (stesso pattern di p.organization), ma ogni
+  // opera completata resta un piccolo beneficio permanente (vedi driftTransnationalWorks sotto). Il tipo
+  // di opera vincola DAVVERO le nazioni disponibili — niente ferrovie o ponti con chi non confina via
+  // terra con l'Italia, niente gasdotti con chi non ha gas da esportarci, niente cavi sottomarini oltre
+  // il Mediterraneo e i mari limitrofi — proprio perché un ponte o un treno Italia-India, o un cavo
+  // sottomarino Italia-USA, non avrebbero alcun senso geografico.
+  var LANDLOCKED_NATION_IDS = ["svizzera", "austria", "ungheria"];
+  var LAND_BORDER_NATION_IDS = ["francia", "svizzera", "austria"];
+  var TRANSNATIONAL_WORK_TYPES = {
+    gasdotto: {
+      label: "Gasdotto", noun: "il gasdotto", icon: "🛢️", cost: 4200, weeks: 14,
+      desc: "Un nuovo gasdotto per diversificare l'approvvigionamento energetico: solo con nazioni che hanno davvero gas da esportare verso l'Italia.",
+      eligibleIds: ["russia", "norvegia", "turchia", "egitto"],
+      effects: { energia: 0.45, commercio: 0.15 }
+    },
+    cavo: {
+      label: "Cavo internet sottomarino", noun: "il cavo sottomarino", icon: "🌐", cost: 3400, weeks: 12,
+      desc: "Un cavo in fibra ottica sul fondale marino: realistico entro il Mediterraneo e i mari limitrofi, non attraverso un intero oceano.",
+      eligibleIds: ["francia", "spagna", "grecia", "croazia", "turchia", "egitto", "israele", "emiratiarabi"],
+      effects: { ricercaSviluppo: 0.3, commercio: 0.2 }
+    },
+    ponte: {
+      label: "Ponte transfrontaliero", noun: "il ponte", icon: "🌉", cost: 2600, weeks: 10,
+      desc: "Un ponte o un grande viadotto: serve davvero un confine terrestre comune con l'Italia.",
+      eligibleIds: LAND_BORDER_NATION_IDS,
+      effects: { economia: 0.25 }
+    },
+    ferrovia: {
+      label: "Tratta ferroviaria ad alta velocità", noun: "la tratta ferroviaria", icon: "🚄", cost: 5200, weeks: 18,
+      desc: "Una linea ad alta velocità transfrontaliera: possibile solo con chi condivide un confine terrestre con l'Italia.",
+      eligibleIds: LAND_BORDER_NATION_IDS,
+      effects: { economia: 0.2, trasporti: 0.45 }
+    },
+    porto: {
+      label: "Porto commerciale", noun: "il porto commerciale", icon: "⚓", cost: 3000, weeks: 10,
+      desc: "Un terminal portuale o una piattaforma logistica condivisa: raggiungibile per mare da quasi ogni grande partner commerciale.",
+      eligibleIds: WORLD_NATIONS.filter(function (n) { return LANDLOCKED_NATION_IDS.indexOf(n.id) === -1; }).map(function (n) { return n.id; }),
+      effects: { commercio: 0.35, relazioniDiplomatiche: 0.15 }
+    }
+  };
+  function ensureTransnationalWorks() {
+    if (!state.transnationalWorks) state.transnationalWorks = { active: null, completed: [] };
+    return state.transnationalWorks;
+  }
+  function resolveTransnationalWork(typeId, nationId) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return null;
+    var type = TRANSNATIONAL_WORK_TYPES[typeId];
+    var nation = WORLD_NATIONS.filter(function (n) { return n.id === nationId; })[0];
+    if (!type || !nation || type.eligibleIds.indexOf(nationId) === -1) return null;
+    var tw = ensureTransnationalWorks();
+    if (tw.active) return null;
+    if (p.fondi < type.cost) return null;
+    p.fondi -= type.cost;
+    recordFondiLedger("Avvio " + type.label.toLowerCase() + " con " + nation.name, -type.cost);
+    tw.active = { typeId: typeId, nationId: nationId, startTurn: state.turn, completeTurn: state.turn + type.weeks };
+    var resultText = "Il governo avvia " + type.noun + " in collaborazione con " + nation.name + ": i lavori dureranno circa " + type.weeks + " settimane.";
+    state.log.unshift({ week: state.turn, title: "Al via " + type.noun + " con " + nation.name, choiceLabel: nation.name, result: resultText, headlines: [], type: "geopolitica" });
+    return { resultText: resultText };
+  }
+  // Avanzamento settimanale del cantiere (se c'è) e piccolo beneficio permanente per ogni opera già
+  // completata: stesso principio delle Organizzazioni Internazionali, ma qui il beneficio non richiede
+  // alcun contributo settimanale, proprio perché è un'infrastruttura già realizzata, non un'alleanza da
+  // mantenere in vita.
+  function driftTransnationalWorks(p) {
+    var tw = ensureTransnationalWorks();
+    if (tw.active && state.turn >= tw.active.completeTurn) {
+      var type = TRANSNATIONAL_WORK_TYPES[tw.active.typeId];
+      var nation = WORLD_NATIONS.filter(function (n) { return n.id === tw.active.nationId; })[0];
+      if (type && nation) {
+        applyNationalEffects(type.effects, 1);
+        if (!state.foreignRelations) state.foreignRelations = {};
+        state.foreignRelations[nation.id] = clamp((state.foreignRelations[nation.id] || 50) + rand(10, 18), 0, 100);
+        if (!state.lastPositiveContactTurn) state.lastPositiveContactTurn = {};
+        state.lastPositiveContactTurn[nation.id] = state.turn;
+        p.reputazione = clamp(p.reputazione + rand(1, 2.5), 0, 100);
+        tw.completed.push({ typeId: tw.active.typeId, nationId: tw.active.nationId, completedTurn: state.turn });
+        var resultText = "Dopo settimane di lavori, " + type.noun + " con " + nation.name + " è completato: un beneficio permanente per il Paese e un salto nelle relazioni bilaterali.";
+        state.log.unshift({ week: state.turn, title: "Opera transnazionale completata: " + type.label + " con " + nation.name, choiceLabel: nation.name, result: resultText, headlines: [], type: "geopolitica" });
+        state.worldNews.unshift({ cat: "Esteri", text: type.label + " tra Italia e " + nation.name + " è ufficialmente operativo." });
+      }
+      tw.active = null;
+    }
+    tw.completed.forEach(function (c) {
+      var type = TRANSNATIONAL_WORK_TYPES[c.typeId];
+      if (!type) return;
+      Object.keys(type.effects).forEach(function (k) { applyCountryMetricDelta(k, 0.006); });
+    });
+  }
+  function renderTransnationalWorks() {
+    var p = state.player;
+    if (p.parliamentRole !== "governo") return "";
+    var tw = ensureTransnationalWorks();
+    var html = '<section aria-label="Grandi Opere Transnazionali"><details class="log"><summary>Grandi Opere Transnazionali<span>▾</span></summary>' +
+      '<p class="ci-hint">Infrastrutture bilaterali di grande scala costruite insieme a un\'altra nazione: un solo cantiere alla volta, ma ogni opera completata resta un beneficio permanente. Il tipo di opera scelto determina con quali nazioni è davvero possibile realizzarla.</p>';
+    if (tw.active) {
+      var activeType = TRANSNATIONAL_WORK_TYPES[tw.active.typeId];
+      var activeNation = WORLD_NATIONS.filter(function (n) { return n.id === tw.active.nationId; })[0];
+      var weeksLeft = Math.max(0, tw.active.completeTurn - state.turn);
+      html += '<p class="ci-hint"><strong>' + activeType.icon + " " + activeType.label + ' con ' + (activeNation ? activeNation.name : "?") + '</strong> — cantiere in corso, completamento tra ' + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + '.</p>';
+    } else {
+      html += '<div class="option-grid">' + Object.keys(TRANSNATIONAL_WORK_TYPES).map(function (typeId) {
+        var t = TRANSNATIONAL_WORK_TYPES[typeId];
+        var isOpen = expandedWorkTypeId === typeId;
+        return '<button type="button" class="option-card' + (isOpen ? " selected" : "") + '" data-work-type="' + typeId + '"><span class="olabel">' + t.icon + " " + t.label + '</span><span class="odesc">' + t.desc + " (" + fmtEuro(t.cost) + ", circa " + t.weeks + " settimane)</span></button>";
+      }).join("") + '</div>';
+      if (expandedWorkTypeId) {
+        var selType = TRANSNATIONAL_WORK_TYPES[expandedWorkTypeId];
+        var eligibleNations = WORLD_NATIONS.filter(function (n) { return selType.eligibleIds.indexOf(n.id) !== -1; });
+        html += '<div class="field"><label class="field-label">Con quale nazione realizzare ' + selType.noun + '?</label><div class="option-grid">' +
+          eligibleNations.map(function (n) {
+            return '<button type="button" class="option-card' + (expandedWorkNationId === n.id ? " selected" : "") + '" data-work-nation="' + n.id + '"><span class="olabel">' + n.name + '</span><span class="odesc">' + n.area + '</span></button>';
+          }).join("") + '</div></div>';
+        if (expandedWorkNationId) {
+          var disabled = p.fondi < selType.cost;
+          html += '<p class="ci-hint">Costo: <strong>' + fmtEuro(selType.cost) + '</strong> (hai ' + fmtEuro(p.fondi) + '), durata stimata ' + selType.weeks + ' settimane.</p>' +
+            '<button class="save-bar-btn primary" id="start-transnational-work-btn" type="button" style="align-self:flex-start"' + (disabled ? " disabled" : "") + '>Avvia il cantiere</button>';
+        }
+      }
+    }
+    if (tw.completed.length) {
+      html += '<p class="ci-hint" style="margin-top:0.8rem"><strong>Opere completate:</strong></p><ul class="log-list">' +
+        tw.completed.slice().reverse().map(function (c) {
+          var type = TRANSNATIONAL_WORK_TYPES[c.typeId];
+          var nation = WORLD_NATIONS.filter(function (n) { return n.id === c.nationId; })[0];
+          return '<li>' + (type ? type.icon + " " + type.label : c.typeId) + " con " + (nation ? nation.name : c.nationId) + " (settimana " + c.completedTurn + ")</li>";
+        }).join("") + '</ul>';
+    }
+    html += "</details></section>";
+    return html;
+  }
+
+  // ---------- Forum Globale sull'Ambiente (richiesto da un giocatore) ----------
+  // Una convocazione annuale riservata a chi guida davvero il governo (il Presidente del Consiglio, non
+  // un ministro qualunque): un bilancio dinamico della situazione climatica MONDIALE, non della sola
+  // Italia, con consigli a nazioni diverse scelti in base al loro reale orientamento ideologico (stessa
+  // famiglia politica già usata ovunque nel gioco, non una scala a parte), e scelte che pesano sia
+  // sull'Italia (Scheda Paese) sia, in piccola parte, sull'indice climatico globale stesso.
+  var ENVIRONMENTAL_FORUM_COOLDOWN_TURNS = 52;
+  var WORLD_CLIMATE_INDEX_DEFAULT = 58;
+  var CLIMATE_TIER_BY_FAMILY = {
+    fascista: "alto", sovranista: "alto", nazionalpopolare: "alto", monarchico: "alto", comunista: "alto",
+    liberale: "medio", libertario: "medio", cattolico: "medio", regionalista: "medio", meridionalista: "medio",
+    gratuitista: "medio", comunismolusso: "medio", movimentista: "medio",
+    progressista: "basso", tecnoprogressista: "basso", europeista: "basso"
+  };
+  var CLIMATE_ADVICE_TEMPLATES = {
+    alto: [
+      function (n) { return "Il forum chiede a " + n.name + " un piano vincolante per tagliare le emissioni dei settori più inquinanti, segnalando che i ritardi accumulati non sono più sostenibili."; },
+      function (n) { return n.name + " viene invitata a ridurre la dipendenza dai combustibili fossili, con un calendario preciso di dismissione degli impianti più vecchi."; }
+    ],
+    medio: [
+      function (n) { return "Il forum riconosce i progressi di " + n.name + " ma chiede di accelerare sugli obiettivi intermedi già fissati, senza nuovi rinvii."; },
+      function (n) { return "A " + n.name + " viene chiesto un salto di qualità sugli investimenti in rinnovabili, per non restare indietro rispetto ai partner più ambiziosi."; }
+    ],
+    basso: [
+      function (n) { return n.name + " viene citata come esempio da seguire, con l'invito a condividere le proprie tecnologie verdi con i partner in difficoltà."; },
+      function (n) { return "Il forum elogia la traiettoria di " + n.name + ", chiedendo di mantenere il ritmo degli investimenti nella transizione energetica."; }
+    ]
+  };
+  function ensureWorldClimateIndex() {
+    if (state.worldClimateIndex === undefined || state.worldClimateIndex === null) state.worldClimateIndex = WORLD_CLIMATE_INDEX_DEFAULT;
+    return state.worldClimateIndex;
+  }
+  // Deriva lentamente verso il peggio (in media circa -0.0175/settimana) se nessuno interviene, proprio
+  // come una vera crisi climatica non si ferma da sola: il Forum Globale sull'Ambiente è lo strumento
+  // per il Presidente del Consiglio per spingerlo nella direzione opposta, un anno alla volta.
+  function driftWorldClimateIndex() {
+    ensureWorldClimateIndex();
+    state.worldClimateIndex = clamp(state.worldClimateIndex + rand(-0.05, 0.015), 0, 100);
+  }
+  function worldClimateSeverityText(idx) {
+    if (idx >= 70) return "Il quadro globale resta impegnativo ma gestibile: diversi paesi mostrano segnali di progresso concreto sulla riduzione delle emissioni.";
+    if (idx >= 50) return "Il quadro globale è incerto: ai progressi di alcuni paesi si contrappongono i ritardi di altri, e gli obiettivi concordati restano a rischio.";
+    if (idx >= 30) return "Il quadro globale si fa preoccupante: gli eventi climatici estremi si moltiplicano e gli impegni presi finora non bastano a invertire la rotta.";
+    return "Il quadro globale è critico: la comunità scientifica parla apertamente di emergenza climatica, mentre i ritardi accumulati rendono sempre più difficile restare sotto le soglie di sicurezza.";
+  }
+  function checkEnvironmentalForumTrigger() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || !state.cabinet || state.cabinet.premierId !== "player") return false;
+    if (state.turn < (p.environmentalForumCooldownTurn || 0)) return false;
+    return Math.random() < 0.3;
+  }
+  function buildEnvironmentalForumDossier() {
+    var p = state.player;
+    p.environmentalForumCooldownTurn = state.turn + ENVIRONMENTAL_FORUM_COOLDOWN_TURNS;
+    var worldIdx = ensureWorldClimateIndex();
+    var picked = shuffleN(WORLD_NATIONS.slice(), Math.min(3, WORLD_NATIONS.length));
+    var adviceLines = picked.map(function (n) {
+      var tier = CLIMATE_TIER_BY_FAMILY[n.family] || "medio";
+      var pool = CLIMATE_ADVICE_TEMPLATES[tier];
+      return pool[Math.floor(Math.random() * pool.length)](n);
+    });
+    var italyAmb = state.countryProfile.ambientalismo;
+    var italyAdvice = italyAmb >= 6.5
+      ? "All'Italia viene riconosciuto un percorso di transizione solido, con l'invito a mantenerlo anche nei prossimi anni."
+      : italyAmb <= 3.5
+      ? "All'Italia viene chiesto con insistenza un piano più ambizioso sulla transizione energetica: i ritardi accumulati iniziano a pesare anche nei consessi internazionali."
+      : "All'Italia viene chiesto di accelerare gradualmente sulla transizione energetica, senza stravolgere il percorso già avviato.";
+    var brief = worldClimateSeverityText(worldIdx) + " " + adviceLines.join(" ") + " " + italyAdvice;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Forum Globale sull'Ambiente",
+      cat: "Geopolitica", title: "Il Forum Globale sull'Ambiente si riunisce per il bilancio annuale",
+      brief: brief,
+      choices: [
+        { label: "Annuncia impegni ambiziosi per l'Italia", hint: "Costa fondi e un po' di capitale politico interno, ma pesa sulla credibilità internazionale", effects: { fondi: -rand(700, 1000), reputazione: rand(1, 2), national: { ambientalismo: 0.8, energia: 0.3 }, worldClimateIndexDelta: rand(1, 2) }, result: "L'Italia annuncia nuovi impegni ambiziosi al forum: la mossa pesa sul bilancio ma rafforza la credibilità internazionale del governo." },
+        { label: "Proponi un piano equilibrato tra ambiente e industria", hint: "Effetto più contenuto, costo minore", effects: { fondi: -rand(250, 400), national: { ambientalismo: 0.35 }, worldClimateIndexDelta: rand(0.3, 0.6) }, result: "Il governo propone al forum una linea di equilibrio tra obiettivi ambientali e tutela del tessuto industriale." },
+        { label: "Difendi le priorità industriali italiane, frenando sugli obiettivi più ambiziosi", hint: "Nessun costo, ma critiche dai partner più verdi", effects: { reputazione: -rand(1, 2), national: { ambientalismo: -0.3 }, worldClimateIndexDelta: -rand(0.2, 0.5) }, result: "Il governo frena sugli obiettivi più ambiziosi per tutelare l'industria nazionale: i partner più verdi criticano la scelta." },
+        { label: "Partecipa solo formalmente, senza impegni vincolanti", hint: "Nessun costo né guadagno", effects: { worldClimateIndexDelta: -rand(0.1, 0.2) }, result: "Il governo partecipa al forum senza assumere impegni vincolanti: una presenza più formale che sostanziale." }
+      ]
+    };
+  }
+
   function generateGeopoliticaDossier(domainId) {
     var domain = GEOPOLITICA_DOMAINS.filter(function (d) { return d.id === domainId; })[0];
     if (!domain) return null;
@@ -19959,6 +20174,10 @@
         state.foreignLeaderRapport[targetNationForLeader.id] = clamp(curLeaderRapport + eff.leaderRapportDelta.delta, 5, 95);
       }
     }
+    // Leva diretta sull'indice climatico MONDIALE (vedi buildEnvironmentalForumDossier): a differenza del
+    // lento drift passivo di driftWorldClimateIndex, qui una scelta esplicita del Presidente del
+    // Consiglio al Forum Globale sull'Ambiente sposta subito l'indice, in un senso o nell'altro.
+    if (eff.worldClimateIndexDelta) state.worldClimateIndex = clamp(ensureWorldClimateIndex() + eff.worldClimateIndexDelta, 0, 100);
 
     var outlets = pickN(OUTLETS, 3);
     var headlines = outlets.map(function (o) { return { outlet: o.name, text: generateHeadlineText(o, dossier, choice, p) }; });
@@ -20138,6 +20357,8 @@
     driftConsensoGoverno();
     driftYouthWing(p);
     driftMinistryFund(p);
+    driftTransnationalWorks(p);
+    driftWorldClimateIndex();
     triggerAmbientStatements();
     triggerConflictStatement();
 
@@ -27779,7 +28000,7 @@
       visible: function () { return !!(state.player && state.playerMinistry && state.cabinet && state.cabinet.premierId !== "player"); },
       render: function () { return renderMinisteroPage(); } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", icon: "🌍", nav: "Estero", render: function () {
-        return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
+        return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations() + renderTransnationalWorks();
       } },
     { id: "coalizioni", label: "Coalizioni e Alleanze", icon: "🤝", nav: "Alleanze", render: function () {
         return renderReunificationPanel() + renderCoalitionPanel();
@@ -27824,6 +28045,11 @@
   // Quale settore economico è espanso in questo momento nel pannello "Economia Settoriale": stesso
   // pattern di expandedNationId sopra, puro stato di interfaccia.
   var expandedSectorId = null;
+  // Quale tipo di Grande Opera Transnazionale è espanso (e con quale nazione), per scegliere
+  // tipo → nazione in due passaggi: stesso pattern di expandedNationId/expandedSectorId sopra, puro
+  // stato di interfaccia.
+  var expandedWorkTypeId = null;
+  var expandedWorkNationId = null;
   // Quale tema è espanso nelle pagine Leggi Regionali/Mozioni Regionali (vedi renderRegionalLeggiPage/
   // renderRegionalMozioniPage): stesso pattern di expandedMetricTile sopra, puro stato di interfaccia.
   var expandedRegionalLawThemeId = null;
@@ -30773,6 +30999,34 @@
         render();
       });
     });
+    app.querySelectorAll("[data-work-type]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-work-type");
+        expandedWorkTypeId = expandedWorkTypeId === id ? null : id;
+        expandedWorkNationId = null;
+        render();
+      });
+    });
+    app.querySelectorAll("[data-work-nation]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-work-nation");
+        expandedWorkNationId = expandedWorkNationId === id ? null : id;
+        render();
+      });
+    });
+    var startWorkBtn = document.getElementById("start-transnational-work-btn");
+    if (startWorkBtn) {
+      startWorkBtn.addEventListener("click", function () {
+        if (startWorkBtn.disabled) return;
+        var res = resolveTransnationalWork(expandedWorkTypeId, expandedWorkNationId);
+        if (!res) { showSaveStatus("Non puoi avviare questo cantiere (fondi insufficienti o un altro cantiere già in corso).", true); return; }
+        expandedWorkTypeId = null;
+        expandedWorkNationId = null;
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    }
     app.querySelectorAll("[data-sector-tile]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-sector-tile");
@@ -31813,6 +32067,13 @@
 
     if (checkForeignLeaderEventTrigger()) {
       state.aiDynamicDossier = buildForeignLeaderEventDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (checkEnvironmentalForumTrigger()) {
+      state.aiDynamicDossier = buildEnvironmentalForumDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
