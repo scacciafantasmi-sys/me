@@ -1731,7 +1731,11 @@
     var region = CONFLICT_REGIONS[Math.floor(Math.random() * CONFLICT_REGIONS.length)];
     var involvedA = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
     var involvedB = WORLD_NATIONS.filter(function (n) { return n.id !== involvedA.id; })[Math.floor(Math.random() * (WORLD_NATIONS.length - 1))];
-    var conflict = { id: "conflict_" + state.turn, region: region, sideA: involvedA.name, sideB: involvedB.name, startWeek: state.turn, resolveTurn: state.turn + 20 + Math.floor(Math.random() * 20), supportedSide: null };
+    // sideAId/sideBId (oltre ai nomi già usati per il testo): servono a collegare il conflitto alle
+    // vere relazioni con l'estero (state.foreignRelations) e all'area politica reale della nazione
+    // (WORLD_NATIONS[].family) — usati dal sostegno continuativo (renderGeopoliticalTensionPanel) e
+    // dalle dichiarazioni dei leader di partito (triggerConflictStatement).
+    var conflict = { id: "conflict_" + state.turn, region: region, sideA: involvedA.name, sideB: involvedB.name, sideAId: involvedA.id, sideBId: involvedB.id, startWeek: state.turn, resolveTurn: state.turn + 20 + Math.floor(Math.random() * 20), supportedSide: null };
     state.activeConflicts.push(conflict);
     state.geopoliticalTension = clamp(state.geopoliticalTension + rand(5, 12), 0, 100);
     return {
@@ -1778,6 +1782,38 @@
       state.worldNews.unshift({ cat: "Politica Estera", text: text });
     });
     if (state.worldNews && state.worldNews.length > 6) state.worldNews.length = 6;
+  }
+  // Sostegno continuativo a un lato di un conflitto in corso (richiesto da un giocatore): a differenza
+  // della postura scelta una sola volta all'apertura del conflitto, questo è un vero gesto di soft power
+  // ripetibile, che sposta davvero le relazioni con l'estero verso entrambi i paesi coinvolti — mai solo
+  // verso chi si sostiene, SEMPRE anche (in negativo) verso l'altro lato, coerente col fatto che
+  // schierarsi fa sempre arrabbiare qualcuno.
+  function resolveConflictSupport(conflictId, side) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return null;
+    var conflict = (state.activeConflicts || []).filter(function (c) { return c.id === conflictId; })[0];
+    if (!conflict) return null;
+    if (!p.conflictSupportCooldowns) p.conflictSupportCooldowns = {};
+    if (state.turn < (p.conflictSupportCooldowns[conflictId] || 0)) return null;
+    if (p.fondi < CONFLICT_SUPPORT_COST) return null;
+    var supportedId = side === "sideA" ? conflict.sideAId : conflict.sideBId;
+    var otherId = side === "sideA" ? conflict.sideBId : conflict.sideAId;
+    var supportedNation = WORLD_NATIONS.filter(function (n) { return n.id === supportedId; })[0];
+    var otherNation = WORLD_NATIONS.filter(function (n) { return n.id === otherId; })[0];
+    if (!supportedNation || !otherNation) return null;
+    p.fondi -= CONFLICT_SUPPORT_COST;
+    recordFondiLedger("Sostegno diplomatico a " + supportedNation.name + " (" + conflict.region + ")", -CONFLICT_SUPPORT_COST);
+    p.conflictSupportCooldowns[conflictId] = state.turn + CONFLICT_SUPPORT_COOLDOWN_TURNS;
+    conflict.supportedSide = side;
+    if (!state.foreignRelations) state.foreignRelations = {};
+    var curSupported = state.foreignRelations[supportedId] !== undefined ? state.foreignRelations[supportedId] : 50;
+    var curOther = state.foreignRelations[otherId] !== undefined ? state.foreignRelations[otherId] : 50;
+    state.foreignRelations[supportedId] = clamp(curSupported + rand(5, 9), 0, 100);
+    state.foreignRelations[otherId] = clamp(curOther - rand(4, 8), 0, 100);
+    p.reputazione = clamp(p.reputazione + rand(0.2, 0.6), 0, 100);
+    var resultText = "Il Governo rafforza apertamente il sostegno a " + supportedNation.name + " nel conflitto in " + conflict.region + ": i rapporti con " + supportedNation.name + " migliorano, ma " + otherNation.name + " non la prende bene.";
+    state.log.unshift({ week: state.turn, title: "Sostegno diplomatico rafforzato", choiceLabel: supportedNation.name, result: resultText, headlines: [], type: "dossier", cat: "Politica Estera" });
+    return { resultText: resultText, headlines: [] };
   }
   var WORLD_WAR_TENSION_THRESHOLD = 88;
   var WORLD_WAR_MIN_ACTIVE_CONFLICTS = 2;
@@ -1919,9 +1955,37 @@
     if (state.activeConflicts.length) {
       html += '<p class="ci-hint">In corso: ' + state.activeConflicts.map(function (c) { return c.sideA + " contro " + c.sideB + " (" + c.region + ")"; }).join("; ") + '.</p>';
     }
+    // Richiesto da un giocatore: prima la postura su un conflitto regionale si sceglieva UNA SOLA volta,
+    // al momento in cui scoppiava, e restava fissa per tutta la sua durata (20-40 settimane) — nessun
+    // vero "soft power" continuativo. Chi governa può ora rinforzare il sostegno a un lato in corsa
+    // d'opera: alza davvero le relazioni con l'estero (state.foreignRelations) verso chi sostiene, le
+    // abbassa verso l'altro lato — un vantaggio diplomatico reale, al prezzo di far arrabbiare
+    // l'avversario, non un gesto simbolico senza conseguenze.
+    if (p.parliamentRole === "governo" && state.activeConflicts.length) {
+      if (!p.conflictSupportCooldowns) p.conflictSupportCooldowns = {};
+      html += '<p class="eyebrow" style="margin-top:0.6rem">Sostegno diplomatico ai conflitti in corso</p>';
+      state.activeConflicts.forEach(function (c) {
+        var nationA = WORLD_NATIONS.filter(function (n) { return n.id === c.sideAId; })[0];
+        var nationB = WORLD_NATIONS.filter(function (n) { return n.id === c.sideBId; })[0];
+        if (!nationA || !nationB) return;
+        var cd = p.conflictSupportCooldowns[c.id] || 0;
+        var weeksLeft = cd - state.turn;
+        var disabled = weeksLeft > 0 || p.fondi < CONFLICT_SUPPORT_COST;
+        var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+          : p.fondi < CONFLICT_SUPPORT_COST ? "Fondi insufficienti (" + fmtEuro(CONFLICT_SUPPORT_COST) + ")" : "Costo: " + fmtEuro(CONFLICT_SUPPORT_COST);
+        var currentStance = c.supportedSide === "sideA" ? ("Sostieni attualmente " + nationA.name)
+          : c.supportedSide === "sideB" ? ("Sostieni attualmente " + nationB.name) : "Nessun lato sostenuto attivamente";
+        html += '<p class="ci-hint" style="margin:0.3rem 0">' + c.region + ' (' + c.sideA + ' contro ' + c.sideB + ') — ' + currentStance + '.</p><div class="option-grid">' +
+          '<button type="button" class="option-card" data-conflict-support="' + c.id + '::sideA"' + (disabled ? " disabled" : "") + '><span class="olabel">Rafforza il sostegno a ' + nationA.name + '</span><span class="odesc">' + status + '</span></button>' +
+          '<button type="button" class="option-card" data-conflict-support="' + c.id + '::sideB"' + (disabled ? " disabled" : "") + '><span class="olabel">Rafforza il sostegno a ' + nationB.name + '</span><span class="odesc">' + status + '</span></button>' +
+          '</div>';
+      });
+    }
     html += "</section>";
     return html;
   }
+  var CONFLICT_SUPPORT_COST = 1100;
+  var CONFLICT_SUPPORT_COOLDOWN_TURNS = 6;
 
   // ---------- Politica Fiscale: aliquote reali italiane, modulabili da chi governa ----------
   // Parte dai valori veri (IRPEF a scaglioni, IVA, IRES) e ogni intervento ha due effetti distinti: uno
@@ -12555,6 +12619,66 @@
     var fig = pool[Math.floor(Math.random() * pool.length)];
     return { name: generateStaffName(), role: fig.role, color: null, familyId: null, toneWeights: fig.weights };
   }
+  // ---------- Dichiarazioni dei leader di partito sui conflitti internazionali (richiesto da un
+  // giocatore) ---------- Prima i conflitti regionali (state.activeConflicts) non lasciavano traccia
+  // alcuna nel registro delle dichiarazioni: nessun leader si schierava mai, indipendentemente da quanto
+  // la propria area politica fosse vicina o lontana da uno dei due paesi coinvolti. Qui si riusa la
+  // stessa scala ideologica sinistra-destra già impiegata per le coalizioni e il Salotto TV
+  // (LEFT_RIGHT_POSITION, applicata sia all'area politica del leader sia a quella REALE della nazione,
+  // WORLD_NATIONS[].family): un leader la cui area è vicina a quella di un paese coinvolto si schiera
+  // apertamente con lui, uno lontano da entrambi chiede prudenza/mediazione — mai a caso. Ogni tanto,
+  // se uno dei due paesi è nell'Unione Europea, la dichiarazione arriva direttamente da Bruxelles
+  // (un'istituzione, non un partito italiano), coerente con una vera crisi che coinvolge l'UE.
+  var CONFLICT_IDEOLOGY_CLOSE_ENOUGH = 2;
+  function triggerConflictStatement() {
+    if (!state.activeConflicts || !state.activeConflicts.length) return;
+    if (Math.random() > 0.3) return;
+    var conflict = state.activeConflicts[Math.floor(Math.random() * state.activeConflicts.length)];
+    var nationA = WORLD_NATIONS.filter(function (n) { return n.id === conflict.sideAId; })[0];
+    var nationB = WORLD_NATIONS.filter(function (n) { return n.id === conflict.sideBId; })[0];
+    if (!nationA || !nationB) return;
+    if ((nationA.isEU || nationB.isEU) && Math.random() < 0.3) {
+      var euSide = nationA.isEU ? nationA : nationB;
+      pushStatement({
+        week: state.turn, authorName: "Portavoce della Commissione Europea", authorRole: "Unione Europea",
+        authorColor: "#003399", authorPhoto: null, isPlayer: false, topicLabel: "Conflitto in " + conflict.region,
+        themeMetric: null, matchedKeyword: null, detectedTone: "istituzionale", authorFamilyId: null,
+        text: "La Commissione Europea esprime preoccupazione per l'escalation del conflitto in " + conflict.region + " e valuta nuove misure a sostegno di " + euSide.name + "."
+      });
+      return;
+    }
+    var author = pickAmbientAuthor();
+    if (!author.familyId) return;
+    var posSelf = LEFT_RIGHT_POSITION[author.familyId];
+    var posA = LEFT_RIGHT_POSITION[nationA.family];
+    var posB = LEFT_RIGHT_POSITION[nationB.family];
+    if (posSelf === undefined || posA === undefined || posB === undefined) return;
+    var distA = Math.abs(posSelf - posA), distB = Math.abs(posSelf - posB);
+    var preferred = null;
+    if (distA < distB && distA <= CONFLICT_IDEOLOGY_CLOSE_ENOUGH) preferred = nationA;
+    else if (distB < distA && distB <= CONFLICT_IDEOLOGY_CLOSE_ENOUGH) preferred = nationB;
+    var text;
+    if (preferred) {
+      var supportTpls = [
+        function (n) { return "esprime piena solidarietà a " + n.name + " nel conflitto in " + conflict.region + ", chiedendo al Governo di fare di più per sostenerla."; },
+        function (n) { return "si schiera apertamente con " + n.name + ", definendo la sua causa nel conflitto in " + conflict.region + " pienamente legittima."; },
+        function (n) { return "chiede al Governo di intensificare subito il sostegno a " + n.name + " nella crisi di " + conflict.region + "."; }
+      ];
+      text = author.name + " " + supportTpls[Math.floor(Math.random() * supportTpls.length)](preferred);
+    } else {
+      var neutralTpls = [
+        "invita alla massima prudenza sul conflitto in " + conflict.region + ", senza schierarsi apertamente con nessuna delle due parti.",
+        "chiede una mediazione internazionale per il conflitto in " + conflict.region + ", senza prendere posizione tra " + conflict.sideA + " e " + conflict.sideB + "."
+      ];
+      text = author.name + " " + neutralTpls[Math.floor(Math.random() * neutralTpls.length)];
+    }
+    pushStatement({
+      week: state.turn, authorName: author.name, authorRole: author.role, authorColor: author.color, authorPhoto: null,
+      isPlayer: false, topicLabel: "Conflitto in " + conflict.region, themeMetric: null, matchedKeyword: null,
+      detectedTone: preferred ? "aggressivo" : "istituzionale", authorFamilyId: author.familyId || null,
+      text: text
+    });
+  }
   function triggerAmbientStatements() {
     if (Math.random() > 0.5) return;
     // Solo temi della Scheda Paese, mai le "notizie recenti" del registro: quei titoli sono pensati per
@@ -20015,6 +20139,7 @@
     driftYouthWing(p);
     driftMinistryFund(p);
     triggerAmbientStatements();
+    triggerConflictStatement();
 
     var commDigMember = staffMember("comunicazione_digitale");
     var commDigSkill = commDigMember ? (commDigMember.skillMult !== undefined ? commDigMember.skillMult : 1) : 0;
@@ -30632,6 +30757,17 @@
         var parts = btn.getAttribute("data-nation-action").split(":");
         var res = resolveNationAction(parts[0], parts[1]);
         if (!res) { showSaveStatus("Non puoi ancora agire su questa nazione (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-conflict-support]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var parts = btn.getAttribute("data-conflict-support").split("::");
+        var res = resolveConflictSupport(parts[0], parts[1]);
+        if (!res) { showSaveStatus("Non puoi ancora rafforzare il sostegno a questo conflitto (fondi o tempo di recupero insufficienti).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
