@@ -15164,19 +15164,50 @@
   // come un golpe riuscito o un tentativo di guerra civile vittorioso (stesso pattern di stato riusato qui
   // sotto). Se il paese era sotto un regime, la rivoluzione lo travolge e riporta la democrazia.
   function checkPopularRevolutionTrigger() {
+    if (state.collapseSaga && state.collapseSaga.active) return false;
+    if (state.uprisingSaga && state.uprisingSaga.active) return false;
     if (!state.countryProfile || state.countryProfile.felicita === undefined) return false;
     if (state.countryProfile.felicita >= 2) return false;
     if (state.snapElectionPending) return false;
     if (state.turn < (state.popularRevolutionCooldownTurn || 0)) return false;
     return true;
   }
-  function triggerPopularRevolutionIfDue() {
-    if (!checkPopularRevolutionTrigger()) return null;
-    // Raffreddamento lungo (non solo per evitare un doppio scatto nella stessa settimana): il nuovo
-    // governo uscito dalle urne merita un po' di tempo per invertire la rotta prima che il paese possa
-    // insorgere di nuovo, altrimenti un benessere sociale rimasto basso scatenerebbe una rivoluzione dietro
-    // l'altra ad ogni elezione.
+  // Richiesto da un giocatore: prima la rivoluzione popolare risolveva tutto all'istante, in un solo
+  // dossier. Ora, con lo stesso principio già usato per uprisingSaga sopra, diventa una vera saga
+  // narrata di 4-5 settimane — scioperi e cortei raccontati città per città, con motivazioni legate alla
+  // situazione reale del paese — prima dell'epilogo che porta comunque, senza eccezioni, alle dimissioni
+  // del governo (qui non c'è un esito incerto da calcolare: con la felicità sotto 2/10 il collasso è già
+  // in corso, la saga ne racconta solo lo svolgimento).
+  function startCollapseSaga() {
     state.popularRevolutionCooldownTurn = state.turn + 30;
+    state.collapseSaga = { active: true, stage: 0, totalStages: Math.floor(rand(4, 6)), citiesUsed: [] };
+    state.log.unshift({
+      week: state.turn, title: "Il paese scivola nel caos", choiceLabel: "Benessere sociale crollato",
+      result: "Con il benessere sociale crollato a " + fmt1(state.countryProfile.felicita) + "/10, le prime avvisaglie di una crisi sociale senza precedenti si moltiplicano in tutto il paese: scioperi generali e cortei permanenti cominciano a paralizzare le grandi città.",
+      headlines: [], type: "istituzioni", cat: "Istituzioni"
+    });
+  }
+  function buildCollapseCityDossier() {
+    var saga = state.collapseSaga;
+    var city = pickUprisingCity(saga);
+    saga.citiesUsed.push(city);
+    var reason = uprisingProtestReason();
+    var govLabelNow = govEntityLabel() || "Il governo in carica";
+    var brief = "A " + city + " scioperi generali e cortei permanenti paralizzano la città, spinti soprattutto da " + reason + ". " + govLabelNow + " non riesce a offrire risposte convincenti, mentre la crisi sociale si allarga di settimana in settimana.";
+    var choices = [
+      { label: "Prometti misure straordinarie immediate", hint: "Tenta di guadagnare tempo", effects: { reputazione: rand(-1, 2) }, result: "Le misure straordinarie promesse non bastano a fermare la protesta a " + city + "." },
+      { label: "Ordina il contenimento delle piazze", hint: "Linea dura, rischia di peggiorare le cose", effects: { reputazione: -rand(1, 3), national: { sicurezza: 0.2, felicita: -0.2 } }, result: "Il contenimento delle piazze a " + city + " non spegne la rabbia sociale." },
+      { label: "Lascia che la crisi segua il suo corso", hint: "Nessun intervento diretto", effects: {}, result: "La crisi a " + city + " continua al proprio ritmo, senza una vera risposta del governo." }
+    ];
+    saga.stage++;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: "Crisi Sociale — settimana " + saga.stage + " di " + saga.totalStages, cat: "Istituzioni",
+      title: "Il paese in crisi — " + city, brief: brief, choices: choices
+    };
+  }
+  function buildCollapseResolutionDossier() {
+    state.collapseSaga = null;
     var wasRegime = !!state.regime;
     var regimeLabel = wasRegime ? regimeLabelName(state.regime.type) : null;
     var govLabelBefore = govEntityLabel() || "Il governo in carica";
@@ -15207,8 +15238,8 @@
     state.govEntity = null;
     state.snapElectionPending = true;
     state.nextElectionTurn = state.turn + 8;
-    var text = "Con il benessere sociale crollato a " + fmt1(state.countryProfile.felicita) + "/10, una vera e propria rivoluzione popolare attraversa il paese: scioperi generali, cortei permanenti e piazze occupate per settimane. " +
-      (wasRegime ? regimeLabel + " viene travolto: il regime cade e la democrazia torna in vigore" : govLabelBefore + " non regge alla pressione della piazza e cade") +
+    var text = "Dopo settimane di scioperi generali, cortei permanenti e piazze occupate, con il benessere sociale rimasto crollato a " + fmt1(state.countryProfile.felicita) + "/10, la rivoluzione popolare travolge il paese: " +
+      (wasRegime ? regimeLabel + " viene travolto: il regime cade e la democrazia torna in vigore" : govLabelBefore + " non regge più alla pressione della piazza e cade") +
       ". Chi era al governo ne esce dimezzato nei sondaggi: l'opinione pubblica non perdona chi ha lasciato precipitare il paese a questo punto. Si torna al voto, con una campagna lampo nel pieno di una crisi sociale senza precedenti.";
     state.log.unshift({ week: state.turn, title: "Rivoluzione Popolare: il governo cade", choiceLabel: "Crisi sociale", result: text, headlines: [], type: "istituzioni", cat: "Istituzioni" });
     if (!state.worldNews) state.worldNews = [];
@@ -15219,6 +15250,18 @@
       cat: "Istituzioni", title: "Il paese insorge: il governo cade", brief: text,
       choices: [{ label: "Prendo atto", hint: "Si torna subito al voto", effects: {}, result: "Il paese si prepara a una campagna elettorale lampo, nel pieno di una crisi sociale senza precedenti." }]
     };
+  }
+  // Punto di ingresso unico, chiamato ogni settimana nello stesso punto ad altissima priorità dove
+  // prima viveva la vecchia rivoluzione istantanea: se la saga è già attiva ne racconta il prossimo
+  // capitolo (o la risolve, a epilogo raggiunto), altrimenti verifica se è il momento di farla partire.
+  function resolveCollapseSagaIfDue() {
+    if (state.collapseSaga && state.collapseSaga.active) {
+      if (state.collapseSaga.stage < state.collapseSaga.totalStages) return buildCollapseCityDossier();
+      return buildCollapseResolutionDossier();
+    }
+    if (!checkPopularRevolutionTrigger()) return null;
+    startCollapseSaga();
+    return buildCollapseCityDossier();
   }
 
   // ---------- Mandato esplorativo del Presidente della Repubblica ----------
@@ -16589,7 +16632,7 @@
     // Stessa priorità assoluta della catena di turno normale (vedi triggerPopularRevolutionIfDue): il
     // Presidente della Repubblica resta in carica per il proprio mandato, ma il Governo in Parlamento può
     // comunque cadere sotto di lui, esattamente come già succede per il crollo di consenso qui sotto.
-    var presRevolutionDossier = triggerPopularRevolutionIfDue();
+    var presRevolutionDossier = resolveCollapseSagaIfDue();
     if (presRevolutionDossier) {
       state.aiDynamicDossier = presRevolutionDossier;
       state.currentDossierId = "ai_dynamic";
@@ -19125,7 +19168,7 @@
     var p = state.player;
     var isGoverno = p.parliamentRole === "governo";
     if (!p.sectorInvestCooldowns) p.sectorInvestCooldowns = {};
-    var html = '<section aria-label="Economia Settoriale"><details class="log"><summary>Economia Settoriale<span>▾</span></summary>' +
+    var html = '<section aria-label="Economia Settoriale"><details class="log" open><summary>Economia Settoriale<span>▾</span></summary>' +
       '<p class="ci-hint">Uno spaccato per settore dell\'economia reale, da 1 (in crisi) a 10 (in forte crescita): si muove lentamente in modo indipendente, restando comunque legato all\'andamento generale dell\'economia nella Scheda Paese.' +
       (isGoverno ? " Tocca un settore per investirci direttamente." : "") + '</p><div class="party-directory">';
     html += ECONOMY_SECTORS.map(function (s) {
@@ -19356,7 +19399,7 @@
     var p = state.player;
     if (p.parliamentRole !== "governo") return "";
     var tw = ensureTransnationalWorks();
-    var html = '<section aria-label="Grandi Opere Transnazionali"><details class="log"><summary>Grandi Opere Transnazionali<span>▾</span></summary>' +
+    var html = '<section aria-label="Grandi Opere Transnazionali"><details class="log" open><summary>Grandi Opere Transnazionali<span>▾</span></summary>' +
       '<p class="ci-hint">Infrastrutture bilaterali di grande scala costruite insieme a un\'altra nazione: un solo cantiere alla volta, ma ogni opera completata resta un beneficio permanente. Il tipo di opera scelto determina con quali nazioni è davvero possibile realizzarla.</p>';
     if (tw.active) {
       var activeType = TRANSNATIONAL_WORK_TYPES[tw.active.typeId];
@@ -19611,7 +19654,7 @@
     pendingGovFormationNegotiation: null,
     playerMinistry: null, regionalPresidency: null, pendingRegionalElectionResult: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, liraAnnounced: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
-    uprisingSaga: null, cpuUprisingCooldownTurn: 0, pendingDictatorVerdictTurn: null, fallenRegimeMemory: null,
+    uprisingSaga: null, cpuUprisingCooldownTurn: 0, pendingDictatorVerdictTurn: null, fallenRegimeMemory: null, collapseSaga: null,
     salarioMinimoAttivo: false, salarioMinimoNetto: null,
     bilancioStato: { entrate: 920, uscite: 979 },
     budgetAllocations: {}, lastBudgetReviewTurn: 0, budgetHistory: [], lastPartyTaxTurn: 0, lastYearBudgetAllocations: {},
@@ -21018,6 +21061,7 @@
     var p = state.player;
     if (!state.regime || !state.regime.isPlayer) return false;
     if (state.uprisingSaga && state.uprisingSaga.active) return false;
+    if (state.collapseSaga && state.collapseSaga.active) return false;
     if (state.turn < (state.cpuUprisingCooldownTurn || 0)) return false;
     if ((state.turn - state.regime.since) < CPU_UPRISING_MIN_TURNS_SINCE_REGIME) return false;
     var support = Math.min(p.sondaggi, state.consensoGoverno !== undefined ? state.consensoGoverno : p.sondaggi);
@@ -21210,6 +21254,11 @@
     var html = '<section aria-label="Opposizione al Regime"><details class="log"><summary>Opposizione al Regime<span>▾</span></summary>';
     if (state.uprisingSaga && state.uprisingSaga.active) {
       html += '<p class="ci-hint">Le piazze sono già in subbuglio contro ' + regimeLabelName(state.regime.type) + ': segui gli sviluppi della rivolta popolare nei prossimi dossier della settimana.</p>';
+      html += "</details></section>";
+      return html;
+    }
+    if (state.collapseSaga && state.collapseSaga.active) {
+      html += '<p class="ci-hint">Il paese è già travolto da una crisi sociale spontanea: segui gli sviluppi nei prossimi dossier della settimana, prima di poter tentare qualunque altra azione contro il regime.</p>';
       html += "</details></section>";
       return html;
     }
@@ -24990,37 +25039,120 @@
     if (avg >= 3.5) return "Difficili";
     return "Bui";
   }
+  // Richiesto da un giocatore: lo storico mostrava solo "Legislatura N" come nome, senza dire quale
+  // governo fosse stato davvero (un partito solo? una coalizione? quali partiti?). Questa funzione
+  // costruisce un nome leggibile della composizione di governo, elencando sempre i partiti coinvolti.
+  function describeLegislatureGovernment(ge) {
+    if (!ge || !ge.memberIds || !ge.memberIds.length) return "Nessun governo definito";
+    var names = ge.memberIds.map(function (id) {
+      if (id === "player") return state.player ? state.player.name : "il tuo partito";
+      var party = partyById(id);
+      return party ? party.name : id;
+    });
+    if (names.length === 1) return "Governo monocolore di " + names[0];
+    var coal = coalitionById(ge.id);
+    if (coal) return "Governo di " + coal.label + " (" + names.join(", ") + ")";
+    return "Governo di coalizione tra " + names.length + " partiti (" + names.join(", ") + ")";
+  }
   function closeCurrentEpoch() {
     var e = state.currentEpoch;
     if (!e) return;
     var samples = e.moodSamples && e.moodSamples.length ? e.moodSamples : [5.5];
     var avgMood = samples.reduce(function (s, v) { return s + v; }, 0) / samples.length;
     var name = e.regimeType
-      ? "Gli Anni di " + REGIME_LABELS[e.regimeType].name
+      ? "Gli Anni di " + regimeLabelName(e.regimeType)
       : "Gli Anni " + epochMoodDescriptor(avgMood) + " " + (e.govLabel ? "del " + e.govLabel : "");
     var summary = (e.govLabel || "Nessun governo definito") + " ha guidato il paese dalla settimana " + e.startWeek +
       " alla " + state.turn + " (" + (state.turn - e.startWeek) + " settimane, Legislatura " + e.legislature + "), con un clima nazionale medio " +
-      epochMoodDescriptor(avgMood).toLowerCase() + " (" + fmt1(avgMood) + "/10)" + (e.regimeType ? ", sotto " + REGIME_LABELS[e.regimeType].name + "." : ".");
+      epochMoodDescriptor(avgMood).toLowerCase() + " (" + fmt1(avgMood) + "/10)" + (e.regimeType ? ", sotto " + regimeLabelName(e.regimeType) + "." : ".");
+    // Leggi/mozioni/referendum/emendamenti della legislatura appena chiusa: state.policyHistory porta già
+    // il campo "legislature" su ogni voce (vedi recordPolicyOutcome), basta filtrare per quello.
+    var legislaturePolicies = (state.policyHistory || []).filter(function (ph) { return ph.legislature === e.legislature; });
+    var passedPolicies = legislaturePolicies.filter(function (ph) { return ph.passed; });
+    var rejectedPolicies = legislaturePolicies.filter(function (ph) { return !ph.passed; });
+    // Spesa per voce durante la legislatura: dal fondiLedger (già esistente, vedi recordFondiLedger),
+    // aggregata per etichetta e limitata alle sole uscite (delta negativo) — "dove sono stati stanziati i
+    // fondi", non ogni singolo movimento di cassa.
+    var legislatureLedger = (state.fondiLedger || []).filter(function (f) { return f.week >= e.startWeek && f.week <= state.turn; });
+    var spendingByLabel = {};
+    legislatureLedger.forEach(function (f) { if (f.delta < 0) spendingByLabel[f.label] = (spendingByLabel[f.label] || 0) + f.delta; });
+    var spendingBreakdown = Object.keys(spendingByLabel).map(function (k) { return { label: k, total: spendingByLabel[k] }; })
+      .sort(function (a, b) { return a.total - b.total; }).slice(0, 8);
+    // Miglioramenti/peggioramenti della Scheda Paese dall'inizio alla fine della legislatura: confronto
+    // tra l'istantanea presa all'apertura (e.profileStart, vedi openNewEpoch) e il valore attuale.
+    var profileStart = e.profileStart || {};
+    var profileDeltas = Object.keys(state.countryProfile).map(function (k) {
+      if (profileStart[k] === undefined || typeof state.countryProfile[k] !== "number") return null;
+      var d = state.countryProfile[k] - profileStart[k];
+      return Math.abs(d) >= 0.3 ? { key: k, label: METRIC_LABELS[k] || k, delta: d } : null;
+    }).filter(function (x) { return x; });
+    var improvements = profileDeltas.filter(function (d) { return d.delta > 0; }).sort(function (a, b) { return b.delta - a.delta; }).slice(0, 8);
+    var worsenings = profileDeltas.filter(function (d) { return d.delta < 0; }).sort(function (a, b) { return a.delta - b.delta; }).slice(0, 8);
     if (!state.countryEpochs) state.countryEpochs = [];
-    state.countryEpochs.unshift({ startWeek: e.startWeek, endWeek: state.turn, legislature: e.legislature, govLabel: e.govLabel, name: name, summary: summary });
+    state.countryEpochs.unshift({
+      startWeek: e.startWeek, endWeek: state.turn, legislature: e.legislature, govLabel: e.govLabel,
+      govName: describeLegislatureGovernment({ id: e.govEntityId, memberIds: e.govMemberIds }),
+      name: name, summary: summary,
+      passedPolicies: passedPolicies, rejectedPolicies: rejectedPolicies,
+      spendingBreakdown: spendingBreakdown, improvements: improvements, worsenings: worsenings
+    });
     state.currentEpoch = null;
   }
   function openNewEpoch() {
     closeCurrentEpoch();
-    state.currentEpoch = { startWeek: state.turn, legislature: state.legislature, govLabel: govEntityLabel(), regimeType: state.regime ? state.regime.type : null, moodSamples: [] };
+    state.currentEpoch = {
+      startWeek: state.turn, legislature: state.legislature, govLabel: govEntityLabel(),
+      govEntityId: state.govEntity ? state.govEntity.id : null, govMemberIds: (state.govEntity && state.govEntity.memberIds) || [],
+      regimeType: state.regime ? state.regime.type : null, moodSamples: [],
+      profileStart: Object.assign({}, state.countryProfile)
+    };
   }
+  // Quale epoca (per indice nell'elenco, dalla più recente) è espansa in questo momento: stesso pattern
+  // di expandedMetricTile/expandedNationId sopra, puro stato di interfaccia.
+  var expandedEpochIndex = null;
   function renderCountryHistory() {
     var epochs = state.countryEpochs || [];
     var html = '<section aria-label="Storia del Paese"><details class="log"><summary>Storia del Paese<span>▾</span></summary>' +
-      '<p class="ci-hint">Una cronaca delle grandi epoche di governo, con un nome che riassume come sono andate davvero — comincia a registrarle da qui in avanti, non ricostruisce il passato di una partita già avviata.</p>';
+      '<p class="ci-hint">Una cronaca delle grandi epoche di governo, con un nome che riassume come sono andate davvero e chi c\'era davvero al governo — comincia a registrarle da qui in avanti, non ricostruisce il passato di una partita già avviata.</p>';
     if (state.currentEpoch) {
-      html += '<p class="eyebrow" style="margin-top:0.6rem">Epoca in corso</p><p class="ci-hint"><strong>' + (state.currentEpoch.govLabel || "Nessun governo definito") +
+      html += '<p class="eyebrow" style="margin-top:0.6rem">Epoca in corso</p><p class="ci-hint"><strong>' +
+        describeLegislatureGovernment({ id: state.currentEpoch.govEntityId, memberIds: state.currentEpoch.govMemberIds }) +
         '</strong> guida il paese dalla settimana ' + state.currentEpoch.startWeek + " (Legislatura " + state.currentEpoch.legislature + ").</p>";
     }
     if (epochs.length) {
-      html += '<ul class="enacted-policy-list">' + epochs.map(function (e) {
-        return '<li><strong>' + e.name + '</strong> <span class="ci-hint">(settimane ' + e.startWeek + '–' + e.endWeek + ')</span><br>' + e.summary + '</li>';
-      }).join("") + '</ul>';
+      html += '<div class="party-directory">' + epochs.map(function (e, idx) {
+        var isOpen = expandedEpochIndex === idx;
+        var row = '<button type="button" class="party-row' + (isOpen ? " open" : "") + '" data-epoch-tile="' + idx + '">' +
+          '<div class="party-row-body"><div class="party-row-head"><strong>' + e.name + '</strong></div>' +
+          '<div class="party-row-sub">' + (e.govName || e.govLabel || "Nessun governo definito") + ' <span class="ci-hint">(settimane ' + e.startWeek + '–' + e.endWeek + ')</span></div>' +
+          '<div class="party-row-sub">' + e.summary + '</div></div></button>';
+        if (isOpen) {
+          var passed = e.passedPolicies || [], rejected = e.rejectedPolicies || [];
+          var spending = e.spendingBreakdown || [], improvements = e.improvements || [], worsenings = e.worsenings || [];
+          row += '<div class="inline-topic-expand" style="grid-column:1/-1">';
+          row += '<p class="eyebrow" style="margin:.5rem 0 .3rem">Leggi e mozioni di questa legislatura</p>';
+          row += passed.length
+            ? '<p class="ci-hint"><strong>Approvate (' + passed.length + '):</strong></p><ul class="enacted-policy-list">' + passed.map(function (ph) { return "<li>" + ph.title + " <span class=\"ci-hint\">(" + ph.kind + ", " + ph.proposer + ")</span></li>"; }).join("") + "</ul>"
+            : '<p class="ci-hint">Nessuna proposta approvata in questa legislatura.</p>';
+          row += rejected.length
+            ? '<p class="ci-hint"><strong>Respinte (' + rejected.length + '):</strong></p><ul class="enacted-policy-list">' + rejected.map(function (ph) { return "<li>" + ph.title + " <span class=\"ci-hint\">(" + ph.kind + ", " + ph.proposer + ")</span></li>"; }).join("") + "</ul>"
+            : "";
+          row += '<p class="eyebrow" style="margin:.7rem 0 .3rem">Fondi stanziati</p>';
+          row += spending.length
+            ? '<ul class="enacted-policy-list">' + spending.map(function (s) { return "<li>" + s.label + ": " + fmtEuro(Math.abs(Math.round(s.total))) + "</li>"; }).join("") + "</ul>"
+            : '<p class="ci-hint">Nessuna spesa rilevante registrata in questa legislatura.</p>';
+          row += '<p class="eyebrow" style="margin:.7rem 0 .3rem">Scheda Paese: dall\'inizio alla fine della legislatura</p>';
+          row += improvements.length
+            ? '<p class="ci-hint"><strong>Migliorati:</strong></p><ul class="enacted-policy-list">' + improvements.map(function (d) { return "<li>" + d.label + ": +" + fmt1(d.delta) + "</li>"; }).join("") + "</ul>"
+            : "";
+          row += worsenings.length
+            ? '<p class="ci-hint"><strong>Peggiorati:</strong></p><ul class="enacted-policy-list">' + worsenings.map(function (d) { return "<li>" + d.label + ": " + fmt1(d.delta) + "</li>"; }).join("") + "</ul>"
+            : "";
+          if (!improvements.length && !worsenings.length) row += '<p class="ci-hint">Nessun cambiamento rilevante nella Scheda Paese in questa legislatura.</p>';
+          row += "</div>";
+        }
+        return row;
+      }).join("") + "</div>";
     } else {
       html += '<p class="ci-hint">Nessuna epoca ancora chiusa: la prima verrà registrata alla prossima elezione.</p>';
     }
@@ -31242,6 +31374,13 @@
         render();
       });
     });
+    app.querySelectorAll("[data-epoch-tile]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-epoch-tile"), 10);
+        expandedEpochIndex = expandedEpochIndex === idx ? null : idx;
+        render();
+      });
+    });
     app.querySelectorAll("[data-sector-invest]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
@@ -31778,7 +31917,7 @@
 
     // Priorità ancora più alta del crollo di consenso sotto: una rivoluzione popolare non si negozia con
     // un mandato esplorativo, il governo cade subito (vedi triggerPopularRevolutionIfDue sopra).
-    var revolutionDossier = triggerPopularRevolutionIfDue();
+    var revolutionDossier = resolveCollapseSagaIfDue();
     if (revolutionDossier) {
       state.aiDynamicDossier = revolutionDossier;
       state.currentDossierId = "ai_dynamic";
