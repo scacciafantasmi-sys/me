@@ -2626,6 +2626,14 @@
       headlines: [], type: "cronaca"
     });
   }
+  // Fondo ministeriale (vedi renderMinisteroPage più sotto): un piccolo rifornimento ogni settimana, ma
+  // SOLO mentre si è davvero titolari di un dicastero (non del Premierato, che gestisce l'intero
+  // bilancio dello Stato tramite altri strumenti) — volutamente modesto, perché deve restare una somma
+  // da amministrare con attenzione, non un secondo portafoglio di partito senza limiti.
+  function driftMinistryFund(p) {
+    if (!state.playerMinistry || !state.cabinet || state.cabinet.premierId === "player" || p.parliamentRole !== "governo") return;
+    p.ministryFund = Math.max(0, (p.ministryFund || 0) + rand(220, 420));
+  }
   // Sezione Giovanile: il suo grado di accordo con la linea del partito ("agreement") oscilla
   // lentamente verso un bersaglio legato alla reputazione del partito, con un po' di rumore settimanale
   // — se scende sotto il 30% la sezione si scioglie da sola (troppo distante dalla linea del partito
@@ -2957,14 +2965,14 @@
   }
 
   var ROLES = [
-    { id: "portavoce", label: "Portavoce", desc: "Amplifica la visibilità ottenuta dalle azioni di comunicazione (+20%).", cost: 800, salary: 55 },
-    { id: "tesoriere", label: "Tesoriere", desc: "Riduce le spese fisse delle sezioni (-20%) e le quote di tesseramento rendono di più (+10%).", cost: 700, salary: 45 },
-    { id: "organizzatore", label: "Responsabile Organizzazione", desc: "Accelera la crescita degli iscritti dalle azioni sul territorio (+20%).", cost: 750, salary: 50 },
-    { id: "comunicazione_digitale", label: "Responsabile Comunicazione Digitale", desc: "Rallenta il calo della visibilità mediatica nel tempo.", cost: 650, salary: 45 },
-    { id: "capo_segreteria", label: "Capo della Segreteria Politica", desc: "Attutisce gli sbalzi tra le correnti interne e riduce il rischio di scissione.", cost: 900, salary: 60 },
-    { id: "responsabile_enti_locali", label: "Responsabile Enti Locali", desc: "Rafforza gli effetti dei dossier di policy territoriale (+20%).", cost: 700, salary: 50 },
-    { id: "responsabile_formazione", label: "Responsabile Formazione", desc: "Migliora i guadagni di reputazione dalle scelte positive (+20%).", cost: 650, salary: 45 },
-    { id: "consigliere_strategico", label: "Consigliere Strategico", desc: "Attutisce le conseguenze negative delle scelte più rischiose (-25%).", cost: 950, salary: 60 }
+    { id: "portavoce", label: "Portavoce", desc: "Amplifica la visibilità ottenuta dalle azioni di comunicazione (+20%).", cost: 880, salary: 55 },
+    { id: "tesoriere", label: "Tesoriere", desc: "Riduce le spese fisse delle sezioni (-20%) e le quote di tesseramento rendono di più (+10%).", cost: 770, salary: 45 },
+    { id: "organizzatore", label: "Responsabile Organizzazione", desc: "Accelera la crescita degli iscritti dalle azioni sul territorio (+20%).", cost: 825, salary: 50 },
+    { id: "comunicazione_digitale", label: "Responsabile Comunicazione Digitale", desc: "Rallenta il calo della visibilità mediatica nel tempo.", cost: 715, salary: 45 },
+    { id: "capo_segreteria", label: "Capo della Segreteria Politica", desc: "Attutisce gli sbalzi tra le correnti interne e riduce il rischio di scissione.", cost: 990, salary: 60 },
+    { id: "responsabile_enti_locali", label: "Responsabile Enti Locali", desc: "Rafforza gli effetti dei dossier di policy territoriale (+20%).", cost: 770, salary: 50 },
+    { id: "responsabile_formazione", label: "Responsabile Formazione", desc: "Migliora i guadagni di reputazione dalle scelte positive (+20%).", cost: 715, salary: 45 },
+    { id: "consigliere_strategico", label: "Consigliere Strategico", desc: "Attutisce le conseguenze negative delle scelte più rischiose (-25%).", cost: 1050, salary: 60 }
   ];
 
   // Fino a 4 correnti per famiglia (non tutte vengono usate sempre: vedi formazioneCorrentiDossier).
@@ -15519,9 +15527,9 @@
   // una vera cronologia consultabile. Alimentato da ogni singola chiamata a buildEnactmentAnnouncement qui
   // sotto (il punto in cui OGNI voto nazionale, del giocatore o di un altro partito, viene risolto), quindi
   // non serve toccare la logica di risoluzione dei voti, solo registrarne l'esito accanto a dove già accade.
-  function recordPolicyOutcome(kind, title, passed, proposer) {
+  function recordPolicyOutcome(kind, title, passed, proposer, metric) {
     if (!state.policyHistory) state.policyHistory = [];
-    state.policyHistory.unshift({ week: state.turn, legislature: state.legislature || 1, kind: kind, title: title, passed: !!passed, proposer: proposer || "Il tuo partito" });
+    state.policyHistory.unshift({ week: state.turn, legislature: state.legislature || 1, kind: kind, title: title, passed: !!passed, proposer: proposer || "Il tuo partito", metric: metric || null });
   }
   function buildEnactmentAnnouncement(opts) {
     var p = state.player;
@@ -16062,7 +16070,7 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "questo esito referendario", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum nazionale", repDelta: 0, isGoverno: p.parliamentRole === "governo" });
-    recordPolicyOutcome("Referendum", topic.title, passed, "Iniziativa referendaria");
+    recordPolicyOutcome("Referendum", topic.title, passed, "Iniziativa referendaria", topic.metric);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Referendum nazionale — il paese ha votato",
       cat: "Referendum Nazionale", title: topic.title, brief: announceHtml + esito + stanceNote + " Come si posiziona il tuo partito su questo esito?",
@@ -16832,7 +16840,7 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo referendum", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum", repDelta: passed ? 2 : -2, isGoverno: isGoverno });
-    recordPolicyOutcome("Referendum", topic.title, passed, "Il tuo partito");
+    recordPolicyOutcome("Referendum", topic.title, passed, "Il tuo partito", topic.metric);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Esito del referendum che hai promosso",
       cat: "Referendum Proposto", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito a questo risultato?",
@@ -17050,7 +17058,7 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "la tua proposta di legge elettorale", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: "corruzione", themeId: METRIC_TO_THEME_ID.corruzione, inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge Elettorale", repDelta: repDelta, isGoverno: true });
-    recordPolicyOutcome("Legge Elettorale", law.name, passed, "Il tuo partito");
+    recordPolicyOutcome("Legge Elettorale", law.name, passed, "Il tuo partito", "corruzione");
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua legge elettorale è passata" : "La tua legge elettorale è stata respinta",
       cat: "Legge Elettorale", title: law.name, brief: announceHtml + esito + " Come reagisce il tuo partito?",
@@ -17514,7 +17522,7 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: isGoverno });
-    recordPolicyOutcome("Mozione", topic.title, passed, "Il tuo partito");
+    recordPolicyOutcome("Mozione", topic.title, passed, "Il tuo partito", topic.metric);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua mozione è passata in Aula" : "La tua mozione è stata respinta in Aula",
       cat: "Mozione Parlamentare", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito?",
@@ -17682,7 +17690,7 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno });
-    recordPolicyOutcome("Legge", topic.title, passed, "Il tuo partito");
+    recordPolicyOutcome("Legge", topic.title, passed, "Il tuo partito", topic.metric);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua legge è passata in Aula" : "La tua proposta di legge è stata respinta",
       cat: "Proposta di Legge", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito?",
@@ -17761,7 +17769,7 @@
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: isGoverno });
-    recordPolicyOutcome("Modifica di Legge", topic.title, passed, "Il tuo partito");
+    recordPolicyOutcome("Modifica di Legge", topic.title, passed, "Il tuo partito", topic.metric);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua modifica di legge è passata in Aula" : "La tua proposta di modifica è stata respinta",
       cat: "Modifica di Legge", title: topic.title, brief: announceHtml + esito + " Come reagisce il tuo partito?",
@@ -17845,7 +17853,7 @@
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Modifica di Legge" });
     var amendmentProposer = partyById(meta.proposerId);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: amendmentProposer ? amendmentProposer.familyId : undefined });
-    recordPolicyOutcome("Modifica di Legge", dossier.title.split(" (")[0], passed, meta.proposerName);
+    recordPolicyOutcome("Modifica di Legge", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   // ---------- Proposte di legge presentate da altri partiti ----------
@@ -17934,7 +17942,7 @@
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
     var leggeProposerParty = partyById(meta.proposerId);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: leggeProposerParty ? leggeProposerParty.familyId : undefined });
-    recordPolicyOutcome("Legge", dossier.title.split(" (")[0], passed, meta.proposerName);
+    recordPolicyOutcome("Legge", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   // ---------- Mozioni presentate da altri partiti ----------
@@ -18025,7 +18033,7 @@
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Mozione Parlamentare" });
     var mozioneCpuProposer = partyById(meta.proposerId);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: mozioneCpuProposer ? mozioneCpuProposer.familyId : undefined });
-    recordPolicyOutcome("Mozione", dossier.title.split(" (")[0], passed, meta.proposerName);
+    recordPolicyOutcome("Mozione", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
   function renderMozioniPanel() {
@@ -18936,8 +18944,8 @@
   // azioni semplici, ciascuna con costo/cooldown proprio per nazione (p.nationActionCooldowns, chiave
   // "nazione_azione"), colmano quel vuoto senza toccare il drift passivo già esistente.
   var NATION_ACTIONS = {
-    accordo: { label: "Proponi un accordo commerciale", desc: "Rafforza il legame commerciale e le relazioni bilaterali con questa nazione.", cost: 350, cooldown: 10 },
-    visita: { label: "Organizza una visita di Stato", desc: "Un gesto diplomatico ad alto profilo: costa di più, ma pesa sul prestigio internazionale del governo ed è l'unico modo per evitare che il rapporto si raffreddi da solo nel tempo.", cost: 600, cooldown: 14 },
+    accordo: { label: "Proponi un accordo commerciale", desc: "Rafforza il legame commerciale e le relazioni bilaterali con questa nazione.", cost: 400, cooldown: 10 },
+    visita: { label: "Organizza una visita di Stato", desc: "Un gesto diplomatico ad alto profilo: costa di più, ma pesa sul prestigio internazionale del governo ed è l'unico modo per evitare che il rapporto si raffreddi da solo nel tempo.", cost: 680, cooldown: 14 },
     tensione: { label: "Alza la tensione diplomatica", desc: "Una linea dura verso questa nazione: nessun costo, ma le relazioni bilaterali ne risentono.", cost: 0, cooldown: 8 }
   };
   function resolveNationAction(nationId, actionId) {
@@ -19292,6 +19300,7 @@
     electoralLawLegislatureUsed: null, pendingElectoralLaw: null,
     cumulativeGovWeeks: 0, lingeringScandal: null,
     coalitionInviteCooldowns: {}, baselineSondaggi: null, baselineOrganicTarget: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
+    ministryFund: 0, ministryDeskCases: null, ministryActionsLog: [],
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null, mozioneSelectedCat: null,
     campaignCooldowns: {}, euCampaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
@@ -19998,6 +20007,7 @@
     driftGeopoliticalTension();
     driftConsensoGoverno();
     driftYouthWing(p);
+    driftMinistryFund(p);
     triggerAmbientStatements();
 
     var commDigMember = staffMember("comunicazione_digitale");
@@ -20908,10 +20918,10 @@
   // oppure non interviene (per una minaccia reale, l'esito negativo è garantito; per un'occasione,
   // semplicemente sfuma senza conseguenze).
   var INTELLIGENCE_ACTIONS = {
-    antiterrorismo: { label: "Sventa una Minaccia Terroristica", cost: 1200, cooldown: 10 },
-    controspionaggio: { label: "Contrasta lo Spionaggio Industriale", cost: 1000, cooldown: 10 },
-    interferenze_elettorali: { label: "Contrasta Interferenze Elettorali Straniere", cost: 900, cooldown: 12 },
-    operazione_coperta: { label: "Conduci un'Operazione Coperta all'Estero", cost: 2500, cooldown: 16 }
+    antiterrorismo: { label: "Sventa una Minaccia Terroristica", cost: 1350, cooldown: 10 },
+    controspionaggio: { label: "Contrasta lo Spionaggio Industriale", cost: 1120, cooldown: 10 },
+    interferenze_elettorali: { label: "Contrasta Interferenze Elettorali Straniere", cost: 1000, cooldown: 12 },
+    operazione_coperta: { label: "Conduci un'Operazione Coperta all'Estero", cost: 2800, cooldown: 16 }
   };
   var INTEL_SITUATION_COOLDOWN_TURNS = 8;
   function intelligenceActionSuccessProb(id) {
@@ -22874,11 +22884,11 @@
   // (vedi resolvePartyEvent) impedisce di incatenarne più di uno nella stessa manciata di settimane.
   var PARTY_EVENTS = {
     comizio: {
-      label: "Comizio pubblico", cost: 2800, cooldown: 5,
+      label: "Comizio pubblico", cost: 3150, cooldown: 5,
       desc: "Un comizio nella tua città di riferimento, per mobilitare simpatizzanti e militanti."
     },
     manifestazione: {
-      label: "Manifestazione di piazza", cost: 5000, cooldown: 10,
+      label: "Manifestazione di piazza", cost: 5600, cooldown: 10,
       desc: "Una manifestazione di piazza su un tema identitario del partito: molto visibile, un po' divisiva."
     },
     congresso: {
@@ -22886,11 +22896,11 @@
       desc: "Un congresso nazionale per rilanciare la linea del partito: il più caro, ma anche il più efficace."
     },
     cena_partito: {
-      label: "Cena organizzata dal partito", cost: 3000, cooldown: 8,
+      label: "Cena organizzata dal partito", cost: 3350, cooldown: 8,
       desc: "Una cena a porte quasi chiuse con iscritti e simpatizzanti più stretti: meno pubblico, più confidenza."
     },
     tour_territoriale: {
-      label: "Tour nei territori", cost: 5000, cooldown: 5,
+      label: "Tour nei territori", cost: 5600, cooldown: 5,
       desc: "Un giro di tappe in diverse città, per radicare il partito lontano dai grandi centri."
     },
     missione_diplomatica: {
@@ -22898,7 +22908,7 @@
       desc: "Una missione all'estero per costruire relazioni internazionali e rafforzare il profilo del partito sulla scena globale."
     },
     campagna_mediatica_nazionale: {
-      label: "Campagna mediatica nazionale", cost: 2000, cooldown: 4,
+      label: "Campagna mediatica nazionale", cost: 2250, cooldown: 4,
       desc: "Una campagna coordinata sui media nazionali per portare il partito al centro del dibattito pubblico."
     }
   };
@@ -23043,23 +23053,23 @@
     return w >= 0 && w <= CAMPAIGN_WINDOW_WEEKS;
   }
   var CAMPAIGN_ACTIVITIES = {
-    comizio_chiusura: { label: "Comizio di chiusura campagna", cost: 1750, cooldown: 3,
+    comizio_chiusura: { label: "Comizio di chiusura campagna", cost: 1950, cooldown: 3,
       desc: "Il grande comizio nella tua città di riferimento, nel pieno della campagna elettorale." },
-    porta_a_porta: { label: "Porta a porta nei quartieri", cost: 700, cooldown: 2,
+    porta_a_porta: { label: "Porta a porta nei quartieri", cost: 780, cooldown: 2,
       desc: "I militanti bussano casa per casa per convincere gli indecisi, quartiere per quartiere." },
-    spot_elettorale: { label: "Spot elettorale in TV", cost: 3150, cooldown: 3,
+    spot_elettorale: { label: "Spot elettorale in TV", cost: 3550, cooldown: 3,
       desc: "Uno spot elettorale nella fascia di massimo ascolto, nei giorni caldi della campagna." },
     dibattito_tv: { label: "Dibattito televisivo con gli avversari", cost: 0, cooldown: 4,
       desc: "Un confronto diretto in TV con i leader degli altri partiti: alto rischio, alta visibilità." },
-    campagna_social: { label: "Campagna mirata sui social media", cost: 1600, cooldown: 2,
+    campagna_social: { label: "Campagna mirata sui social media", cost: 1800, cooldown: 2,
       desc: "Contenuti e sponsorizzazioni mirate su Instagram, TikTok e X per intercettare l'elettorato più giovane." },
-    volantinaggio: { label: "Volantinaggio in stazioni e mercati", cost: 250, cooldown: 2,
+    volantinaggio: { label: "Volantinaggio in stazioni e mercati", cost: 280, cooldown: 2,
       desc: "Militanti con volantini nei luoghi di passaggio quotidiano: economico, capillare, poco spettacolare." },
-    endorsement_vip: { label: "Endorsement di un volto noto", cost: 4400, cooldown: 6,
+    endorsement_vip: { label: "Endorsement di un volto noto", cost: 4950, cooldown: 6,
       desc: "Un personaggio pubblico si espone pubblicamente per il partito, nel bene e nel male." },
-    tour_regionale: { label: "Tour elettorale nelle regioni chiave", cost: 2450, cooldown: 4,
+    tour_regionale: { label: "Tour elettorale nelle regioni chiave", cost: 2750, cooldown: 4,
       desc: "Un giro di tappe nelle regioni dove il voto è più in bilico, con comizi locali ogni giorno." },
-    intervista_podcast: { label: "Intervista in un podcast politico", cost: 450, cooldown: 2,
+    intervista_podcast: { label: "Intervista in un podcast politico", cost: 500, cooldown: 2,
       desc: "Un formato più lungo e disteso dei talk show tradizionali, apprezzato dal pubblico più giovane." },
     attacco_avversario: { label: "Attacco mirato a un avversario", cost: 0, cooldown: 5,
       desc: "Una campagna di comunicazione aggressiva contro il principale avversario politico: puoi guadagnarci o farti male da solo." }
@@ -23182,23 +23192,23 @@
     return w >= 0 && w <= EU_CAMPAIGN_WINDOW_WEEKS;
   }
   var EU_CAMPAIGN_ACTIVITIES = {
-    comizio_europeo: { label: "Comizio sui temi europei", cost: 1600, cooldown: 3,
+    comizio_europeo: { label: "Comizio sui temi europei", cost: 1800, cooldown: 3,
       desc: "Un comizio dedicato ai temi che si decidono a Bruxelles, non alla politica nazionale di ogni giorno." },
-    porta_a_porta_eu: { label: "Porta a porta per le europee", cost: 600, cooldown: 2,
+    porta_a_porta_eu: { label: "Porta a porta per le europee", cost: 680, cooldown: 2,
       desc: "I militanti bussano casa per casa per spiegare perché votare la lista anche alle europee." },
-    spot_europeo: { label: "Spot per le europee", cost: 2650, cooldown: 3,
+    spot_europeo: { label: "Spot per le europee", cost: 2950, cooldown: 3,
       desc: "Uno spot elettorale dedicato alla campagna per il Parlamento Europeo." },
     dibattito_capilista: { label: "Dibattito tra capilista", cost: 0, cooldown: 4,
       desc: "Un confronto diretto con i capilista delle altre liste in corsa per l'Europarlamento." },
-    campagna_social_eu: { label: "Campagna social sui temi europei", cost: 1400, cooldown: 2,
+    campagna_social_eu: { label: "Campagna social sui temi europei", cost: 1550, cooldown: 2,
       desc: "Contenuti mirati sui temi europei, per intercettare un elettorato spesso meno mobilitato del solito." },
-    volantinaggio_eu: { label: "Volantinaggio sui temi europei", cost: 250, cooldown: 2,
+    volantinaggio_eu: { label: "Volantinaggio sui temi europei", cost: 280, cooldown: 2,
       desc: "Militanti con volantini sui temi europei nei luoghi di passaggio quotidiano." },
-    endorsement_eurodeputato: { label: "Endorsement di un europarlamentare uscente", cost: 3500, cooldown: 6,
+    endorsement_eurodeputato: { label: "Endorsement di un europarlamentare uscente", cost: 3900, cooldown: 6,
       desc: "Un eurodeputato uscente si schiera pubblicamente per la lista, nel bene e nel male." },
-    tour_capoluoghi_eu: { label: "Tour nei capoluoghi di circoscrizione", cost: 2100, cooldown: 4,
+    tour_capoluoghi_eu: { label: "Tour nei capoluoghi di circoscrizione", cost: 2350, cooldown: 4,
       desc: "Un giro di tappe nei capoluoghi delle circoscrizioni elettorali europee." },
-    intervista_tematica_eu: { label: "Intervista sui temi europei", cost: 350, cooldown: 2,
+    intervista_tematica_eu: { label: "Intervista sui temi europei", cost: 400, cooldown: 2,
       desc: "Un'intervista dedicata alle politiche europee, meno seguita di un talk show nazionale ma più approfondita." },
     attacco_lista_rivale: { label: "Attacco a una lista rivale", cost: 0, cooldown: 5,
       desc: "Una campagna di comunicazione aggressiva contro una lista rivale in corsa per l'Europarlamento." }
@@ -23526,7 +23536,7 @@
   // nome generico di default ("Giovani <Partito>") che il giocatore può cambiare quando vuole. Il suo
   // grado di accordo con la linea del partito ("agreement") oscilla nel tempo (vedi driftYouthWing) e,
   // se scende sotto il 30%, la sezione si scioglie da sola e può essere riaperta dopo un raffreddamento.
-  var YOUTH_WING_OPEN_COST = 350;
+  var YOUTH_WING_OPEN_COST = 400;
   function openYouthWing() {
     var p = state.player;
     if (p.giovanile) return null;
@@ -23580,7 +23590,7 @@
       desc: "Una cena esclusiva per i sostenitori più facoltosi del partito." },
     crowdfunding: { label: "Campagna di crowdfunding online", cost: 0, cooldown: 5,
       desc: "Una raccolta fondi online aperta a iscritti e simpatizzanti, con obiettivi condivisi sui social." },
-    merchandising: { label: "Vendita di gadget di partito", cost: 300, cooldown: 4,
+    merchandising: { label: "Vendita di gadget di partito", cost: 330, cooldown: 4,
       desc: "Magliette, spille e gadget con il simbolo del partito, venduti a sezioni e militanti." },
     sottoscrizione: { label: "Sottoscrizione popolare tra i militanti", cost: 0, cooldown: 5,
       desc: "Una raccolta capillare tra gli iscritti sul territorio: rende di più quanto più il partito è grande." },
@@ -23588,7 +23598,7 @@
       desc: "Un incontro riservato con imprenditori e associazioni di categoria vicine alla linea del partito." },
     spazi_pubblicitari: { label: "Vendita di spazi pubblicitari", cost: 0, cooldown: 4,
       desc: "Spazi pubblicitari sul giornale e sul sito del partito ceduti a inserzionisti." },
-    asta_benefica: { label: "Asta di beneficenza", cost: 150, cooldown: 6,
+    asta_benefica: { label: "Asta di beneficenza", cost: 170, cooldown: 6,
       desc: "Un'asta di cimeli e oggetti simbolici legati alla storia del partito." },
     fondi_gruppo: { label: "Fondi del gruppo parlamentare", cost: 0, cooldown: 10, requiresParliament: true,
       desc: "La quota di fondi pubblici destinata ai gruppi parlamentari, disponibile solo se il partito siede in Aula." }
@@ -25093,6 +25103,176 @@
     html += "</div></section>";
     return html;
   }
+  // ---------- La Scrivania del Ministero (richiesto da un giocatore) ----------
+  // Prima, da Ministro, l'unica cosa proattiva da fare era questo singolo pannello sopra (1-2 bottoni
+  // generici "Investi su X"): troppo poco. Qui sotto una vera scrivania con 3 casi concreti alla volta,
+  // sempre legati al proprio dicastero (stessi sostantivi/metriche di MINISTRY_FOCUS, mai generici a
+  // caso), pescati da più "forme" diverse (non sempre la stessa quaterna) così da restare vari lungo
+  // tutta la legislatura. Un fondo SEPARATO dalle casse di partito (p.ministryFund, vedi
+  // driftMinistryFund) paga le scelte più costose: va amministrato con attenzione, non è infinito.
+  var MINISTRY_DESK_SHAPES = [
+    function (noun, m1, m2, articled) {
+      var effBold = {}; effBold[m1] = rand(0.3, 0.5); if (m2 !== m1) effBold[m2] = rand(0.1, 0.2);
+      var effSafe = {}; effSafe[m1] = rand(0.1, 0.2);
+      return { title: "Sulla scrivania: " + noun,
+        brief: "Gli uffici del Ministero " + articled + " hanno preparato un dossier tecnico su " + noun + ": tocca a te decidere come procedere.",
+        choices: [
+          { label: "Stanzia fondi e intervieni con decisione", hint: "Costoso, effetto reale e misurabile", cost: rand(1400, 2400), national: effBold, reputazione: rand(0.3, 1) },
+          { label: "Un intervento più contenuto", hint: "Meno costoso, effetto più piccolo", cost: rand(400, 800), national: effSafe },
+          { label: "Rinvia la decisione", hint: "Nessun costo, ma il problema resta lì", cost: 0, reputazione: -rand(0.2, 0.6) }
+        ] };
+    },
+    function (noun, m1, m2, articled) {
+      var effGood = {}; effGood[m1] = rand(0.25, 0.4);
+      var effMid = {}; effMid[m1] = rand(0.1, 0.2);
+      return { title: "Audizione con gli stakeholder: " + noun,
+        brief: "Le associazioni di categoria coinvolte in " + noun + " chiedono un incontro al Ministero " + articled + ", con richieste precise sul tavolo.",
+        choices: [
+          { label: "Accogli le loro richieste", hint: "Costoso, ma ti guadagni consenso tra gli addetti ai lavori", cost: rand(1000, 1900), national: effGood, visibilita: rand(1, 2.5) },
+          { label: "Trova un compromesso a metà strada", hint: "Costo contenuto, un piccolo passo avanti per tutti", cost: rand(350, 700), national: effMid, reputazione: rand(0.1, 0.4) },
+          { label: "Ricevili, ma non concedere nulla", hint: "Nessun costo, ma restano scontenti", cost: 0, reputazione: -rand(0.3, 0.8) }
+        ] };
+    },
+    function (noun, m1, m2, articled) {
+      var effBig = {}; effBig[m1] = rand(0.35, 0.55); if (m2 !== m1) effBig[m2] = rand(0.15, 0.3);
+      var effSmall = {}; effSmall[m1] = rand(0.15, 0.3);
+      return { title: "Stanziamento pluriennale: " + noun,
+        brief: "Un piano di investimento su più anni per " + noun + " è pronto per la firma: impegna una parte importante del fondo del Ministero " + articled + ", ma gli effetti durano nel tempo.",
+        choices: [
+          { label: "Firma il piano pluriennale", hint: "Molto costoso, l'effetto più ampio possibile", cost: rand(2600, 4200), national: effBig, reputazione: rand(0.5, 1.5) },
+          { label: "Riduci la portata del piano", hint: "Più sostenibile, risultati più modesti", cost: rand(900, 1500), national: effSmall },
+          { label: "Accantona il piano per ora", hint: "Nessun costo, nessun impegno preso", cost: 0 }
+        ] };
+    },
+    function (noun, m1, m2, articled) {
+      var effUrgent = {}; effUrgent[m1] = rand(0.3, 0.5);
+      var effDelegated = {}; effDelegated[m1] = rand(0.08, 0.18);
+      return { title: "Un caso urgente: " + noun,
+        brief: "Un caso concreto legato a " + noun + " è arrivato direttamente sulla tua scrivania, con la stampa già interessata: una risposta rapida è attesa.",
+        choices: [
+          { label: "Intervieni di persona, subito", hint: "Costoso ma visibile, rafforza la tua immagine da Ministro", cost: rand(900, 1700), national: effUrgent, visibilita: rand(1.5, 3), reputazione: rand(0.2, 0.6) },
+          { label: "Fai gestire il caso dagli uffici tecnici", hint: "Economico, meno protagonismo personale", cost: rand(200, 450), national: effDelegated },
+          { label: "Lascia che si sgonfi da solo", hint: "Nessun costo, rischi di sembrare assente", cost: 0, reputazione: -rand(0.4, 1) }
+        ] };
+    },
+    function (noun, m1, m2, articled) {
+      var effReform = {}; effReform[m1] = rand(0.2, 0.35); if (m2 !== m1) effReform[m2] = rand(0.2, 0.35);
+      return { title: "Riforma organizzativa: " + noun,
+        brief: "Un pacchetto di riforma interna su " + noun + " è pronto: cambia il modo in cui il Ministero " + articled + " gestisce la materia, non solo quanto ci spende.",
+        choices: [
+          { label: "Approva la riforma", hint: "Costo moderato, effetto duraturo su più fronti", cost: rand(1100, 1900), national: effReform, reputazione: rand(0.2, 0.7) },
+          { label: "Archivia la riforma per ora", hint: "Nessun costo, nessun cambiamento", cost: 0, reputazione: -rand(0.1, 0.3) }
+        ] };
+    }
+  ];
+  function buildMinistryDeskCase(ministry, usedNouns) {
+    var focus = MINISTRY_FOCUS[ministry];
+    if (!focus) return null;
+    var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
+    var freeNouns = focus.nouns.filter(function (n) { return usedNouns.indexOf(n) === -1; });
+    var noun = (freeNouns.length ? freeNouns : focus.nouns)[Math.floor(Math.random() * (freeNouns.length ? freeNouns.length : focus.nouns.length))];
+    var m1 = focus.metrics[0], m2 = focus.metrics[1] || focus.metrics[0];
+    var shape = MINISTRY_DESK_SHAPES[Math.floor(Math.random() * MINISTRY_DESK_SHAPES.length)];
+    var built = shape(noun, m1, m2, articled);
+    return { id: "mdesk_" + state.turn + "_" + Math.floor(Math.random() * 1e6), noun: noun, title: built.title, brief: built.brief, choices: built.choices };
+  }
+  // Mantiene sempre 3 casi attivi sulla scrivania (mai lo stesso sostantivo due volte alla volta, per
+  // non sembrare ripetitiva): generata al bisogno, non ricreata da zero a ogni render, così i casi
+  // restano stabili finché il giocatore non li risolve davvero (o finché non si perde il dicastero).
+  function ensureMinistryDesk() {
+    var p = state.player;
+    if (!p || !state.playerMinistry || !state.cabinet || state.cabinet.premierId === "player") { if (p) p.ministryDeskCases = null; return; }
+    if (!p.ministryDeskCases) p.ministryDeskCases = [];
+    var ministry = state.playerMinistry.ministry;
+    var addedAny = false;
+    while (p.ministryDeskCases.length < 3) {
+      var usedNouns = p.ministryDeskCases.map(function (c) { return c.noun; });
+      var newCase = buildMinistryDeskCase(ministry, usedNouns);
+      if (!newCase) break;
+      p.ministryDeskCases.push(newCase);
+      addedAny = true;
+    }
+    // render() chiama questa funzione DOPO che il click sulla barra di navigazione ha già salvato lo
+    // stato (vedi bindPageNavDrawer: save() avviene prima di render()): senza un salvataggio esplicito
+    // qui, la prima scrivania generata resterebbe solo in memoria — chi la guarda e basta, senza cliccare
+    // altro, se ne ritroverebbe una diversa al prossimo avvio.
+    if (addedAny) save();
+  }
+  function renderMinisteroDeskPanel() {
+    var p = state.player;
+    var cases = p.ministryDeskCases || [];
+    var fund = p.ministryFund || 0;
+    var html = '<section aria-label="Scrivania del Ministero"><p class="eyebrow">Scrivania del Ministero</p>' +
+      '<p class="ci-hint">Casi concreti del tuo settore, oltre al dossier settimanale normale: ogni scelta costosa pesa sul fondo ministeriale qui sotto, non sulle casse del partito.</p>' +
+      '<div class="stat-tile"><div class="label">Fondo ministeriale disponibile</div><div class="row"><span class="value">' + fmtEuro(fund) + '</span></div></div>';
+    cases.forEach(function (c) {
+      html += '<div style="margin-top:0.8rem;padding-top:0.7rem;border-top:1px solid var(--border)"><strong>' + c.title + '</strong>' +
+        '<p class="ci-hint" style="margin:.3rem 0 .5rem">' + c.brief + '</p><div class="option-grid">';
+      c.choices.forEach(function (choice, idx) {
+        var cost = choice.cost || 0;
+        var disabled = cost > fund;
+        html += '<button type="button" class="option-card" data-ministry-case="' + c.id + '::' + idx + '"' + (disabled ? " disabled" : "") + '>' +
+          '<span class="olabel">' + choice.label + '</span><span class="odesc">' + choice.hint + (cost ? " — Costo: " + fmtEuro(cost) : " — Nessun costo") + (disabled ? " (fondo insufficiente)" : "") + '</span></button>';
+      });
+      html += "</div></div>";
+    });
+    html += "</section>";
+    return html;
+  }
+  // Riepilogo, filtrato sulle metriche del tuo dicastero, delle leggi/mozioni/modifiche/referendum già
+  // votati in Aula: non sostituisce la Scheda Paese (dove restano TUTTI, di ogni ministero — richiesto
+  // esplicitamente da un giocatore: "non devono scomparire da lì"), è solo una vista dedicata per non
+  // dover cercare a mano, tra tutte le altre, solo quelle del proprio settore.
+  function renderMinistryPolicyPanel() {
+    var ministry = state.playerMinistry.ministry;
+    var focus = MINISTRY_FOCUS[ministry];
+    if (!focus) return "";
+    var metrics = focus.metrics;
+    var items = (state.policyHistory || []).filter(function (e) { return e.metric && metrics.indexOf(e.metric) !== -1; });
+    var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
+    var body = !items.length
+      ? '<p class="ci-hint">Nessuna proposta del tuo settore è ancora stata votata in Aula in questa legislatura.</p>'
+      : items.slice(0, 40).map(function (e) {
+          return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + e.title + '</strong>' +
+            '<span class="chip ' + (e.passed ? "good" : "critical") + '">' + (e.passed ? "Approvata" : "Respinta") + '</span></div>' +
+            '<div class="party-row-sub">' + e.kind + " — Legislatura " + e.legislature + " — proposta da " + e.proposer + '</div></div></div>';
+        }).join("");
+    return '<section aria-label="Proposte del tuo settore"><details class="log">' +
+      '<summary>Leggi, mozioni e referendum del Ministero ' + articled + '<span>▾</span></summary>' +
+      '<div class="party-directory">' + body + '</div></details></section>';
+  }
+  // "Tendina" con tutto quello che hai fatto in prima persona da Ministro (vedi data-ministry-case),
+  // più recente in cima — richiesta esplicitamente da un giocatore, oltre al fondo stesso.
+  function renderMinistryActionLogPanel() {
+    var log = state.player.ministryActionsLog || [];
+    var body = !log.length
+      ? '<p class="ci-hint">Non hai ancora preso decisioni dalla scrivania del Ministero.</p>'
+      : log.slice(0, 60).map(function (e) {
+          return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><strong>' + e.title + '</strong>' +
+            '<span class="value">Sett. ' + e.week + '</span></div>' +
+            '<div class="party-row-sub">' + e.choiceLabel + (e.cost ? " — " + fmtEuro(e.cost) : " — nessun costo") + '</div></div></div>';
+        }).join("");
+    return '<section aria-label="Azioni da Ministro"><details class="log">' +
+      '<summary>Le tue decisioni da Ministro<span>▾</span></summary>' +
+      '<div class="party-directory">' + body + '</div></details></section>';
+  }
+  function renderMinisteroPage() {
+    var p = state.player;
+    if (!p || !state.playerMinistry || !state.cabinet || state.cabinet.premierId === "player") {
+      return '<section aria-label="Ministero"><p class="ci-hint">Non hai al momento un dicastero personale.</p></section>';
+    }
+    ensureMinistryDesk();
+    var ministry = state.playerMinistry.ministry;
+    var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
+    var html = '<section aria-label="Ufficio del Ministro"><p class="eyebrow">Il tuo Ministero</p>' +
+      '<p class="ci-hint" style="font-size:1.05rem;color:var(--text);font-weight:700;margin-bottom:.3rem">Benvenuto in ufficio, Ministro ' + articled + '</p>' +
+      '<p class="ci-hint">Da qui gestisci in prima persona il dicastero: una scrivania con casi concreti da affrontare, un fondo dedicato separato dalle casse del partito, e un riepilogo di tutto ciò che riguarda il tuo settore in Parlamento — in aggiunta ai dossier settimanali che continui a ricevere normalmente, non al loro posto.</p></section>';
+    html += renderMinisteroDeskPanel();
+    html += renderMinisterInitiativePanel();
+    html += renderMinistryPolicyPanel();
+    html += renderMinistryActionLogPanel();
+    return html;
+  }
   // ---------- Commissioni Parlamentari (richiesto da un giocatore) ----------
   // Aperte a QUALUNQUE parlamentare, maggioranza o opposizione — a differenza dei Ministeri, riservati a
   // chi è al governo, è un vero "cosa fare" anche per chi sta all'opposizione, non solo mozioni/leggi
@@ -26156,7 +26336,7 @@
   // di aspettare passivamente. Come il resto delle azioni introdotte in questa sessione, nessun esito è
   // garantito: il dialogo può anche andare peggio di come è iniziato.
   var PARTY_CONTACT_COOLDOWN_TURNS = 8;
-  var PARTY_CONTACT_COST = 400;
+  var PARTY_CONTACT_COST = 450;
   // Richiesto da un giocatore: il contatto non deve avere le stesse probabilità indipendentemente da
   // quanto le due linee politiche sono distanti sull'asse sinistra-destra (LEFT_RIGHT_POSITION, già usato
   // altrove per decidere se un'alleanza è credibile). Più la distanza è ampia, meno probabile un buon
@@ -27357,6 +27537,14 @@
     { id: "parlamento", label: "Parlamento e Governo", icon: "⚖️", nav: "Parlamento", render: function () {
         return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
       } },
+    // Richiesto da un giocatore: fare il Ministro dava troppo poco da fare (solo un piccolo pannello
+    // "Iniziativa Ministeriale" in mezzo a tutto il resto). Una scheda dedicata, visibile SOLO mentre si
+    // è davvero titolari di un dicastero (stessa condizione già usata da renderMinisterInitiativePanel:
+    // non il Premierato, che gestisce il governo nel suo insieme tramite altri strumenti) — vedi
+    // visiblePageDefs/activePageDef/renderPageNav sotto, che filtrano PAGE_DEFS su questo campo.
+    { id: "ministero", label: "Il tuo Ministero", icon: "🗄️", nav: "Ministero",
+      visible: function () { return !!(state.player && state.playerMinistry && state.cabinet && state.cabinet.premierId !== "player"); },
+      render: function () { return renderMinisteroPage(); } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", icon: "🌍", nav: "Estero", render: function () {
         return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations();
       } },
@@ -27382,9 +27570,16 @@
         return renderCareerSummary() + renderElectionHistoryPanel();
       } }
   ];
+  // Alcune schede (per ora solo "ministero") esistono in PAGE_DEFS solo come definizione statica, ma
+  // vanno mostrate/navigabili solo quando una condizione di gioco è vera (vedi PAGE_DEFS sopra): un
+  // campo "visible" assente equivale a sempre visibile, per non dover toccare le altre voci.
+  function visiblePageDefs() {
+    return PAGE_DEFS.filter(function (pg) { return !pg.visible || pg.visible(); });
+  }
   function activePageDef() {
-    var current = state.uiPage || PAGE_DEFS[0].id;
-    return PAGE_DEFS.filter(function (pg) { return pg.id === current; })[0] || PAGE_DEFS[0];
+    var visible = visiblePageDefs();
+    var current = state.uiPage || visible[0].id;
+    return visible.filter(function (pg) { return pg.id === current; })[0] || visible[0];
   }
   var resignArmed = false;
   // Quale indicatore della Scheda Paese è espanso in questo momento (vedi renderProfileMetricTile): puro
@@ -27425,7 +27620,7 @@
     var current = activePageDef().id;
     var tutorialBtn = '<button type="button" class="page-nav-btn" id="nav-tutorial-btn" title="Guida rapida">' +
       '<span class="page-nav-icon">💡</span><span class="page-nav-label">Guida</span></button>';
-    var items = PAGE_DEFS.map(function (pg) {
+    var items = visiblePageDefs().map(function (pg) {
       return '<button type="button" class="page-nav-btn' + (pg.id === current ? " active" : "") + '" data-nav-page="' + pg.id + '" title="' + pg.label.replace(/"/g, "&quot;") + '">' +
         '<span class="page-nav-icon">' + pg.icon + '</span><span class="page-nav-label">' + pg.nav + '</span></button>';
     }).join("");
@@ -28267,7 +28462,6 @@
       // di default (vedi wrapCollapsed).
       body += renderPlayerStats();
       body += renderFondiLedgerPanel();
-      body += renderMinisterInitiativePanel();
       body += renderPollGrid(state.prevSnapshot);
       body += renderPublicOpinionPanel();
       // Punto di aggancio per lo scroll dopo un cambio di pagina dalla barra in cima (vedi
@@ -28649,6 +28843,12 @@
           if (!state.cabinet.assignments) state.cabinet.assignments = {};
           state.cabinet.assignments[ministryAssigned] = { holderId: "player", name: state.player.name, source: "Il leader del partito in persona" };
           state.playerMinistry = { ministry: ministryAssigned, since: state.turn };
+          // Fondo separato dalle casse di partito, per le iniziative dirette dalla scrivania del
+          // Ministero (vedi renderMinisteroPage/ensureMinistryDesk): parte modesto apposta, perché deve
+          // restare una risorsa scarsa da amministrare, non un secondo portafoglio del partito.
+          state.player.ministryFund = rand(5000, 9000);
+          state.player.ministryDeskCases = null;
+          state.player.ministryActionsLog = [];
         } else {
           var chosenCandidate = pcf.candidates.filter(function (c) { return c.id === choice.cabinetCandidateId; })[0];
           if (chosenCandidate) {
@@ -29776,6 +29976,35 @@
         showSaveStatus(res.resultText, !!(res.blocked || (res.delta !== undefined && res.delta < 0)));
         state.resultData = res;
         state.phase = "result";
+        save();
+        render();
+      });
+    });
+    // Risolve un caso dalla Scrivania del Ministero (vedi renderMinisteroDeskPanel): a differenza dei
+    // dossier settimanali, resta sulla stessa pagina invece di passare a una schermata di esito a parte
+    // — con 3 casi alla volta, saltare a un "risultato" a ogni click avrebbe interrotto il flusso più che
+    // aiutarlo. Il costo attinge al fondo ministeriale (p.ministryFund), MAI alle casse di partito: non
+    // si passa da eff.fondi/applyChoice per quello, che toccherebbe p.fondi.
+    app.querySelectorAll("[data-ministry-case]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var raw = btn.getAttribute("data-ministry-case").split("::");
+        var caseId = raw[0], choiceIdx = parseInt(raw[1], 10);
+        var p = state.player;
+        var cases = p.ministryDeskCases || [];
+        var caseIdx = cases.findIndex(function (c) { return c.id === caseId; });
+        var deskCase = caseIdx !== -1 ? cases[caseIdx] : null;
+        var choice = deskCase ? deskCase.choices[choiceIdx] : null;
+        if (!deskCase || !choice) { showSaveStatus("Questo caso non è più sulla tua scrivania.", true); return; }
+        var cost = choice.cost || 0;
+        if (cost > (p.ministryFund || 0)) { showSaveStatus("Fondo ministeriale insufficiente per questa scelta.", true); return; }
+        p.ministryFund = Math.max(0, (p.ministryFund || 0) - cost);
+        var effects = { reputazione: choice.reputazione, visibilita: choice.visibilita, national: choice.national };
+        applyChoice({ title: deskCase.title, cat: "Governo — Ministero" }, { effects: effects, result: "" });
+        if (!p.ministryActionsLog) p.ministryActionsLog = [];
+        p.ministryActionsLog.unshift({ week: state.turn, title: deskCase.title, choiceLabel: choice.label, cost: cost });
+        cases.splice(caseIdx, 1);
+        ensureMinistryDesk();
+        showSaveStatus("Deciso: " + choice.label.toLowerCase() + ".", false);
         save();
         render();
       });
