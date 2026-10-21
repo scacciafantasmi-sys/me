@@ -26159,21 +26159,88 @@
     if (v >= 20) return { text: "Freddi", cls: "accent" };
     return { text: "Ostili", cls: "accent" };
   }
+  // Richiesto da un giocatore: prima le relazioni con gli altri partiti cambiavano solo di riflesso
+  // (attacchi, voti in Aula, deriva lenta verso un punto di riposo ideologico), senza alcuno strumento per
+  // dialogare DIRETTAMENTE con un partito a scelta e provare a scaldare il rapporto — un vuoto vero,
+  // specie per chi vuole tentare un avvicinamento a un partito ideologicamente non troppo lontano, invece
+  // di aspettare passivamente. Come il resto delle azioni introdotte in questa sessione, nessun esito è
+  // garantito: il dialogo può anche andare peggio di come è iniziato.
+  var PARTY_CONTACT_COOLDOWN_TURNS = 8;
+  var PARTY_CONTACT_COST = 400;
+  // Richiesto da un giocatore: il contatto non deve avere le stesse probabilità indipendentemente da
+  // quanto le due linee politiche sono distanti sull'asse sinistra-destra (LEFT_RIGHT_POSITION, già usato
+  // altrove per decidere se un'alleanza è credibile). Più la distanza è ampia, meno probabile un buon
+  // esito; oltre una soglia il contatto non ha proprio senso e viene rifiutato categoricamente, SENZA
+  // nemmeno un tentativo di dialogo — soglia più stretta se una delle due linee è essa stessa estrema
+  // (comunista, nazionalpopolare, fascista): un partito moderato di centro può provare a dialogare con la
+  // destra o la sinistra non estrema, ma comunista-fascista, o centro-estrema destra, restano impossibili.
+  var EXTREME_FAMILY_THRESHOLD = 2.5;
+  function isExtremeFamily(famId) {
+    var pos = LEFT_RIGHT_POSITION[famId];
+    return pos !== undefined && Math.abs(pos) >= EXTREME_FAMILY_THRESHOLD;
+  }
+  function contactParty(partyId) {
+    var p = state.player;
+    if (state.turn < (p.partyContactCooldownTurn || 0)) return null;
+    var party = activeParties().filter(function (pt) { return pt.id === partyId; })[0];
+    if (!party) return null;
+    if (p.fondi < PARTY_CONTACT_COST) return null;
+    p.partyContactCooldownTurn = state.turn + PARTY_CONTACT_COOLDOWN_TURNS;
+    p.fondi -= PARTY_CONTACT_COST;
+    recordFondiLedger("Contatto diplomatico: " + party.name, -PARTY_CONTACT_COST);
+    var myPos = LEFT_RIGHT_POSITION[p.family];
+    var theirPos = party.familyId ? LEFT_RIGHT_POSITION[party.familyId] : undefined;
+    var dist = (myPos !== undefined && theirPos !== undefined) ? Math.abs(myPos - theirPos) : 0;
+    var eitherExtreme = isExtremeFamily(p.family) || (party.familyId && isExtremeFamily(party.familyId));
+    var maxAllowedDist = eitherExtreme ? 2 : 4;
+    if (dist > maxAllowedDist) {
+      var textBlocked = party.name + " non risponde alla tua richiesta di contatto: le vostre linee politiche sono troppo lontane perché un dialogo diretto abbia senso.";
+      state.log.unshift({ week: state.turn, title: "Contatto diplomatico ignorato", choiceLabel: party.name, result: textBlocked, headlines: [], type: "dossier", cat: "Strategia Elettorale" });
+      return { resultText: textBlocked, headlines: [] };
+    }
+    if (!state.partyRelations) state.partyRelations = {};
+    var cur = state.partyRelations[partyId] !== undefined ? state.partyRelations[partyId] : 50;
+    var goodW = clamp(0.65 - dist * 0.12, 0.1, 0.65);
+    var badW = clamp(0.15 + dist * 0.08, 0.15, 0.45);
+    var neutralW = Math.max(0.05, 1 - goodW - badW);
+    var outcome = pickTourOutcome([
+      { weight: badW, delta: -rand(2, 5), text: "Il contatto diretto con " + party.name + " si rivela più teso del previsto: le distanze politiche, invece di appianarsi, emergono con chiarezza." },
+      { weight: neutralW, delta: rand(1, 3), text: "Il dialogo con " + party.name + " resta cordiale ma formale: nessuna vera apertura, solo buone maniere." },
+      { weight: goodW, delta: rand(4, 8), text: "Il contatto diretto con " + party.name + " va bene: un canale di dialogo reale si apre, e i rapporti ne beneficiano." }
+    ]);
+    state.partyRelations[partyId] = clamp(cur + outcome.delta, 0, 100);
+    state.log.unshift({ week: state.turn, title: "Contatto diplomatico con " + party.name, choiceLabel: party.name, result: outcome.text, headlines: [], type: "dossier", cat: "Strategia Elettorale" });
+    return { resultText: outcome.text, headlines: [] };
+  }
   function renderPartyRelations() {
     if (!state.partyRelations) return "";
+    var p = state.player;
+    var weeksLeft = p ? (p.partyContactCooldownTurn || 0) - state.turn : 0;
+    var onCooldown = weeksLeft > 0;
+    var canAfford = p && p.fondi >= PARTY_CONTACT_COST;
+    var myPos = p ? LEFT_RIGHT_POSITION[p.family] : undefined;
+    var myExtreme = p && isExtremeFamily(p.family);
     var rows = activeParties().map(function (pt) {
       var v = state.partyRelations[pt.id] !== undefined ? state.partyRelations[pt.id] : 50;
-      return { name: pt.name, color: pt.color, v: v };
+      var theirPos = pt.familyId ? LEFT_RIGHT_POSITION[pt.familyId] : undefined;
+      var dist = (myPos !== undefined && theirPos !== undefined) ? Math.abs(myPos - theirPos) : 0;
+      var tooFar = dist > ((myExtreme || isExtremeFamily(pt.familyId)) ? 2 : 4);
+      return { id: pt.id, name: pt.name, color: pt.color, v: v, tooFar: tooFar };
     }).sort(function (a, b) { return b.v - a.v; });
     var items = rows.map(function (r) {
       var lbl = relationLabel(r.v);
+      var disabled = onCooldown || !canAfford || r.tooFar;
       return '<div class="party-row"><span class="sw" style="background:' + r.color + '"></span>' +
         '<div class="party-row-body"><div class="party-row-head"><strong>' + r.name + '</strong>' +
-        '<span class="chip ' + lbl.cls + '">' + lbl.text + "</span></div></div></div>";
+        '<span class="chip ' + lbl.cls + '">' + lbl.text + "</span></div>" +
+        (r.tooFar ? '<p class="ci-hint" style="margin:0.2rem 0 0">Linee politiche troppo lontane: non risponderebbe a un contatto diretto.</p>' : '') +
+        "</div>" +
+        '<button type="button" class="staff-btn" data-contact-party="' + r.id + '"' + (disabled ? " disabled" : "") + '>Contatta</button></div>';
     }).join("");
     return '<section aria-label="Relazioni tra partiti"><details class="log">' +
       '<summary>Relazioni con gli altri partiti<span>▾</span></summary>' +
-      '<p class="ci-hint">Quanto il tuo partito è vicino o ostile a ciascuna delle altre forze politiche: cambia soprattutto se attacchi direttamente un rivale, e tende lentamente a tornare neutrale nel tempo.</p>' +
+      '<p class="ci-hint">Quanto il tuo partito è vicino o ostile a ciascuna delle altre forze politiche: cambia se attacchi direttamente un rivale, tende lentamente a tornare verso l\'affinità ideologica reale nel tempo, oppure puoi provare a scaldarla tu stesso con un contatto diretto — costa ' + fmtEuro(PARTY_CONTACT_COST) + ', una volta ogni ' + PARTY_CONTACT_COOLDOWN_TURNS + ' settimane. Più le linee politiche sono vicine, più è probabile che vada bene; oltre una certa distanza (specie se una delle due linee è estrema) non risponde nemmeno.' +
+      (onCooldown ? " Prossimo contatto possibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") + "." : "") + '</p>' +
       '<div class="party-directory">' + items + "</div></details></section>";
   }
 
@@ -29704,6 +29771,17 @@
         var res = inviteParty(partyId);
         if (!res) { showSaveStatus("Non puoi ancora inviare questo invito.", true); return; }
         showSaveStatus(res.accepted ? res.label + " ha accettato il tuo invito!" : res.label + " ha rifiutato il tuo invito per ora.", !res.accepted);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-contact-party]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var partyId = btn.getAttribute("data-contact-party");
+        var res = contactParty(partyId);
+        if (!res) { showSaveStatus("Non puoi ancora contattare questo partito.", true); return; }
+        state.resultData = res;
+        state.phase = "result";
         save();
         render();
       });
