@@ -17006,7 +17006,13 @@
       markTopicNounResolved(topic.noun);
     }
     if (governmentCrisisDossier) return governmentCrisisDossier;
-    if (isEuExit && passed) return euAlternativeChoiceDossier();
+    // Richiesto da un giocatore: quando il referendum sull'uscita dall'UE passava, si saltava
+    // direttamente al dossier "quale nuova rotta internazionale?" senza mai mostrare prima un vero
+    // dossier con l'ESITO del voto — il risultato finiva solo nel Diario, mai come schermata a sé.
+    // Ora l'esito si vede sempre come dossier proprio (il blocco generico qui sotto), e la scelta sulla
+    // nuova collocazione internazionale arriva la settimana successiva (vedi state.player.
+    // pendingEuAlternativeChoice, letto in alta priorità nel dispatcher settimanale).
+    if (isEuExit && passed) p.pendingEuAlternativeChoice = true;
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
@@ -26612,7 +26618,13 @@
   // state.govEntity.memberIds) decide sempre da solo: qui non scatta nulla.
   function resolveCoalitionApproval() {
     var allyIds = (state.govEntity && state.govEntity.memberIds) || [];
-    if (!allyIds.length) return { approved: true };
+    // Bug segnalato da un giocatore: un governo che governa DA SOLO (un solo membro in
+    // state.govEntity.memberIds, tipicamente "player" senza alleati) veniva comunque sottoposto al
+    // vaglio della coalizione, con "player" stesso trattato come un alleato che può "opporsi" a sé
+    // stesso — bloccando a caso scelte di governo importanti (come il referendum sull'uscita dall'UE)
+    // senza che l'utente capisse perché. Un solo membro non è una coalizione: decide sempre da solo,
+    // esattamente come già documentato nel commento sopra (vedi "Un governo solista... non scatta nulla").
+    if (allyIds.length <= 1) return { approved: true };
     var allianceId = state.govEntity.id;
     if (!state.coalitionTrust) state.coalitionTrust = {};
     if (state.coalitionTrust[allianceId] === undefined) state.coalitionTrust[allianceId] = initialCoalitionTrust(allianceId);
@@ -32153,6 +32165,14 @@
     var proposedReferendumDossier = resolvePendingReferendumIfDue();
     if (proposedReferendumDossier) {
       state.aiDynamicDossier = proposedReferendumDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    if (p.pendingEuAlternativeChoice) {
+      p.pendingEuAlternativeChoice = false;
+      state.aiDynamicDossier = euAlternativeChoiceDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
