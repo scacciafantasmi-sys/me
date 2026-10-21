@@ -25283,11 +25283,7 @@
     ensureMinistryDesk();
     var ministry = state.playerMinistry.ministry;
     var articled = MINISTRY_ARTICLED[ministry] || ("di " + ministry);
-    // id usato per far atterrare lo scroll qui (vedi bindPageNavDrawer) quando si passa a questa scheda:
-    // senza, il cambio pagina riportava in cima a tutto il blocco comune (dossier, statistiche di
-    // partito, sondaggi...) che precede il contenuto di OGNI pagina, lasciando il benvenuto del Ministero
-    // fuori vista molto più in basso — segnalato da un giocatore.
-    var html = '<section aria-label="Ufficio del Ministro" id="ministero-welcome"><p class="eyebrow">Il tuo Ministero</p>' +
+    var html = '<section aria-label="Ufficio del Ministro"><p class="eyebrow">Il tuo Ministero</p>' +
       '<p class="ci-hint" style="font-size:1.05rem;color:var(--text);font-weight:700;margin-bottom:.3rem">Benvenuto in ufficio, Ministro ' + articled + '</p>' +
       '<p class="ci-hint">Da qui gestisci in prima persona il dicastero: una scrivania con casi concreti da affrontare, un fondo dedicato separato dalle casse del partito, e un riepilogo di tutto ciò che riguarda il tuo settore in Parlamento — in aggiunta ai dossier settimanali che continui a ricevere normalmente, non al loro posto.</p></section>';
     html += renderMinisteroDeskPanel();
@@ -27844,13 +27840,7 @@
     var sameContext = lastRenderScroll.turn === state.turn && lastRenderScroll.uiPage === state.uiPage && lastRenderScroll.mode === curMode;
     var isResultOfSameDossier = state.phase === "result" && lastRenderScroll.phase === "building" && sameContext;
     var screenChanged = !(sameContext && lastRenderScroll.phase === state.phase);
-    // Segnalato da un giocatore: passando alla scheda "Ministero", lo scroll in cima lasciava il
-    // benvenuto ("Benvenuto in ufficio, Ministro...") molto più in basso, sotto tutto il blocco comune
-    // (dossier della settimana, statistiche di partito, sondaggi...) che precede il contenuto di OGNI
-    // pagina. Qui NON si scorre in cima: più sotto, dopo aver ricostruito il DOM, si scorre invece
-    // direttamente alla sezione col benvenuto (vedi #ministero-welcome in renderMinisteroPage).
-    var scrollToMinisteroWelcome = screenChanged && !isResultOfSameDossier && state.uiPage === "ministero";
-    if (screenChanged && !isResultOfSameDossier && !scrollToMinisteroWelcome && typeof window !== "undefined" && window.scrollTo) {
+    if (screenChanged && !isResultOfSameDossier && typeof window !== "undefined" && window.scrollTo) {
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     }
     lastRenderScroll = { turn: state.turn, uiPage: state.uiPage, mode: curMode, phase: state.phase };
@@ -28565,30 +28555,48 @@
           save();
         }
       }
+      var dossierSection = "";
       if (state.phase === "building") {
-        body += renderDossierCard(activeDossier);
+        dossierSection += renderDossierCard(activeDossier);
       } else if (state.phase === "result") {
-        body += renderResultCard(state.resultData);
-        body += renderHeadlines(state.resultData.headlines);
+        dossierSection += renderResultCard(state.resultData);
+        dossierSection += renderHeadlines(state.resultData.headlines);
       }
-      if (state.player && !state.player.formationComplete) body += renderFormationSocialPanel();
-      body += renderExplorationHint();
+      if (state.player && !state.player.formationComplete) dossierSection += renderFormationSocialPanel();
+      dossierSection += renderExplorationHint();
 
       // Ordine pensato per la settimana tipo: prima i numeri chiave e le azioni che si usano spesso
       // (statistiche, sondaggi, eventi, riforme, referendum, alleanze, parlamento), poi tutto ciò che è
       // più di consultazione occasionale — raccolto in blocchi richiudibili per non allungare la pagina
       // di default (vedi wrapCollapsed).
-      body += renderPlayerStats();
-      body += renderFondiLedgerPanel();
-      body += renderPollGrid(state.prevSnapshot);
-      body += renderPublicOpinionPanel();
+      var statsSection = "";
+      statsSection += renderPlayerStats();
+      statsSection += renderFondiLedgerPanel();
+      statsSection += renderPollGrid(state.prevSnapshot);
+      statsSection += renderPublicOpinionPanel();
+
+      var pageContent = activePageDef().render();
       // Punto di aggancio per lo scroll dopo un cambio di pagina dalla barra in cima (vedi
       // bindPageNavDrawer): senza un riferimento stabile, cambiare pagina riportava sempre in cima
       // all'intera schermata (dossier, statistiche, sondaggi...), sopra al contenuto della pagina appena
       // scelta — il giocatore doveva scorrere a mano ogni volta per vedere quello che aveva appena
       // richiesto. id anziché una classe: deve essere unico e trovabile con getElementById dopo ogni render.
-      body += '<div id="page-content-anchor"></div>';
-      body += activePageDef().render();
+      // Richiesto da un giocatore: sulla scheda "Ministero" il benvenuto ("Benvenuto in ufficio,
+      // Ministro...") deve essere la PRIMA cosa che si vede passando a quella scheda, non l'ultima dopo
+      // dossier/statistiche/sondaggi come su tutte le altre — qui l'ORDINE si inverte (contenuto della
+      // pagina prima, blocco comune dopo) solo per questa scheda: stessa identica logica e stessi dati
+      // di sopra, nessun effetto collaterale perso, cambia solo dove finisce nell'HTML.
+      if (state.uiPage === "ministero") {
+        body += '<div id="page-content-anchor"></div>';
+        body += pageContent;
+        body += dossierSection;
+        body += statsSection;
+      } else {
+        body += dossierSection;
+        body += statsSection;
+        body += '<div id="page-content-anchor"></div>';
+        body += pageContent;
+      }
     }
     // Ogni render() ricostruisce l'intero DOM da zero (innerHTML), quindi lo stato open/closed di ogni
     // <details> richiudibile andrebbe perso a ogni singolo click che causa un re-render — anche solo
@@ -28611,12 +28619,7 @@
         if (openSummaries.indexOf(s.textContent) !== -1) s.parentElement.open = true;
       });
     }
-    var ministeroWelcomeEl = scrollToMinisteroWelcome ? document.getElementById("ministero-welcome") : null;
-    if (ministeroWelcomeEl) {
-      ministeroWelcomeEl.scrollIntoView({ block: "start", behavior: "auto" });
-    } else if (typeof window !== "undefined" && window.scrollTo) {
-      window.scrollTo({ top: scrollYBeforeSwap, left: 0, behavior: "auto" });
-    }
+    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo({ top: scrollYBeforeSwap, left: 0, behavior: "auto" });
     bindInteractions();
   }
 
