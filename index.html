@@ -14891,6 +14891,11 @@
     p.sezioni = Math.max(1, Math.round((p.sezioni || 1) * leaveShare));
     p.fondi = Math.max(500, Math.round((p.fondi || 0) * leaveShare));
     p.reputazione = clamp((p.reputazione || 50) - rand(5, 12), 0, 100);
+    // Stesso motivo del takeover (vedi recomputePeriodic/computeOrganicTarget): da qui in avanti il nuovo
+    // partito nato dalla scissione ha un nuovo sondaggio di partenza (baselineSondaggi sopra), quindi gli
+    // serve anche un nuovo punto di riferimento organico neutro, altrimenti il bersaglio settimanale lo
+    // tirerebbe giù da subito solo per il disallineamento di scala tra le due formule.
+    p.baselineOrganicTarget = computeOrganicTarget(p);
     p.playerIsLeader = true;
     p.interimLeaderName = null;
     p.leaderTrust = clamp(55 + Math.random() * 15, 0, 100);
@@ -19286,7 +19291,7 @@
     referendumSearchQuery: "", mozioneSearchQuery: "", leggeSearchQuery: "", amendmentSearchQuery: "", policyHistoryLegislatureFilter: "",
     electoralLawLegislatureUsed: null, pendingElectoralLaw: null,
     cumulativeGovWeeks: 0, lingeringScandal: null,
-    coalitionInviteCooldowns: {}, baselineSondaggi: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
+    coalitionInviteCooldowns: {}, baselineSondaggi: null, baselineOrganicTarget: null, euInitiativeCooldowns: {}, reunificationCooldowns: {}, mergeCooldowns: {}, geopoliticaCooldowns: {},
     geopoliticaCooldownTurn: 0, euInitiativeCooldownTurn: 0,
     fundraisingCooldowns: {}, mozioneCooldownTurn: 0, pendingMozione: null, mozioneCandidates: null, mozioneSelectedCat: null,
     campaignCooldowns: {}, euCampaignCooldowns: {}, referendumCampaignCooldownTurn: 0, giovanile: null, giovanileCooldownTurn: 0,
@@ -19943,6 +19948,25 @@
       ]
     };
   }
+  // Bersaglio "organico" dei sondaggi: quanto i numeri attuali del partito (iscritti, radicamento,
+  // visibilità, reputazione, clima del paese) giustificherebbero da soli, indipendentemente da quale sia
+  // il sondaggio di partenza. Estratta a parte (prima era tutta inline dentro recomputePeriodic) perché
+  // serve anche FUORI dal giro settimanale: un partito preso in mano (vedi baselineOrganicTarget sotto)
+  // deve poterla calcolare anche al momento stesso della presa di comando, per avere un vero punto di
+  // riferimento "neutro" da cui misurare i progressi o i passi indietro successivi.
+  function computeOrganicTarget(p) {
+    var style = effectiveLeaderStyle(p);
+    var repCeiling = clamp((p.reputazione - 15) / 45, 0.03, 1);
+    var incumbencyRelief = clamp((p.cumulativeGovWeeks || 0) / 500, 0, 1) * 0.2;
+    var nicheMult = NICHE_FAMILIES[p.family] ? clamp(0.22 + p.reputazione / 200 + incumbencyRelief, 0.22, 0.72 + incumbencyRelief) : 1;
+    var cp = state.countryProfile;
+    var countryMoodAvg = (cp.economia + cp.disoccupazione + cp.felicita + cp.sicurezza) / 4;
+    var countryMoodBonus = clamp((countryMoodAvg - 5.5) * 0.55, -2, 2);
+    return clamp(
+      (0.12 + Math.sqrt(p.iscritti) * 0.034 + p.sezioni * 0.12 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.032 + countryMoodBonus) * style.growthMult * repCeiling * nicheMult,
+      0, 40
+    );
+  }
   // ---------- Weekly recomputation: polling, drift, decay, upkeep ----------
   function recomputePeriodic() {
     var p = state.player;
@@ -20018,78 +20042,34 @@
     // annullare l'effetto delle scelte, che restano molto più forti di questa deriva settimanale.
     p.reputazione = clamp(p.reputazione + (55 - p.reputazione) * 0.015, 0, 100);
 
-    // La reputazione ora agisce da vero TETTO moltiplicativo, non solo da piccolo bonus/malus additivo:
-    // un partito con base ristretta ma coerente può restare con iscritti/visibilità alti anche facendo
-    // cose gravi (es. violenza), ma senza legittimità pubblica quell'entusiasmo di nicchia non si traduce
-    // in consenso elettorale reale. Sotto reputazione ~15 la crescita crolla quasi a zero; sopra ~60 non
-    // c'è più penalità.
-    var repCeiling = clamp((p.reputazione - 15) / 45, 0.03, 1);
-    // Le ideologie di nicchia (fascismo, monarchia, comunismo, gratuitismo, comunismo di lusso) partono già
-    // da sondaggi molto bassi (vedi state.parties in freshState), ma senza un freno aggiuntivo
-    // crescerebbero con la STESSA facilità di un partito mainstream una volta accumulati iscritti/sezioni/
-    // reputazione — non realistico per basi elettorali strutturalmente di nicchia. La prima versione di
-    // questo freno (0.32 -> 1, saturato già a reputazione ~88) si è rivelata troppo debole nella pratica:
-    // con scelte fatte a caso (nessuna strategia), un partito come Potere al Popolo (famiglia comunista)
-    // superava il 2% di sondaggi in meno di 20 settimane, perché la reputazione sale in fretta anche senza
-    // sforzo deliberato e il moltiplicatore saturava quasi subito verso "nessuna penalità". Il freno ora
-    // resta permanentemente più basso (0.22 -> 0.72, mai saturato del tutto nemmeno a reputazione massima):
-    // resta comunque possibile crescere costruendo credibilità, ma un'ideologia di nicchia deve restare
-    // strutturalmente più lenta di una mainstream per l'intera partita, non solo nelle prime settimane.
-    // Segnalato da un giocatore con un governo di Comunismo di Lusso in carica da oltre 1700 settimane,
-    // reputazione già al tetto: il freno restava fisso a 0.72 anche per un'ideologia di nicchia che ha
-    // governato con successo per anni interi, tenendo il bersaglio dei sondaggi sotto quanto già
-    // raggiunto — un calo strutturale "qualsiasi cosa faccia", indipendente dalle scelte, perché il tetto
-    // non lasciava mai spazio per crescere oltre. Nella realtà un movimento un tempo di nicchia che governa
-    // a lungo si NORMALIZZA agli occhi dell'elettorato (è successo a più di un partito storicamente
-    // marginale). Il tetto ora si allenta gradualmente (mai del tutto, resta comunque sotto un partito
-    // mainstream vero) in base a QUANTO SI È GOVERNATO DAVVERO (p.cumulativeGovWeeks, incrementato una
-    // volta a settimana solo mentre si è al governo — non basta essere un partito vecchio, ed entrare al
-    // governo per la prima volta dopo una lunga storia da opposizione non dà alcuno sconto immediato) e
-    // solo su una scala lentissima (fino a 500 settimane di governo REALE, quasi un decennio di gioco): non
-    // premia un breve governo fortunato, solo un lungo corso genuino guadagnato settimana dopo settimana.
-    var incumbencyRelief = clamp((p.cumulativeGovWeeks || 0) / 500, 0, 1) * 0.2;
-    var nicheMult = NICHE_FAMILIES[p.family] ? clamp(0.22 + p.reputazione / 200 + incumbencyRelief, 0.22, 0.72 + incumbencyRelief) : 1;
-    // Le sezioni locali (vedi openLocalSection) contano soprattutto sul TERRITORIO (elezioni
-    // comunali/provinciali/regionali, vedi triggerLocalElectionCycle), ma un radicamento reale deve
-    // ancora contribuire, in modo contenuto, anche alla crescita organica nazionale — toglierlo del
-    // tutto lasciava i sondaggi piatti o in calo anche per un partito che si sta davvero espandendo sul
-    // territorio. Il vero problema non era il peso delle sezioni in sé, ma poterne aprire decine tutte
-    // nella stessa settimana (vedi il limite di una sezione a settimana in openLocalSection): con
-    // quel limite, un coefficiente moderato non può più produrre balzi innaturali, solo una crescita
-    // lenta e proporzionata al radicamento reale.
-    // Pesi ricalibrati: la radice quadrata sugli iscritti (rendimenti fortemente decrescenti, voluti)
-    // penalizzava troppo i partiti già grandi (es. presi in mano già forti, o cresciuti molto in una
-    // partita lunga), che restavano strutturalmente condannati a scendere verso un equilibrio molto più
-    // basso qualunque cosa facesse il giocatore. Il coefficiente sale leggermente (0.028 -> 0.034): un
-    // partito piccolo non se ne accorge quasi, uno grande recupera qualche punto di bersaglio. Stesso
-    // discorso per le sezioni (0.1 -> 0.12, il radicamento territoriale vale un po' di più) e per la
-    // reputazione oltre il tetto moltiplicativo di repCeiling: il contributo diretto (reputazione-50)
-    // saliva troppo poco (0.02/punto, quasi nullo tra 60 e 100 dove repCeiling è già saturo) — portato a
-    // 0.032, così mantenere una reputazione alta continua a dare un ritorno reale anche a lungo termine,
-    // non solo nella fascia bassa dove sblocca repCeiling.
-    // Clima nazionale: prima il paese pesava sui sondaggi SOLO tramite il trend settimana-su-settimana
-    // (countrySondaggiEffect più sotto), un segnale che si spegne appena la Scheda Paese smette di
-    // muoversi — un paese che resta stabilmente messo male (o benissimo) per mesi non lasciava alcuna
-    // traccia strutturale sul bersaglio. Qui invece pesa il LIVELLO assoluto di un piccolo paniere di
-    // indicatori-chiave (economia, occupazione, felicità, sicurezza): sopra la media nazionale (5.5) dà
-    // una piccola spinta continua, sotto la media un piccolo freno continuo — indipendente dalle scelte
-    // del partito, la stessa pressione per tutti, giocatore compreso, esattamente come un elettorato che
-    // guarda anche a come stanno oggettivamente le cose, non solo a chi ha fatto cosa questa settimana.
-    var cp = state.countryProfile;
-    var countryMoodAvg = (cp.economia + cp.disoccupazione + cp.felicita + cp.sicurezza) / 4;
-    var countryMoodBonus = clamp((countryMoodAvg - 5.5) * 0.55, -2, 2);
-    var organicTarget = clamp(
-      (0.12 + Math.sqrt(p.iscritti) * 0.034 + p.sezioni * 0.12 + p.visibilita * 0.1 + (p.reputazione - 50) * 0.032 + countryMoodBonus) * style.growthMult * repCeiling * nicheMult,
-      0, 40
-    );
-    // La formula organica sopra è tarata su un partito che parte da zero e cresce sul campo: usata da
-    // sola su un partito "preso in mano" già forte (che eredita iscritti/sezioni/sondaggi reali molto
-    // più grandi) lo farebbe collassare in poche settimane verso l'equilibrio di un partito piccolo,
-    // anche senza errori del giocatore. Se il partito ha un sondaggio reale di partenza, l'obiettivo
-    // settimanale resta ancorato soprattutto a quello, e la componente organica pesa solo per un terzo
-    // (permette comunque a buone o cattive scelte di farlo salire o scendere nel tempo).
+    var organicTarget = computeOrganicTarget(p);
+    // BUG GRAVE segnalato da più giocatori ("qualunque scelta tu fai i voti scendono", un partito reale
+    // preso in mano che perde punti settimana dopo settimana "facendo scelte giuste", fino quasi a 0 per i
+    // partiti minori): la formula organica qui sopra è tarata su un partito che cresce da zero sul campo,
+    // e anche con i suoi coefficienti resta STRUTTURALMENTE molto più bassa (tipicamente 8-15) di quanto
+    // valgano i sondaggi reali di un partito grande vero (PD, FdI... anche 20-30+) — gli iscritti "stimati"
+    // (pollNow * 1200) restano comunque schiacciati dai rendimenti fortemente decrescenti della radice
+    // quadrata. Blendare quel valore ASSOLUTO con il sondaggio di partenza (anche solo al 35%) tirava
+    // SEMPRE il bersaglio sotto il punto di partenza per qualunque partito preso in mano sopra quella
+    // soglia strutturale — un calo garantito indipendente da quanto bene giocasse chi era al comando, non
+    // un errore di bilanciamento ma di impostazione: due numeri su scale diverse non andavano mai mescolati
+    // come valori assoluti. Ora, per un partito preso in mano, si usa invece la VARIAZIONE del bersaglio
+    // organico rispetto al suo valore al momento della presa di comando (p.baselineOrganicTarget, impostato
+    // lì — vedi takeover sopra — e anche al momento di uno scissione/rifondazione che fissa un nuovo
+    // baselineSondaggi): se il partito non è né migliorato né peggiorato rispetto ad allora, il bersaglio
+    // resta ancorato al sondaggio di partenza; scelte che fanno davvero crescere iscritti/radicamento/
+    // visibilità/reputazione oltre quel punto di partenza spingono il bersaglio in su, scelte che le fanno
+    // peggiorare lo spingono in giù — esattamente l'intenzione originale, senza il disallineamento di scala.
+    // Un salvataggio già in corso, colpito dal bug, non aveva ancora alcun baselineOrganicTarget salvato:
+    // viene impostato qui al primo giro successivo al fix, usando il valore organico DI QUEL MOMENTO (già
+    // eroso dal bug) come nuovo "zero" — ferma subito l'emorragia da qui in avanti, anche se non restituisce
+    // i punti già persi prima del fix.
+    if (p.baselineSondaggi !== null && p.baselineSondaggi !== undefined &&
+        (p.baselineOrganicTarget === null || p.baselineOrganicTarget === undefined)) {
+      p.baselineOrganicTarget = organicTarget;
+    }
     var target = p.baselineSondaggi !== null && p.baselineSondaggi !== undefined
-      ? clamp(organicTarget * 0.35 + p.baselineSondaggi * 0.65, 0, 40)
+      ? clamp(p.baselineSondaggi + clamp(organicTarget - p.baselineOrganicTarget, -15, 15) * 0.6, 0, 40)
       : organicTarget;
     // Il paese che va oggettivamente meglio o peggio deve pesare anche sui sondaggi, non solo sulle
     // statistiche interne del partito (iscritti, sezioni, reputazione): chi governa ne riceve credito o
@@ -22482,6 +22462,12 @@
         state.player.sezioni = Math.max(3, Math.round(pollNow / 1.5));
         state.player.reputazione = 60;
         state.player.visibilita = Math.min(70, pollNow * 2.2);
+        // Punto di riferimento "neutro" per il bersaglio organico dei sondaggi (vedi recomputePeriodic):
+        // da qui in avanti il bersaglio si muove in base a QUANTO quel valore organico migliora o
+        // peggiora rispetto a QUESTO momento, non al suo valore assoluto (su scala completamente diversa
+        // dal sondaggio reale ereditato) — altrimenti ogni partito preso in mano sopra l'equilibrio
+        // "organico" tipico scenderebbe sempre, qualunque cosa faccia il giocatore.
+        state.player.baselineOrganicTarget = computeOrganicTarget(state.player);
         // Un partito reale ha seggi in Parlamento oggi SOLO se ha davvero superato la soglia di
         // sbarramento: i tre grandi partiti di governo corrono in coalizione (soglia 10% collettiva,
         // sempre superata), il campo largo idem; tutti gli altri corrono da soli e servono almeno il 3%
@@ -26200,7 +26186,7 @@
     if (dist > maxAllowedDist) {
       var textBlocked = party.name + " non risponde alla tua richiesta di contatto: le vostre linee politiche sono troppo lontane perché un dialogo diretto abbia senso.";
       state.log.unshift({ week: state.turn, title: "Contatto diplomatico ignorato", choiceLabel: party.name, result: textBlocked, headlines: [], type: "dossier", cat: "Strategia Elettorale" });
-      return { resultText: textBlocked, headlines: [] };
+      return { resultText: textBlocked, headlines: [], blocked: true };
     }
     if (!state.partyRelations) state.partyRelations = {};
     var cur = state.partyRelations[partyId] !== undefined ? state.partyRelations[partyId] : 50;
@@ -26214,7 +26200,7 @@
     ]);
     state.partyRelations[partyId] = clamp(cur + outcome.delta, 0, 100);
     state.log.unshift({ week: state.turn, title: "Contatto diplomatico con " + party.name, choiceLabel: party.name, result: outcome.text, headlines: [], type: "dossier", cat: "Strategia Elettorale" });
-    return { resultText: outcome.text, headlines: [] };
+    return { resultText: outcome.text, headlines: [], delta: outcome.delta };
   }
   function renderPartyRelations() {
     if (!state.partyRelations) return "";
@@ -29784,6 +29770,10 @@
         var partyId = btn.getAttribute("data-contact-party");
         var res = contactParty(partyId);
         if (!res) { showSaveStatus("Non puoi ancora contattare questo partito.", true); return; }
+        // Segnalato da un giocatore: senza un avviso sempre visibile (vedi showSaveStatus, pensato
+        // apposta per questo), il click sembrava non fare nulla quando lanciato scrollati in basso nella
+        // pagina Partiti — l'esito veniva comunque registrato, ma compariva solo in cima, fuori vista.
+        showSaveStatus(res.resultText, !!(res.blocked || (res.delta !== undefined && res.delta < 0)));
         state.resultData = res;
         state.phase = "result";
         save();
