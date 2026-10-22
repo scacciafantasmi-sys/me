@@ -19864,11 +19864,40 @@
   // il blocco, un alleato che se ne va) andrebbe perso al primo reload — segnalato da un giocatore dopo
   // un'intera legislatura in cui i due blocchi storici sembravano immutabili, a differenza delle
   // coalizioni nate in partita (quelle vivono già in state.dynamicCoalitions).
+  // Bug grave segnalato da un giocatore: dopo migliaia di settimane il salvataggio restava bloccato per
+  // sempre alla stessa settimana, qualunque cosa facesse — ogni ricarica tornava lì. Causa: state.log
+  // cresce con .unshift() a ogni singola scelta/evento (134 punti del codice) senza MAI un limite, pur
+  // essendo mostrato in interfaccia solo nelle ultime decine di voci (vedi logVisibleCount) — dopo
+  // migliaia di settimane diventa un array enorme che, serializzato in JSON a ogni save(), supera la
+  // quota di localStorage del browser (in genere 5-10MB). localStorage.setItem lancia allora un errore
+  // che il catch qui sotto ingoiava in silenzio: il salvataggio falliva da quel momento in avanti SENZA
+  // alcun avviso, e il giocatore restava bloccato esattamente alla settimana dell'ultimo salvataggio
+  // riuscito, convinto (comprensibilmente) che il gioco si fosse "rotto". trimUnboundedHistoryArrays
+  // (sotto) tiene questi registri entro un limite ragionevole PRIMA che diventi un problema; se il
+  // salvataggio fallisce comunque (un salvataggio già troppo grande da partite precedenti a questo fix),
+  // un secondo tentativo più aggressivo prova a recuperare spazio invece di arrendersi subito.
+  function trimUnboundedHistoryArrays(aggressive) {
+    var keepRecent = aggressive ? 150 : 400;
+    if (state.log && state.log.length > keepRecent) {
+      var recent = state.log.slice(0, keepRecent);
+      // Gli epiloghi degli Archi Narrativi (vedi renderPartyArcHistory) sono un piccolo numero di voci
+      // "milestone" pensate per restare visibili per tutta la partita: vanno preservate anche quando sono
+      // più vecchie del taglio, a differenza delle comuni voci di cronaca/scelte settimanali.
+      var oldMilestones = state.log.slice(keepRecent).filter(function (e) { return e.cat === "Arco Narrativo" && e.choiceLabel === "Epilogo"; });
+      state.log = recent.concat(oldMilestones);
+    }
+  }
   function save() {
     try {
       state.fixedCoalitionMembers = { centrodestra: COALITIONS.centrodestra.members.slice(), campolargo: COALITIONS.campolargo.members.slice() };
+      trimUnboundedHistoryArrays(false);
       localStorage.setItem(currentStorageKey(), JSON.stringify(state));
-    } catch (e) {}
+    } catch (e) {
+      try {
+        trimUnboundedHistoryArrays(true);
+        localStorage.setItem(currentStorageKey(), JSON.stringify(state));
+      } catch (e2) {}
+    }
   }
   // Riempie automaticamente ogni campo strutturale mancante in un salvataggio (aggiunto in versioni
   // successive a quella del salvataggio) con il suo valore di default, più le migrazioni "vere" caso per
@@ -19989,6 +20018,15 @@
           if (famMatch) dp.familyId = famMatch.id;
         });
       }
+    }
+    // Applica subito il taglio di state.log (vedi trimUnboundedHistoryArrays, definita più sotto insieme
+    // a save()): un salvataggio già gonfio da partite precedenti a questo fix va sgonfiato appena
+    // caricato, non solo al prossimo save() riuscito, altrimenti l'array enorme resta in memoria e il
+    // problema di quota di localStorage si ripresenta subito al primo salvataggio automatico.
+    if (parsed.log && parsed.log.length > 400) {
+      var recentLog = parsed.log.slice(0, 400);
+      var oldMilestonesLog = parsed.log.slice(400).filter(function (e) { return e.cat === "Arco Narrativo" && e.choiceLabel === "Epilogo"; });
+      parsed.log = recentLog.concat(oldMilestonesLog);
     }
     return parsed;
   }
@@ -25237,6 +25275,12 @@
     legislatureLedger.forEach(function (f) { if (f.delta < 0) spendingByLabel[f.label] = (spendingByLabel[f.label] || 0) + f.delta; });
     var spendingBreakdown = Object.keys(spendingByLabel).map(function (k) { return { label: k, total: spendingByLabel[k] }; })
       .sort(function (a, b) { return a.total - b.total; }).slice(0, 8);
+    // Una volta aggregate qui sopra in spendingBreakdown (già salvato per sempre nell'epoca chiusa), le
+    // voci del fondiLedger della legislatura appena conclusa non servono più a nessun'altra funzione del
+    // gioco: senza questo taglio, fondiLedger cresce senza limiti per tutta la partita esattamente come
+    // state.log (vedi trimUnboundedHistoryArrays), finendo tra le cause dei salvataggi troppo grandi per
+    // localStorage dopo molte legislature.
+    state.fondiLedger = (state.fondiLedger || []).filter(function (f) { return f.week >= state.turn; });
     // Miglioramenti/peggioramenti della Scheda Paese dall'inizio alla fine della legislatura: confronto
     // tra l'istantanea presa all'apertura (e.profileStart, vedi openNewEpoch) e il valore attuale.
     var profileStart = e.profileStart || {};
