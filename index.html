@@ -19673,7 +19673,7 @@
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null, lastElectionWinnerId: null,
     cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConfidenceVote: false, pendingConsultazioni: null,
-    pendingGovFormationNegotiation: null,
+    pendingGovFormationNegotiation: null, pendingGovInvite: null,
     playerMinistry: null, regionalPresidency: null, pendingRegionalElectionResult: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, liraAnnounced: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
     uprisingSaga: null, cpuUprisingCooldownTurn: 0, pendingDictatorVerdictTurn: null, fallenRegimeMemory: null, collapseSaga: null,
@@ -22422,11 +22422,24 @@
         state.consensoGoverno = 20;
       } else {
         var blocSeats = winnerAloneSeats;
+        // Richiesto da un giocatore: un piccolo partito del giocatore (non nel blocco che ha vinto)
+        // veniva reclutato automaticamente come alleato extra da chi forma il governo, senza alcuna
+        // vera scelta — il giocatore si ritrovava al governo "di sorpresa", niente dossier, nessun modo
+        // di preferire l'opposizione. Qui sotto il giocatore non viene più arruolato in automatico:
+        // se l'algoritmo lo sceglierebbe come alleato, l'invito resta in sospeso (playerInviteCandidate,
+        // salvato poi in state.pendingGovInvite) e arriva come un vero dossier la settimana successiva
+        // (vedi buildGovInviteDossier/checkPendingGovInvite), con la scelta di accettare o restare
+        // all'opposizione. Il governo intanto nasce comunque, cercando altri alleati se servono.
+        var playerInviteCandidate = null;
         if (blocSeats.camera < CAMERA_MAJORITY_SEATS || blocSeats.senato < SENATO_MAJORITY_SEATS) {
           var otherEntities = excludeMainRivalUnlessNecessary(qualified.filter(function (e) { return e.id !== winner.id; })
             .sort(function (a, b) { return b.totalSeats - a.totalSeats; }));
           var currentFamilyIds = entityFamilyIds(governingMemberIds);
           function recruitAlly(ally, forced) {
+            if (ally.members.indexOf("player") !== -1) {
+              if (!playerInviteCandidate) playerInviteCandidate = { winnerId: winner.id, winnerLabel: winner.label, forced: forced };
+              return;
+            }
             ally.wasIdeologicallyForced = forced;
             extraAllies.push(ally);
             governingMemberIds = governingMemberIds.concat(ally.members);
@@ -22468,6 +22481,9 @@
           }
         }
         finishGovernmentFormation(winner, extraAllies, governingMemberIds, blocSeats, seatsById);
+        if (playerInviteCandidate) {
+          state.pendingGovInvite = Object.assign({ turn: state.turn }, playerInviteCandidate);
+        }
       }
     } else {
       state.pendingConsultazioni = null;
@@ -22649,6 +22665,51 @@
     finishGovernmentFormation(winner, extraAllies, neg.governingMemberIds, blocSeats, neg.seatsById);
     state.pendingGovFormationNegotiation = null;
     finishGovernmentCabinetSetup();
+  }
+
+  // ---------- Invito al governo (partito del giocatore non nel blocco vincitore) ----------
+  // Richiesto da un giocatore: prima, un piccolo partito del giocatore scelto dall'algoritmo come
+  // alleato extra (vedi playerInviteCandidate in resolveElection) finiva al governo "di sorpresa",
+  // senza alcun dossier. Ora riceve un vero invito, con la scelta di accettare o restare all'opposizione
+  // — esattamente come nella realtà un partito valuta una proposta di governo che non ha cercato lui.
+  function buildGovInviteDossier() {
+    var inv = state.pendingGovInvite;
+    if (!inv) return null;
+    var p = state.player;
+    return {
+      id: "gov_invite", kind: "notizia", cat: "Formazione del Governo",
+      eyebrow: inv.forced ? "Un invito di necessità, oltre la tua area politica" : "Un invito ad allargare la maggioranza",
+      title: inv.winnerLabel + " ti invita a entrare nel governo",
+      brief: inv.winnerLabel + " non ha da sola i numeri per governare e si rivolge anche a " + p.name + " per allargare la maggioranza" +
+        (inv.forced ? ", nonostante la distanza tra le due aree politiche: un'intesa di necessità, non di affinità." : ": un'alleanza coerente con la tua area politica.") +
+        " Puoi accettare ed entrare al governo, con responsabilità dirette sulle scelte dell'esecutivo, oppure restare all'opposizione, libero di criticarlo.",
+      choices: [
+        { label: "Accetta: entra al governo", hint: "Responsabilità dirette, voce in capitolo sulle scelte dell'esecutivo", acceptGovInvite: true, effects: {}, result: "" },
+        { label: "Rifiuta: resta all'opposizione", hint: "Più libertà di critica, ma nessun potere esecutivo", declineGovInvite: true, effects: { reputazione: rand(0.3, 1) }, result: "Il partito sceglie di restare all'opposizione, libero di criticare le scelte del nuovo governo." }
+      ]
+    };
+  }
+  // Risolve l'accettazione: il partito entra nella coalizione di governo già formata (senza di lui),
+  // stesso trattamento di un alleato extra riconosciuto in finishGovernmentFormation (forcedAllyIds se
+  // l'invito era "di necessità"), con un piccolo costo di fiducia per essere entrato dopo, a trattativa
+  // già chiusa, invece che dal primo giorno.
+  function resolveGovInviteAccept() {
+    var p = state.player;
+    var inv = state.pendingGovInvite;
+    state.pendingGovInvite = null;
+    if (!inv || !state.govEntity) return;
+    state.govEntity.memberIds.push("player");
+    state.govEntity.seatSplit.player = { camera: p.seatsCamera, senato: p.seatsSenato };
+    state.govEntity.extraAllyIds.push("player");
+    if (inv.forced) state.govEntity.forcedAllyIds.push("player");
+    state.consensoGoverno = clamp((state.consensoGoverno === undefined ? 50 : state.consensoGoverno) - (inv.forced ? 10 : 5), 15, 100);
+    p.parliamentRole = "governo";
+    addDiaryEntry("Andiamo al governo", "Accettiamo l'invito di " + inv.winnerLabel + ": da questa settimana " + p.name + " è al governo, non più solo all'opposizione.");
+    state.log.unshift({
+      week: state.turn, title: "Invito al governo accettato", choiceLabel: inv.winnerLabel,
+      result: p.name + " entra nella coalizione di governo guidata da " + inv.winnerLabel + ".",
+      headlines: [], type: "istituzioni", cat: "Formazione del Governo"
+    });
   }
 
   // ---------- Rendering ----------
@@ -23559,39 +23620,41 @@
   // (vedi resolvePartyEvent) impedisce di incatenarne più di uno nella stessa manciata di settimane.
   var PARTY_EVENTS = {
     comizio: {
-      label: "Comizio pubblico", cost: 4725, cooldown: 5,
+      label: "Comizio pubblico", cost: 4725, cooldown: 8,
       desc: "Un comizio nella tua città di riferimento, per mobilitare simpatizzanti e militanti."
     },
     manifestazione: {
-      label: "Manifestazione di piazza", cost: 8400, cooldown: 10,
+      label: "Manifestazione di piazza", cost: 8400, cooldown: 15,
       desc: "Una manifestazione di piazza su un tema identitario del partito: molto visibile, un po' divisiva."
     },
     congresso: {
-      label: "Congresso nazionale", cost: 22500, cooldown: 10,
+      label: "Congresso nazionale", cost: 22500, cooldown: 15,
       desc: "Un congresso nazionale per rilanciare la linea del partito: il più caro, ma anche il più efficace."
     },
     cena_partito: {
-      label: "Cena organizzata dal partito", cost: 5025, cooldown: 8,
+      label: "Cena organizzata dal partito", cost: 5025, cooldown: 12,
       desc: "Una cena a porte quasi chiuse con iscritti e simpatizzanti più stretti: meno pubblico, più confidenza."
     },
     tour_territoriale: {
-      label: "Tour nei territori", cost: 8400, cooldown: 5,
+      label: "Tour nei territori", cost: 8400, cooldown: 8,
       desc: "Un giro di tappe in diverse città, per radicare il partito lontano dai grandi centri."
     },
     missione_diplomatica: {
-      label: "Missione diplomatica internazionale", cost: 45000, cooldown: 13,
+      label: "Missione diplomatica internazionale", cost: 45000, cooldown: 20,
       desc: "Una missione all'estero per costruire relazioni internazionali e rafforzare il profilo del partito sulla scena globale."
     },
     campagna_mediatica_nazionale: {
-      label: "Campagna mediatica nazionale", cost: 3375, cooldown: 4,
+      label: "Campagna mediatica nazionale", cost: 3375, cooldown: 6,
       desc: "Una campagna coordinata sui media nazionali per portare il partito al centro del dibattito pubblico."
     }
   };
-  // Oltre al cooldown individuale di ogni evento (sopra), un solo evento di partito — di QUALSIASI tipo
-  // tra i sei — è utilizzabile ogni 3 settimane in totale: vedi il controllo su lastPartyEventTurn in
-  // resolvePartyEvent, che impedisce di incatenarne più di uno nella stessa settimana o nelle immediate
-  // successive anche quando i cooldown individuali lo permetterebbero.
-  var PARTY_EVENTS_SHARED_COOLDOWN = 3;
+  // Segnalato da un giocatore: con un cooldown condiviso di sole 3 settimane bastava alternare un evento
+  // diverso ogni volta (i cooldown individuali, 4-13 settimane, non erano mai tutti occupati insieme) per
+  // avere una crescita quasi continua di sondaggi/visibilità/reputazione/iscritti — una "mossa a tavolino"
+  // sempre conveniente che da sola bastava a far crescere il partito, senza bisogno di affrontare il resto
+  // del gioco. Gli eventi di partito devono aiutare, non sostituire tutto il resto: cooldown individuali e
+  // condiviso allungati, ed effetti abbassati (vedi partyEventEffects/PARTY_EVENT_SCENE_MAGNITUDE sotto).
+  var PARTY_EVENTS_SHARED_COOLDOWN = 6;
   var DIPLOMATIC_PARTNERS = ["con la Francia", "con la Germania", "con la Spagna", "con gli Stati Uniti", "con il Regno Unito", "con il Giappone", "con il Brasile", "con l'India", "con il Canada", "con gli Emirati Arabi Uniti", "con la Polonia", "con il Marocco"];
   var DIPLOMATIC_TOPICS = ["la cooperazione commerciale", "la sicurezza e la difesa", "la transizione energetica", "la ricerca scientifica", "la cooperazione culturale", "la gestione dei flussi migratori"];
   var MEDIA_CAMPAIGN_FLAVORS = [
@@ -23621,17 +23684,18 @@
   // ingredienti del bersaglio organico) senza questo problema, allineati gli altri quattro aggiungendo
   // una piccola componente duratura coerente con cosa rappresenta ciascun evento.
   function partyEventEffects(eventId) {
-    if (eventId === "comizio") return { sondaggi: rand(0.08, 0.12), visibilita: rand(1, 2) };
-    if (eventId === "manifestazione") return { sondaggi: rand(0.08, 0.12), reputazione: rand(1, 2.5), visibilita: rand(3, 6) };
-    if (eventId === "congresso") return { sondaggi: rand(0.16, 0.24), reputazione: rand(3, 5) };
-    if (eventId === "cena_partito") return { reputazione: rand(1, 3), iscritti: rand(8, 18) };
-    if (eventId === "tour_territoriale") return { sondaggi: rand(0.22, 0.34), reputazione: rand(3, 6) };
+    if (eventId === "comizio") return { sondaggi: rand(0.05, 0.08), visibilita: rand(0.6, 1.2) };
+    if (eventId === "manifestazione") return { sondaggi: rand(0.05, 0.08), reputazione: rand(0.6, 1.5), visibilita: rand(1.8, 3.6) };
+    if (eventId === "congresso") return { sondaggi: rand(0.1, 0.15), reputazione: rand(1.8, 3) };
+    if (eventId === "cena_partito") return { reputazione: rand(0.6, 1.8), iscritti: rand(5, 11) };
+    if (eventId === "tour_territoriale") return { sondaggi: rand(0.13, 0.2), reputazione: rand(1.8, 3.6) };
     // Bug segnalato da un giocatore ("balzi di sondaggi di oltre un punto in un colpo solo"): questo valore
     // era rand(1.3, 1.9) — 8-10 volte più degli altri eventi di partito qui sopra (tutti tra 0.08 e 0.34),
     // sproporzionato anche considerando il suo costo doppio e il cooldown più lungo rispetto al congresso
-    // (il secondo evento più potente). Riportato in scala con gli altri.
-    if (eventId === "missione_diplomatica") return { sondaggi: rand(0.3, 0.5), reputazione: rand(2, 4), visibilita: rand(3, 5), national: { relazioniDiplomatiche: rand(0.15, 0.35) } };
-    if (eventId === "campagna_mediatica_nazionale") return { sondaggi: rand(0.08, 0.12), visibilita: rand(1, 2) };
+    // (il secondo evento più potente). Riportato in scala con gli altri, poi abbassato di nuovo insieme a
+    // tutti gli altri eventi di partito (vedi nota sopra PARTY_EVENTS_SHARED_COOLDOWN).
+    if (eventId === "missione_diplomatica") return { sondaggi: rand(0.18, 0.3), reputazione: rand(1.2, 2.4), visibilita: rand(1.8, 3), national: { relazioniDiplomatiche: rand(0.1, 0.25) } };
+    if (eventId === "campagna_mediatica_nazionale") return { sondaggi: rand(0.05, 0.08), visibilita: rand(0.6, 1.2) };
     return {};
   }
   // Ogni evento genera un testo di esito diverso a ogni attivazione (città, partner internazionale o
@@ -23684,7 +23748,7 @@
   // (1, il default di RALLY_SPEECH_ARCHETYPES/PUBLIC_APPEARANCE_ARCHETYPES), identica per un Congresso da
   // 15000 e per una cena di partito da 3000 — rendendo l'evento più caro un pessimo affare per euro
   // speso. Ora la magnitudine scala con il peso reale dell'evento, in proporzione al suo costo.
-  var PARTY_EVENT_SCENE_MAGNITUDE = { congresso: 3.2, manifestazione: 1.8, cena_partito: 1 };
+  var PARTY_EVENT_SCENE_MAGNITUDE = { congresso: 2.1, manifestazione: 1.2, cena_partito: 0.65 };
   function buildAudienceQuestion(noun, isGoverno, magnitude) {
     var askerName = generateStaffName();
     var pFamily = state.player && state.player.family;
@@ -25122,13 +25186,28 @@
   // Richiesto da un giocatore: lo storico mostrava solo "Legislatura N" come nome, senza dire quale
   // governo fosse stato davvero (un partito solo? una coalizione? quali partiti?). Questa funzione
   // costruisce un nome leggibile della composizione di governo, elencando sempre i partiti coinvolti.
-  function describeLegislatureGovernment(ge) {
-    if (!ge || !ge.memberIds || !ge.memberIds.length) return "Nessun governo definito";
+  // Bug segnalato da un giocatore: "player" viene sempre escluso da ge.memberIds per costruzione (vedi
+  // winnerMemberIds in finishGovernmentFormation — altre funzioni, come renderParliament, lo rimettono a
+  // mano quando serve), quindi quando il PROPRIO partito fa parte della maggioranza di governo — sia come
+  // membro del blocco vincitore già eletto, sia come alleato aggiunto dopo per arrivare al 51% — il suo
+  // nome non appariva mai nella composizione mostrata in Storia del Paese, come se il governo di quella
+  // legislatura fosse stato formato senza di lui. Il parametro playerInGov (vero se il proprio partito era
+  // davvero al governo in quella legislatura, vedi closeCurrentEpoch/renderCountryHistory) rimette il
+  // proprio nome nell'elenco quando manca.
+  function describeLegislatureGovernment(ge, playerInGov) {
+    if (!ge || !ge.memberIds || !ge.memberIds.length) {
+      if (playerInGov) return "Governo monocolore di " + (state.player ? state.player.name : "il tuo partito");
+      return "Nessun governo definito";
+    }
     var names = ge.memberIds.map(function (id) {
       if (id === "player") return state.player ? state.player.name : "il tuo partito";
       var party = partyById(id);
       return party ? party.name : id;
     });
+    if (playerInGov) {
+      var playerName = state.player ? state.player.name : "il tuo partito";
+      if (names.indexOf(playerName) === -1) names.push(playerName);
+    }
     if (names.length === 1) return "Governo monocolore di " + names[0];
     var coal = coalitionById(ge.id);
     if (coal) return "Governo di " + coal.label + " (" + names.join(", ") + ")";
@@ -25169,9 +25248,13 @@
     var improvements = profileDeltas.filter(function (d) { return d.delta > 0; }).sort(function (a, b) { return b.delta - a.delta; }).slice(0, 8);
     var worsenings = profileDeltas.filter(function (d) { return d.delta < 0; }).sort(function (a, b) { return a.delta - b.delta; }).slice(0, 8);
     if (!state.countryEpochs) state.countryEpochs = [];
+    // Il ruolo del proprio partito a fine legislatura (prima che la prossima elezione lo sovrascriva,
+    // vedi resolveElection/finishGovernmentFormation più sotto, chiamate dopo closeCurrentEpoch): riflette
+    // già correttamente un ingresso al governo avvenuto a trattativa chiusa (vedi resolveGovInviteAccept).
+    var playerInGovAtClose = !!(state.player && state.player.parliamentRole === "governo");
     state.countryEpochs.unshift({
       startWeek: e.startWeek, endWeek: state.turn, legislature: e.legislature, govLabel: e.govLabel,
-      govName: describeLegislatureGovernment({ id: e.govEntityId, memberIds: e.govMemberIds }),
+      govName: describeLegislatureGovernment({ id: e.govEntityId, memberIds: e.govMemberIds }, playerInGovAtClose),
       name: name, summary: summary,
       passedPolicies: passedPolicies, rejectedPolicies: rejectedPolicies,
       spendingBreakdown: spendingBreakdown, improvements: improvements, worsenings: worsenings
@@ -25196,7 +25279,7 @@
       '<p class="ci-hint">Una cronaca delle grandi epoche di governo, con un nome che riassume come sono andate davvero e chi c\'era davvero al governo — comincia a registrarle da qui in avanti, non ricostruisce il passato di una partita già avviata.</p>';
     if (state.currentEpoch) {
       html += '<p class="eyebrow" style="margin-top:0.6rem">Epoca in corso</p><p class="ci-hint"><strong>' +
-        describeLegislatureGovernment({ id: state.currentEpoch.govEntityId, memberIds: state.currentEpoch.govMemberIds }) +
+        describeLegislatureGovernment({ id: state.currentEpoch.govEntityId, memberIds: state.currentEpoch.govMemberIds }, state.player && state.player.parliamentRole === "governo") +
         '</strong> guida il paese dalla settimana ' + state.currentEpoch.startWeek + " (Legislatura " + state.currentEpoch.legislature + ").</p>";
     }
     if (epochs.length) {
@@ -29942,6 +30025,12 @@
       } else if (choice.liraDossierChoice) {
         state.player.pendingEuAlternativeChoice = true;
         state.resultData = applyChoice(dossier, choice);
+      } else if (choice.acceptGovInvite) {
+        resolveGovInviteAccept();
+        state.resultData = applyChoice(dossier, choice);
+      } else if (choice.declineGovInvite) {
+        state.pendingGovInvite = null;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "geo_regional_war" && choice.regionalConflictStance) {
         var targetConflict = (state.activeConflicts || []).filter(function (c) { return c.id === dossier.geoConflictId; })[0];
         if (targetConflict) targetConflict.supportedSide = choice.regionalConflictStance;
@@ -32183,6 +32272,17 @@
     if (state.pendingRegionalElectionResult) {
       state.aiDynamicDossier = state.pendingRegionalElectionResult;
       state.pendingRegionalElectionResult = null;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    // Richiesto da un giocatore: quando un governo nasce senza il partito del giocatore (non nel blocco
+    // vincitore, non reclutato in automatico — vedi playerInviteCandidate in resolveElection), un vero
+    // invito ad entrare in maggioranza arriva come dossier a sé, con la scelta di accettare o restare
+    // all'opposizione, invece dell'arruolamento automatico e silenzioso di prima.
+    if (state.pendingGovInvite) {
+      state.aiDynamicDossier = buildGovInviteDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
