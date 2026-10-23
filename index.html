@@ -2097,6 +2097,73 @@
     html += '</div><button type="button" class="staff-btn hire" id="save-fiscal-btn"' + (onCooldown ? " disabled" : "") + '>Salva la manovra fiscale</button></details></section>';
     return html;
   }
+  // ---------- Misure di Bilancio: due decreti per abbassare deficit e debito senza toccare le tasse ----------
+  // Richiesto da un giocatore: l'unico modo diretto per intervenire sul deficit era il pannello fiscale
+  // (alzare le tasse) o il raro allarme sui conti pubblici (gov_deficit_eccessivo). Mancava uno strumento
+  // ordinario, proponibile quando si vuole, basato su leve reali diverse dalla leva fiscale: tagliare gli
+  // sprechi nella spesa pubblica, o riscuotere davvero quanto già dovuto senza alzare le aliquote. Due
+  // decreti, entrambi riservati a chi governa, con un raffreddamento lungo (30 settimane) per restare
+  // strumenti seri e non un tasto da premere ogni settimana — il debito si muove comunque piano (vedi
+  // driftBilancioStato), qui si tratta di accelerarlo un po', non di risolverlo in un colpo.
+  var BUDGET_MEASURES_COOLDOWN_TURNS = 30;
+  var BUDGET_MEASURES = {
+    revisione_spesa: {
+      label: "Revisione della Spesa Pubblica",
+      desc: "Taglia sprechi, doppioni e capitoli di spesa improduttivi nell'amministrazione pubblica, senza toccare un'aliquota: libera risorse vere per lo Stato, ma i tagli si fanno sentire da chi ne dipende."
+    },
+    lotta_evasione: {
+      label: "Lotta all'Evasione Fiscale",
+      desc: "Rafforza i controlli e la riscossione su chi già doveva pagare, senza alzare le aliquote per nessuno: più gettito reale, non più tasse."
+    }
+  };
+  function resolveBudgetMeasure(id) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || state.currencyAbolished) return null;
+    if (!p.budgetMeasureCooldowns) p.budgetMeasureCooldowns = {};
+    if (state.turn < (p.budgetMeasureCooldowns[id] || 0)) return null;
+    var m = BUDGET_MEASURES[id];
+    if (!m) return null;
+    p.budgetMeasureCooldowns[id] = state.turn + BUDGET_MEASURES_COOLDOWN_TURNS;
+    var b = state.bilancioStato;
+    var text, repDelta;
+    if (id === "revisione_spesa") {
+      b.uscite = Math.max(400, b.uscite - rand(15, 30));
+      state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -1, 12);
+      state.debitoPil = clamp(state.debitoPil - rand(0.3, 0.6), 80, 220);
+      repDelta = -rand(1.5, 4);
+      p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+      p.iscritti = Math.max(0, p.iscritti - rand(15, 35));
+      text = "Il governo vara una revisione della spesa pubblica: capitoli improduttivi e doppioni vengono tagliati, liberando risorse vere per lo Stato. La misura abbassa deficit e debito pubblico, ma i tagli non passano inosservati tra chi ne risente.";
+    } else {
+      b.entrate += rand(15, 30);
+      state.deficitPil = clamp(state.deficitPil - rand(0.25, 0.5), -1, 12);
+      state.debitoPil = clamp(state.debitoPil - rand(0.2, 0.4), 80, 220);
+      repDelta = rand(0.5, 2);
+      p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
+      state.countryProfile.corruzione = clamp(state.countryProfile.corruzione + rand(0.1, 0.3), 1, 10);
+      state.countryProfile.aziende = clamp(state.countryProfile.aziende - rand(0.05, 0.15), 1, 10);
+      text = "Il governo rafforza i controlli e la riscossione fiscale, senza alzare un'aliquota: più gettito reale da chi già doveva pagare e non pagava. La misura abbassa deficit e debito pubblico; qualche malumore tra le imprese per i controlli più stringenti.";
+    }
+    state.log.unshift({ week: state.turn, title: m.label, choiceLabel: m.label, result: text, headlines: [], type: "dossier", cat: "Bilancio dello Stato" });
+    return { resultText: text, headlines: [] };
+  }
+  function renderBudgetMeasuresPanel() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || state.currencyAbolished) return "";
+    if (!p.budgetMeasureCooldowns) p.budgetMeasureCooldowns = {};
+    var html = '<section aria-label="Misure di Bilancio"><details class="log"><summary>Misure di Bilancio<span>▾</span></summary>' +
+      '<p class="ci-hint">Due leve dirette su deficit e debito pubblico che non passano dalle aliquote fiscali: effetto immediato ma contenuto, raffreddamento lungo.</p><div class="option-grid">';
+    Object.keys(BUDGET_MEASURES).forEach(function (id) {
+      var m = BUDGET_MEASURES[id];
+      var weeksLeft = (p.budgetMeasureCooldowns[id] || 0) - state.turn;
+      var disabled = weeksLeft > 0;
+      var status = disabled ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : "Nessun costo diretto per le casse del partito";
+      html += '<button type="button" class="option-card" data-budget-measure="' + id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + m.label + '</span><span class="odesc">' + m.desc + " " + status + '</span></button>';
+    });
+    html += "</div></details></section>";
+    return html;
+  }
   // ---------- Programma Spaziale Nazionale ----------
   // Otto tappe, sempre nello stesso ordine storico reale (dal primo satellite alla missione umana su
   // Marte): un investimento enorme e a lungo termine, riservato a chi governa, finanziato in deficit (il
@@ -28599,7 +28666,7 @@
         // Richiesto da un giocatore: la cronologia di leggi/mozioni/referendum vive qui in Scheda Paese
         // (prima stava solo sotto Storia del Partito, spostata qui — non duplicata — perché è qui che la
         // si cerca per davvero).
-        return renderNationalStrip() + renderPresidentCard() + renderCountryProfile() + renderEconomySectors() + renderIniziativaLiberaPanel() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetAllocation() + renderPolicyHistoryPanel();
+        return renderNationalStrip() + renderPresidentCard() + renderCountryProfile() + renderEconomySectors() + renderIniziativaLiberaPanel() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetMeasuresPanel() + renderBudgetAllocation() + renderPolicyHistoryPanel();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", icon: "🎭", nav: "Partiti", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
@@ -30909,6 +30976,16 @@
         }
         var res = resolvePartyEvent(id);
         if (!res) { showSaveStatus("Non puoi ancora organizzare questo evento (fondi o tempo di recupero insufficienti).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-budget-measure]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-budget-measure");
+        var res = resolveBudgetMeasure(id);
+        if (!res) { showSaveStatus("Non puoi ancora varare questa misura (tempo di recupero insufficiente).", true); return; }
         showSaveStatus(res.resultText, false);
         save();
         render();
