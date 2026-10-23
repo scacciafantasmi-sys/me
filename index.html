@@ -19673,7 +19673,7 @@
     countryProfilePrev: null, euGroupPending: false, partyLeaderOverrides: {},
     parliamentSeats: null, euParliamentSeats: null, lastElectionStandings: null, lastElectionWinnerId: null,
     cabinet: null, cabinetCpuNamePool: {}, pendingCabinetFormation: null, pendingGovernmentOath: false, pendingConfidenceVote: false, pendingConsultazioni: null,
-    pendingGovFormationNegotiation: null, pendingGovInvite: null,
+    pendingGovFormationNegotiation: null, pendingGovInvite: null, pendingGovInviteWelcome: null,
     playerMinistry: null, regionalPresidency: null, pendingRegionalElectionResult: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, liraAnnounced: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
     uprisingSaga: null, cpuUprisingCooldownTurn: 0, pendingDictatorVerdictTurn: null, fallenRegimeMemory: null, collapseSaga: null,
@@ -22738,6 +22738,17 @@
   // stesso trattamento di un alleato extra riconosciuto in finishGovernmentFormation (forcedAllyIds se
   // l'invito era "di necessità"), con un piccolo costo di fiducia per essere entrato dopo, a trattativa
   // già chiusa, invece che dal primo giorno.
+  // Richiesto da un giocatore: il giro di consultazioni con TUTTI i partiti della coalizione
+  // (pendingConsultazioni) resta riservato a chi guida la trattativa — il partito di maggioranza che ha
+  // vinto le elezioni (vedi finishGovernmentFormation) — non a chi viene semplicemente invitato dopo per
+  // comporre i numeri: un piccolo alleato aggiunto in corsa non siede al tavolo con ciascun partito, si
+  // limita ad accettare l'incarico che gli viene offerto. Niente pendingConsultazioni qui, quindi — solo
+  // un unico dossier di benvenuto (pendingGovInviteWelcome/buildGovWelcomeDossier sotto) con una sola
+  // scelta, "Prendi atto", subito dopo l'accettazione.
+  // Manteneva comunque il buco con l'assegnazione dei ministeri: finishGovernmentCabinetSetup non veniva
+  // mai richiamata qui, quindi il giocatore restava "al governo" solo di nome, senza un vero ministero,
+  // giuramento o voto di fiducia come chiunque altro. Ora la richiama, con la stessa identica logica già
+  // usata per chi è al governo fin dal primo giorno.
   function resolveGovInviteAccept() {
     var p = state.player;
     var inv = state.pendingGovInvite;
@@ -22749,12 +22760,34 @@
     if (inv.forced) state.govEntity.forcedAllyIds.push("player");
     state.consensoGoverno = clamp((state.consensoGoverno === undefined ? 50 : state.consensoGoverno) - (inv.forced ? 10 : 5), 15, 100);
     p.parliamentRole = "governo";
+    finishGovernmentCabinetSetup();
+    state.pendingGovInviteWelcome = { winnerLabel: inv.winnerLabel, forced: inv.forced };
     addDiaryEntry("Andiamo al governo", "Accettiamo l'invito di " + inv.winnerLabel + ": da questa settimana " + p.name + " è al governo, non più solo all'opposizione.");
     state.log.unshift({
       week: state.turn, title: "Invito al governo accettato", choiceLabel: inv.winnerLabel,
       result: p.name + " entra nella coalizione di governo guidata da " + inv.winnerLabel + ".",
       headlines: [], type: "istituzioni", cat: "Formazione del Governo"
     });
+  }
+  // Dossier di benvenuto, una sola volta, subito dopo aver accettato l'invito: spiega come il partito è
+  // arrivato al governo e cosa lo aspetta ora, con un'unica scelta ("Prendi atto") — non una vera
+  // trattativa come il giro di consultazioni di chi guida la coalizione, solo la presa di coscienza di un
+  // incarico già assegnato.
+  function buildGovWelcomeDossier() {
+    var w = state.pendingGovInviteWelcome;
+    if (!w) return null;
+    var p = state.player;
+    return {
+      id: "gov_invite_welcome", kind: "notizia", cat: "Formazione del Governo",
+      eyebrow: "Il tuo partito è ora al governo",
+      title: "Benvenuto al governo, " + p.name,
+      brief: "Il tuo partito è entrato nella coalizione di governo guidata da " + w.winnerLabel +
+        (w.forced ? ", chiamato a sostenere un'intesa di necessità nata per i numeri, non per affinità politica." : ", un'alleanza coerente con la tua area politica.") +
+        " Non hai condotto tu la trattativa: sei arrivato dopo, su invito, per completare la maggioranza. Da qui in avanti il tuo partito ha responsabilità dirette sulle scelte dell'esecutivo, una quota di ministeri in proporzione al tuo peso in Parlamento, e la stessa esposizione di ogni altro partito di governo — compresa la caduta se la maggioranza dovesse perdere la fiducia.",
+      choices: [
+        { label: "Prendi atto", hint: "Il nuovo incarico comincia da qui", effects: {}, result: "Il partito prende atto del nuovo incarico di governo e si prepara alle responsabilità che comporta." }
+      ]
+    };
   }
 
   // ---------- Rendering ----------
@@ -30082,6 +30115,9 @@
       } else if (choice.declineGovInvite) {
         state.pendingGovInvite = null;
         state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_invite_welcome") {
+        state.pendingGovInviteWelcome = null;
+        state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "geo_regional_war" && choice.regionalConflictStance) {
         var targetConflict = (state.activeConflicts || []).filter(function (c) { return c.id === dossier.geoConflictId; })[0];
         if (targetConflict) targetConflict.supportedSide = choice.regionalConflictStance;
@@ -32335,6 +32371,17 @@
     // all'opposizione, invece dell'arruolamento automatico e silenzioso di prima.
     if (state.pendingGovInvite) {
       state.aiDynamicDossier = buildGovInviteDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    // Segue subito l'invito accettato (vedi resolveGovInviteAccept): un piccolo alleato invitato dopo non
+    // conduce il giro di consultazioni con ogni partito della coalizione (quello resta riservato a chi
+    // guida la trattativa, vedi pendingConsultazioni poco sotto) — prende solo atto dell'incarico con un
+    // unico dossier di benvenuto.
+    if (state.pendingGovInviteWelcome) {
+      state.aiDynamicDossier = buildGovWelcomeDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
