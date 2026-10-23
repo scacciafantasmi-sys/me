@@ -2162,53 +2162,35 @@
         '<span class="olabel">' + m.label + '</span><span class="odesc">' + m.desc + " " + status + '</span></button>';
     });
     html += "</div>";
-    // Richiesto da un giocatore: anche una mozione o una proposta di legge, se passano in Aula, abbassano
-    // il deficit — non solo i due decreti sopra (effetto diretto sull'indicatore economia da cui dipende
-    // driftBilancioStato, più il nudge sulle aliquote se il tema è fiscale, vedi isFiscalTopic). Qui sotto
-    // due temi scelti apposta per questo, proponibili con un click diretto — richiamando le STESSE
-    // funzioni già esistenti (proposeMozione/proposeLegge, le stesse della scheda Parlamento: stesso
-    // costo, stesso raffreddamento condiviso con qualunque altra mozione/legge, stesso voto incerto in
-    // Aula, disponibile anche all'opposizione) — non una copia del pannello intero con la sua ricerca e
-    // le sue 18 categorie, quasi tutte estranee al deficit: solo questi due temi, qui, senza duplicare
-    // nulla. Resta comunque un link rapido alla categoria "Economia e Imprese" per chi vuole sfogliare
-    // altri temi economici oltre a questi due.
-    html += renderBudgetLegislativeShortcuts();
-    html += '<p class="ci-hint">Altri temi economici in Parlamento, categoria "Economia e Imprese":</p>' +
-      '<button type="button" class="staff-btn hire" id="budget-jump-economia-btn">Vai a Economia e Imprese in Parlamento</button>';
-    html += "</details></section>";
-    return html;
-  }
-  var BUDGET_LEGISLATIVE_TOPICS = {
-    deficit_mozione: { kind: "mozione", title: "Mozione per una gestione più efficiente della spesa pubblica",
-      noun: "una gestione più efficiente della spesa pubblica", metric: "economia",
-      brief: "Una mozione che impegna il Governo a individuare sprechi e inefficienze nella spesa pubblica, per liberare risorse senza nuove tasse." },
-    deficit_legge: { kind: "legge", title: "Legge per il contrasto strutturale all'evasione fiscale",
-      noun: "un contrasto strutturale all'evasione fiscale", metric: "economia",
-      brief: "Una proposta di legge per rafforzare in modo permanente i controlli e la riscossione fiscale, senza alzare le aliquote per chi già paga regolarmente." }
-  };
-  function renderBudgetLegislativeShortcuts() {
-    var p = state.player;
-    var html = '<p class="ci-hint">Due temi scelti apposta per il deficit, proponibili subito (stesso costo e raffreddamento di qualunque altra mozione/legge, voto incerto in Aula):</p><div class="option-grid">';
-    Object.keys(BUDGET_LEGISLATIVE_TOPICS).forEach(function (id) {
-      var t = BUDGET_LEGISLATIVE_TOPICS[id];
-      var isMozione = t.kind === "mozione";
-      var alreadyResolved = isMozione
-        ? (p.acceptedMozioni || []).indexOf(t.title) !== -1 || (p.resolvedTopicNouns || []).indexOf(t.noun) !== -1
-        : (p.acceptedLeggi || []).indexOf(t.title) !== -1 || (p.resolvedTopicNouns || []).indexOf(t.noun) !== -1;
-      var pending = isMozione ? p.pendingMozione : p.pendingLegge;
-      var cooldownTurn = isMozione ? p.mozioneCooldownTurn : p.leggeCooldownTurn;
-      var weeksLeft = (cooldownTurn || 0) - state.turn;
-      var cost = isMozione ? MOZIONE_PROPOSAL_COST : LEGGE_PROPOSAL_COST;
-      var disabled = alreadyResolved || !!pending || weeksLeft > 0 || p.fondi < cost;
-      var status = alreadyResolved ? "Già varata: non riproponibile"
-        : pending ? "Hai già una " + (isMozione ? "mozione" : "proposta di legge") + " in attesa di voto"
-        : weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
-        : p.fondi < cost ? "Fondi insufficienti (" + fmtEuro(cost) + ")"
-        : "Costo: " + fmtEuro(cost);
-      html += '<button type="button" class="option-card" data-budget-legislative="' + id + '"' + (disabled ? " disabled" : "") + '>' +
-        '<span class="olabel">' + (isMozione ? "Mozione: " : "Legge: ") + t.title.replace(/^(Mozione per |Legge per )/, "") + '</span><span class="odesc">' + t.brief + " " + status + '</span></button>';
+    // Richiesto da un giocatore: anche una mozione, una proposta/disegno di legge o un decreto-legge
+    // (tutti nello stesso pool di allLawTopics — "decreto-legge" e "disegno di legge delega" sono solo
+    // due formulazioni diverse dello stesso topic "legge", vedi LAW_SHAPES) o una modifica di legge,
+    // se passano in Aula, abbassano il deficit — non solo i due decreti sopra. Stesso blocco già usato per
+    // "Leggi del tuo Ministero" (renderMinistryLegislativeBlock/renderMinistryProposalKind): la STESSA
+    // funzione generica, riusata qui con le metriche economia/pil al posto di quelle del dicastero. Scrive
+    // i bottoni data-propose-legge/data-propose-mozione/data-propose-amendment già esistenti, e imposta
+    // p.leggeCandidates/p.mozioneCandidates/p.amendmentCandidates (gli stessi campi letti dai pannelli
+    // "veri" in Parlamento): nessun nuovo handler di click, nessuna duplicazione della logica di
+    // risoluzione — esattamente la stessa, identica cosa già fatta per il Ministero, non un'imitazione.
+    html += '<section aria-label="Leggi sul Deficit"><details class="log" open><summary>Leggi, mozioni e modifiche che incidono sul deficit<span>▾</span></summary>' +
+      '<p class="ci-hint">Le stesse proposte che trovi nella pagina Parlamento, già filtrate sui temi di Economia e PIL: non sostituiscono quella pagina (dove restano tutte, di ogni settore), sono solo una scorciatoia pensata per il deficit.</p>';
+    html += renderMinistryProposalKind({
+      pendingField: "pendingLegge", cooldownField: "leggeCooldownTurn", candidatesField: "leggeCandidates", selectedCatField: "leggeSelectedCat",
+      dataAttr: "propose-legge", cost: LEGGE_PROPOSAL_COST, topicsFn: allLawTopics, metrics: ["economia", "pil"],
+      label: "Proposta di legge", labelPlural: "Proposte di legge, disegni di legge e decreti-legge"
     });
-    html += "</div>";
+    html += renderMinistryProposalKind({
+      pendingField: "pendingMozione", cooldownField: "mozioneCooldownTurn", candidatesField: "mozioneCandidates", selectedCatField: "mozioneSelectedCat",
+      dataAttr: "propose-mozione", cost: MOZIONE_PROPOSAL_COST, topicsFn: allMozioneTopics, metrics: ["economia", "pil"],
+      label: "Mozione", labelPlural: "Mozioni"
+    });
+    html += renderMinistryProposalKind({
+      pendingField: "pendingAmendment", cooldownField: "amendmentCooldownTurn", candidatesField: "amendmentCandidates", selectedCatField: "amendmentSelectedCat",
+      dataAttr: "propose-amendment", cost: AMENDMENT_PROPOSAL_COST, topicsFn: allAmendmentTopics, metrics: ["economia", "pil"],
+      label: "Modifica di legge", labelPlural: "Modifiche di legge"
+    });
+    html += "</details></section>";
+    html += "</details></section>";
     return html;
   }
   // ---------- Programma Spaziale Nazionale ----------
@@ -5635,6 +5617,10 @@
         state.regionalUiPage = btn.getAttribute("data-regional-nav-page");
         save();
         render();
+        // Stesso fix di bindPageNavDrawer/scrollToPageContent: senza questo, cambiare scheda qui
+        // lasciava la vista in cima al dossier della settimana invece che all'inizio della sezione
+        // regionale appena scelta (#page-content-anchor, vedi renderCore ramo "regional_president").
+        scrollToPageContent();
       });
     });
   }
@@ -25148,6 +25134,53 @@
   // resolveElection; state.europeanElectionResults per le europee, salvato in resolveEuropeanElection),
   // ma venivano usati solo per contare le tornate affrontate, mai mostrati come un vero elenco
   // consultabile. Le due liste vengono unite e ordinate dalla più recente alla più vecchia.
+  // Segnalato di nuovo da un giocatore: la riga di ogni legislatura mostrava solo "Legislatura N" e i
+  // seggi del PROPRIO partito — niente su chi avesse composto il governo, niente sulle leggi/mozioni/
+  // referendum di quella legislatura, e non era nemmeno cliccabile (sembrava esserlo, nello stesso stile
+  // delle altre liste espandibili del gioco, ma non apriva nulla). Quei dati esistono già altrove — stessa
+  // fonte già usata da "Storia del Paese" (state.countryEpochs, con govName e passedPolicies/
+  // rejectedPolicies per legislatura chiusa, e state.currentEpoch/state.policyHistory per quella in
+  // corso) — qui vengono solo riletti e mostrati in un riquadro espandibile per ogni legislatura, stesso
+  // pattern già usato per le epoche (data-epoch-tile/expandedEpochIndex), senza ricalcolare o duplicare
+  // nulla della logica che li genera.
+  var expandedElectionIndex = null;
+  // Bug pre-esistente scoperto testando questa funzione: state.legislature avanza di 1 PRIMA che
+  // openNewEpoch() legga il suo valore quando la formazione del governo passa dalla trattativa
+  // interattiva (pendingGovFormationNegotiation, chiusa settimane dopo il voto), ma non quando il
+  // governo si forma subito in automatico, nella stessa chiamata di resolveElection() che registra
+  // electionResults — quindi un'epoca (countryEpochs/currentEpoch) può avere lo stesso numero di
+  // legislatura dell'elezione che l'ha generata, o uno in più, a seconda di quale percorso di
+  // formazione è scattato quella volta. Si prova prima la corrispondenza esatta, poi quella con +1,
+  // invece di assumere un offset fisso sempre uguale.
+  function legislaturePolicySummaryHtml(legislature) {
+    var epochs = state.countryEpochs || [];
+    var closedEpoch = epochs.filter(function (ep) { return ep.legislature === legislature; })[0]
+      || epochs.filter(function (ep) { return ep.legislature === legislature + 1; })[0];
+    var govName, passed, rejected;
+    if (closedEpoch) {
+      govName = closedEpoch.govName || closedEpoch.govLabel || "Nessun governo definito";
+      passed = closedEpoch.passedPolicies || []; rejected = closedEpoch.rejectedPolicies || [];
+    } else if (state.currentEpoch && (state.currentEpoch.legislature === legislature || state.currentEpoch.legislature === legislature + 1)) {
+      govName = describeLegislatureGovernment({ id: state.currentEpoch.govEntityId, memberIds: state.currentEpoch.govMemberIds }, state.player && state.player.parliamentRole === "governo");
+      // state.policyHistory usa sempre lo stesso numero di legislatura dell'epoca corrente (entrambi
+      // letti da state.legislature DOPO l'incremento, in ogni momento del mandato) — mai quello
+      // dell'elezione: si filtra su state.currentEpoch.legislature, non sul parametro "legislature" qui
+      // sopra, per restare coerenti anche quando i due numeri divergono.
+      var livePolicies = (state.policyHistory || []).filter(function (ph) { return ph.legislature === state.currentEpoch.legislature; });
+      passed = livePolicies.filter(function (ph) { return ph.passed; });
+      rejected = livePolicies.filter(function (ph) { return !ph.passed; });
+    } else {
+      return '<p class="ci-hint">Nessun dato disponibile su questa legislatura: ha preceduto l\'introduzione di questo registro, non viene ricostruita a ritroso.</p>';
+    }
+    var html = '<p class="ci-hint"><strong>Governo:</strong> ' + govName + "</p>";
+    html += passed.length
+      ? '<p class="ci-hint"><strong>Approvate (' + passed.length + '):</strong></p><ul class="enacted-policy-list">' + passed.map(function (ph) { return "<li>" + ph.title + " <span class=\"ci-hint\">(" + ph.kind + ", " + ph.proposer + ")</span></li>"; }).join("") + "</ul>"
+      : '<p class="ci-hint">Nessuna proposta approvata in questa legislatura.</p>';
+    html += rejected.length
+      ? '<p class="ci-hint"><strong>Respinte (' + rejected.length + '):</strong></p><ul class="enacted-policy-list">' + rejected.map(function (ph) { return "<li>" + ph.title + " <span class=\"ci-hint\">(" + ph.kind + ", " + ph.proposer + ")</span></li>"; }).join("") + "</ul>"
+      : "";
+    return html;
+  }
   function renderElectionHistoryPanel() {
     var p = state.player;
     var national = (state.electionResults || []).map(function (e) {
@@ -25158,27 +25191,33 @@
     });
     var merged = national.concat(eu).sort(function (a, b) { return b.turn - a.turn; });
     if (!merged.length) return "";
-    var itemHtml = function (e) {
+    var itemHtml = function (e, idx) {
       if (e.kind === "nazionali") {
         var inParl = e.seatsCamera > 0 || e.seatsSenato > 0;
         var allianceLabel = e.allianceId ? ((coalitionById(e.allianceId) || {}).label || "una coalizione") : "da solo";
-        return '<li><span class="chip ' + (inParl ? "good" : "critical") + '">Politiche</span> <strong>Legislatura ' + e.legislature + '</strong>' +
-          ' <span class="ci-hint">(settimana ' + e.turn + ' — ' + weekLabel(e.turn) + ')</span><br>' +
-          (inParl
+        var isOpen = expandedElectionIndex === idx;
+        var row = '<button type="button" class="party-row' + (isOpen ? " open" : "") + '" data-election-tile="' + idx + '">' +
+          '<div class="party-row-body"><div class="party-row-head"><span class="chip ' + (inParl ? "good" : "critical") + '">Politiche</span> <strong>Legislatura ' + e.legislature + '</strong></div>' +
+          '<div class="party-row-sub">' + (inParl
             ? p.name + " entra in Parlamento con " + e.seatsCamera + " seggi alla Camera e " + e.seatsSenato + " al Senato, correndo " + allianceLabel + "."
-            : p.name + " resta fuori dal Parlamento in questa legislatura, correndo " + allianceLabel + ".") + "</li>";
+            : p.name + " resta fuori dal Parlamento in questa legislatura, correndo " + allianceLabel + ".") +
+          ' <span class="ci-hint">(settimana ' + e.turn + ' — ' + weekLabel(e.turn) + ')</span></div></div></button>';
+        if (isOpen) {
+          row += '<div class="inline-topic-expand" style="grid-column:1/-1">' + legislaturePolicySummaryHtml(e.legislature) + "</div>";
+        }
+        return row;
       }
       var hasSeats = e.seats > 0;
-      return '<li><span class="chip ' + (hasSeats ? "good" : "critical") + '">Europee</span> <strong>Elezioni Europee</strong>' +
-        ' <span class="ci-hint">(settimana ' + e.turn + ' — ' + weekLabel(e.turn) + ')</span><br>' +
-        (hasSeats
+      return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><span class="chip ' + (hasSeats ? "good" : "critical") + '">Europee</span> <strong>Elezioni Europee</strong></div>' +
+        '<div class="party-row-sub">' + (hasSeats
           ? p.name + " elegge " + e.seats + " " + (e.seats === 1 ? "eurodeputato" : "eurodeputati") + " al Parlamento Europeo."
-          : p.name + " non raggiunge la soglia di sbarramento e resta fuori dal Parlamento Europeo.") + "</li>";
+          : p.name + " non raggiunge la soglia di sbarramento e resta fuori dal Parlamento Europeo.") +
+        ' <span class="ci-hint">(settimana ' + e.turn + ' — ' + weekLabel(e.turn) + ')</span></div></div></div>';
     };
     return '<section aria-label="Cronologia Elettorale"><details class="log">' +
       '<summary>Cronologia Elettorale — ' + merged.length + ' tornat' + (merged.length === 1 ? "a" : "e") + '<span>▾</span></summary>' +
-      '<p class="ci-hint">Ogni elezione politica nazionale ed europea affrontata dal partito, dalla più recente alla più vecchia.</p>' +
-      '<ul class="enacted-policy-list">' + merged.map(itemHtml).join("") + "</ul></details></section>";
+      '<p class="ci-hint">Ogni elezione politica nazionale ed europea affrontata dal partito, dalla più recente alla più vecchia. Tocca una legislatura per vedere chi ha governato e cosa è stato approvato o respinto.</p>' +
+      '<div class="party-directory">' + merged.map(itemHtml).join("") + "</div></details></section>";
   }
   // ---------- Storico Completo dei Provvedimenti: tutto ciò che è stato varato, dalla prima volta ----------
   // Prima questo elenco viveva sepolto in fondo al pannello Scheda Paese, dopo tutte le griglie di
@@ -28791,6 +28830,22 @@
   }
   // onBeforeNavigate (facoltativo) permette a una scena in corso di congedarsi in modo pulito prima di
   // lasciare spazio alla pagina scelta.
+  // Segnalato da un giocatore: cambiare scheda dalla barra in cima (Diario, Storia, e in realtà
+  // qualunque scheda con sopra un dossier/statistiche abbastanza lunghi) lasciava la vista in cima a
+  // TUTTA la schermata — dossier della settimana, statistiche, sondaggi — non all'inizio del contenuto
+  // della scheda appena scelta, nonostante esista già un'ancora pensata apposta (#page-content-anchor,
+  // piazzata subito prima del contenuto di pagina in renderCore). Il commento qui sotto diceva che uno
+  // scrollIntoView esplicito avrebbe "sovrascritto" un riposizionamento già corretto fatto da render() —
+  // falso: render()/renderCore() scorre sempre e solo in cima allo scroll (window top), MAI all'ancora.
+  // Su una schermata corta (partita appena iniziata, poche settimane) i due punti capitano quasi nello
+  // stesso posto, dando l'illusione che funzionasse; su una lunga (dopo centinaia di settimane, con
+  // dossier/statistiche/sondaggi accumulati) la differenza diventa enorme — da cui "funziona per alcune
+  // pagine, non per altre" segnalato dal giocatore. Stessa tecnica già usata da scrollToWeeklyCard:
+  // chiamata DOPO render(), per sovrascrivere DAVVERO lo scroll-in-cima generico con quello giusto.
+  function scrollToPageContent() {
+    var el = document.getElementById("page-content-anchor");
+    if (el && typeof el.scrollIntoView === "function") { el.scrollIntoView({ block: "start", behavior: "auto" }); }
+  }
   function bindPageNavDrawer(onBeforeNavigate) {
     var navTutorialBtn = document.getElementById("nav-tutorial-btn");
     if (navTutorialBtn) navTutorialBtn.addEventListener("click", function () { openTutorialPanel(); });
@@ -28801,10 +28856,8 @@
         if (!state.visitedPages) state.visitedPages = {};
         state.visitedPages[state.uiPage] = true;
         save();
-        // render() stesso riporta la vista in cima quando uiPage cambia (vedi lastRenderScrollKey in
-        // renderCore): non serve più uno scroll separato qui, e uno scrollIntoView aggiuntivo dopo
-        // finirebbe solo per sovrascriverlo scorrendo di nuovo più in basso, verso #page-content-anchor.
         render();
+        scrollToPageContent();
       });
     });
   }
@@ -31038,31 +31091,6 @@
         render();
       });
     });
-    app.querySelectorAll("[data-budget-legislative]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-budget-legislative");
-        var t = BUDGET_LEGISLATIVE_TOPICS[id];
-        if (!t) return;
-        var res = t.kind === "mozione" ? proposeMozione(t) : proposeLegge(t);
-        if (!res) { showSaveStatus("Non puoi ancora proporla (fondi, tempo di recupero o un'altra proposta già in attesa di voto).", true); return; }
-        showSaveStatus(res.resultText, false);
-        save();
-        render();
-      });
-    });
-    var budgetJumpBtn = document.getElementById("budget-jump-economia-btn");
-    if (budgetJumpBtn) {
-      budgetJumpBtn.addEventListener("click", function () {
-        var p = state.player;
-        state.uiPage = "parlamento";
-        if (!state.visitedPages) state.visitedPages = {};
-        state.visitedPages.parlamento = true;
-        p.mozioneSelectedCat = "economia"; p.mozioneCandidates = null; p.mozioneSearchQuery = "";
-        p.leggeSelectedCat = "economia"; p.leggeCandidates = null; p.leggeSearchQuery = "";
-        save();
-        render();
-      });
-    }
     app.querySelectorAll("[data-fundraising]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-fundraising");
@@ -31793,6 +31821,13 @@
       btn.addEventListener("click", function () {
         var idx = parseInt(btn.getAttribute("data-epoch-tile"), 10);
         expandedEpochIndex = expandedEpochIndex === idx ? null : idx;
+        render();
+      });
+    });
+    app.querySelectorAll("[data-election-tile]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = parseInt(btn.getAttribute("data-election-tile"), 10);
+        expandedElectionIndex = expandedElectionIndex === idx ? null : idx;
         render();
       });
     });
