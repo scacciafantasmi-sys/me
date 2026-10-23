@@ -23997,6 +23997,41 @@
     var w = weeksToNationalElection();
     return w >= 0 && w <= CAMPAIGN_WINDOW_WEEKS;
   }
+  // Richiesto da un giocatore: senza un tetto settimanale, i singoli cooldown per attività (2-6
+  // settimane ciascuno) permettevano comunque di accumulare in UNA sola settimana quasi tutte le
+  // iniziative insieme, pagandone solo il costo in fondi — una campagna "tutta insieme" invece che
+  // scandita nel tempo. Ora, oltre al cooldown di ogni singola attività, non si possono fare più di 3
+  // iniziative di campagna (di qualunque tipo, promessa elettorale compresa) nella stessa settimana:
+  // superato il tetto, bisogna aspettare la settimana successiva, qualunque cooldown sia già scaduto.
+  var CAMPAIGN_ACTIONS_PER_WEEK_CAP = 3;
+  function campaignActionsUsedThisWeek(p) {
+    return p.campaignActionsWeek === state.turn ? (p.campaignActionsCount || 0) : 0;
+  }
+  function campaignActionsRemainingThisWeek(p) {
+    return Math.max(0, CAMPAIGN_ACTIONS_PER_WEEK_CAP - campaignActionsUsedThisWeek(p));
+  }
+  function consumeCampaignAction(p) {
+    if (p.campaignActionsWeek !== state.turn) { p.campaignActionsWeek = state.turn; p.campaignActionsCount = 0; }
+    p.campaignActionsCount += 1;
+  }
+  // Dossier una tantum, alla prima settimana utile di ogni ciclo elettorale (vedi il controllo nella
+  // catena di turno principale): segnala al giocatore che la campagna è davvero cominciata e che da ora
+  // in poi può usare il pannello "Campagna Elettorale" — senza questo annuncio, il pannello comparirebbe
+  // in silenzio tra gli altri della pagina Partito, facile da non notare proprio nella settimana in cui
+  // conta di più iniziare a muoversi.
+  function buildCampaignWindowOpenDossier() {
+    return {
+      id: "campaign_window_open", kind: "notizia", cat: "Campagna Elettorale",
+      eyebrow: "Si apre la campagna elettorale",
+      title: "Comincia la campagna elettorale",
+      brief: "Mancano " + CAMPAIGN_WINDOW_WEEKS + " settimane al voto: da questa settimana puoi organizzare iniziative di campagna — comizi, spot, porta a porta e altro — nella sezione \"Il tuo Partito\", fino a " + CAMPAIGN_ACTIONS_PER_WEEK_CAP + " iniziative a settimana, poi bisogna aspettare la settimana successiva. Anche gli altri partiti, nel loro piccolo, intensificano la propria presenza pubblica in questo periodo. Come apri la campagna?",
+      choices: [
+        { label: "Apertura istituzionale, sui contenuti", hint: "Meno scintille, ma coerente con una linea seria", effects: { reputazione: rand(1, 2.5) }, result: "Apri la campagna con un intervento misurato, concentrato sui contenuti: non fa rumore, ma lascia un segno di serietà." },
+        { label: "Apertura aggressiva, all'attacco degli avversari", hint: "Più visibilità, ma rischi di polarizzare subito", effects: { visibilita: rand(3, 6), reputazione: -rand(0, 1) }, result: "Apri la campagna all'attacco, puntando dritto sugli avversari: la mossa fa rumore, nel bene e nel male." },
+        { label: "Apertura emotiva, sulla storia del partito", hint: "Mobilita la base, meno efficace sugli indecisi", effects: { iscritti: rand(10, 25), reputazione: rand(0.5, 1.5) }, result: "Apri la campagna richiamando la storia e l'identità del partito: la base si riconosce, gli indecisi restano a guardare." }
+      ]
+    };
+  }
   var CAMPAIGN_ACTIVITIES = {
     comizio_chiusura: { label: "Comizio di chiusura campagna", cost: 2925, cooldown: 3,
       desc: "Il grande comizio nella tua città di riferimento, nel pieno della campagna elettorale." },
@@ -24061,11 +24096,13 @@
     var a = CAMPAIGN_ACTIVITIES[id];
     var p = state.player;
     if (!inNationalCampaignWindow()) return null;
+    if (campaignActionsRemainingThisWeek(p) <= 0) return null;
     if (!p.campaignCooldowns) p.campaignCooldowns = {};
     if (state.turn < (p.campaignCooldowns[id] || 0)) return null;
     if (p.fondi < a.cost) return null;
     p.fondi -= a.cost;
     p.campaignCooldowns[id] = state.turn + a.cooldown;
+    consumeCampaignAction(p);
     var dossier = { title: a.label, cat: "Campagna Elettorale" };
     var choice = { label: a.label, effects: campaignActivityEffects(id), result: campaignActivityFlavor(id) };
     return applyChoice(dossier, choice);
@@ -24082,11 +24119,13 @@
   function resolveCampaignPledge() {
     var p = state.player;
     if (!inNationalCampaignWindow()) return null;
+    if (campaignActionsRemainingThisWeek(p) <= 0) return null;
     if (!p.campaignCooldowns) p.campaignCooldowns = {};
     if (state.turn < (p.campaignCooldowns.promessa || 0)) return null;
     var candidate = campaignPledgeCandidate(p);
     if (!candidate) return null;
     p.campaignCooldowns.promessa = state.turn + 3;
+    consumeCampaignAction(p);
     var dossier = { title: "Promessa elettorale su " + candidate.noun, cat: "Campagna Elettorale" };
     var choice = {
       label: "Promessa elettorale su " + candidate.noun,
@@ -24100,22 +24139,29 @@
     if (!p || !inNationalCampaignWindow()) return "";
     if (!p.campaignCooldowns) p.campaignCooldowns = {};
     var w = weeksToNationalElection();
+    var remaining = campaignActionsRemainingThisWeek(p);
+    var capReached = remaining <= 0;
     var html = '<section aria-label="Campagna Elettorale"><details class="log" open><summary>Campagna Elettorale — mancano ' + w + " settiman" + (w === 1 ? "a" : "e") + '<span>▾</span></summary>' +
-      '<p class="ci-hint">Le elezioni politiche sono vicine: puoi organizzare iniziative di campagna, generali o legate alla linea del partito, oltre agli eventi di partito ordinari.</p><div class="option-grid">';
+      '<p class="ci-hint">Le elezioni politiche sono vicine: puoi organizzare iniziative di campagna, generali o legate alla linea del partito, oltre agli eventi di partito ordinari. ' +
+      (capReached
+        ? "Hai già usato tutte le " + CAMPAIGN_ACTIONS_PER_WEEK_CAP + " iniziative di questa settimana: torna la settimana prossima."
+        : "Iniziative di campagna ancora disponibili questa settimana: " + remaining + "/" + CAMPAIGN_ACTIONS_PER_WEEK_CAP + ".") +
+      '</p><div class="option-grid">';
     Object.keys(CAMPAIGN_ACTIVITIES).forEach(function (id) {
       var a = CAMPAIGN_ACTIVITIES[id];
       var cd = p.campaignCooldowns[id] || 0;
       var weeksLeft = cd - state.turn;
-      var disabled = weeksLeft > 0 || p.fondi < a.cost;
-      var status = weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+      var disabled = capReached || weeksLeft > 0 || p.fondi < a.cost;
+      var status = capReached ? "Massimo di iniziative settimanali raggiunto"
+        : weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
         : p.fondi < a.cost ? "Fondi insufficienti (" + fmtEuro(a.cost) + ")" : (a.cost ? "Costo: " + fmtEuro(a.cost) : "Nessun costo");
       html += '<button type="button" class="option-card" data-campaign-activity="' + id + '"' + (disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + '</span></button>';
     });
     var pledgeCd = p.campaignCooldowns.promessa || 0;
     var pledgeWeeksLeft = pledgeCd - state.turn;
-    var pledgeDisabled = pledgeWeeksLeft > 0;
-    var pledgeStatus = pledgeWeeksLeft > 0 ? "Disponibile tra " + pledgeWeeksLeft + " settiman" + (pledgeWeeksLeft === 1 ? "a" : "e") : "Nessun costo — legata alla linea del partito";
+    var pledgeDisabled = capReached || pledgeWeeksLeft > 0;
+    var pledgeStatus = capReached ? "Massimo di iniziative settimanali raggiunto" : pledgeWeeksLeft > 0 ? "Disponibile tra " + pledgeWeeksLeft + " settiman" + (pledgeWeeksLeft === 1 ? "a" : "e") : "Nessun costo — legata alla linea del partito";
     html += '<button type="button" class="option-card" data-campaign-pledge="1"' + (pledgeDisabled ? " disabled" : "") + '>' +
       '<span class="olabel">Promessa elettorale sul tuo tema</span><span class="odesc">Una promessa specifica, coerente con la linea del partito. ' + pledgeStatus + '</span></button>';
     html += "</div></details></section>";
@@ -32547,6 +32593,19 @@
     if (weeksToElection <= 24 && !state.allianceOffered) {
       state.allianceOffered = true;
       state.currentDossierId = "alleanza_negoziato";
+      state.phase = "building";
+      return;
+    }
+
+    // Una tantum per ogni ciclo elettorale (confronto con state.nextElectionTurn, non un flag booleano
+    // semplice: così torna a scattare alla legislatura successiva senza bisogno di resettarlo altrove):
+    // segnala l'apertura della finestra di campagna (vedi inNationalCampaignWindow/CAMPAIGN_WINDOW_WEEKS)
+    // invece di lasciare che il pannello "Campagna Elettorale" compaia in silenzio tra gli altri della
+    // pagina Partito, proprio nella settimana in cui più conta accorgersene.
+    if (!state.regime && inNationalCampaignWindow() && state.campaignWindowAnnouncedFor !== state.nextElectionTurn) {
+      state.campaignWindowAnnouncedFor = state.nextElectionTurn;
+      state.aiDynamicDossier = buildCampaignWindowOpenDossier();
+      state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
     }
