@@ -2161,7 +2161,54 @@
       html += '<button type="button" class="option-card" data-budget-measure="' + id + '"' + (disabled ? " disabled" : "") + '>' +
         '<span class="olabel">' + m.label + '</span><span class="odesc">' + m.desc + " " + status + '</span></button>';
     });
-    html += "</div></details></section>";
+    html += "</div>";
+    // Richiesto da un giocatore: anche una mozione o una proposta di legge, se passano in Aula, abbassano
+    // il deficit — non solo i due decreti sopra (effetto diretto sull'indicatore economia da cui dipende
+    // driftBilancioStato, più il nudge sulle aliquote se il tema è fiscale, vedi isFiscalTopic). Qui sotto
+    // due temi scelti apposta per questo, proponibili con un click diretto — richiamando le STESSE
+    // funzioni già esistenti (proposeMozione/proposeLegge, le stesse della scheda Parlamento: stesso
+    // costo, stesso raffreddamento condiviso con qualunque altra mozione/legge, stesso voto incerto in
+    // Aula, disponibile anche all'opposizione) — non una copia del pannello intero con la sua ricerca e
+    // le sue 18 categorie, quasi tutte estranee al deficit: solo questi due temi, qui, senza duplicare
+    // nulla. Resta comunque un link rapido alla categoria "Economia e Imprese" per chi vuole sfogliare
+    // altri temi economici oltre a questi due.
+    html += renderBudgetLegislativeShortcuts();
+    html += '<p class="ci-hint">Altri temi economici in Parlamento, categoria "Economia e Imprese":</p>' +
+      '<button type="button" class="staff-btn hire" id="budget-jump-economia-btn">Vai a Economia e Imprese in Parlamento</button>';
+    html += "</details></section>";
+    return html;
+  }
+  var BUDGET_LEGISLATIVE_TOPICS = {
+    deficit_mozione: { kind: "mozione", title: "Mozione per una gestione più efficiente della spesa pubblica",
+      noun: "una gestione più efficiente della spesa pubblica", metric: "economia",
+      brief: "Una mozione che impegna il Governo a individuare sprechi e inefficienze nella spesa pubblica, per liberare risorse senza nuove tasse." },
+    deficit_legge: { kind: "legge", title: "Legge per il contrasto strutturale all'evasione fiscale",
+      noun: "un contrasto strutturale all'evasione fiscale", metric: "economia",
+      brief: "Una proposta di legge per rafforzare in modo permanente i controlli e la riscossione fiscale, senza alzare le aliquote per chi già paga regolarmente." }
+  };
+  function renderBudgetLegislativeShortcuts() {
+    var p = state.player;
+    var html = '<p class="ci-hint">Due temi scelti apposta per il deficit, proponibili subito (stesso costo e raffreddamento di qualunque altra mozione/legge, voto incerto in Aula):</p><div class="option-grid">';
+    Object.keys(BUDGET_LEGISLATIVE_TOPICS).forEach(function (id) {
+      var t = BUDGET_LEGISLATIVE_TOPICS[id];
+      var isMozione = t.kind === "mozione";
+      var alreadyResolved = isMozione
+        ? (p.acceptedMozioni || []).indexOf(t.title) !== -1 || (p.resolvedTopicNouns || []).indexOf(t.noun) !== -1
+        : (p.acceptedLeggi || []).indexOf(t.title) !== -1 || (p.resolvedTopicNouns || []).indexOf(t.noun) !== -1;
+      var pending = isMozione ? p.pendingMozione : p.pendingLegge;
+      var cooldownTurn = isMozione ? p.mozioneCooldownTurn : p.leggeCooldownTurn;
+      var weeksLeft = (cooldownTurn || 0) - state.turn;
+      var cost = isMozione ? MOZIONE_PROPOSAL_COST : LEGGE_PROPOSAL_COST;
+      var disabled = alreadyResolved || !!pending || weeksLeft > 0 || p.fondi < cost;
+      var status = alreadyResolved ? "Già varata: non riproponibile"
+        : pending ? "Hai già una " + (isMozione ? "mozione" : "proposta di legge") + " in attesa di voto"
+        : weeksLeft > 0 ? "Disponibile tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e")
+        : p.fondi < cost ? "Fondi insufficienti (" + fmtEuro(cost) + ")"
+        : "Costo: " + fmtEuro(cost);
+      html += '<button type="button" class="option-card" data-budget-legislative="' + id + '"' + (disabled ? " disabled" : "") + '>' +
+        '<span class="olabel">' + (isMozione ? "Mozione: " : "Legge: ") + t.title.replace(/^(Mozione per |Legge per )/, "") + '</span><span class="odesc">' + t.brief + " " + status + '</span></button>';
+    });
+    html += "</div>";
     return html;
   }
   // ---------- Programma Spaziale Nazionale ----------
@@ -30991,6 +31038,31 @@
         render();
       });
     });
+    app.querySelectorAll("[data-budget-legislative]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-budget-legislative");
+        var t = BUDGET_LEGISLATIVE_TOPICS[id];
+        if (!t) return;
+        var res = t.kind === "mozione" ? proposeMozione(t) : proposeLegge(t);
+        if (!res) { showSaveStatus("Non puoi ancora proporla (fondi, tempo di recupero o un'altra proposta già in attesa di voto).", true); return; }
+        showSaveStatus(res.resultText, false);
+        save();
+        render();
+      });
+    });
+    var budgetJumpBtn = document.getElementById("budget-jump-economia-btn");
+    if (budgetJumpBtn) {
+      budgetJumpBtn.addEventListener("click", function () {
+        var p = state.player;
+        state.uiPage = "parlamento";
+        if (!state.visitedPages) state.visitedPages = {};
+        state.visitedPages.parlamento = true;
+        p.mozioneSelectedCat = "economia"; p.mozioneCandidates = null; p.mozioneSearchQuery = "";
+        p.leggeSelectedCat = "economia"; p.leggeCandidates = null; p.leggeSearchQuery = "";
+        save();
+        render();
+      });
+    }
     app.querySelectorAll("[data-fundraising]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-fundraising");
