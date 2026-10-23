@@ -5090,6 +5090,7 @@
       return;
     }
     triggerRivalPartyEvent();
+    triggerCpuCampaignDeclaration();
     triggerPlayerNewsEvent();
     triggerExternalMovementEvent();
     triggerGovernmentCrisisContagion();
@@ -14431,6 +14432,52 @@
     state.partyArcs[party.id] = arc;
   }
 
+  // ---------- Dichiarazioni di campagna degli altri partiti (CPU) ----------
+  // Richiesto da un giocatore: nella finestra di campagna elettorale nazionale (vedi
+  // inNationalCampaignWindow/CAMPAIGN_WINDOW_WEEKS) solo il partito del giocatore aveva un sistema di
+  // campagna attivo — gli altri partiti restavano silenziosi, muovendosi solo con il drift organico di
+  // sempre. Qui, ogni settimana di campagna, un partito a caso ha una probabilità di "fare dichiarazioni"
+  // su un tema coerente con la propria ideologia (stesso motore combinatorio FAMILY_SIGNATURE_THEMES/
+  // FAMILY_ANGLE_NOUNS già usato per le promesse elettorali del giocatore), con un piccolo effetto sui
+  // sondaggi — esplicitamente richiesto "realistico, non un boost enorme a caso": stesso schema di
+  // scala-per-dimensione già usato in triggerRivalPartyEvent (percepibile ma mai uno sconvolgimento,
+  // proporzionato alla dimensione attuale del partito), range di partenza piccolo e leggermente più
+  // spesso positivo che negativo (una dichiarazione di campagna aiuta un filo più spesso di quanto
+  // nuoccia), non un singolo +3/+5 su un partito qualunque.
+  var CPU_CAMPAIGN_DECLARATION_VERBS = [
+    function (n, noun) { return n + " apre la campagna con una dichiarazione su " + noun + "."; },
+    function (n, noun) { return "Il leader di " + n + " rilancia la propria linea su " + noun + " in un comizio di piazza."; },
+    function (n, noun) { return n + " dedica lo spot elettorale di questa settimana a " + noun + "."; },
+    function (n, noun) { return "In un'intervista, " + n + " mette al centro della campagna " + noun + "."; },
+    function (n, noun) { return "Il programma elettorale di " + n + " rilancia la propria proposta su " + noun + "."; }
+  ];
+  function cpuCampaignDeclarationNoun(party) {
+    var themeIds = FAMILY_SIGNATURE_THEMES[party.familyId] || [];
+    if (!themeIds.length) return null;
+    var themeId = themeIds[Math.floor(Math.random() * themeIds.length)];
+    var angles = FAMILY_ANGLE_NOUNS[party.familyId];
+    var nouns = angles && angles[themeId];
+    if (!nouns || !nouns.length) return null;
+    return nouns[Math.floor(Math.random() * nouns.length)];
+  }
+  function triggerCpuCampaignDeclaration() {
+    if (!inNationalCampaignWindow()) return;
+    if (Math.random() > 0.4) return;
+    var pool = activeParties();
+    if (!pool.length) return;
+    var party = pool[Math.floor(Math.random() * pool.length)];
+    var noun = cpuCampaignDeclarationNoun(party);
+    if (!noun) return;
+    var verb = CPU_CAMPAIGN_DECLARATION_VERBS[Math.floor(Math.random() * CPU_CAMPAIGN_DECLARATION_VERBS.length)];
+    var rawDelta = rand(-0.15, 0.35);
+    var sizeScale = clamp(state.parties[party.id] / 8, 0.18, 1.6);
+    state.parties[party.id] = Math.max(0.3, state.parties[party.id] + rawDelta * sizeScale);
+    state.log.unshift({
+      week: state.turn, title: "Campagna elettorale", choiceLabel: party.short,
+      result: verb(party.name, noun), headlines: [], type: "cronaca", cat: "Campagna Elettorale"
+    });
+  }
+
   // ---------- Attacco mirato di un rivale quando sei davvero in testa ----------
   // triggerRivalPartyEvent sopra è cronaca generica e simmetrica: non guarda mai a chi sta vincendo, non
   // colpisce mai qualcuno IN QUANTO in testa. Qui invece sì: se il tuo distacco nei sondaggi dal secondo
@@ -16718,6 +16765,7 @@
       return;
     }
     triggerRivalPartyEvent();
+    triggerCpuCampaignDeclaration();
     triggerPlayerNewsEvent();
     triggerExternalMovementEvent();
     triggerGovernmentCrisisContagion();
@@ -32309,6 +32357,7 @@
     if (state.player && !state.player.formationComplete) {
       recomputePeriodic();
       triggerRivalPartyEvent();
+      triggerCpuCampaignDeclaration();
       triggerWorldNews();
       triggerRealConflictNews();
       resolveRegionalConflictsIfDue();
@@ -32424,6 +32473,7 @@
     }
     updateLeaderTrust();
     triggerRivalPartyEvent();
+    triggerCpuCampaignDeclaration();
     triggerPlayerNewsEvent();
     triggerExternalMovementEvent();
     triggerGovernmentCrisisContagion();
