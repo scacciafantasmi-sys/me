@@ -14084,6 +14084,29 @@
     situation.progressPct = ((Math.round(p.formationSignatures || 0)) / FORMATION_SIGNATURE_TARGET) * 100;
     return situation;
   }
+  // Richiesto da un giocatore: durante il comitato promotore il paese continua comunque a votare (vedi
+  // il blocco apposito in advanceTurnLogicCore), ma finora lo faceva "in silenzio" — nessun dossier
+  // informava il giocatore. Riusa il testo già generato da resolveElection/resolveRegionalElectionBackground
+  // (stesso state.log) invece di ricostruirlo da zero, per non rischiare di raccontare due volte la stessa
+  // cosa in due modi diversi.
+  function buildFormationElectionNewsDossier(nationalElectionHappened, regionalNews) {
+    var p = state.player;
+    var parts = [];
+    if (nationalElectionHappened && state.lastElectionStandings && state.lastElectionStandings.length) {
+      var top = state.lastElectionStandings.slice(0, 3).map(function (e) { return e.label + " (" + e.seats + " seggi)"; }).join(", ");
+      parts.push("Elezioni Politiche — Legislatura " + Math.max(1, state.legislature - 1) + ": " + top + ". Nasce un nuovo governo guidato da " + govEntityLabel() + ".");
+    }
+    (regionalNews || []).forEach(function (l) { parts.push(l.result); });
+    return {
+      id: "formation_election_news", kind: "notizia", cat: "Fondazione",
+      eyebrow: "Mentre il comitato raccoglie le firme",
+      title: "Il paese vota, ma non ancora per " + p.name,
+      brief: "Il comitato promotore di " + p.name + " è ancora al lavoro sulle firme: non esiste ancora come soggetto elettorale, quindi non è comparso sulla scheda. Il resto del paese, però, è andato alle urne questa settimana. " + parts.join(" "),
+      choices: [
+        { label: "Prendo nota, si continua con la raccolta firme", hint: "", effects: {}, result: "Il comitato riprende il lavoro sulla raccolta firme." }
+      ]
+    };
+  }
   // Chiamata da entrambi i punti in cui la Raccolta Firme può far scattare la soglia — la scelta
   // settimanale del dossier (resolveDossierChoice) e il post social libero (bindFormationSocialInteractions,
   // che non passa da resolveDossierChoice) — così il controllo e il messaggio restano un'unica fonte di
@@ -14092,6 +14115,20 @@
     var p = state.player;
     if (p.formationComplete || (p.formationSignatures || 0) < FORMATION_SIGNATURE_TARGET) return;
     p.formationComplete = true;
+    // BUG GRAVE segnalato da un giocatore ("in neanche 30 settimane dalla fondazione già al 4%, poi al
+    // 7% dopo 40 — assurdamente irrealistico"): foundedTurn viene impostato al turno 1, all'apertura del
+    // comitato promotore, non a QUESTO momento — eppure è da foundedTurn che si conta la finestra di 150
+    // settimane del tetto di crescita iniziale (EARLY_GROWTH_CEILING_VALUE/TURNS in recomputePeriodic).
+    // Una raccolta firme realistica può richiedere molte decine, anche oltre 150, settimane (300.000
+    // firme non si raccolgono in fretta): quella finestra protettiva risultava già parzialmente o
+    // interamente consumata PRIMA ancora che il partito esistesse davvero, lasciando i sondaggi liberi
+    // di saltare subito al bersaglio organico non più protetto — calcolato nel frattempo su iscritti/
+    // visibilità/reputazione che intanto, durante il comitato, erano comunque potuti crescere parecchio
+    // (solo i sondaggi restavano bloccati allo 0.3%, non le altre statistiche). Da qui in avanti
+    // foundedTurn segna il vero inizio della vita del partito: la finestra di 150 settimane — e il tetto
+    // del 3% che la accompagna — riparte intera da questo momento, non da quando si è solo iniziato a
+    // raccogliere firme.
+    p.foundedTurn = state.turn;
     // Il Congresso Fondativo (lo statuto verticista/democratico) non spariva: arriva solo ORA, non più al
     // turno 1 — vedi il controllo in cima ad advanceTurnLogicCore.
     state.pendingCongressoFondativo = true;
@@ -18227,6 +18264,48 @@
     recordPolicyOutcome("Modifica di Legge", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
+  // Stessa logica di resolveCpuMozioneSilently sopra, applicata alle modifiche di legge.
+  function resolveCpuAmendmentSilently() {
+    var pool = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 1; });
+    if (!pool.length) return;
+    var weighted = pool.map(function (pt) { return { pt: pt, w: Math.max(0.5, state.parties[pt.id] || 0.5) }; });
+    var proposer = pickWeighted(weighted, function (e) { return e.w; }).pt;
+    var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
+    var topicPool = proposer.familyId ? amendmentTopicsForFamily(proposer.familyId) : [];
+    if (!topicPool.length) topicPool = amendmentTopicsGeneral();
+    topicPool = filterAmendmentTopicsByGovernmentRole(topicPool, isGovProposer);
+    if (!topicPool.length) return;
+    var acceptedTitles = (state.player && state.player.acceptedAmendments) || [];
+    if (acceptedTitles.length) {
+      var freshTopics = topicPool.filter(function (t) { return acceptedTitles.indexOf(t.title) === -1; });
+      if (freshTopics.length) topicPool = freshTopics;
+    }
+    var topic = topicPool[Math.floor(Math.random() * topicPool.length)];
+    var baseProb;
+    if (isGovProposer) {
+      baseProb = 0.68 + Math.random() * 0.15;
+    } else {
+      var govFam = currentGoverningFamilyId();
+      var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
+      baseProb = (myPos === undefined || govPos === undefined) ? 0.18 : clamp(0.5 - (Math.abs(myPos - govPos) / 6) * 0.46, 0.03, 0.5);
+    }
+    var passed = Math.random() < baseProb;
+    var delta = passed ? rand(0.35, 0.8) : rand(-0.08, 0.08);
+    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
+    if (state.consensoGoverno !== undefined) {
+      var cg = isGovProposer ? (passed ? rand(1.1, 2.4) : -rand(1.1, 2.4)) : (passed ? -rand(1.1, 2.4) : rand(1.1, 2.4));
+      state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
+    }
+    var title = topic.title + " (" + proposer.short + ")";
+    var esito = passed
+      ? "La proposta di modifica di " + proposer.name + " su " + topic.noun + " viene approvata in via definitiva dall'Aula: " + topic.noun + " viene aggiornata."
+      : "La proposta di modifica di " + proposer.name + " su " + topic.noun + " viene respinta dall'Aula: il tema resta comunque acceso nel dibattito pubblico.";
+    if (passed) {
+      recordEnactedPolicy(title.split(" (")[0], "Modifica approvata (proposta da " + proposer.name + "): " + topic.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
+    }
+    state.log.unshift({ week: state.turn, title: title, choiceLabel: proposer.short, result: esito, headlines: [], type: "mozione", cat: "Modifica di Legge" });
+    recordPolicyOutcome("Modifica di Legge", title.split(" (")[0], passed, proposer.name, topic.metric);
+  }
   // ---------- Proposte di legge presentate da altri partiti ----------
   // Stessa logica delle mozioni CPU: chi propone (di governo o di opposizione) pesca dal pool pesato
   // sui sondaggi, la probabilità dipende da chi governa davvero, e il voto del gruppo del giocatore la
@@ -18315,6 +18394,53 @@
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: leggeProposerParty ? leggeProposerParty.familyId : undefined });
     recordPolicyOutcome("Legge", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
+  }
+  // Stessa logica di resolveCpuMozioneSilently sopra, applicata alle proposte di legge: il Parlamento
+  // continua a votare leggi vere anche quando il partito del giocatore non ha seggi per parteciparvi.
+  function resolveCpuLeggeSilently() {
+    var pool = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 1; });
+    if (!pool.length) return;
+    var weighted = pool.map(function (pt) { return { pt: pt, w: Math.max(0.5, state.parties[pt.id] || 0.5) }; });
+    var proposer = pickWeighted(weighted, function (e) { return e.w; }).pt;
+    var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
+    var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
+    if (!topicPool.length) topicPool = lawTopicsGeneral();
+    topicPool = filterLawTopicsByGovernmentRole(topicPool, isGovProposer);
+    if (!topicPool.length) return;
+    var picked = pickCpuTopic(topicPool);
+    var topic = picked.topic;
+    var baseProb;
+    if (isGovProposer) {
+      baseProb = 0.72 + Math.random() * 0.15;
+    } else {
+      var govFam = currentGoverningFamilyId();
+      var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
+      baseProb = (myPos === undefined || govPos === undefined) ? 0.2 : clamp(0.55 - (Math.abs(myPos - govPos) / 6) * 0.5, 0.03, 0.55);
+    }
+    var passed = Math.random() < baseProb;
+    var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
+    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
+    if (state.consensoGoverno !== undefined) {
+      var cg = isGovProposer ? (passed ? rand(1.5, 3.2) : -rand(1.5, 3.2)) : (passed ? -rand(1.5, 3.2) : rand(1.5, 3.2));
+      state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
+    }
+    var title = (picked.isRevisit ? topic.title + " — Nuovo Intervento" : topic.title) + " (" + proposer.short + ")";
+    var esito = passed
+      ? (picked.isRevisit
+        ? "La proposta di legge di " + proposer.name + " su " + topic.noun + " viene approvata in via definitiva dall'Aula: un ulteriore intervento normativo si aggiunge a quanto già stabilito in passato su " + topic.noun + "."
+        : "La proposta di legge di " + proposer.name + " su " + topic.noun + " viene approvata in via definitiva dall'Aula: " + topic.noun + " diventa legge dello Stato.")
+      : "La proposta di legge di " + proposer.name + " su " + topic.noun + " viene respinta dall'Aula: il tema resta comunque acceso nel dibattito pubblico.";
+    if (passed) {
+      recordEnactedPolicy(title.split(" (")[0], picked.isRevisit
+        ? ("Ulteriore intervento legislativo (proposta da " + proposer.name + "): un nuovo intervento normativo si aggiunge a quanto già stabilito su " + topic.noun + ".")
+        : ("Legge approvata (proposta da " + proposer.name + "): " + topic.noun + " diventa legge dello Stato. Il paese prende atto del cambiamento: non verrà riproposta."), topic.metric);
+      markTopicNounResolved(topic.noun);
+      if (isFiscalTopic(topic.noun) || isFiscalTopic(title)) {
+        if (proposer.familyId) applyIndirectFiscalNudge(proposer.familyId, 1);
+      }
+    }
+    state.log.unshift({ week: state.turn, title: title, choiceLabel: proposer.short, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
+    recordPolicyOutcome("Legge", title.split(" (")[0], passed, proposer.name, topic.metric);
   }
   // ---------- Mozioni presentate da altri partiti ----------
   // Non solo il giocatore: ogni tanto è un ALTRO partito (di governo o di opposizione) a presentare una
@@ -18406,6 +18532,59 @@
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: mozioneCpuProposer ? mozioneCpuProposer.familyId : undefined });
     recordPolicyOutcome("Mozione", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
+  }
+  // Richiesto da un giocatore: mozioni, leggi e modifiche di altri partiti (vedi i tre blocchi "CPU"
+  // sopra/sotto) venivano proposte SOLO quando il giocatore era in Parlamento — serve davvero il suo
+  // voto per decidere l'esito (vedi voteAdj sopra). Ma un vero Parlamento continua a lavorare anche
+  // quando un singolo partito (il tuo) resta fuori, sia perché non ha ancora seggi sia perché è stato
+  // dissolto: stesso identico meccanismo di selezione proponente/tema/probabilità di successo di
+  // buildCpuMozioneDossier, ma risolto SILENZIOSAMENTE (nessun voto da chiedere, quindi nessun voteAdj:
+  // l'esito dipende solo da chi propone e da quanto è vicino o lontano dal governo in carica), senza
+  // occupare il dossier settimanale del giocatore — stesso pattern già usato per triggerRivalPartyEvent/
+  // triggerCpuCampaignDeclaration, aggiornamenti di sottofondo che non richiedono mai una sua scelta.
+  function resolveCpuMozioneSilently() {
+    var pool = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 1; });
+    if (!pool.length) return;
+    var weighted = pool.map(function (pt) { return { pt: pt, w: Math.max(0.5, state.parties[pt.id] || 0.5) }; });
+    var proposer = pickWeighted(weighted, function (e) { return e.w; }).pt;
+    var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
+    var topicPool = proposer.familyId ? mozioneTopicsForFamily(proposer.familyId) : [];
+    if (!topicPool.length) topicPool = mozioneTopicsGeneral();
+    if (!topicPool.length) return;
+    var picked = pickCpuTopic(topicPool);
+    var topic = picked.topic;
+    var baseProb;
+    if (isGovProposer) {
+      baseProb = 0.8 + Math.random() * 0.12;
+    } else {
+      var govFam = currentGoverningFamilyId();
+      var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
+      baseProb = (myPos === undefined || govPos === undefined) ? 0.35 : clamp(0.78 - (Math.abs(myPos - govPos) / 6) * 0.68, 0.06, 0.78);
+    }
+    var passed = Math.random() < baseProb;
+    var delta = passed ? rand(0.15, 0.35) : rand(-0.03, 0.03);
+    if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
+    if (state.consensoGoverno !== undefined) {
+      var cg = isGovProposer ? (passed ? rand(0.6, 1.6) : -rand(0.6, 1.6)) : (passed ? -rand(0.6, 1.6) : rand(0.6, 1.6));
+      state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
+    }
+    var title = (picked.isRevisit ? topic.title + " — Nuova Mozione" : topic.title) + " (" + proposer.short + ")";
+    var esito = passed
+      ? (picked.isRevisit
+        ? "La mozione di " + proposer.name + " su " + topic.noun + " viene approvata dall'Aula: un ulteriore atto di indirizzo si aggiunge a quanto già deciso in passato su " + topic.noun + "."
+        : "La mozione di " + proposer.name + " su " + topic.noun + " viene approvata dall'Aula: entra ufficialmente nell'agenda del paese.")
+      : "La mozione di " + proposer.name + " su " + topic.noun + " viene respinta dall'Aula: il tema resta comunque acceso nel dibattito pubblico.";
+    if (passed) {
+      recordEnactedPolicy(title.split(" (")[0], picked.isRevisit
+        ? ("Ulteriore atto parlamentare (proposta da " + proposer.name + "): un nuovo atto di indirizzo si aggiunge a quanto già deciso su " + topic.noun + ".")
+        : ("Mozione approvata (proposta da " + proposer.name + "): " + topic.noun + " entra nell'agenda parlamentare. Il paese prende atto del cambiamento: non verrà riproposta."), topic.metric);
+      markTopicNounResolved(topic.noun);
+      if (isFiscalTopic(topic.noun) || isFiscalTopic(title)) {
+        if (proposer.familyId) applyIndirectFiscalNudge(proposer.familyId, 0.6);
+      }
+    }
+    state.log.unshift({ week: state.turn, title: title, choiceLabel: proposer.short, result: esito, headlines: [], type: "mozione", cat: "Mozione Parlamentare" });
+    recordPolicyOutcome("Mozione", title.split(" (")[0], passed, proposer.name, topic.metric);
   }
   function renderMozioniPanel() {
     var p = state.player;
@@ -32401,6 +32580,23 @@
       ensureRegionsInit();
       driftRegionalMetrics();
       resolveRegionalLawsIfDue();
+      // Richiesto da un giocatore: il Parlamento vota comunque mozioni, leggi e modifiche tra le altre
+      // forze politiche anche mentre il comitato promotore raccoglie le firme — il partito del
+      // giocatore non ha ancora seggi (anzi non esiste ancora come soggetto elettorale), ma il resto
+      // dell'Aula no di certo. Stesse identiche risoluzioni silenziose usate quando il partito, già
+      // fondato, resta comunque fuori dal Parlamento (vedi resolveCpuMozioneSilently e affini).
+      if (state.turn >= (state.cpuMozioneCooldownTurn || 0) && Math.random() < 0.4) {
+        state.cpuMozioneCooldownTurn = state.turn + CPU_MOZIONE_COOLDOWN_TURNS;
+        resolveCpuMozioneSilently();
+      }
+      if (state.turn >= (state.cpuLeggeCooldownTurn || 0) && Math.random() < 0.3) {
+        state.cpuLeggeCooldownTurn = state.turn + CPU_LEGGE_COOLDOWN_TURNS;
+        resolveCpuLeggeSilently();
+      }
+      if (state.turn >= (state.cpuAmendmentCooldownTurn || 0) && Math.random() < 0.25) {
+        state.cpuAmendmentCooldownTurn = state.turn + CPU_AMENDMENT_COOLDOWN_TURNS;
+        resolveCpuAmendmentSilently();
+      }
       // Segnalato da un giocatore: anche con il resto del paese che si muove (vedi sopra), le elezioni
       // vere e proprie restavano sospese finché durava la raccolta firme — il Governo in carica non
       // cambiava mai, nessuna classifica dei voti, nessuna legislatura che avanzasse, anche dopo decine
@@ -32409,7 +32605,47 @@
       // qualificare il giocatore stesso (sotto qualunque soglia reale) — aggiorna solo il resto del
       // paese, esattamente come le altre chiamate "silenziose" sopra.
       resolveEuropeanElection();
-      if (!state.regime && state.turn >= state.nextElectionTurn) resolveElection();
+      var formationNationalElectionHappened = false;
+      if (!state.regime && state.turn >= state.nextElectionTurn) { resolveElection(); formationNationalElectionHappened = true; }
+      // Richiesto da un giocatore: le elezioni REGIONALI restavano sospese come le politiche nazionali
+      // erano prima del fix sopra — nessuna regione rinnovava mai la propria presidenza finché durava la
+      // raccolta firme. Stessa identica chiamata "silenziosa" già usata per le altre 19 regioni quando il
+      // giocatore guida di persona una regione (vedi triggerRegionalElectionCycle) — qui si applica a
+      // TUTTE le regioni, perché durante il comitato il partito non ha ancora alcun radicamento
+      // territoriale riconosciuto da cui candidarsi.
+      var formationRegionalLogCountBefore = state.log.length;
+      ITALIAN_REGIONS.forEach(function (region) {
+        if (state.turn >= state.regions[region.id].nextElectionTurn) resolveRegionalElectionBackground(region.id);
+      });
+      var formationRegionalNews = state.log.slice(0, state.log.length - formationRegionalLogCountBefore)
+        .filter(function (l) { return l.cat === "Elezioni Regionali"; });
+      // Richiesto da un giocatore: anche i referendum nazionali si tengono comunque durante il comitato —
+      // non esistendo ancora come soggetto elettorale, il comitato non può scendere in campo né per il SÌ
+      // né per il NO (stance neutra, come "non prendere posizione"), ma il quesito si vota e si risolve
+      // lo stesso, quorum compreso.
+      triggerReferendumIfDue();
+      if (state.pendingNationalReferendum && state.pendingNationalReferendum.stance === undefined) {
+        state.pendingNationalReferendum.stance = null;
+      }
+      var formationReferendumOutcomeDossier = resolveNationalReferendumIfDue();
+      // Richiesto da un giocatore: il resto del paese vota comunque (vedi sopra), ma finora lo faceva "in
+      // silenzio" — nessun modo per il giocatore di saperlo finché non andava a controllare da solo in
+      // Diario. Nelle settimane in cui si è votato (politiche nazionali, un cambio di maggioranza in
+      // almeno una regione, o l'esito di un referendum) un dossier dedicato lo spiega subito, al posto
+      // del normale dossier di raccolta firme di quella settimana — lasciando comunque chiarissimo che
+      // il comitato non è ancora un soggetto elettorale e quindi non era in corsa.
+      if (formationReferendumOutcomeDossier) {
+        state.aiDynamicDossier = formationReferendumOutcomeDossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
+      if (formationNationalElectionHappened || formationRegionalNews.length) {
+        state.aiDynamicDossier = buildFormationElectionNewsDossier(formationNationalElectionHappened, formationRegionalNews);
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
       // Richiesto da un giocatore: non solo scelte settimanali, anche 3 veri episodi fissi legati alle
       // soglie di firme raggiunte (25%/50%/75%, vedi buildFormationMilestoneDossierIfDue) — quando una
       // soglia viene superata per la prima volta, quella scena sostituisce per una sola settimana il
@@ -32981,36 +33217,58 @@
       return;
     }
 
-    if (p.inParliament && state.turn >= (state.cpuMozioneCooldownTurn || 0) && Math.random() < 0.4) {
-      var cpuMozioneDossier = buildCpuMozioneDossier();
-      if (cpuMozioneDossier) {
+    // Richiesto da un giocatore: finché il partito del giocatore resta fuori dal Parlamento (zero seggi,
+    // non solo all'opposizione), il resto dell'Aula deve continuare comunque a votare mozioni/leggi/
+    // modifiche tra le altre forze — un vero Parlamento non si ferma per l'assenza di un singolo partito.
+    // Senza un gruppo del giocatore da consultare non c'è alcun dossier da mostrare (nessun voteAdj
+    // possibile), quindi l'esito si risolve subito, silenziosamente (vedi resolveCpuMozioneSilently e
+    // affini) — stesso ritmo/probabilità delle versioni con dossier, ma senza occupare la settimana del
+    // giocatore con una scelta che non gli compete.
+    if (state.turn >= (state.cpuMozioneCooldownTurn || 0) && Math.random() < 0.4) {
+      if (p.inParliament) {
+        var cpuMozioneDossier = buildCpuMozioneDossier();
+        if (cpuMozioneDossier) {
+          state.cpuMozioneCooldownTurn = state.turn + CPU_MOZIONE_COOLDOWN_TURNS;
+          state.aiDynamicDossier = cpuMozioneDossier;
+          state.currentDossierId = "ai_dynamic";
+          state.phase = "building";
+          return;
+        }
+      } else {
         state.cpuMozioneCooldownTurn = state.turn + CPU_MOZIONE_COOLDOWN_TURNS;
-        state.aiDynamicDossier = cpuMozioneDossier;
-        state.currentDossierId = "ai_dynamic";
-        state.phase = "building";
-        return;
+        resolveCpuMozioneSilently();
       }
     }
 
-    if (p.inParliament && state.turn >= (state.cpuLeggeCooldownTurn || 0) && Math.random() < 0.3) {
-      var cpuLeggeDossier = buildCpuLeggeDossier();
-      if (cpuLeggeDossier) {
+    if (state.turn >= (state.cpuLeggeCooldownTurn || 0) && Math.random() < 0.3) {
+      if (p.inParliament) {
+        var cpuLeggeDossier = buildCpuLeggeDossier();
+        if (cpuLeggeDossier) {
+          state.cpuLeggeCooldownTurn = state.turn + CPU_LEGGE_COOLDOWN_TURNS;
+          state.aiDynamicDossier = cpuLeggeDossier;
+          state.currentDossierId = "ai_dynamic";
+          state.phase = "building";
+          return;
+        }
+      } else {
         state.cpuLeggeCooldownTurn = state.turn + CPU_LEGGE_COOLDOWN_TURNS;
-        state.aiDynamicDossier = cpuLeggeDossier;
-        state.currentDossierId = "ai_dynamic";
-        state.phase = "building";
-        return;
+        resolveCpuLeggeSilently();
       }
     }
 
-    if (p.inParliament && state.turn >= (state.cpuAmendmentCooldownTurn || 0) && Math.random() < 0.25) {
-      var cpuAmendmentDossier = buildCpuAmendmentDossier();
-      if (cpuAmendmentDossier) {
+    if (state.turn >= (state.cpuAmendmentCooldownTurn || 0) && Math.random() < 0.25) {
+      if (p.inParliament) {
+        var cpuAmendmentDossier = buildCpuAmendmentDossier();
+        if (cpuAmendmentDossier) {
+          state.cpuAmendmentCooldownTurn = state.turn + CPU_AMENDMENT_COOLDOWN_TURNS;
+          state.aiDynamicDossier = cpuAmendmentDossier;
+          state.currentDossierId = "ai_dynamic";
+          state.phase = "building";
+          return;
+        }
+      } else {
         state.cpuAmendmentCooldownTurn = state.turn + CPU_AMENDMENT_COOLDOWN_TURNS;
-        state.aiDynamicDossier = cpuAmendmentDossier;
-        state.currentDossierId = "ai_dynamic";
-        state.phase = "building";
-        return;
+        resolveCpuAmendmentSilently();
       }
     }
 
