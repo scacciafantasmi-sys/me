@@ -14117,17 +14117,16 @@
     p.formationComplete = true;
     // BUG GRAVE segnalato da un giocatore ("in neanche 30 settimane dalla fondazione già al 4%, poi al
     // 7% dopo 40 — assurdamente irrealistico"): foundedTurn viene impostato al turno 1, all'apertura del
-    // comitato promotore, non a QUESTO momento — eppure è da foundedTurn che si conta la finestra di 150
-    // settimane del tetto di crescita iniziale (EARLY_GROWTH_CEILING_VALUE/TURNS in recomputePeriodic).
-    // Una raccolta firme realistica può richiedere molte decine, anche oltre 150, settimane (300.000
-    // firme non si raccolgono in fretta): quella finestra protettiva risultava già parzialmente o
-    // interamente consumata PRIMA ancora che il partito esistesse davvero, lasciando i sondaggi liberi
-    // di saltare subito al bersaglio organico non più protetto — calcolato nel frattempo su iscritti/
-    // visibilità/reputazione che intanto, durante il comitato, erano comunque potuti crescere parecchio
-    // (solo i sondaggi restavano bloccati allo 0.3%, non le altre statistiche). Da qui in avanti
-    // foundedTurn segna il vero inizio della vita del partito: la finestra di 150 settimane — e il tetto
-    // del 3% che la accompagna — riparte intera da questo momento, non da quando si è solo iniziato a
-    // raccogliere firme.
+    // comitato promotore, non a QUESTO momento — eppure è da foundedTurn che parte lo smorzamento della
+    // crescita iniziale (EARLY_GROWTH_DAMP_FLOOR/RAMP_TURNS in recomputePeriodic). Una raccolta firme
+    // realistica può richiedere molte decine, anche centinaia, di settimane (300.000 firme non si
+    // raccolgono in fretta): lo smorzamento risultava già parzialmente o quasi del tutto esaurito PRIMA
+    // ancora che il partito esistesse davvero, lasciando i sondaggi liberi di saltare quasi subito al
+    // bersaglio organico non più smorzato — calcolato nel frattempo su iscritti/visibilità/reputazione
+    // che intanto, durante il comitato, erano comunque potuti crescere parecchio (solo i sondaggi
+    // restavano bloccati allo 0.3%, non le altre statistiche). Da qui in avanti foundedTurn segna il
+    // vero inizio della vita del partito: la crescita riparte lenta da questo momento, non da quando si
+    // è solo iniziato a raccogliere firme.
     p.foundedTurn = state.turn;
     // Il Congresso Fondativo (lo statuto verticista/democratico) non spariva: arriva solo ORA, non più al
     // turno 1 — vedi il controllo in cima ad advanceTurnLogicCore.
@@ -17608,7 +17607,12 @@
     // Richiesto da un giocatore: compare solo quando l'energia della Scheda Paese è davvero in crisi
     // (sotto 3.0/10), non sempre disponibile come gli altri temi — vedi requiresEnergiaBelow, filtrato
     // alla fonte in lawTopicsGeneral() prima di generare le 3 varianti (proposta/delega/decreto).
-    { noun: "un decreto per calmierare il caro carburante", metric: "energia", cat: "energia", requiresEnergiaBelow: 3.0 }
+    { noun: "un decreto per calmierare il caro carburante", metric: "energia", cat: "energia", requiresEnergiaBelow: 3.0 },
+    // Richiesto da un giocatore: lo ius scholae (cittadinanza per i figli di immigrati nati o cresciuti
+    // in Italia dopo un ciclo di studi) esisteva già come referendum (vedi REFERENDUM_TOPICS,
+    // "iusscholae") ma non come vera proposta di legge — il dibattito politico reale lo vede proprio
+    // come riforma legislativa, non solo come quesito referendario.
+    { noun: "l'introduzione dello ius scholae per i figli di immigrati nati o cresciuti in Italia", metric: "immigrazione", cat: "immigrazione" }
   ];
   // Testi rivisti per spiegare un po' meglio cosa sono DAVVERO queste 3 forme, non solo come si chiamano
   // (segnalato da un giocatore): restano una frase sola, ma ora dicono anche cosa cambia davvero per il
@@ -20703,8 +20707,18 @@
   // organica non può mai produrre da sola. Entrambi sono rari (raffreddamento lungo) e presentati come
   // veri dossier con scelte reali, non semplici bump silenziosi: il giocatore reagisce al momento, non lo
   // subisce soltanto.
-  var EARLY_GROWTH_CEILING_VALUE = 3.0;
-  var EARLY_GROWTH_CEILING_TURNS = 150;
+  // Richiesto da un giocatore ("non ci devono essere tetti, la crescita deve essere più lenta, non
+  // bloccata di colpo"): sostituiscono il vecchio muro fisso (EARLY_GROWTH_CEILING_VALUE/TURNS) che
+  // teneva i sondaggi incollati a un valore preciso per un numero fisso di settimane e poi li liberava
+  // di colpo — proprio quel "di colpo" era il problema: un comitato promotore lungo consumava la
+  // finestra protettiva prima ancora che il partito esistesse, e i sondaggi saltavano subito al
+  // bersaglio organico non più protetto. Il nuovo smorzamento (vedi il suo uso in recomputePeriodic) è
+  // continuo, non un interruttore: parte molto basso (EARLY_GROWTH_DAMP_FLOOR, il bersaglio vale solo
+  // una piccola frazione di quanto "meriterebbe" dai soli iscritti/reputazione/visibilità) e sale
+  // gradualmente verso il 100% nell'arco di circa 5-6 anni di gioco (EARLY_GROWTH_RAMP_TURNS) — nessun
+  // valore fisso da raggiungere e poi restare bloccati, nessun salto quando la finestra "finisce".
+  var EARLY_GROWTH_RAMP_TURNS = 300;
+  var EARLY_GROWTH_DAMP_FLOOR = 0.12;
   var BREAKTHROUGH_COOLDOWN_TURNS = 180;
   var BREAKTHROUGH_FLAVORS = [
     { title: "Un video del comizio diventa virale", brief: "Un frammento di un tuo comizio inizia a circolare online e in poche ore totalizza milioni di visualizzazioni: per la prima volta, il partito è sulla bocca di tutti." },
@@ -20914,23 +20928,25 @@
     var isGovernoNow = p.parliamentRole === "governo";
     var countrySondaggiEffect = clamp(countryTrendDelta * 0.6 * (isGovernoNow ? 1 : -0.4), -2.6, 2.6);
     target = clamp(target + countrySondaggiEffect, 0, 40);
-    // Un vero soffitto strutturale per i primi tempi di un partito fondato da zero (nessun sondaggio
-    // reale ereditato, vedi baselineSondaggi): nella realtà, sfondare il 3% in una sola legislatura senza
-    // un vero momento di rottura (vedi checkBreakthroughTrigger sopra) è raro fuori da condizioni
-    // eccezionali. Il tetto si applica SOLO ai partiti fondati da zero (chi prende in mano un partito
-    // esistente eredita già una base reale, non ha bisogno di questo freno) e SOLO finché non è ancora
-    // arrivato un vero colpo di scena mediatico o non sono passate abbastanza settimane — una volta
-    // sfondato, non torna mai più indietro.
-    if ((p.baselineSondaggi === null || p.baselineSondaggi === undefined) && !p.breakthroughFired &&
-        (state.turn - (p.foundedTurn || 0)) < EARLY_GROWTH_CEILING_TURNS) {
-      target = Math.min(target, EARLY_GROWTH_CEILING_VALUE);
+    // Crescita smorzata per i primi tempi di un partito fondato da zero (nessun sondaggio reale
+    // ereditato, vedi baselineSondaggi): nella realtà un soggetto politico nuovo mette anni a farsi
+    // conoscere, non poche decine di settimane. Si applica SOLO ai partiti fondati da zero (chi prende
+    // in mano un partito esistente eredita già una base reale, non ha bisogno di questo freno) e SOLO
+    // finché non è ancora arrivato un vero colpo di scena mediatico (vedi checkBreakthroughTrigger
+    // sopra, che rimuove lo smorzamento di colpo — resta l'unico vero "scatto" previsto, un'eccezione
+    // rara e narrata, non la norma): uno smorzamento CONTINUO (non un tetto fisso che un giorno
+    // sparisce) tiene il bersaglio a una piccola frazione di quanto "meriterebbe" appena fondato, e
+    // lo lascia crescere verso il 100% molto gradualmente nell'arco di anni.
+    if ((p.baselineSondaggi === null || p.baselineSondaggi === undefined) && !p.breakthroughFired) {
+      var earlyGrowthRamp = clamp((state.turn - (p.foundedTurn || 0)) / EARLY_GROWTH_RAMP_TURNS, 0, 1);
+      target = target * (EARLY_GROWTH_DAMP_FLOOR + (1 - EARLY_GROWTH_DAMP_FLOOR) * earlyGrowthRamp);
     }
     // Richiesto da un giocatore: durante il Comitato Promotore (raccolta firme, prima della vera
     // fondazione del partito — vedi formationComplete/FORMATION_SIGNATURE_TARGET) il soggetto politico
     // non esiste ancora ufficialmente, non ha liste depositate né simboli sulla scheda: non ha senso che
-    // compaia già con sondaggi "veri". Tetto durissimo allo 0.3%, più stretto e indipendente da
-    // EARLY_GROWTH_CEILING_VALUE sopra (che vale solo DOPO la fondazione) — rimosso del tutto non appena
-    // il comitato raccoglie le firme necessarie e formationComplete diventa true.
+    // compaia già con sondaggi "veri". Tetto durissimo allo 0.3%, più stretto e indipendente dallo
+    // smorzamento sopra (che vale solo DOPO la fondazione) — rimosso del tutto non appena il comitato
+    // raccoglie le firme necessarie e formationComplete diventa true.
     if (!p.formationComplete) target = Math.min(target, 0.3);
     // Salvato solo per mostrarlo in UI (vedi renderPollGrid): prima il giocatore vedeva salire o scendere
     // i sondaggi settimana dopo settimana senza alcuna indicazione del PERCHÉ — nessun modo di capire se
@@ -20987,17 +21003,10 @@
       p.baselineOrganicTarget += (organicTarget - p.baselineOrganicTarget) * baselineRatchetRate;
     }
     p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3 * electionNoiseMult, 0, 40);
-    // Il tetto sul BERSAGLIO qui sopra (vedi EARLY_GROWTH_CEILING_VALUE) da solo non basta: diversi eventi
-    // di partito e situazioni applicano un bonus DIRETTO ai sondaggi (eff.sondaggi in applyChoice, o gli
-    // eventi di rivalità/regionali sotto), che bypassa del tutto la convergenza lenta verso il bersaglio e
-    // può sfondare il tetto in un colpo solo. Un ultimo blocco qui, eseguito ogni settimana prima di
-    // mostrare il numero al giocatore, chiude anche questa scappatoia: se il tetto è ancora attivo (nessun
-    // vero breakthrough), un eventuale sforamento di questa settimana viene riportato giù. Non tocca mai
-    // un calo (min, non clamp): un crollo resta un crollo, il tetto blocca solo la salita.
-    if ((p.baselineSondaggi === null || p.baselineSondaggi === undefined) && !p.breakthroughFired &&
-        (state.turn - (p.foundedTurn || 0)) < EARLY_GROWTH_CEILING_TURNS) {
-      p.sondaggi = Math.min(p.sondaggi, EARLY_GROWTH_CEILING_VALUE);
-    }
+    // Richiesto da un giocatore: niente più tetto fisso da "chiudere a scappatoia" qui — lo smorzamento
+    // sul BERSAGLIO sopra (EARLY_GROWTH_DAMP_FLOOR/RAMP_TURNS) è continuo, non un muro, quindi un bonus
+    // diretto occasionale (eff.sondaggi in applyChoice, un evento di rivalità...) può avere il suo
+    // piccolo effetto reale senza bisogno di essere sistematicamente riportato giù la settimana dopo.
     // Stessa scappatoia chiusa anche per il tetto del Comitato Promotore (vedi sopra): un eventuale bonus
     // diretto ai sondaggi (eff.sondaggi in applyChoice) non deve poter sforare lo 0.3% prima che il
     // partito sia davvero fondato.
