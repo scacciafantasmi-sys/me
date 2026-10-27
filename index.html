@@ -1946,6 +1946,88 @@
       choices: choices
     };
   }
+  // ---------- Rientro in NATO/UE dopo un'uscita (richiesto da un giocatore) ----------
+  // "possibilità di richiedere il rientro in UE/NATO dopo dittatura + uscita". Fino ad ora un'uscita
+  // (per decreto di governo — gov_uscita_nato — per un referendum, o imposta da un regime fascista
+  // poi caduto) era definitiva per il resto della partita: nessun punto del gioco offriva mai la
+  // possibilità di tornare indietro. Disponibile solo in piena democrazia e solo a chi governa (un
+  // regime attivo non negozia con NATO/UE, e non è una scelta che l'opposizione possa avviare da
+  // sola): la NATO, un processo più rapido nella realtà (un trattato tra Stati, non un'unione
+  // economica e giuridica integrata), riammette più facilmente; la riammissione nell'Unione Europea
+  // resta un processo lungo e incerto, possibile solo se le relazioni diplomatiche si sono già
+  // parzialmente ricostruite, e anche riuscendo restituisce solo una parte del danno economico
+  // subito con l'uscita (le conseguenze di una scelta così grande non si annullano mai del tutto).
+  var NATO_REJOIN_COOLDOWN_TURNS = 30;
+  var EU_REJOIN_COOLDOWN_TURNS = 50;
+  var EU_REJOIN_MIN_RELAZIONI = 4;
+  function renderReaccessionPanel() {
+    var p = state.player;
+    if (!p || state.regime || p.parliamentRole !== "governo" || (!state.leftNato && !state.leftEu)) return "";
+    var html = '<section aria-label="Rientro in NATO/UE"><details class="log"><summary>Rientro in NATO/UE<span>▾</span></summary>';
+    if (state.leftNato) {
+      var natoWeeksLeft = (state.natoRejoinCooldownTurn || 0) - state.turn;
+      var natoOnCooldown = natoWeeksLeft > 0;
+      html += '<p class="ci-hint">Il paese è fuori dalla NATO: il governo può chiedere il rientro, un processo relativamente rapido, tanto più probabile quante migliori sono le relazioni diplomatiche internazionali (ora: ' + fmt1(state.countryProfile.relazioniDiplomatiche) + '/10).' +
+        (natoOnCooldown ? ' Potrai riprovare tra ' + natoWeeksLeft + ' settiman' + (natoWeeksLeft === 1 ? "a" : "e") + '.' : '') + '</p>' +
+        '<div class="option-grid"><button type="button" class="option-card" data-rejoin-nato="1"' + (natoOnCooldown ? " disabled" : "") + '>' +
+        '<span class="olabel">Richiedi il rientro nella NATO</span><span class="odesc">' + (natoOnCooldown ? "In raffreddamento" : "Esito non garantito") + '</span></button></div>';
+    }
+    if (state.leftEu) {
+      var euWeeksLeft = (state.euRejoinCooldownTurn || 0) - state.turn;
+      var euOnCooldown = euWeeksLeft > 0;
+      var euEligible = state.countryProfile.relazioniDiplomatiche >= EU_REJOIN_MIN_RELAZIONI;
+      html += '<p class="ci-hint">Il paese è fuori dall\'Unione Europea: il governo può chiedere la riammissione, un processo lungo e incerto, possibile solo con relazioni diplomatiche già in parte ricostruite (serve almeno ' + EU_REJOIN_MIN_RELAZIONI + '/10, ora: ' + fmt1(state.countryProfile.relazioniDiplomatiche) + '/10) — e anche riuscendo, i danni economici dell\'uscita si ricuperano solo in parte.' +
+        (euOnCooldown ? ' Potrai riprovare tra ' + euWeeksLeft + ' settiman' + (euWeeksLeft === 1 ? "a" : "e") + '.' : '') + '</p>' +
+        '<div class="option-grid"><button type="button" class="option-card" data-rejoin-eu="1"' + (euOnCooldown || !euEligible ? " disabled" : "") + '>' +
+        '<span class="olabel">Richiedi la riammissione nell\'Unione Europea</span><span class="odesc">' + (euOnCooldown ? "In raffreddamento" : !euEligible ? "Relazioni diplomatiche ancora troppo deboli" : "Processo lungo, esito incerto") + '</span></button></div>';
+    }
+    html += "</details></section>";
+    return html;
+  }
+  function attemptNatoRejoin() {
+    var p = state.player;
+    state.natoRejoinCooldownTurn = state.turn + NATO_REJOIN_COOLDOWN_TURNS;
+    var prob = clamp(0.25 + state.countryProfile.relazioniDiplomatiche / 20, 0.1, 0.75);
+    var success = Math.random() < prob;
+    var text;
+    if (success) {
+      state.leftNato = false;
+      state.italyMilitaryStance = "nato";
+      state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche + 0.5, 1, 10);
+      state.spreadBps = Math.max(40, state.spreadBps - 40);
+      text = "Dopo mesi di colloqui, l'Alleanza Atlantica accoglie formalmente la richiesta italiana: il paese rientra nella NATO.";
+    } else {
+      p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
+      text = "La richiesta di rientro nella NATO non trova per ora sufficiente consenso tra gli alleati storici: la porta resta aperta, ma non subito.";
+    }
+    state.log.unshift({ week: state.turn, title: success ? "Il paese rientra nella NATO" : "Richiesta di rientro nella NATO respinta", choiceLabel: "Rientro in NATO", result: text, headlines: [], type: "istituzioni", cat: "Geopolitica" });
+    return { resultText: text, headlines: [] };
+  }
+  function attemptEuRejoin() {
+    var p = state.player;
+    if (state.countryProfile.relazioniDiplomatiche < EU_REJOIN_MIN_RELAZIONI) return null;
+    state.euRejoinCooldownTurn = state.turn + EU_REJOIN_COOLDOWN_TURNS;
+    var prob = clamp(0.08 + (state.countryProfile.relazioniDiplomatiche - EU_REJOIN_MIN_RELAZIONI) / 25, 0.04, 0.3);
+    var success = Math.random() < prob;
+    var text;
+    if (success) {
+      state.leftEu = false;
+      state.euExitDecided = false;
+      state.liraAnnounced = false;
+      var cp = state.countryProfile;
+      cp.economia = clamp(cp.economia + 1.5, 1, 10);
+      cp.commercio = clamp(cp.commercio + 2, 1, 10);
+      cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 1, 1, 10);
+      state.spreadBps = Math.max(60, state.spreadBps - 120);
+      state.deficitPil = clamp((state.deficitPil || 0) - 0.8, -1, 12);
+      text = "Dopo un lungo negoziato di adesione, l'Unione Europea riammette il paese: l'euro torna a essere la moneta nazionale, anche se le cicatrici economiche degli anni fuori dall'Unione non si cancellano del tutto.";
+    } else {
+      p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
+      text = "Il negoziato di riammissione nell'Unione Europea si arena: diversi Stati membri chiedono ancora garanzie prima di riaprire le porte.";
+    }
+    state.log.unshift({ week: state.turn, title: success ? "Il paese rientra nell'Unione Europea" : "Negoziato di riammissione nell'UE fallito", choiceLabel: "Riammissione UE", result: text, headlines: [], type: "istituzioni", cat: "Geopolitica" });
+    return { resultText: text, headlines: [] };
+  }
   function renderGeopoliticalTensionPanel() {
     var p = state.player;
     if (!p) return "";
@@ -29422,7 +29504,7 @@
       visible: function () { return !!(state.player && state.playerMinistry && state.cabinet && state.cabinet.premierId !== "player"); },
       render: function () { return renderMinisteroPage(); } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", icon: "🌍", nav: "Estero", render: function () {
-        return renderGeopoliticalTensionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations() + renderTransnationalWorks();
+        return renderGeopoliticalTensionPanel() + renderReaccessionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations() + renderTransnationalWorks();
       } },
     { id: "coalizioni", label: "Coalizioni e Alleanze", icon: "🤝", nav: "Alleanze", render: function () {
         return renderReunificationPanel() + renderCoalitionPanel();
@@ -32337,6 +32419,25 @@
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
         state.phase = "building";
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-rejoin-nato]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var outcome = attemptNatoRejoin();
+        showSaveStatus(outcome.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-rejoin-eu]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var outcome = attemptEuRejoin();
+        if (!outcome) return;
+        showSaveStatus(outcome.resultText, false);
         save();
         render();
       });
