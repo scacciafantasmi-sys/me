@@ -2539,6 +2539,27 @@
     var cgDelta = clamp(countryTrendDelta * 1.5, -3, 3);
     if (cgDelta) state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
   }
+  // Richiesto da un giocatore: "darei maggiore peso a elementi come l'andamento del PIL, il deficit...
+  // il consenso varia per iniziative come le missioni diplomatiche, ma risente meno dei risultati
+  // concreti dell'azione di governo". computeCountryTrendDelta/driftConsensoGovernoByCountryTrend
+  // sopra guardano SOLO ai 21 indicatori "qualitativi" della Scheda Paese (COUNTRY_PROFILE_METRICS):
+  // deficit, debito pubblico e spread — i tre numeri macro più visibili, quelli che un elettore vero
+  // guarda per primi — non ci finiscono mai dentro, a prescindere da quanto migliorino o peggiorino.
+  // Va chiamata DOPO driftMacroeconomy (da cui legge i valori già aggiornati di questa settimana),
+  // con un confronto rispetto al valore di partenza della settimana (macroTrendPrev, stesso principio
+  // di countryProfilePrev sopra).
+  function applyMacroTrendToConsenso() {
+    if (state.consensoGoverno === undefined || state.consensoGoverno === null) return;
+    var prev = state.macroTrendPrev;
+    if (prev && prev.deficitPil !== undefined) {
+      var deficitImprovement = prev.deficitPil - state.deficitPil;
+      var debtImprovement = prev.debitoPil - state.debitoPil;
+      var spreadImprovement = prev.spreadBps - state.spreadBps;
+      var cgDelta = clamp(deficitImprovement * 0.5 + debtImprovement * 0.3 + spreadImprovement * 0.01, -2, 2);
+      if (cgDelta) state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
+    }
+    state.macroTrendPrev = { deficitPil: state.deficitPil, debitoPil: state.debitoPil, spreadBps: state.spreadBps };
+  }
   // ---------- Stanziamento del bilancio pubblico: chi governa (giocatore o CPU) decide dove investire ----------
   // 7 grandi categorie, ciascuna con 5-6 sottocategorie concrete (38 voci in totale): il partito che
   // guida il governo in quel momento — il giocatore se governa lui, altrimenti la CPU in base alla sua
@@ -2809,6 +2830,17 @@
     Object.keys(metricDeltas).forEach(function (metric) {
       applyCountryMetricDelta(metric, metricDeltas[metric]);
     });
+    // Richiesto da un giocatore: "una manovra orientata alle imprese e agli investimenti dovrebbe
+    // poter incidere maggiormente su PIL e occupazione". Prima nessuna voce di bilancio toccava MAI
+    // il PIL (nessuna categoria ha metric:"pil" — vedi BUDGET_CATEGORIES — e in driftMacroeconomy il
+    // PIL può solo SCENDERE per il peso del debito, mai salire per nessuna azione reale del
+    // giocatore): concentrare l'intera manovra sulla crescita economica non spostava mai l'indicatore
+    // che più la racconta. Un esito reale della categoria "Economia" (sgravi, startup, export...) si
+    // riflette ora anche su PIL e occupazione, in proporzione a quanto è andata bene o male.
+    if (metricDeltas.economia) {
+      applyCountryMetricDelta("pil", metricDeltas.economia * 0.6);
+      applyCountryMetricDelta("disoccupazione", metricDeltas.economia * 0.4);
+    }
     // Finora gli stanziamenti/tagli decisi qui muovevano SOLO gli indicatori della Scheda Paese: il
     // Bilancio dello Stato vero e proprio (state.bilancioStato.uscite, la stessa spesa pubblica da cui
     // driftBilancioStato calcola saldo/deficit/debito ogni settimana) restava del tutto indifferente a
@@ -2818,7 +2850,14 @@
     // qui in avanti la deriva settimanale (driftBilancioStato) parte da questa nuova base, quindi
     // l'effetto sul saldo, sul deficit e infine sul debito pubblico arriva davvero, non solo sugli
     // indicatori settoriali della Scheda Paese.
-    var netBudgetImpact = totalAllocated - totalCut;
+    // BUG segnalato da un giocatore ("il deficit non diminuisce neanche risparmiando parte del
+    // tesoretto"): il "Residuo" mostrato nel pannello (la parte del tesoretto NÉ stanziata NÉ
+    // tagliata) non aveva mai alcun effetto — restava puro testo informativo. Scegliere di non
+    // spendere una parte del tesoretto discrezionale è una vera scelta di prudenza fiscale, non il
+    // nulla: conta ora come un risparmio reale, esattamente come un taglio esplicito (ma senza il
+    // contraccolpo narrativo su un settore specifico, perché non è un taglio mirato a nulla).
+    var residuo = Math.max(0, budgetPoolTotal() - totalAllocated + totalCut);
+    var netBudgetImpact = totalAllocated - totalCut - residuo;
     state.bilancioStato.uscite = Math.max(400, state.bilancioStato.uscite + netBudgetImpact);
     // Conservato PRIMA del reset, per poter precompilare il modulo dell'anno prossimo con un solo
     // pulsante ("Conferma gli stanziamenti dell'anno scorso", vedi renderBudgetAllocation) — richiesto da
@@ -2836,17 +2875,18 @@
     var cuts = lines.filter(function (l) { return l.outcome === "taglio"; }).length;
     var report = {
       year: Math.floor(state.turn / 52), week: state.turn, totalAllocated: Math.round(totalAllocated * 10) / 10,
-      totalCut: Math.round(totalCut * 10) / 10, saldoAnno: saldoAnno,
+      totalCut: Math.round(totalCut * 10) / 10, totalResiduo: Math.round(residuo * 10) / 10, saldoAnno: saldoAnno,
       lines: lines, positives: positives, negatives: negatives, cuts: cuts, govLabel: govEntityLabel()
     };
     state.budgetHistory.unshift(report);
     if (state.budgetHistory.length > 6) state.budgetHistory.length = 6;
-    if (lines.length) {
+    if (lines.length || residuo > 0.5) {
       state.log.unshift({
         week: state.turn, title: "Bilancio Annuale degli Investimenti Pubblici", choiceLabel: report.govLabel,
         result: "Il governo ha stanziato " + fmtEuroMld(report.totalAllocated) + " su " + (lines.length - cuts) + " voci di investimento (" +
           positives + " successi, " + negatives + " sprechi o fallimenti)" +
           (cuts ? ", e ha tagliato " + fmtEuroMld(report.totalCut) + " su " + cuts + " voci" : "") +
+          (residuo > 0.5 ? ", e ha lasciato non stanziati (quindi risparmiati) " + fmtEuroMld(report.totalResiduo) + " del tesoretto discrezionale" : "") +
           ". Il bilancio dello Stato chiude quest'anno in " + (saldoAnno >= 0 ? "avanzo" : "disavanzo") + " di " + fmtEuroMld(Math.abs(saldoAnno)) + ".",
         headlines: [], type: "cronaca"
       });
@@ -21252,6 +21292,7 @@
     if (!p.lobby && !p.lobbyOfferSeen && checkLobbyEligible(p) && Math.random() < 0.03) p.lobbyOfferSeen = true;
     driftBilancioStato();
     driftMacroeconomy();
+    applyMacroTrendToConsenso();
     applySalarioMinimoEffect();
     driftGeopoliticalTension();
     driftConsensoGoverno();
@@ -25788,6 +25829,7 @@
       '<p class="eyebrow" style="margin-top:0.6rem">Ultimo bilancio annuale chiuso (settimana ' + last.week + ') — ' + last.govLabel + '</p>' +
       '<p class="ci-hint">Stanziati ' + fmtEuroMld(last.totalAllocated) + ': ' + last.positives + " investimenti riusciti, " + last.negatives + " sprechi o fallimenti" +
       (last.totalCut ? ", e tagliati " + fmtEuroMld(last.totalCut) + " su " + (last.cuts || 0) + " voci" : "") +
+      (last.totalResiduo ? ", e lasciati non stanziati (risparmiati) " + fmtEuroMld(last.totalResiduo) : "") +
       (last.saldoAnno !== undefined ? ". Bilancio dello Stato chiuso in " + (last.saldoAnno >= 0 ? "avanzo" : "disavanzo") + " di " + fmtEuroMld(Math.abs(last.saldoAnno)) : "") + '.</p>' +
       '<ul class="enacted-policy-list">' + last.lines.map(function (l) {
         return '<li><strong>' + l.catLabel + ' — ' + l.subLabel + '</strong> <span class="ci-hint">(' + fmtEuroMld(l.amount) + ')</span> ' +
@@ -25820,7 +25862,7 @@
       if (v > 0) allocated += v; else cut += -v;
     });
     var html = '<section aria-label="Stanziamento del Bilancio"><details class="log" open><summary>Stanziamento del Bilancio Pubblico<span>▾</span></summary>';
-    html += '<p class="ci-hint">Come governo, decidi tu dove investire il tesoretto discrezionale di quest\'anno: scrivi un importo (in miliardi di euro) per ciascuna voce e salva. Un valore positivo è uno stanziamento, uno negativo un taglio deliberato — libera risorse ma peggiora quella materia. A fine anno ogni voce avrà un esito, buono o cattivo, sulla Scheda Paese.</p>';
+    html += '<p class="ci-hint">Come governo, decidi tu dove investire il tesoretto discrezionale di quest\'anno: scrivi un importo (in miliardi di euro) per ciascuna voce e salva. Un valore positivo è uno stanziamento, uno negativo un taglio deliberato — libera risorse ma peggiora quella materia. A fine anno ogni voce avrà un esito, buono o cattivo, sulla Scheda Paese. Il Residuo (il tesoretto non stanziato né tagliato) conta come un vero risparmio: abbassa la spesa pubblica e quindi il deficit, esattamente come un taglio, ma senza peggiorare nessuna materia specifica.</p>';
     html += '<div class="stat-grid">' +
       '<div class="stat-tile"><div class="label">Tesoretto annuale</div><div class="row"><span class="value">' + fmtEuroMld(pool) + "</span></div></div>" +
       '<div class="stat-tile"><div class="label">Stanziato finora</div><div class="row"><span class="value">' + fmtEuroMld(allocated) + "</span></div></div>" +
