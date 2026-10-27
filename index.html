@@ -28174,11 +28174,15 @@
   // per effetto delle tue scelte (soprattutto attaccare un rivale) e si smussa lentamente da sola.
   function relationLabel(v) {
     if (v >= 80) return { text: "Alleati", cls: "good" };
-    if (v >= 60) return { text: "Cordiali", cls: "good" };
+    if (v >= CORDIALE_RELATION_THRESHOLD) return { text: "Cordiali", cls: "good" };
     if (v >= 40) return { text: "Neutrali", cls: "neutral" };
     if (v >= 20) return { text: "Freddi", cls: "accent" };
     return { text: "Ostili", cls: "accent" };
   }
+  // Richiesto da un giocatore: "diventare 'cordiale' con un partito dovrebbe sbloccare la
+  // disponibilità ad alleanza anche se prima non era disponibile" — vedi inviteParty/inviteStatusText
+  // più sotto, dove questa soglia supera il rifiuto categorico di wouldExceedCoalitionSpread.
+  var CORDIALE_RELATION_THRESHOLD = 60;
   // Richiesto da un giocatore: prima le relazioni con gli altri partiti cambiavano solo di riflesso
   // (attacchi, voti in Aula, deriva lenta verso un punto di riposo ideologico), senza alcuno strumento per
   // dialogare DIRETTAMENTE con un partito a scelta e provare a scaldare il rapporto — un vuoto vero,
@@ -28314,15 +28318,21 @@
     var party = activeParties().filter(function (pt) { return pt.id === partyId; })[0];
     if (!party) return null;
     p.coalitionInviteCooldowns[partyId] = state.turn + 10;
+    var rel = state.partyRelations && state.partyRelations[partyId] !== undefined ? state.partyRelations[partyId] : 50;
     // Rifiuto categorico, non solo improbabile: guarda all'estensione ideologica dell'intera coalizione
     // (giocatore compreso), non solo alla distanza dal giocatore — vedi wouldExceedCoalitionSpread.
-    if (party.familyId && wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId)) {
+    // Richiesto da un giocatore: un rapporto davvero diventato "cordiale" (60+, la stessa soglia di
+    // relationLabel) ora supera questo rifiuto categorico — una vicinanza personale/politica coltivata
+    // abbastanza a lungo può aprire un'intesa pragmatica anche oltre la linea ideologica, come capita
+    // davvero nella realtà. Non diventa un sì automatico: resta probabilistico come per chiunque altro,
+    // solo con un tetto più basso (un'intesa forzata resta più difficile da chiudere di una naturale).
+    var ideologicallyIncompatible = !!(party.familyId && wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId));
+    if (ideologicallyIncompatible && rel < CORDIALE_RELATION_THRESHOLD) {
       p.reputazione = clamp(p.reputazione - rand(0.5, 2), 0, 100);
-      state.log.unshift({ week: state.turn, title: "Invito di alleanza rifiutato", choiceLabel: party.name, result: party.name + " rifiuta categoricamente: le due linee politiche sono troppo distanti per un'alleanza credibile.", headlines: [], type: "dossier", cat: "Strategia Elettorale" });
+      state.log.unshift({ week: state.turn, title: "Invito di alleanza rifiutato", choiceLabel: party.name, result: party.name + " rifiuta categoricamente: le due linee politiche sono troppo distanti per un'alleanza credibile, e il rapporto personale non è ancora abbastanza solido da superarla.", headlines: [], type: "dossier", cat: "Strategia Elettorale" });
       return { accepted: false, label: party.name, incompatible: true };
     }
-    var rel = state.partyRelations && state.partyRelations[partyId] !== undefined ? state.partyRelations[partyId] : 50;
-    var acceptProb = clamp(0.1 + rel / 140, 0.05, 0.85);
+    var acceptProb = ideologicallyIncompatible ? clamp(0.05 + rel / 220, 0.03, 0.35) : clamp(0.1 + rel / 140, 0.05, 0.85);
     var accepted = Math.random() < acceptProb;
     if (accepted) {
       if (!state.dynamicCoalitions) state.dynamicCoalitions = [];
@@ -28356,8 +28366,12 @@
   // Etichetta di vicinanza/status da mostrare accanto a ciascun invito, cosi' la scelta di chi invitare
   // è informata (quanto è probabile un sì) invece di essere alla cieca.
   function inviteStatusText(party, p) {
-    if (party.familyId && wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId)) return "Ideologicamente incompatibile: rifiuterà sempre";
     var rel = Math.round(state.partyRelations && state.partyRelations[party.id] !== undefined ? state.partyRelations[party.id] : 50);
+    // Stessa soglia/eccezione di inviteParty sopra: sotto "cordiale" resta un rifiuto categorico,
+    // sopra diventa solo un'intesa più difficile, non più impossibile.
+    if (party.familyId && rel < CORDIALE_RELATION_THRESHOLD && wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId)) {
+      return "Ideologicamente incompatibile: rifiuterà, a meno che il rapporto non diventi cordiale (60+)";
+    }
     var lbl = relationLabel(rel);
     var cd = p.coalitionInviteCooldowns[party.id] || 0;
     var weeksLeft = cd - state.turn;
@@ -28462,8 +28476,14 @@
       // durante la partita.
       var takenIds2 = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
       (state.dynamicCoalitions || []).forEach(function (c) { takenIds2 = takenIds2.concat(c.members); });
-      var expandCandidates = activeParties().filter(function (party) { return takenIds2.indexOf(party.id) === -1 && !wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId); })
-        .sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
+      // Richiesto da un giocatore: un rapporto diventato "cordiale" (60+) con un partito
+      // ideologicamente incompatibile lo fa ricomparire tra gli invitabili (vedi la stessa soglia in
+      // inviteParty/inviteStatusText) — altrimenti, anche dopo aver coltivato il rapporto a lungo,
+      // quel partito restava escluso qui per sempre, senza mai poter sfruttare lo sblocco.
+      var expandCandidates = activeParties().filter(function (party) {
+        return takenIds2.indexOf(party.id) === -1 &&
+          (!wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId) || (state.partyRelations[party.id] || 50) >= CORDIALE_RELATION_THRESHOLD);
+      }).sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
       if (expandCandidates.length) {
         html += '<p class="ci-hint">Puoi invitare qualsiasi altro partito a unirsi alla tua coalizione:</p><div class="option-grid">';
         expandCandidates.forEach(function (party) {
@@ -28502,8 +28522,12 @@
       // gli invitabili: prima restavano visibili con un rifiuto garantito, lasciando pensare che una
       // coalizione tra capo e coda dello spettro (es. centro + comunista, o centro + nazional-fascista)
       // fosse comunque un tentativo sensato da poter fare.
-      var candidates = activeParties().filter(function (party) { return takenIds.indexOf(party.id) === -1 && !wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId); })
-        .sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
+      // Stessa eccezione di poco sopra (expandCandidates): un rapporto diventato "cordiale" (60+)
+      // riporta il partito tra gli invitabili anche qui.
+      var candidates = activeParties().filter(function (party) {
+        return takenIds.indexOf(party.id) === -1 &&
+          (!wouldExceedCoalitionSpread(currentCoalitionFamilyIds(), party.familyId) || (state.partyRelations[party.id] || 50) >= CORDIALE_RELATION_THRESHOLD);
+      }).sort(function (a, b) { return (state.partyRelations[b.id] || 50) - (state.partyRelations[a.id] || 50); });
       candidates.forEach(function (party) {
         var cd = p.coalitionInviteCooldowns[party.id] || 0;
         var disabled = (cd - state.turn) > 0;
