@@ -4197,13 +4197,15 @@
     var weights = rivalPool.map(function (pt) { return Math.max(1, state.parties[pt.id] || 1); });
     var totalW = weights.reduce(function (s, w) { return s + w; }, 0) || 1;
     rivalPool.forEach(function (pt, i) { entries.push({ name: pt.name, pct: remaining * weights[i] / totalW, winner: false }); });
-    // Chi vince la presidenza (sistema reale: maggioritario sul candidato presidente, non sulle liste)
-    // deve restare sempre primo in classifica, anche quando la sua quota di partenza è modesta: senza
-    // questo vincolo un rivale pesante poteva risultare "più votato" del neo-eletto presidente, un
-    // risultato incoerente con l'esito che la classifica dovrebbe illustrare.
-    var maxRivalPct = entries.reduce(function (m, e) { return e.winner ? m : Math.max(m, e.pct); }, 0);
-    var winnerEntry = entries.filter(function (e) { return e.winner; })[0];
-    if (winnerEntry && winnerEntry.pct <= maxRivalPct) winnerEntry.pct = maxRivalPct + rand(2, 6);
+    // BUG segnalato da un giocatore ("partiti con circa il 3% a livello nazionale vincere elezioni
+    // regionali con percentuali vicine al 40%"): questo vincolo forzava SEMPRE il vincitore della
+    // presidenza ad apparire come la lista più votata in classifica, anche quando la sua vera forza
+    // di campagna (playerPct, ora onesto — vedi resolveRegionalElectionForPlayer) fosse modesta,
+    // gonfiandolo fino a superare qualunque rivale. Nel sistema reale (maggioritario sul candidato
+    // presidente, non sulle liste) è del tutto normale che vinca la presidenza una lista anche più
+    // piccola di altre: niente più forzatura, la classifica riflette le quote reali, il tag
+    // "Presidente eletto" segnala comunque chi ha vinto a prescindere dalla propria posizione in
+    // classifica.
     entries.sort(function (a, b) { return b.pct - a.pct; });
     var sumPct = entries.reduce(function (s, e) { return s + e.pct; }, 0) || 1;
     return entries.map(function (e, i) {
@@ -4258,7 +4260,15 @@
       p.reputazione = clamp(p.reputazione + rand(5, 9), 0, 100);
       p.visibilita = clamp(p.visibilita + rand(6, 11), 0, 100);
       p.iscritti = Math.max(0, p.iscritti + won * 15);
-      playerPct = clamp(won * 1.1 + 15, 24, 48);
+      // BUG segnalato da un giocatore ("partiti con circa il 3% a livello nazionale vincere elezioni
+      // regionali con percentuali vicine al 40%"): confermato — "won" (la vera forza della campagna,
+      // già una combinazione realistica di sondaggi nazionali e radicamento locale, vedi
+      // computeRegionalCampaignStrength) arrivava qui SOLO a decidere SE si vince, poi la percentuale
+      // MOSTRATA ignorava quel numero e veniva rigonfiata con un pavimento fisso al 24% — un partito
+      // appena sopra la soglia minima per vincere (won=22, quasi tutto radicamento locale, pochissimi
+      // sondaggi nazionali) compariva comunque con quasi il 40% in classifica. Ora la percentuale
+      // mostrata segue davvero won, con solo un piccolo rumore realistico.
+      playerPct = clamp(won + rand(-2, 4), 3, 45);
       ranking = buildRegionalElectionRankingHtml(regionId, p.name, p.color, playerPct, true);
       if (runSelf) {
         title = wasPersonalIncumbent ? (p.name + " viene riconfermata/o alla guida della " + regionId) : ("Vittoria storica: " + p.name + " guida la " + regionId);
@@ -4286,8 +4296,10 @@
       // classifica IDENTICA (sempre "intorno al 22%") qualunque fosse la vera forza della campagna
       // (won arriva fino a 40) — un partito con "quasi tutte le sedi" di una regione, con un "won" ben
       // sopra 22, veniva comunque schiacciato allo stesso 22% visualizzato di un partito molto più
-      // debole. Il tetto ora segue davvero won, non lo ignora.
-      playerPct = clamp(won * 1.1 + 2, 4, 38);
+      // debole. Il tetto ora segue davvero won, non lo ignora. Stessa correzione generale applicata
+      // al ramo "vince la presidenza" sopra: niente più moltiplicatore/offset che gonfia il numero
+      // oltre quanto won racconta davvero.
+      playerPct = clamp(won + rand(-1, 3), 3, 38);
       ranking = buildRegionalElectionRankingHtml(regionId, p.name, p.color, playerPct, false);
       title = "Elezioni Regionali in " + regionId;
       text = "Il partito elegge " + won + " consiglieri regionali in " + regionId + ": un ingresso in Consiglio Regionale, ma la presidenza resta ad altri.";
@@ -4297,7 +4309,7 @@
       r.playerIsGovernor = false;
       r.regionalLeaderName = null; r.regionalLeaderSource = null; r.regionalLeaderTraits = null; r.regionalLeaderSkill = 0;
       if (wasPersonalIncumbent) r.approvalLocal = 50;
-      playerPct = clamp(won * 1.1 + 1, 1, 8);
+      playerPct = clamp(won + rand(0, 1), 1, 8);
       ranking = buildRegionalElectionRankingHtml(regionId, p.name, p.color, playerPct, false);
       title = "Elezioni Regionali in " + regionId;
       text = "In " + regionId + " il partito si presenta ma non riesce a entrare davvero in Consiglio Regionale questa volta.";
