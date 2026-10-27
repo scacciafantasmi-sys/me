@@ -27607,18 +27607,23 @@
   // memberIds, ma i suoi ministeri restavano per sempre in state.cabinet.ministries/assignments —
   // nessuno dei due punti li toccava mai. Il pannello "Il Governo e i suoi ministri" in Parlamento
   // legge esattamente da lì (Object.keys(cabinet.ministries)), quindi continuava a mostrare l'alleato
-  // come se facesse ancora parte dell'esecutivo. Quei ministeri tornano ora vacanti ("ancora da
-  // assegnare", lo stesso testo già previsto dal pannello per un ministero senza titolare) appena
-  // l'alleato se ne va — non assegnati a nessun altro: la sostituzione vera con un ministro tecnico è
-  // una richiesta distinta, non ancora implementata.
+  // come se facesse ancora parte dell'esecutivo.
+  // Richiesto da un giocatore (richiesta distinta, non solo il bug sopra): un ministero lasciato
+  // scoperto da un alleato che se ne va non resta "ancora da assegnare" a tempo indeterminato — il
+  // Presidente del Consiglio tappa il buco con un ministro tecnico (nessun partito, un nome vero
+  // generato come per ogni altro ministro CPU), con un piccolo contraccolpo aggiuntivo sul consenso
+  // di governo: un rimpasto improvvisato, anche se tecnico, non è mai gratis.
   function vacateCabinetMinistries(allyId) {
     var cabinet = state.cabinet;
     if (!cabinet || !cabinet.ministries || !cabinet.ministries[allyId]) return;
     var vacated = cabinet.ministries[allyId];
     delete cabinet.ministries[allyId];
-    if (cabinet.assignments) {
-      vacated.forEach(function (ministry) { delete cabinet.assignments[ministry]; });
-    }
+    if (!cabinet.ministries.tecnico) cabinet.ministries.tecnico = [];
+    vacated.forEach(function (ministry) {
+      cabinet.ministries.tecnico.push(ministry);
+      if (cabinet.assignments) cabinet.assignments[ministry] = { name: generateStaffName(), source: "tecnico" };
+    });
+    state.consensoGoverno = clamp((state.consensoGoverno !== undefined ? state.consensoGoverno : 50) - rand(1, 4), 0, 100);
   }
   // Un singolo alleato lascia la coalizione (non l'intera alleanza, a differenza di dissolveCoalition):
   // stessa logica di soglia-membri-minimi già usata da removePartyFromCoalitions per i partiti che si
@@ -28506,7 +28511,9 @@
           var list = cabinet.ministries[id];
           if (!list.length) return "";
           var party = partyById(id);
-          var name = id === "player" ? p.name : (party ? party.name : id);
+          // "tecnico" non e' un vero partito (vedi vacateCabinetMinistries): è il gruppo dei ministeri
+          // tappati con un tecnico dopo l'uscita di un alleato, non riassegnati a nessun'altra forza.
+          var name = id === "player" ? p.name : id === "tecnico" ? "Ministri tecnici" : (party ? party.name : id);
           var ministerLines = list.map(function (ministry) {
             var a = cabinet.assignments && cabinet.assignments[ministry];
             var articled = MINISTRY_ARTICLED[ministry] || ministry;
