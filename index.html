@@ -11119,6 +11119,103 @@
       "</details></section>";
   }
 
+  // ---------- Mozione di Sfiducia (richiesto da un giocatore) ----------
+  // "quando il governo attuale è sotto il 30%, un pulsante in Parlamento per una mozione di
+  // sfiducia, con dossier di raccolta adesioni tra i partiti di opposizione: caduta del governo e
+  // nuove elezioni se la maggioranza aderisce". Solo per chi è all'opposizione (chi è già al governo
+  // non presenta una sfiducia contro se stesso — vedi invece "Lascia la maggioranza di governo"
+  // sopra). Il dossier mostra PRIMA, in anteprima, quali altri partiti si schiererebbero (in base
+  // alla distanza ideologica dal governo, alla relazione col tuo partito, e a quanto è già debole il
+  // consenso di governo) e il conteggio reale dei seggi (state.parliamentSeats, la stessa fonte già
+  // usata da confidenceVoteDossier) — solo DOPO il giocatore decide se depositarla davvero, non alla
+  // cieca.
+  var NO_CONFIDENCE_COOLDOWN_TURNS = 15;
+  function renderNoConfidenceMotionPanel() {
+    var p = state.player;
+    if (!p || !p.inParliament || p.parliamentRole === "governo" || state.regime) return "";
+    if (!state.govEntity || state.consensoGoverno === undefined || state.consensoGoverno >= 30) return "";
+    var weeksLeft = (p.noConfidenceMotionCooldownTurn || 0) - state.turn;
+    var onCooldown = weeksLeft > 0;
+    return '<section aria-label="Mozione di Sfiducia"><details class="log"><summary>Mozione di Sfiducia<span>▾</span></summary>' +
+      '<p class="ci-hint">Il Governo ' + govEntityLabel() + ' è sceso al ' + fmt1(state.consensoGoverno) + '% di consenso: puoi valutare una mozione di sfiducia. Il dossier mostra prima in anteprima quali altri partiti di opposizione si schiererebbero con te e il conteggio reale dei seggi, prima di doverti impegnare: se i numeri in Aula bastano e la depositi, il Governo cade e si torna al voto; se non bastano, puoi comunque rinunciare senza conseguenze, oppure tentarla lo stesso (un azzardo quasi certamente perdente, che però può aiutarti a sondare il terreno).' +
+      (onCooldown ? ' Potrai riprovare tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.' : '') + '</p>' +
+      '<div class="option-grid"><button type="button" class="option-card" data-no-confidence-motion="1"' + (onCooldown ? " disabled" : "") + '>' +
+      '<span class="olabel">Valuta una mozione di sfiducia</span><span class="odesc">' + (onCooldown ? "In raffreddamento" : "Vedi prima chi si schiera con te") + '</span></button></div>' +
+      "</details></section>";
+  }
+  function buildNoConfidenceMotionDossier() {
+    var p = state.player;
+    var ge = state.govEntity;
+    if (!ge) return null;
+    var govMemberIds = ge.memberIds || [];
+    var camSeats = (state.parliamentSeats && state.parliamentSeats.camera) || projectSeats(400);
+    var senSeats = (state.parliamentSeats && state.parliamentSeats.senato) || projectSeats(200);
+    var govFam = currentGoverningFamilyId();
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var oppositionParties = activeParties().filter(function (pt) { return govMemberIds.indexOf(pt.id) === -1; });
+    // Chi si schiera: più probabile se ideologicamente lontano dal governo, se il rapporto col tuo
+    // partito è buono, e se il governo è già debole di suo (più bassa la sua fiducia, più facile
+    // trovare compagni di viaggio) — nessuna certezza fissa, un tiro di dado per ciascun partito.
+    var supporters = oppositionParties.filter(function (pt) {
+      var dist = (pt.familyId && govFam && LEFT_RIGHT_POSITION[pt.familyId] !== undefined && LEFT_RIGHT_POSITION[govFam] !== undefined)
+        ? Math.abs(LEFT_RIGHT_POSITION[pt.familyId] - LEFT_RIGHT_POSITION[govFam]) : 3;
+      var relation = (state.partyRelations && state.partyRelations[pt.id] !== undefined) ? state.partyRelations[pt.id] : 50;
+      var chance = clamp(0.2 + (30 - cg) / 45 + dist / 14 + (relation - 50) / 160, 0.05, 0.92);
+      return Math.random() < chance;
+    });
+    var supporterCamera = supporters.reduce(function (s, pt) { return s + (camSeats[pt.id] || 0); }, 0) + (p.seatsCamera || 0);
+    var supporterSenato = supporters.reduce(function (s, pt) { return s + (senSeats[pt.id] || 0); }, 0) + (p.seatsSenato || 0);
+    var passes = supporterCamera >= CAMERA_MAJORITY_SEATS && supporterSenato >= SENATO_MAJORITY_SEATS;
+    var namesText = supporters.length ? supporters.map(function (pt) { return pt.name; }).join(", ") : "nessun altro partito";
+    var tallyText = "Alla Camera la mozione può contare su " + supporterCamera + " voti su 400 (soglia 201), al Senato su " + supporterSenato + " su 200 (soglia 101).";
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false,
+      eyebrow: "Mozione di Sfiducia — anteprima delle adesioni",
+      cat: "Governo", title: "Mozione di sfiducia contro " + govEntityLabel(),
+      brief: "Il tuo partito valuta una mozione di sfiducia contro " + govEntityLabel() + " (" + fmt1(cg) + "% di consenso). Si schierano con te anche " + namesText + ". " + tallyText +
+        (passes ? " I numeri ci sono: depositarla davvero farebbe cadere il Governo." : " I numeri non bastano ancora: depositarla ora sarebbe un azzardo quasi certamente perdente."),
+      noConfidenceContext: { passes: passes, supporterIds: supporters.map(function (pt) { return pt.id; }) },
+      choices: [
+        { label: "Deposita formalmente la mozione", noConfidenceDeposit: true,
+          hint: passes ? "I numeri ci sono: il Governo cadrebbe" : "Rischioso: con questi numeri il Governo probabilmente tiene",
+          effects: {}, result: "" },
+        { label: "Non depositarla, per ora", effects: {},
+          result: "Il partito decide di non depositare la mozione dopo aver visto i numeri in anteprima: meglio aspettare un momento più favorevole." }
+      ]
+    };
+  }
+  function resolveNoConfidenceMotionChoice(dossier, choice) {
+    var p = state.player;
+    var ctx = dossier.noConfidenceContext || {};
+    p.noConfidenceMotionCooldownTurn = state.turn + NO_CONFIDENCE_COOLDOWN_TURNS;
+    if (!choice.noConfidenceDeposit) {
+      state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: choice.result, headlines: [], type: "istituzioni", cat: "Governo" });
+      state.resultData = { resultText: choice.result, headlines: [] };
+      return;
+    }
+    var supporterNames = (ctx.supporterIds || []).map(function (id) { var pt = partyById(id); return pt ? pt.name : id; });
+    var namesText = supporterNames.length ? supporterNames.join(", ") : "nessun altro partito";
+    var text;
+    if (ctx.passes) {
+      // Stesso identico schema già usato per ogni altra caduta di governo nel gioco (vedi il
+      // fallimento del Mandato Esplorativo sopra): snapElectionPending + nextElectionTurn, SENZA
+      // azzerare state.govEntity/cabinet qui — resta il governo uscente, per finta di anatra zoppa,
+      // finché la vera elezione anticipata non lo sostituisce (finishGovernmentFormation).
+      state.snapElectionPending = true;
+      state.nextElectionTurn = state.turn + 8;
+      applyGovernmentCollapseLeadershipShock();
+      p.reputazione = clamp(p.reputazione + rand(3, 7), 0, 100);
+      p.sondaggi = clamp(p.sondaggi + rand(0.3, 0.9), 0, 40);
+      text = "La mozione di sfiducia depositata dal tuo partito, con il sostegno di " + namesText + ", passa in Aula: il Governo " + govEntityLabel() + " cade. Il Presidente della Repubblica scioglie le Camere: si torna al voto.";
+    } else {
+      state.consensoGoverno = clamp((state.consensoGoverno !== undefined ? state.consensoGoverno : 30) + rand(3, 8), 0, 100);
+      p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
+      text = "La mozione di sfiducia depositata dal tuo partito, con il sostegno di " + namesText + ", non passa: il Governo tiene, e ne esce persino temporaneamente rafforzato.";
+    }
+    state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: text, headlines: [], type: "istituzioni", cat: "Governo" });
+    state.resultData = { resultText: text, headlines: [] };
+  }
+
   // ---------- Vita pubblica: talk show serale e interviste ----------
   // Due apparizioni mediatiche disponibili a chiunque, dentro o fuori dal Parlamento, ciascuna con un
   // proprio raffreddamento indipendente: si apre come le Riforme di Governo (clic sul dominio -> 5
@@ -29290,7 +29387,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", icon: "⚖️", nav: "Parlamento", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderLeaveGovernmentPanel() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderIniziativaLiberaPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderLeaveGovernmentPanel() + renderNoConfidenceMotionPanel() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderIniziativaLiberaPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
       } },
     // Richiesto da un giocatore: fare il Ministro dava troppo poco da fare (solo un piccolo pannello
     // "Iniziativa Ministeriale" in mezzo a tutto il resto). Una scheda dedicata, visibile SOLO mentre si
@@ -31352,6 +31449,8 @@
         resolveCpuLeggeChoice(dossier, choice);
       } else if (dossier.cpuAmendmentMeta) {
         resolveCpuAmendmentChoice(dossier, choice);
+      } else if (dossier.noConfidenceContext) {
+        resolveNoConfidenceMotionChoice(dossier, choice);
       } else {
         var res = applyChoice(dossier, choice);
         if (choice.judicialRiskDelta && state.player.judicialRisk !== undefined) {
@@ -32198,6 +32297,18 @@
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
         var dossier = playerLeavesGovernmentMajority();
+        if (!dossier) return;
+        state.aiDynamicDossier = dossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-no-confidence-motion]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var dossier = buildNoConfidenceMotionDossier();
         if (!dossier) return;
         state.aiDynamicDossier = dossier;
         state.currentDossierId = "ai_dynamic";
