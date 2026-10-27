@@ -12648,6 +12648,59 @@
     var topicLabel = themeInfo ? (METRIC_LABELS[themeInfo.metric].charAt(0).toUpperCase() + METRIC_LABELS[themeInfo.metric].slice(1)) : "Attualità politica generale";
     return { themeMetric: themeInfo ? themeInfo.metric : null, matchedKeyword: themeInfo ? themeInfo.keyword : null, tone: tone, topicLabel: topicLabel };
   }
+  // Richiesto da un giocatore: "migliora la CPU nelle dichiarazioni pubbliche — se attacco un
+  // partito su un argomento, fai rispondere quel partito coerentemente alla mia dichiarazione,
+  // creando un dibattito". Finora, anche nominando esplicitamente un partito nel testo, l'eventuale
+  // replica (vedi il 35% casuale in triggerAmbientStatements) arrivava da una figura pubblica scelta
+  // A CASO — poteva benissimo non essere affatto il partito appena nominato. Qui si riconosce nel
+  // testo scritto dal giocatore il nome, la sigla o il nome del leader di uno dei partiti attivi
+  // (con \b, per non scattare su una sigla corta dentro un'altra parola), e se lo trova, QUEL
+  // partito specifico — non uno a caso — ottiene una risposta quasi certa.
+  function escapeRegexLiteral(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  function detectStatementTargetParty(text) {
+    if (!text) return null;
+    var parties = activeParties();
+    for (var i = 0; i < parties.length; i++) {
+      var pt = parties[i];
+      var candidates = [pt.name, pt.short, pt.leader].filter(function (v) { return v && v.length >= 3; });
+      for (var j = 0; j < candidates.length; j++) {
+        var re = new RegExp("\\b" + escapeRegexLiteral(candidates[j]) + "\\b", "i");
+        if (re.test(text)) return pt;
+      }
+    }
+    return null;
+  }
+  var TARGETED_REPLY_CHANCE = 0.8;
+  // Stessa logica di vicinanza ideologica già usata dalla replica casuale in triggerAmbientStatements
+  // (AXIS_SCORE/FAMILY_CAMP), applicata però al partito DAVVERO nominato, non a un autore pescato a
+  // caso — e con un'eccezione: un tono aggressivo diretto per nome non lascia spazio a un "sono
+  // d'accordo con te", qualunque sia la distanza ideologica reale.
+  function triggerTargetedPartyReply(statementEntry, targetParty, tone, themeMetric, topicLabelLower) {
+    if (!targetParty || !targetParty.leader) return;
+    if (Math.random() > TARGETED_REPLY_CHANCE) return;
+    var playerFamilyId = state.player && state.player.family;
+    var agree;
+    if (tone === "aggressivo") {
+      agree = false;
+    } else if (targetParty.familyId && playerFamilyId && FAMILY_CAMP[targetParty.familyId] !== undefined && FAMILY_CAMP[playerFamilyId] !== undefined) {
+      var dist = Math.abs(AXIS_SCORE[FAMILY_CAMP[targetParty.familyId]] - AXIS_SCORE[FAMILY_CAMP[playerFamilyId]]);
+      agree = dist < 1.2;
+    } else {
+      agree = Math.random() < 0.4;
+    }
+    var replyToneWeights = agree ? { istituzionale: 3, positivo: 3, aggressivo: 0, critico: 1 } : { aggressivo: 4, critico: 4, istituzionale: 1, positivo: 0 };
+    var replyTone = pickWeightedTone(replyToneWeights);
+    var replyDetailPhrase = themeMetric ? pickAmbientDetailPhrase(themeMetric, topicLabelLower, targetParty.familyId) : topicLabelLower;
+    var replyQuote = buildAmbientQuote(replyDetailPhrase, replyTone, themeMetric);
+    var introPool = agree ? STATEMENT_REPLY_AGREE_INTROS : STATEMENT_REPLY_DISAGREE_INTROS;
+    var introTpl = introPool[Math.floor(Math.random() * introPool.length)];
+    statementEntry.replies.push({
+      authorName: targetParty.leader, authorRole: "Leader di " + targetParty.name, authorColor: targetParty.color, authorPhoto: null,
+      text: introTpl(targetParty.leader, statementEntry.authorName) + replyQuote + "»", week: state.turn
+    });
+  }
   // Stessi tre registri già usati da buildInterviewChoices (pacato/combattivo/glissa) più un quarto,
   // "positivo": qui non è il giocatore a scegliere lo stile cliccando un bottone, lo determina il tono
   // rilevato nel testo scritto — un testo più lungo e argomentato (60+ caratteri) pesa leggermente di più
@@ -13339,6 +13392,8 @@
             topicLabel: classification.topicLabel, themeMetric: classification.themeMetric, matchedKeyword: classification.matchedKeyword,
             text: text
           });
+          var targetParty = detectStatementTargetParty(text);
+          if (targetParty) triggerTargetedPartyReply(state.statements[0], targetParty, classification.tone, classification.themeMetric, classification.topicLabel.toLowerCase());
         } else if (state.career) {
           var c = state.career;
           ensurePlayerDichiarazioniWeek(c);
