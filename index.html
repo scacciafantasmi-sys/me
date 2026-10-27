@@ -9256,15 +9256,58 @@
     if (!p || !p.inParliament) return false;
     return state.turn >= (p.qtSceneCooldownTurn || 0);
   }
+  // Richiesto da un giocatore: "rendere... question time più approfonditi e meno ripetitivi (richiede
+  // banche di domande/risposte nuove, non solo logica)". Prima questa era LA risposta del Governo a
+  // qualunque domanda di question time, su qualunque dei 21 fronti della Scheda Paese: solo 3 frasi
+  // fisse in tutto il gioco (migliora/peggiora/stabile), riproposte quasi parola per parola per
+  // centinaia di question time diversi in una partita intera. Ora un ventaglio di frasi per ciascuno dei
+  // 3 stati, che riprendono anche il dettaglio concreto del fronte (pickAmbientDetailPhrase, lo stesso
+  // bacino già usato per le domande/interviste) così la risposta parla davvero del problema in
+  // questione, non di una "situazione" generica e intercambiabile.
+  var GOVERNMENT_ANSWER_IMPROVING = [
+    "Il Governo replica che i dati delle ultime settimane mostrano un miglioramento su questo fronte, per quanto ancora insufficiente.",
+    "Il Governo rivendica i primi segnali di miglioramento emersi su {DETAIL}, pur riconoscendo che la strada resta lunga.",
+    "Il Governo sottolinea che {DETAIL} sta registrando progressi concreti, grazie alle misure varate nelle ultime settimane.",
+    "Il Governo ricorda che partiva da una situazione difficile e che i numeri su {DETAIL} stanno finalmente voltando pagina.",
+    "Il Governo difende i risultati ottenuti su {DETAIL}, definendoli un primo passo verso un cambiamento più profondo.",
+    "Il Governo fa notare che l'opposizione ignora i miglioramenti già registrati su {DETAIL} nelle ultime settimane.",
+    "Il Governo rivendica la direzione presa su {DETAIL}, invitando a giudicare i risultati nel tempo, non settimana per settimana."
+  ];
+  var GOVERNMENT_ANSWER_WORSENING = [
+    "Il Governo ammette che la situazione si è aggravata nelle ultime settimane, ma rivendica l'impegno messo in campo.",
+    "Il Governo riconosce che {DETAIL} resta un fronte critico, ma attribuisce il peggioramento a fattori che precedono il suo mandato.",
+    "Il Governo ammette le difficoltà su {DETAIL}, ma assicura che un nuovo provvedimento è già allo studio.",
+    "Il Governo non nega l'aggravarsi di {DETAIL}, ma accusa l'opposizione di strumentalizzare un problema strutturale.",
+    "Il Governo riconosce il peggioramento su {DETAIL}, ma chiede tempo prima di giudicare l'efficacia delle misure adottate.",
+    "Il Governo ammette che su {DETAIL} i risultati non sono ancora arrivati, ma esclude un cambio di rotta.",
+    "Il Governo riconosce la gravità di {DETAIL}, ma ricorda che il quadro economico generale limita i margini di intervento immediati."
+  ];
+  var GOVERNMENT_ANSWER_STABLE = [
+    "Il Governo riconosce che la situazione resta sostanzialmente stabile, ma sostiene che le misure adottate inizieranno presto a dare frutti.",
+    "Il Governo descrive {DETAIL} come un fronte sotto controllo, in attesa che le misure recenti producano effetti pienamente visibili.",
+    "Il Governo ammette che su {DETAIL} non ci sono stati scossoni, ma rivendica di aver evitato un peggioramento.",
+    "Il Governo sostiene che {DETAIL} è stabile perché le riforme hanno bisogno di tempo per dare risultati misurabili.",
+    "Il Governo minimizza le preoccupazioni su {DETAIL}, definendo la situazione sotto controllo.",
+    "Il Governo ricorda che su {DETAIL} i margini di manovra sono limitati dal quadro economico generale, ma esclude un arretramento.",
+    "Il Governo rivendica la stabilità su {DETAIL} come un risultato in sé, in un contesto che avrebbe potuto peggiorare molto di più."
+  ];
+  // Prima questa era un'unica frase fissa per QUALUNQUE notizia/scandalo recente portato in Aula
+  // dall'opposizione, indipendentemente dal contenuto: nessuna variazione possibile.
+  var GOVERNMENT_NEWS_DEFLECTION_ANSWERS = [
+    "Il Governo replica che la vicenda è già stata chiarita nelle sedi opportune, e respinge le accuse definendole strumentali.",
+    "Il Governo minimizza, parlando di un caso isolato gonfiato dalla stampa per fini politici.",
+    "Il Governo promette i dovuti accertamenti, ma invita a non trarre conclusioni premature.",
+    "Il Governo respinge ogni addebito, sottolineando che i fatti sono ancora in corso di verifica.",
+    "Il Governo derubrica la vicenda a una polemica di breve respiro, senza ricadute concrete sull'azione dell'esecutivo.",
+    "Il Governo ammette qualche criticità nella gestione, ma nega qualsiasi responsabilità politica diretta."
+  ];
   function buildGovernmentAnswerText(metric, value) {
     var prev = state.countryProfilePrev ? state.countryProfilePrev[metric] : value;
     var improving = value > prev + 0.02;
     var worsening = value < prev - 0.02;
-    var base = improving
-      ? "Il Governo replica che i dati delle ultime settimane mostrano un miglioramento su questo fronte, per quanto ancora insufficiente."
-      : worsening
-        ? "Il Governo ammette che la situazione si è aggravata nelle ultime settimane, ma rivendica l'impegno messo in campo."
-        : "Il Governo riconosce che la situazione resta sostanzialmente stabile, ma sostiene che le misure adottate inizieranno presto a dare frutti.";
+    var pool = improving ? GOVERNMENT_ANSWER_IMPROVING : worsening ? GOVERNMENT_ANSWER_WORSENING : GOVERNMENT_ANSWER_STABLE;
+    var detail = metric ? pickAmbientDetailPhrase(metric, METRIC_LABELS[metric] || "il tema", null) : "il tema";
+    var base = pool[Math.floor(Math.random() * pool.length)].split("{DETAIL}").join(detail);
     var recentPolicy = state.enactedPolicies && state.enactedPolicies[0];
     var policyNote = recentPolicy ? (" Cita come esempio concreto il provvedimento “" + recentPolicy.title + "”, varato di recente.") : "";
     return base + policyNote;
@@ -9334,7 +9377,7 @@
       candidates.push({
         metric: guessed.metric, noun: noun, value: value, source: "notizia",
         topicPhrase: "di quanto emerso di recente: “" + n.text + "”",
-        answerText: "Il Governo replica che la vicenda è già stata chiarita nelle sedi opportune, e respinge le accuse definendole strumentali."
+        answerText: GOVERNMENT_NEWS_DEFLECTION_ANSWERS[Math.floor(Math.random() * GOVERNMENT_NEWS_DEFLECTION_ANSWERS.length)]
       });
     });
     return candidates;
@@ -9457,6 +9500,15 @@
     if (label.indexOf("i ") === 0) return "ai " + label.slice(2);
     return "a " + label;
   }
+  // Richiesto da un giocatore: senza un diario recente, l'apertura dell'intervista era SEMPRE la stessa,
+  // identica frase in ogni partita — ora un piccolo ventaglio di aperture diverse.
+  var LEADER_INTERVIEW_Q1_FALLBACK_OPENERS = [
+    function (p) { return "Il giornalista chiede conto della linea del partito in questa fase, con " + p.name + " a " + fmt1(p.sondaggi) + "% nei sondaggi."; },
+    function (p) { return "Il giornalista apre chiedendo un bilancio a caldo dell'ultimo periodo politico per " + p.name + "."; },
+    function (p) { return "Il giornalista chiede a " + p.name + " un commento sul clima politico generale di queste settimane."; },
+    function (p) { return "Il giornalista apre senza giri di parole, chiedendo a " + p.name + " se è davvero soddisfatta/o dell'andamento del partito."; },
+    function (p) { return "Il giornalista chiede a " + p.name + " di commentare il posizionamento del partito rispetto ad alleati e rivali in questa fase."; }
+  ];
   function buildLeaderInterviewScene() {
     var p = state.player;
     p.leaderInterviewCooldownTurn = state.turn + LEADER_INTERVIEW_COOLDOWN_TURNS;
@@ -9465,7 +9517,7 @@
     var recentDiary = p.diaryEntries && p.diaryEntries[0];
     var q1Text = recentDiary
       ? "Il giornalista apre subito sul tema del momento: “" + recentDiary.title + "”. Come commenta " + p.name + "?"
-      : "Il giornalista chiede conto della linea del partito in questa fase, con " + p.name + " a " + fmt1(p.sondaggi) + "% nei sondaggi.";
+      : LEADER_INTERVIEW_Q1_FALLBACK_OPENERS[Math.floor(Math.random() * LEADER_INTERVIEW_Q1_FALLBACK_OPENERS.length)](p);
     var q1Topic = recentDiary ? recentDiary.title.toLowerCase() : "la linea del partito";
     var weakMetrics = Object.keys(state.countryProfile).filter(function (k) { return METRIC_LABELS[k] && state.countryProfile[k] < 6.5 && !isExpectedWeakMetricFor(p.family, k); });
     var q2Metric = weakMetrics.length ? weakMetrics[Math.floor(Math.random() * weakMetrics.length)] : null;
@@ -9474,6 +9526,16 @@
       ? "Passa poi a un fronte caldo: " + q2Detail + " (" + METRIC_LABELS[q2Metric] + " fermo a " + fmt1(state.countryProfile[q2Metric]) + "/10). Qual è la proposta del partito?"
       : "Passa poi a chiedere quale sarà la prossima mossa politica del partito nelle prossime settimane.";
     var q2Topic = q2Metric ? METRIC_LABELS[q2Metric] : "le prossime mosse del partito";
+    // Richiesto da un giocatore: interviste "più approfondite", non solo meno ripetitive — una terza
+    // domanda su un SECONDO fronte debole distinto dal primo (non lo stesso tema ripetuto due volte),
+    // così l'intervista copre davvero più terreno prima di chiudere.
+    var q3Pool = weakMetrics.filter(function (m) { return m !== q2Metric; });
+    var q3Metric = q3Pool.length ? q3Pool[Math.floor(Math.random() * q3Pool.length)] : null;
+    var q3Detail = q3Metric ? pickAmbientDetailPhrase(q3Metric, METRIC_LABELS[q3Metric], p.family) : null;
+    var q3Text = q3Metric
+      ? "Prima di chiudere, il giornalista insiste su un secondo fronte caldo: " + q3Detail + " (" + METRIC_LABELS[q3Metric] + " fermo a " + fmt1(state.countryProfile[q3Metric]) + "/10). Qual è davvero la linea del partito?"
+      : "Prima di chiudere, il giornalista chiede un bilancio più ampio dell'azione del partito nell'ultimo periodo.";
+    var q3Topic = q3Metric ? METRIC_LABELS[q3Metric] : "il bilancio generale del partito";
     var pol = isGoverno ? "il Governo" : "il tuo partito";
     state.leaderInterview = {
       step: 0, setting: setting, isGoverno: isGoverno,
@@ -9481,7 +9543,9 @@
         { text: q1Text, topicLabel: q1Topic, answeredLabel: null, resultText: null,
           choices: buildPublicAppearanceChoices({ topicLabel: q1Topic, isGoverno: isGoverno, pol: pol, fromCtx: "dall'intervista", subj: "il giornalista" }, 4) },
         { text: q2Text, topicLabel: q2Topic, answeredLabel: null, resultText: null,
-          choices: buildPublicAppearanceChoices({ topicLabel: q2Topic, isGoverno: isGoverno, pol: pol, fromCtx: "dall'intervista", subj: "il giornalista", nationalMetric: q2Metric }, 4) }
+          choices: buildPublicAppearanceChoices({ topicLabel: q2Topic, isGoverno: isGoverno, pol: pol, fromCtx: "dall'intervista", subj: "il giornalista", nationalMetric: q2Metric }, 4) },
+        { text: q3Text, topicLabel: q3Topic, answeredLabel: null, resultText: null,
+          choices: buildPublicAppearanceChoices({ topicLabel: q3Topic, isGoverno: isGoverno, pol: pol, fromCtx: "dall'intervista", subj: "il giornalista", nationalMetric: q3Metric }, 4) }
       ]
     };
     state.phase = "leader_interview_scene";
