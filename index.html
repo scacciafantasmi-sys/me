@@ -16082,6 +16082,32 @@
     if (!state.player.resolvedTopicNouns) state.player.resolvedTopicNouns = [];
     if (state.player.resolvedTopicNouns.indexOf(noun) === -1) state.player.resolvedTopicNouns.push(noun);
   }
+  // Richiesto da un giocatore: "cooldown di 60 settimane prima di riproporre una legge/mozione
+  // respinta (CPU o player)". A differenza di markTopicNounResolved sopra (per un tema APPROVATO,
+  // chiuso per sempre), una proposta RESPINTA non veniva mai tracciata: lo stesso identico tema
+  // poteva tornare la settimana successiva, proposto di nuovo dal giocatore o da un partito CPU
+  // qualunque, come se il voto in Aula appena perso non fosse mai avvenuto. Il raffreddamento è
+  // condiviso tra giocatore e CPU (un tema appena respinto in Aula lo è per l'intero Parlamento, non
+  // solo per chi l'ha proposto) e separato per "legge"/"mozione" (due atti diversi sullo stesso tema
+  // restano due cose distinte).
+  var REJECTED_TOPIC_COOLDOWN_TURNS = 60;
+  function markTopicRejectedCooldown(kind, noun) {
+    if (!noun) return;
+    if (!state.rejectedTopicCooldowns) state.rejectedTopicCooldowns = {};
+    state.rejectedTopicCooldowns[kind + "::" + noun] = state.turn + REJECTED_TOPIC_COOLDOWN_TURNS;
+  }
+  function isTopicOnRejectionCooldown(kind, noun) {
+    if (!noun || !state.rejectedTopicCooldowns) return false;
+    var until = state.rejectedTopicCooldowns[kind + "::" + noun];
+    return until !== undefined && state.turn < until;
+  }
+  // Stesso principio del "meglio un tema ripetuto raro che nessuna proposta" già usato altrove
+  // (vedi filterUnresolvedTopics): se il raffreddamento svuotasse l'intero pool (pool piccolo, tanti
+  // temi appena respinti), si ripesca comunque dal pool intero piuttosto che bloccare la proposta.
+  function filterRejectionCooldown(topicPool, kind) {
+    var fresh = topicPool.filter(function (t) { return !isTopicOnRejectionCooldown(kind, t.noun); });
+    return fresh.length ? fresh : topicPool;
+  }
   // markTopicNounResolved (sopra) è più recente di acceptedMozioni/acceptedLeggi/acceptedReferendum: su un
   // salvataggio già in corso da prima che esistesse, mozioni e leggi accettate PRIMA di allora non hanno
   // mai fatto scattare quella chiamata — il loro argomento non è mai entrato in resolvedTopicNouns, quindi
@@ -17610,7 +17636,8 @@
       return accepted.indexOf(t.title) === -1 && resolvedNouns.indexOf(t.noun) === -1 &&
         (!isGoverno || t.title.indexOf("di contrasto sul Governo") === -1);
     };
-    return mozioneTopicsForFamily(p.family).filter(validTopic).concat(mozioneTopicsGeneral().filter(validTopic));
+    var topics = mozioneTopicsForFamily(p.family).filter(validTopic).concat(mozioneTopicsGeneral().filter(validTopic));
+    return filterRejectionCooldown(topics, "mozione");
   }
   function generateMozioneCandidates(p) {
     if (!p.mozioneSelectedCat) return [];
@@ -17712,6 +17739,7 @@
     var resolvedNouns = p.resolvedTopicNouns || [];
     var validTopic = function (t) { return accepted.indexOf(t.title) === -1 && resolvedNouns.indexOf(t.noun) === -1; };
     var topics = lawTopicsForFamily(p.family).filter(validTopic).concat(lawTopicsGeneral().filter(validTopic));
+    topics = filterRejectionCooldown(topics, "legge");
     return filterLawTopicsByGovernmentRole(topics, p.parliamentRole === "governo");
   }
   function generateLawCandidates(p) {
@@ -17968,6 +17996,7 @@
       var cgDelta = isGoverno ? (passed ? rand(0.6, 1.6) : -rand(0.6, 1.6)) : (passed ? -rand(0.6, 1.6) : rand(0.6, 1.6));
       state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
     }
+    if (!passed) markTopicRejectedCooldown("mozione", topic.noun);
     var esito = passed
       ? "La mozione presentata dal tuo partito viene approvata dall'Aula: " + topic.noun + " entra ufficialmente nell'agenda parlamentare nella direzione che avevi chiesto."
       : "La mozione presentata dal tuo partito viene respinta dall'Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": la battaglia parlamentare su " + topic.noun + " non si è tradotta in un voto favorevole, anche se il tema resta acceso nel dibattito pubblico.";
@@ -18137,6 +18166,7 @@
       var cgDelta = isGoverno ? (passed ? rand(1.5, 3.2) : -rand(1.5, 3.2)) : (passed ? -rand(1.5, 3.2) : rand(1.5, 3.2));
       state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
     }
+    if (!passed) markTopicRejectedCooldown("legge", topic.noun);
     var esito = passed
       ? "La proposta di legge del tuo partito viene approvata in via definitiva dall'Aula: " + topic.noun + " diventa legge dello Stato."
       : "La proposta di legge del tuo partito viene respinta in Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": " + topic.noun + " resta senza una legge dedicata, anche se il tema resta acceso nel dibattito pubblico.";
@@ -18392,6 +18422,7 @@
     var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = lawTopicsGeneral();
     topicPool = filterLawTopicsByGovernmentRole(topicPool, isGovProposer);
+    topicPool = filterRejectionCooldown(topicPool, "legge");
     if (!topicPool.length) return null;
     var picked = pickCpuTopic(topicPool);
     var topic = picked.topic;
@@ -18442,6 +18473,7 @@
       var cg = meta.isGovProposer ? (passed ? rand(1.5, 3.2) : -rand(1.5, 3.2)) : (passed ? -rand(1.5, 3.2) : rand(1.5, 3.2));
       state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
     }
+    if (!passed) markTopicRejectedCooldown("legge", meta.noun);
     var voteNote = choice.mozioneVote === "favore" ? "con il voto favorevole anche del tuo gruppo"
       : choice.mozioneVote === "contro" ? "nonostante il voto contrario del tuo gruppo" : "con il tuo gruppo astenuto";
     var esito = passed
@@ -18478,6 +18510,7 @@
     var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = lawTopicsGeneral();
     topicPool = filterLawTopicsByGovernmentRole(topicPool, isGovProposer);
+    topicPool = filterRejectionCooldown(topicPool, "legge");
     if (!topicPool.length) return;
     var picked = pickCpuTopic(topicPool);
     var topic = picked.topic;
@@ -18496,6 +18529,7 @@
       var cg = isGovProposer ? (passed ? rand(1.5, 3.2) : -rand(1.5, 3.2)) : (passed ? -rand(1.5, 3.2) : rand(1.5, 3.2));
       state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
     }
+    if (!passed) markTopicRejectedCooldown("legge", topic.noun);
     var title = (picked.isRevisit ? topic.title + " — Nuovo Intervento" : topic.title) + " (" + proposer.short + ")";
     var esito = passed
       ? (picked.isRevisit
@@ -18530,6 +18564,7 @@
     var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
     var topicPool = proposer.familyId ? mozioneTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = mozioneTopicsGeneral();
+    topicPool = filterRejectionCooldown(topicPool, "mozione");
     if (!topicPool.length) return null;
     var picked = pickCpuTopic(topicPool);
     var topic = picked.topic;
@@ -18580,6 +18615,7 @@
       var cg = meta.isGovProposer ? (passed ? rand(0.6, 1.6) : -rand(0.6, 1.6)) : (passed ? -rand(0.6, 1.6) : rand(0.6, 1.6));
       state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
     }
+    if (!passed) markTopicRejectedCooldown("mozione", meta.noun);
     var voteNote = choice.mozioneVote === "favore" ? "con il voto favorevole anche del tuo gruppo"
       : choice.mozioneVote === "contro" ? "nonostante il voto contrario del tuo gruppo" : "con il tuo gruppo astenuto";
     var esito = passed
@@ -18622,6 +18658,7 @@
     var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
     var topicPool = proposer.familyId ? mozioneTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = mozioneTopicsGeneral();
+    topicPool = filterRejectionCooldown(topicPool, "mozione");
     if (!topicPool.length) return;
     var picked = pickCpuTopic(topicPool);
     var topic = picked.topic;
@@ -18640,6 +18677,7 @@
       var cg = isGovProposer ? (passed ? rand(0.6, 1.6) : -rand(0.6, 1.6)) : (passed ? -rand(0.6, 1.6) : rand(0.6, 1.6));
       state.consensoGoverno = clamp(state.consensoGoverno + cg, 0, 100);
     }
+    if (!passed) markTopicRejectedCooldown("mozione", topic.noun);
     var title = (picked.isRevisit ? topic.title + " — Nuova Mozione" : topic.title) + " (" + proposer.short + ")";
     var esito = passed
       ? (picked.isRevisit
