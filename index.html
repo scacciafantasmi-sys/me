@@ -11102,6 +11102,23 @@
     return html;
   }
 
+  // ---------- Lasciare la maggioranza di governo (richiesto da un giocatore) ----------
+  // Finora un partito al governo ma senza la Presidenza del Consiglio non aveva alcun modo di
+  // andarsene di propria iniziativa: solo gli alleati CPU potevano farlo (vedi
+  // triggerCoalitionAllyReaction/triggerGoverningAllyDefection), mai il giocatore stesso. Chi guida il
+  // governo (Presidenza) resta escluso apposta: andarsene vorrebbe dire far cadere l'intero esecutivo
+  // che lui stesso presiede, una conseguenza ben più grande di questa scelta, non ancora coperta qui.
+  function renderLeaveGovernmentPanel() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || state.regime) return "";
+    if (!state.cabinet || state.cabinet.premierId === "player") return "";
+    if (!state.govEntity || !state.govEntity.memberIds || state.govEntity.memberIds.indexOf("player") === -1) return "";
+    return '<section aria-label="Lascia la maggioranza di governo"><details class="log"><summary>Lascia la maggioranza di governo<span>▾</span></summary>' +
+      '<p class="ci-hint">Puoi far uscire il partito dalla maggioranza e passare all\'opposizione. È una scelta pesante e irreversibile per questa legislatura: perdi subito i ministeri eventualmente ottenuti, il governo ' + govEntityLabel() + ' incassa un colpo di credibilità e può perdere la maggioranza reale in Parlamento, e la tua reputazione ne risente nell\'immediato — in cambio riacquisti piena libertà di opposizione.</p>' +
+      '<div class="option-grid"><button type="button" class="option-card" data-leave-government><span class="olabel">Lascia la maggioranza e vai all\'opposizione</span><span class="odesc">Instabilità immediata per il governo in carica</span></button></div>' +
+      "</details></section>";
+  }
+
   // ---------- Vita pubblica: talk show serale e interviste ----------
   // Due apparizioni mediatiche disponibili a chiunque, dentro o fuori dal Parlamento, ciascuna con un
   // proprio raffreddamento indipendente: si apre come le Riforme di Governo (clic sul dominio -> 5
@@ -27760,6 +27777,44 @@
       choices: [{ label: "Prendo atto", hint: lostMajority ? "Il governo resta in carica, ma senza più una vera maggioranza" : "Il governo resta in carica, con una maggioranza più risicata", effects: {}, result: "Prendi atto della rottura: il governo resta in carica, ma la squadra che lo sostiene è un po' più piccola di prima." }]
     };
   }
+  // Richiesto da un giocatore: finora solo gli alleati CPU potevano lasciare la maggioranza di
+  // governo di propria iniziativa (sopra); il giocatore stesso, se al governo ma senza la Presidenza,
+  // non aveva alcun modo di farlo. Stessa identica logica di departGoverningAlly (ricalcolo della
+  // maggioranza vera sui seggi reali, niente più ministeri in cabinet, colpo al consenso di governo),
+  // applicata al partito del giocatore invece che a un alleato CPU: è lui stesso a rompere, non lo
+  // subisce — l'instabilità che ne segue è esattamente quella richiesta.
+  function playerLeavesGovernmentMajority() {
+    var p = state.player;
+    var ge = state.govEntity;
+    if (!p || !ge || p.parliamentRole !== "governo" || !ge.memberIds || ge.memberIds.indexOf("player") === -1) return null;
+    var idxM = ge.memberIds.indexOf("player");
+    ge.memberIds.splice(idxM, 1);
+    vacateCabinetMinistries("player");
+    state.playerMinistry = null;
+    p.parliamentRole = "opposizione";
+    var totalCamera = 0, totalSenato = 0;
+    ge.memberIds.forEach(function (mid) {
+      var s = ge.seatSplit && ge.seatSplit[mid];
+      if (s) { totalCamera += s.camera; totalSenato += s.senato; }
+    });
+    var wasMinority = ge.minority;
+    ge.minority = totalCamera < CAMERA_MAJORITY_SEATS || totalSenato < SENATO_MAJORITY_SEATS;
+    var lostMajority = !wasMinority && ge.minority;
+    state.consensoGoverno = clamp((state.consensoGoverno !== undefined ? state.consensoGoverno : 50) - rand(10, 18), 0, 100);
+    p.reputazione = clamp(p.reputazione + rand(-1, 3), 0, 100);
+    var reasonText = p.name + " lascia la maggioranza di governo e passa all'opposizione, denunciando scelte politiche ormai troppo distanti dalla propria linea." +
+      (lostMajority ? " Il governo " + govEntityLabel() + " perde così la maggioranza vera in Parlamento." : " Il governo " + govEntityLabel() + " resta in carica, ma con una maggioranza più risicata.");
+    state.log.unshift({ week: state.turn, title: "Lasci la maggioranza di governo", choiceLabel: p.name, result: reasonText, headlines: [], type: "istituzioni", cat: "Governo" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Governo", text: reasonText });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    return {
+      id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Rompi con il governo",
+      cat: "Governo", title: "Lasci la maggioranza di governo",
+      brief: reasonText,
+      choices: [{ label: "Prendo atto", hint: "Il partito è ora all'opposizione", effects: {}, result: "Il partito passa formalmente all'opposizione: piena libertà di critica, ma anche niente più ministeri né dossier di governo." }]
+    };
+  }
   // Richiama entrambi i controlli sugli alleati (alleanza elettorale e coalizione di governo) in un colpo
   // solo: usata nelle tre catene di turno al posto delle due chiamate separate, così nessuna delle due
   // resta "silenziosa" per distrazione quando si aggiunge un nuovo punto di chiamata in futuro. Entrambe
@@ -29183,7 +29238,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", icon: "⚖️", nav: "Parlamento", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderIniziativaLiberaPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderLeaveGovernmentPanel() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderIniziativaLiberaPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
       } },
     // Richiesto da un giocatore: fare il Ministro dava troppo poco da fare (solo un piccolo pannello
     // "Iniziativa Ministeriale" in mezzo a tutto il resto). Una scheda dedicata, visibile SOLO mentre si
@@ -32083,6 +32138,18 @@
         if (btn.disabled) return;
         var outcome = startCivilWarAttempt();
         showSaveStatus(outcome.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-leave-government]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var dossier = playerLeavesGovernmentMajority();
+        if (!dossier) return;
+        state.aiDynamicDossier = dossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
         save();
         render();
       });
