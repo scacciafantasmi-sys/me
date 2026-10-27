@@ -2334,6 +2334,83 @@
       rsBoost: 1.8, felicitaBoost: 2, relDiplBoost: 1.8 }
   ];
   var SPACE_RIVAL_NATIONS = ["Stati Uniti", "Cina", "Russia", "l'Unione Europea nel suo insieme", "India", "Giappone"];
+  // Richiesto da un giocatore: "dossier periodici di aggiornamento sul programma spaziale ogni 25-30
+  // settimane, registrati anche nel diario; nuove basi/annunci spaziali nel mondo ogni 30-35
+  // settimane". Finora, durante una missione lunga (fino a 180 settimane per Marte), non succedeva
+  // letteralmente nulla tra l'avvio e l'esito finale — un lungo silenzio che non comunicava alcun
+  // vero progresso. Contenuti transumanisti sullo spazio restano fuori da questo aggiornamento,
+  // rimandati apposta a un capitolo futuro.
+  var SPACE_PROGRESS_UPDATE_TEMPLATES = {
+    satellite: [
+      "I test di integrazione del satellite nazionale procedono nei tempi previsti, tra camera anecoica e simulazioni di lancio.",
+      "Il centro di controllo missione supera con successo le prove generali di comunicazione con il satellite ancora a terra."
+    ],
+    agenzia: [
+      "I lavori sul nuovo lanciatore nazionale avanzano: superato con successo il primo test statico dei motori.",
+      "La nuova agenzia spaziale apre il proprio centro operativo: il personale tecnico è quasi al completo."
+    ],
+    astronauta: [
+      "L'addestramento del primo astronauta nazionale entra nella fase di simulazione in assetto di microgravità.",
+      "Superata la selezione medica e psicologica: il candidato astronauta passa alle prove sul simulatore di volo."
+    ],
+    stazione: [
+      "Il primo modulo destinato alla stazione orbitale supera i test di pressurizzazione in laboratorio.",
+      "Firmato un nuovo accordo tecnico con i partner internazionali per l'integrazione dei moduli in orbita."
+    ],
+    sonda_lunare: [
+      "La sonda lunare completa con successo i test di resistenza alle temperature estreme dello spazio.",
+      "Scelto il sito di allunaggio: una pianura ricca di dati scientifici ancora inesplorati."
+    ],
+    luna_equipaggio: [
+      "L'equipaggio della missione lunare completa il primo ciclo di addestramento in acqua per le manovre extraveicolari.",
+      "Il modulo di rientro supera i test di impatto in mare aperto: un passaggio cruciale verso il via libera definitivo."
+    ],
+    base_lunare: [
+      "I moduli abitativi della futura base lunare superano i test di tenuta in condizioni di vuoto spinto.",
+      "Definito il sito della base permanente: una zona vicina a depositi di ghiaccio d'acqua, utile per l'autosufficienza futura."
+    ],
+    marte: [
+      "Il veicolo per la missione marziana supera il primo test di accensione del motore a propulsione avanzata.",
+      "La NASA e le altre agenzie partner confermano la finestra di lancio per la missione congiunta su Marte."
+    ]
+  };
+  var SPACE_PROGRESS_UPDATE_TURNS_MIN = 25, SPACE_PROGRESS_UPDATE_TURNS_MAX = 30;
+  function triggerSpaceProgramProgressUpdate() {
+    var sp = state.spaceProgram;
+    if (!sp || !sp.activeMission) return;
+    // Niente aggiornamento a ridosso dell'esito vero e proprio: ci sarà già un dossier dedicato lì.
+    if (sp.activeMission.resolveTurn - state.turn < 8) return;
+    if (state.turn < (sp.nextProgressUpdateTurn || 0)) return;
+    sp.nextProgressUpdateTurn = state.turn + Math.floor(rand(SPACE_PROGRESS_UPDATE_TURNS_MIN, SPACE_PROGRESS_UPDATE_TURNS_MAX));
+    var stage = SPACE_PROGRAM_STAGES[sp.activeMission.stageIndex];
+    if (!stage) return;
+    var templates = SPACE_PROGRESS_UPDATE_TEMPLATES[stage.id] || ["I lavori sul programma \"" + stage.label + "\" procedono secondo i piani."];
+    var text = templates[Math.floor(Math.random() * templates.length)];
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Spazio", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    addDiaryEntry("Aggiornamento dal Programma Spaziale", text);
+  }
+  // A differenza dell'aggiornamento sopra (legato a una missione ATTIVA del proprio paese), questo
+  // tiene viva la corsa allo spazio nel mondo anche quando non si ha nulla in corso: altre potenze
+  // continuano comunque ad avanzare, indipendentemente da cosa fa l'Italia in quel momento.
+  var SPACE_RACE_NEWS_TURNS_MIN = 30, SPACE_RACE_NEWS_TURNS_MAX = 35;
+  var SPACE_RACE_WORLD_NEWS_TEMPLATES = [
+    function (nation) { return nation + " annuncia la costruzione di una nuova base di lancio, nella corsa allo spazio che si fa sempre più competitiva."; },
+    function (nation) { return nation + " mette in orbita una nuova costellazione di satelliti per le telecomunicazioni, rafforzando la propria presenza nello spazio."; },
+    function (nation) { return nation + " svela il progetto di una nuova stazione orbitale, segno di una rinnovata corsa allo spazio tra le grandi potenze."; },
+    function (nation) { return nation + " firma un nuovo accordo internazionale per l'esplorazione lunare, allargando la propria influenza anche fuori dall'atmosfera."; }
+  ];
+  function triggerSpaceRaceWorldNews() {
+    if (state.turn < (state.spaceRaceNewsCooldownTurn || 0)) return;
+    state.spaceRaceNewsCooldownTurn = state.turn + Math.floor(rand(SPACE_RACE_NEWS_TURNS_MIN, SPACE_RACE_NEWS_TURNS_MAX));
+    var nation = SPACE_RIVAL_NATIONS[Math.floor(Math.random() * SPACE_RIVAL_NATIONS.length)];
+    var template = SPACE_RACE_WORLD_NEWS_TEMPLATES[Math.floor(Math.random() * SPACE_RACE_WORLD_NEWS_TEMPLATES.length)];
+    var text = template(nation);
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Spazio", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
   function spaceStageAffordable(stage) {
     return stage.cost <= budgetPoolTotal() * 2.5;
   }
@@ -2349,6 +2426,7 @@
     var stage = SPACE_PROGRAM_STAGES[sp.stageIndex];
     if (!stage || !spaceStageAffordable(stage)) return null;
     sp.activeMission = { stageIndex: sp.stageIndex, startTurn: state.turn, resolveTurn: state.turn + stage.duration };
+    sp.nextProgressUpdateTurn = state.turn + Math.floor(rand(SPACE_PROGRESS_UPDATE_TURNS_MIN, SPACE_PROGRESS_UPDATE_TURNS_MAX));
     sp.investedTotal += stage.cost;
     state.debitoPil = clamp(state.debitoPil + stage.cost / 500, 80, 220);
     var resultText = "Il governo avvia ufficialmente \"" + stage.label + "\": " + stage.desc + " Ci vorranno circa " + stage.duration + " settimane prima di sapere come è andata.";
@@ -20315,6 +20393,7 @@
     pendingGovFormationNegotiation: null, pendingGovInvite: null, pendingGovInviteWelcome: null,
     playerMinistry: null, regionalPresidency: null, pendingRegionalElectionResult: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, liraAnnounced: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
+    natoRejoinCooldownTurn: 0, euRejoinCooldownTurn: 0, spaceRaceNewsCooldownTurn: 30,
     uprisingSaga: null, cpuUprisingCooldownTurn: 0, pendingDictatorVerdictTurn: null, fallenRegimeMemory: null, collapseSaga: null,
     salarioMinimoAttivo: false, salarioMinimoNetto: null,
     bilancioStato: { entrate: 920, uscite: 979 },
@@ -20336,7 +20415,7 @@
     govAllyDefectionCooldownTurn: 0,
     countryEpochs: [], currentEpoch: null,
     fiscalPolicy: freshFiscalPolicy(), currencyAbolished: false, currencyAbolishedTurn: null, fiscalCooldownTurn: 0,
-    spaceProgram: freshSpaceProgram(),
+    spaceProgram: freshSpaceProgram(), spaceRaceNewsCooldownTurn: Math.floor(30 + Math.random() * 5),
     mafiaCooldownTurn: 0, geopoliticalTension: 30, activeConflicts: [], regionalWarCooldownTurn: 40,
     lastStrikeTurn: 0, strikeStreak: 0, unionRevoltCooldownTurn: 0,
     worldWarActive: false, worldWar: null, italyMilitaryStance: "nato",
@@ -33571,6 +33650,8 @@
       return;
     }
 
+    triggerSpaceProgramProgressUpdate();
+    triggerSpaceRaceWorldNews();
     var spaceMissionDossier = resolveSpaceMissionIfDue();
     if (spaceMissionDossier) {
       state.aiDynamicDossier = spaceMissionDossier;
