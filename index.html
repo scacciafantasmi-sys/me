@@ -15654,7 +15654,13 @@
       if (!positions.length) return;
       var avgPos = positions.reduce(function (s, v) { return s + v; }, 0) / positions.length;
       var premierId = state.cabinet ? state.cabinet.premierId : null;
-      var eligible = memberParties.filter(function (pt) { return pt.id !== premierId; });
+      // Segnalato da un giocatore ("Forza Italia esce troppo spesso dal centrodestra"): FI, per via
+      // della sua posizione più moderata/liberale rispetto a FdI e Lega, risultava quasi sempre il
+      // membro più periferico del blocco — e quindi il più pesato da pickWeighted sotto — pur essendo
+      // già coperta da un evento dedicato e narrativamente motivato (triggerFiVannacciDefection, legata
+      // specificamente all'ascesa di Vannacci nella maggioranza). Il blocco generico qui sotto ora
+      // lascia FI fuori dal centrodestra SOLO a quella condizione, mai per questo evento generico.
+      var eligible = memberParties.filter(function (pt) { return pt.id !== premierId && !(blocId === "centrodestra" && pt.id === "fi"); });
       if (!eligible.length) return;
       // Bug segnalato da un giocatore ("M5S esce SEMPRE da Campo Largo"): la vecchia selezione era un
       // sort deterministico sulla distanza dalla posizione media del blocco — con PD e AVS che condividono
@@ -16480,7 +16486,9 @@
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
-    var choices = buildSituationChoices({ noun: "questo esito referendario", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    // Stesso bug e stessa correzione di resolveLeggeIfDue (vedi lì il commento completo): niente
+    // nationalMetric qui, l'effetto del referendum sull'indicatore è già applicato sopra.
+    var choices = buildSituationChoices({ noun: "questo esito referendario", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum nazionale", repDelta: 0, isGoverno: p.parliamentRole === "governo", popularVote: true });
     recordPolicyOutcome("Referendum", topic.title, passed, "Iniziativa referendaria", topic.metric);
     return {
@@ -16881,7 +16889,10 @@
       return;
     }
 
-    if (state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+    // Stessa correzione del controllo equivalente nella catena di turno normale (vedi lì il commento
+    // completo): niente più anno di "grazia" dopo l'elezione che ignorava in silenzio un consenso già
+    // sotto il 20%.
+    if (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
       state.mandatoEsplorativoCooldownTurn = state.turn + 6;
       state.aiDynamicDossier = buildPresidentCrisisDossier();
       state.currentDossierId = "ai_dynamic";
@@ -17257,7 +17268,9 @@
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
-    var choices = buildSituationChoices({ noun: "l'esito di questo referendum", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    // Stesso bug e stessa correzione di resolveLeggeIfDue (vedi lì il commento completo): niente
+    // nationalMetric qui, l'effetto del referendum sull'indicatore è già applicato sopra.
+    var choices = buildSituationChoices({ noun: "l'esito di questo referendum", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Referendum", repDelta: passed ? 2 : -2, isGoverno: isGoverno, popularVote: true });
     recordPolicyOutcome("Referendum", topic.title, passed, "Il tuo partito", topic.metric);
     return {
@@ -17955,7 +17968,9 @@
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
-    var choices = buildSituationChoices({ noun: "l'esito di questo voto in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    // Stesso bug e stessa correzione di resolveLeggeIfDue (vedi lì il commento completo): niente
+    // nationalMetric qui, l'effetto della mozione sull'indicatore è già applicato sopra.
+    var choices = buildSituationChoices({ noun: "l'esito di questo voto in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Mozione", repDelta: repDelta, isGoverno: isGoverno });
     recordPolicyOutcome("Mozione", topic.title, passed, "Il tuo partito", topic.metric);
     return {
@@ -18123,7 +18138,18 @@
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
-    var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    // BUG segnalato da un giocatore ("una legge approvata ma l'indicatore scende per come rispondo
+    // all'intervista dopo, non per la legge in sé"): l'effetto VERO della legge è già applicato sopra
+    // (applyCountryMetricDelta su topic.metric), ma passare nationalMetric: topic.metric qui sotto
+    // faceva sì che ANCHE le scelte generiche di reazione ("basso profilo" in particolare, sempre
+    // negativo per design) toccassero di nuovo lo STESSO indicatore — e applyCountryMetricDelta smorza
+    // (headroom) solo le variazioni POSITIVE quando l'indicatore è già alto, mai quelle negative: vicino
+    // al tetto, l'effetto vero della legge approvata poteva restare quasi azzerato dallo smorzamento,
+    // mentre la reazione nell'intervista successiva arrivava a piena forza nella direzione opposta,
+    // facendo scendere l'indicatore nonostante la legge fosse passata. Tolto nationalMetric qui: la
+    // reazione del partito resta (reputazione/iscritti/visibilità), ma non rimette più in discussione
+    // l'esito appena deciso dall'Aula sullo stesso identico indicatore.
+    var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno });
     recordPolicyOutcome("Legge", topic.title, passed, "Il tuo partito", topic.metric);
     return {
@@ -18202,7 +18228,9 @@
     var rivalPool = activeParties();
     var rival = pickRivalParty(rivalPool);
     var city = ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)].name;
-    var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, nationalMetric: topic.metric, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
+    // Stesso bug e stessa correzione di resolveLeggeIfDue (vedi lì il commento completo): niente
+    // nationalMetric qui, l'effetto della modifica sull'indicatore è già applicato sopra.
+    var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
     var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Modifica di legge", repDelta: repDelta, isGoverno: isGoverno });
     recordPolicyOutcome("Modifica di Legge", topic.title, passed, "Il tuo partito", topic.metric);
     return {
@@ -21142,6 +21170,28 @@
         state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (partyBaseline - state.parties[party.id]) * 0.06);
       });
     }
+    // BUG segnalato da un giocatore ("i partiti a volte sommati superano il 100% dei voti, non può
+    // essere"): il riproporzionamento sopra (scale2) non può MAI far scendere un partito sotto il
+    // pavimento di 0.3 (vedi Math.max ovunque in questa funzione) — su una partita lunga, con molti
+    // piccoli partiti già vicini al pavimento (specialmente con molte scissioni/fusioni accumulate,
+    // fino a PARTY_COUNT_CAP = 30), lo sforamento che quel pavimento impedisce di assorbire non viene
+    // mai più tolto da nessun'altra parte, e il richiamo verso l'equilibrio subito dopo (sopra) può
+    // aggiungerne ancora un po': il totale reale finisce così sopra quanto previsto da targetOthers,
+    // quindi sopra il 100% assieme al giocatore e agli indecisi. Un'ultima passata, solo quando il
+    // totale è davvero sopra il bersaglio (non tocca MAI il caso opposto, già tollerato come si spiega
+    // sopra), ridistribuisce l'eccedenza SOLO tra i partiti ancora sopra il pavimento — mai spingendo
+    // nessuno sotto 0.3 — lasciando intatti quelli già al minimo.
+    var pollTotalCheck = others.reduce(function (s, party) { return s + state.parties[party.id]; }, 0);
+    var pollTargetCheck = clamp(100 - p.sondaggi - state.indecisi, 20, 99);
+    if (pollTotalCheck > pollTargetCheck) {
+      var aboveFloor = others.filter(function (party) { return state.parties[party.id] > 0.3; });
+      var aboveFloorTotal = aboveFloor.reduce(function (s, party) { return s + state.parties[party.id]; }, 0);
+      var excess = pollTotalCheck - pollTargetCheck;
+      if (aboveFloorTotal > 0) {
+        var shrinkFactor = Math.max(0, (aboveFloorTotal - excess) / aboveFloorTotal);
+        aboveFloor.forEach(function (party) { state.parties[party.id] = Math.max(0.3, state.parties[party.id] * shrinkFactor); });
+      }
+    }
 
     triggerRivalCountermove(rivalId, rivalBaseline, typeof momentumAvgDelta !== "undefined" ? momentumAvgDelta : 0);
     recomputeRating();
@@ -21188,7 +21238,15 @@
     });
     // Il rivale non si limita a colpire: una contromossa riuscita gli porta anche un piccolo beneficio
     // diretto, coerente con l'idea che sta davvero contendendo lo stesso elettorato, non solo reagendo a vuoto.
-    state.parties[rivalId] = Math.max(0.3, state.parties[rivalId] + rand(0.1, 0.4));
+    // BUG segnalato da un giocatore ("i partiti a volte sommati superano il 100% dei voti"): questo
+    // bonus veniva aggiunto al rivale dal nulla, senza toglierlo a nessuno — ogni contromossa riuscita
+    // (fino al 22% di probabilità ogni 10 settimane) creava 0.1-0.4 punti percentuali di consenso
+    // totale in più nell'intera partita, un'inflazione lenta ma permanente su partite lunghe. Coerente
+    // con la stessa idea ("sta contendendo lo stesso elettorato" del giocatore), il bonus ora è
+    // sottratto al giocatore, non creato dal nulla — il totale resta sempre esatto.
+    var rivalCountermoveBonus = rand(0.1, 0.4);
+    state.parties[rivalId] = Math.max(0.3, state.parties[rivalId] + rivalCountermoveBonus);
+    p.sondaggi = clamp(p.sondaggi - rivalCountermoveBonus, 0, 40);
     if (move.relationHit && state.partyRelations) {
       state.partyRelations[rivalId] = clamp((state.partyRelations[rivalId] === undefined ? 50 : state.partyRelations[rivalId]) - rand(3, 8), 0, 100);
     }
@@ -27527,6 +27585,24 @@
     state.coalitionTrust[p.allianceId] = trust;
     if (trust < COALITION_DISSOLVE_THRESHOLD) dissolveCoalition(p.allianceId);
   }
+  // Segnalato da un giocatore (con screenshot della pagina Parlamento): un alleato che lascia il
+  // governo (sia qui sotto sia in departGoverningAlly più sotto) veniva tolto da state.govEntity.
+  // memberIds, ma i suoi ministeri restavano per sempre in state.cabinet.ministries/assignments —
+  // nessuno dei due punti li toccava mai. Il pannello "Il Governo e i suoi ministri" in Parlamento
+  // legge esattamente da lì (Object.keys(cabinet.ministries)), quindi continuava a mostrare l'alleato
+  // come se facesse ancora parte dell'esecutivo. Quei ministeri tornano ora vacanti ("ancora da
+  // assegnare", lo stesso testo già previsto dal pannello per un ministero senza titolare) appena
+  // l'alleato se ne va — non assegnati a nessun altro: la sostituzione vera con un ministro tecnico è
+  // una richiesta distinta, non ancora implementata.
+  function vacateCabinetMinistries(allyId) {
+    var cabinet = state.cabinet;
+    if (!cabinet || !cabinet.ministries || !cabinet.ministries[allyId]) return;
+    var vacated = cabinet.ministries[allyId];
+    delete cabinet.ministries[allyId];
+    if (cabinet.assignments) {
+      vacated.forEach(function (ministry) { delete cabinet.assignments[ministry]; });
+    }
+  }
   // Un singolo alleato lascia la coalizione (non l'intera alleanza, a differenza di dissolveCoalition):
   // stessa logica di soglia-membri-minimi già usata da removePartyFromCoalitions per i partiti che si
   // sciolgono, qui applicata a un alleato che se ne va di sua iniziativa. Aggiorna anche state.govEntity
@@ -27543,6 +27619,7 @@
       var gidx = state.govEntity.memberIds.indexOf(allyId);
       if (gidx !== -1) state.govEntity.memberIds.splice(gidx, 1);
     }
+    vacateCabinetMinistries(allyId);
     var allyParty = partyById(allyId);
     state.log.unshift({
       week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : allyId,
@@ -27651,6 +27728,7 @@
     if (idxF !== -1) ge.forcedAllyIds.splice(idxF, 1);
     var idxM = ge.memberIds.indexOf(allyId);
     if (idxM !== -1) ge.memberIds.splice(idxM, 1);
+    vacateCabinetMinistries(allyId);
     // Ricalcola se il governo ha ancora una vera maggioranza senza questo alleato, sui seggi reali salvati
     // in seatSplit al momento della formazione (vedi finishGovernmentFormation), non su una stima.
     var totalCamera = 0, totalSenato = 0;
@@ -32843,7 +32921,15 @@
     // da quel numero — la fiducia di governo è l'unico vero indicatore di tenuta della maggioranza.
     // Questo controllo va eseguito PRIMA di qualunque altro blocco che possa fare return in anticipo,
     // altrimenti la caduta di governo non scatterebbe quasi mai.
-    if (!state.snapElectionPending && state.turn > state.lastElectionTurn + 52 && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+    // BUG segnalato da un giocatore ("il governo è sceso sotto il 20% ma non è scattato nulla"): c'era
+    // anche un secondo requisito mai menzionato qui sopra, state.turn > state.lastElectionTurn + 52 —
+    // un intero anno di "grazia" dopo ogni elezione durante il quale QUALUNQUE crollo di consenso,
+    // anche ben sotto il 20%, veniva ignorato in silenzio, in diretta contraddizione con "non è più un
+    // tiro di dado indipendente da quel numero" scritto proprio qui sopra. Un governo di minoranza può
+    // partire già esattamente al 20% (vedi finishGovernmentFormation) e scivolare sotto poco dopo: con
+    // quella soglia aggiuntiva, restava comunque intoccabile per un anno intero. Tolta: resta solo il
+    // cooldown di 6 settimane già previsto sotto per non far ripartire il dossier troppo di fila.
+    if (!state.snapElectionPending && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
       // Non più elezioni immediate: prima il Presidente della Repubblica tenta un mandato esplorativo
       // per evitare le urne (vedi buildMandatoEsplorativoDossier e la sua risoluzione in
       // resolveDossierChoice) — le elezioni anticipate restano possibili, ma solo come ESITO di quel
