@@ -5371,6 +5371,7 @@
     triggerNucleoUpdate();
     triggerLocalElectionCycle();
     resolveEuropeanElection();
+    resolveNationalGovCrisisInBackground();
     if (!state.regime && state.turn >= state.nextElectionTurn) { resolveElection(); }
     // Stesso guard delle altre due catene di turno (nazionale e presidenziale): se l'elezione appena
     // risolta ha aperto una trattativa interattiva per la maggioranza nazionale, ha priorità assoluta su
@@ -11393,13 +11394,18 @@
   // governo (Presidenza) resta escluso apposta: andarsene vorrebbe dire far cadere l'intero esecutivo
   // che lui stesso presiede, una conseguenza ben più grande di questa scelta, non ancora coperta qui.
   function renderLeaveGovernmentPanel() {
+    if (!playerCanLeaveGovernmentMajority()) return "";
     var p = state.player;
-    if (!p || p.parliamentRole !== "governo" || state.regime) return "";
-    if (!state.cabinet || state.cabinet.premierId === "player") return "";
-    if (!state.govEntity || !state.govEntity.memberIds || state.govEntity.memberIds.indexOf("player") === -1) return "";
-    return '<section aria-label="Lascia la maggioranza di governo"><details class="log"><summary>Lascia la maggioranza di governo<span>▾</span></summary>' +
-      '<p class="ci-hint">Puoi far uscire il partito dalla maggioranza e passare all\'opposizione. È una scelta pesante e irreversibile per questa legislatura: perdi subito i ministeri eventualmente ottenuti, il governo ' + govEntityLabel() + ' incassa un colpo di credibilità e può perdere la maggioranza reale in Parlamento, e la tua reputazione ne risente nell\'immediato — in cambio riacquisti piena libertà di opposizione.</p>' +
-      '<div class="option-grid"><button type="button" class="option-card" data-leave-government><span class="olabel">Lascia la maggioranza e vai all\'opposizione</span><span class="odesc">Instabilità immediata per il governo in carica</span></button></div>' +
+    // Anteprima onesta: i seggi del governo SENZA quelli del tuo partito dicono già se ritirare la
+    // fiducia lo farebbe cadere (stesso calcolo di detachFromGovernmentMajority).
+    var totals = govMajoritySeatTotals(state.govEntity);
+    var cameraWithout = totals.camera - (p.seatsCamera || 0), senatoWithout = totals.senato - (p.seatsSenato || 0);
+    var decisive = !state.govEntity.minority && (cameraWithout < CAMERA_MAJORITY_SEATS || senatoWithout < SENATO_MAJORITY_SEATS);
+    return '<section aria-label="Lascia la maggioranza di governo"><details class="log"><summary>Ritira la fiducia al governo<span>▾</span></summary>' +
+      '<p class="ci-hint">Puoi ritirare la fiducia al governo ' + govEntityLabel() + ' e passare all\'opposizione. È una scelta pesante e irreversibile per questa legislatura: perdi subito i ministeri eventualmente ottenuti, il governo incassa un colpo di credibilità e la tua reputazione ne risente nell\'immediato — in cambio riacquisti piena libertà di opposizione.</p>' +
+      '<p class="ci-hint">Senza i tuoi seggi la maggioranza scenderebbe a ' + cameraWithout + ' alla Camera (soglia ' + CAMERA_MAJORITY_SEATS + ') e ' + senatoWithout + ' al Senato (soglia ' + SENATO_MAJORITY_SEATS + '): ' +
+      (decisive ? '<strong>i tuoi voti sono decisivi, il governo cadrebbe</strong> e si aprirebbe la crisi, con il mandato esplorativo del Quirinale o il ritorno alle urne.' : 'il governo resterebbe comunque in carica, indebolito.') + '</p>' +
+      '<div class="option-grid"><button type="button" class="option-card" data-leave-government><span class="olabel">' + (decisive ? 'Ritira la fiducia e apri la crisi di governo' : 'Lascia la maggioranza e vai all\'opposizione') + '</span><span class="odesc">' + (decisive ? 'Il governo perde la maggioranza in Aula' : 'Instabilità immediata per il governo in carica') + '</span></button></div>' +
       "</details></section>";
   }
 
@@ -12020,7 +12026,19 @@
     },
     {
       id: "crisi_di_coalizione", label: "Crisi di coalizione", totalStages: 4,
-      eligible: function (p) { return !!p.allianceId && !!coalitionById(p.allianceId) && liveCoalitionMemberIds(coalitionById(p.allianceId)).length >= 1; },
+      // Segnalato da un giocatore: l'arco partiva anche con una coalizione solida (fiducia 60) e poteva
+      // finire con l'uscita di un alleato. Ora serve una crisi vera: fiducia di coalizione fragile, o
+      // almeno un alleato con cui i rapporti sono davvero deteriorati.
+      eligible: function (p) {
+        var coal = p.allianceId ? coalitionById(p.allianceId) : null;
+        if (!coal) return false;
+        var live = liveCoalitionMemberIds(coal);
+        if (!live.length) return false;
+        var trust = state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined ? state.coalitionTrust[p.allianceId] : 50;
+        var relations = state.partyRelations || {};
+        var worstRel = Math.min.apply(null, live.map(function (mid) { return relations[mid] !== undefined ? relations[mid] : 50; }));
+        return trust < 50 || worstRel < 40;
+      },
       startData: function () {
         var p = state.player;
         var coal = coalitionById(p.allianceId);
@@ -17257,19 +17275,917 @@
       ]
     };
   }
+  // ---------- Il Quirinale: poteri, agenda ed eventi del settennato ----------
+  // Richiesto da un giocatore: la modalità Presidente era troppo basica (firma/rinvio generico, grazia,
+  // due tipi di nomina, crisi di governo). Ora:
+  // - le leggi arrivano sulla scrivania con il loro titolo vero, e il rinvio alle Camere indica una
+  //   MODIFICA SPECIFICA (copertura finanziaria, competenze regionali, norme estranee...), scelta dal
+  //   giocatore; dopo qualche settimana le Camere accolgono il rilievo e correggono il testo, oppure lo
+  //   respingono e riapprovano la legge identica, e a quel punto la firma è obbligatoria (art. 74 Cost.);
+  // - un decreto-legge può essere rimandato al Governo prima dell'emanazione, con la stessa logica;
+  // - un'agenda del Presidente (una iniziativa a settimana): visite di Stato, visite nelle Regioni con i
+  //   loro Presidenti, incontri con gli organi dello Stato (Governo, Camere, CSM, Consiglio Supremo di
+  //   Difesa), messaggi alle Camere e alla Nazione, iniziative sociali, dimissioni;
+  // - dossier settimanali molto più vari: calamità naturali, eventi sportivi, ricorrenze civili a data
+  //   fissa (2 giugno, 25 aprile, messaggio di fine anno...), capi di Stato in visita, scioglimento di
+  //   consigli comunali per mafia, ratifiche di trattati, onorificenze, polemiche contro il Colle;
+  // - quattro indicatori propri: prestigio istituzionale, gradimento popolare e i rapporti con i diversi
+  //   organi dello Stato, che pesano sull'esito dei rinvii e delle crisi di governo.
+  var PRES_RELATION_LABELS = {
+    governo: "Governo", parlamento: "Parlamento", magistratura: "Magistratura (CSM)",
+    regioni: "Regioni e autonomie", difesa: "Forze Armate", estero: "Diplomazia"
+  };
+  function ensurePresidentTermFields(term) {
+    if (!term) return;
+    if (term.prestigio === undefined) term.prestigio = 60;
+    if (term.gradimento === undefined) term.gradimento = 62;
+    if (!term.rapporti) term.rapporti = {};
+    Object.keys(PRES_RELATION_LABELS).forEach(function (k) { if (term.rapporti[k] === undefined) term.rapporti[k] = 55; });
+    ["pendingReturns", "lawRecord", "diary", "regionsVisited", "nationsVisited"].forEach(function (k) { if (!term[k]) term[k] = []; });
+    if (!term.cooldowns) term.cooldowns = {};
+    if (!term.firedCeremonies) term.firedCeremonies = {};
+    ["lawsModified", "forcedSignatures", "decreesReturned", "emergenciesManaged", "ceremonies", "sportsEvents", "messages", "stateVisits", "regionalVisits", "institutionalMeetings", "mafiaDissolutions", "honours"].forEach(function (k) {
+      if (term[k] === undefined) term[k] = 0;
+    });
+    if (term.agendaUsedTurn === undefined) term.agendaUsedTurn = -1;
+  }
+  function presAdjust(key, delta) {
+    var term = state.presidentTerm;
+    if (!term || !delta) return;
+    if (key === "prestigio" || key === "gradimento") term[key] = clamp(term[key] + delta, 0, 100);
+    else if (term.rapporti && term.rapporti[key] !== undefined) term.rapporti[key] = clamp(term.rapporti[key] + delta, 0, 100);
+  }
+  // Effetti di una scelta del Quirinale, tutti in un solo oggetto: indicatori del Presidente (prestigio,
+  // gradimento, rapporti.*) e metriche della Scheda Paese (national), più l'esito testuale.
+  function applyPresEffects(eff) {
+    if (!eff) return;
+    if (eff.prestigio) presAdjust("prestigio", eff.prestigio);
+    if (eff.gradimento) presAdjust("gradimento", eff.gradimento);
+    if (eff.rapporti) Object.keys(eff.rapporti).forEach(function (k) { presAdjust(k, eff.rapporti[k]); });
+    if (eff.national) Object.keys(eff.national).forEach(function (k) { applyCountryMetricDelta(k, eff.national[k]); });
+    if (eff.consensoGoverno && state.consensoGoverno !== undefined) state.consensoGoverno = clamp(state.consensoGoverno + eff.consensoGoverno, 0, 100);
+    if (eff.foreign) {
+      if (!state.foreignRelations) state.foreignRelations = {};
+      Object.keys(eff.foreign).forEach(function (nid) {
+        var nation = WORLD_NATIONS.filter(function (n) { return n.id === nid; })[0];
+        var cur = state.foreignRelations[nid] !== undefined ? state.foreignRelations[nid] : (nation ? familyAffinity(state.player.family, nation.family) : 50);
+        state.foreignRelations[nid] = clamp(cur + eff.foreign[nid], 0, 100);
+      });
+    }
+  }
+  function presDiary(title, text) {
+    var term = state.presidentTerm;
+    term.diary.unshift({ week: state.turn, title: title, text: text });
+    if (term.diary.length > 30) term.diary.length = 30;
+    state.log.unshift({ week: state.turn, title: title, choiceLabel: "Quirinale", result: text, headlines: [], type: "istituzioni", cat: "Quirinale" });
+  }
+  // Deriva lenta: il gradimento segue anche come sta il paese (un Capo dello Stato non governa, ma è il
+  // volto delle istituzioni); prestigio e rapporti tornano piano verso valori medi se trascurati.
+  function presidentWeeklyDrift() {
+    var term = state.presidentTerm;
+    var cp = state.countryProfile || {};
+    var mood = ((cp.felicita || 5) + (cp.economia || 5) + (cp.sicurezza || 5)) / 3;
+    var gradTarget = clamp(50 + (mood - 5) * 4 + (term.prestigio - 50) * 0.3, 20, 85);
+    term.gradimento = clamp(term.gradimento + (gradTarget - term.gradimento) * 0.03 + (Math.random() - 0.5) * 0.8, 0, 100);
+    term.prestigio = clamp(term.prestigio + (55 - term.prestigio) * 0.025, 0, 100);
+    Object.keys(term.rapporti).forEach(function (k) { term.rapporti[k] = clamp(term.rapporti[k] + (50 - term.rapporti[k]) * 0.015, 0, 100); });
+  }
+  function pickFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function presGovPartyName() {
+    var id = (state.cabinet && state.cabinet.premierId && state.cabinet.premierId !== "player") ? state.cabinet.premierId : leadingGovPartyId();
+    var party = id ? partyById(id) : null;
+    return party ? party.name : "la maggioranza di governo";
+  }
+  function capitalizeFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  // "su" + articolo: "su il trasporto" -> "sul trasporto", "su l'autonomia" -> "sull'autonomia".
+  function presSu(noun) {
+    if (/^[A-Z][a-zàèéìòù]/.test(noun || "")) noun = noun.charAt(0).toLowerCase() + noun.slice(1);
+    var m = /^(?:(il|lo|la|i|gli|le)\s+|(l'))(.*)$/i.exec(noun || "");
+    if (!m) return "su " + noun;
+    var art = (m[1] || m[2]).toLowerCase();
+    var map = { "il": "sul ", "lo": "sullo ", "la": "sulla ", "i": "sui ", "gli": "sugli ", "le": "sulle ", "l'": "sull'" };
+    return map[art] + m[3];
+  }
+  function presInRegion(regionId) { return regionId === "Marche" ? "nelle Marche" : "in " + regionId; }
+
+  // ---------- Promulgazione, rinvio con modifiche specifiche, firma obbligata ----------
+  // Ogni rilievo indica una modifica precisa, con la sua base costituzionale: quanto è probabile che le
+  // Camere la accolgano (acceptBias) e cosa migliora davvero nel paese se la legge viene corretta.
+  var PRES_LAW_AMENDMENTS = [
+    { id: "copertura", label: "indicare una copertura finanziaria certa", art: "art. 81", acceptBias: 0.15, national: { economia: 0.12, inflazione: 0.06 }, rapporto: "governo" },
+    { id: "regioni", label: "rispettare le competenze delle Regioni", art: "art. 117", acceptBias: 0.05, national: { trasporti: 0.05 }, rapporto: "regioni" },
+    { id: "diritti", label: "rafforzare le garanzie sui diritti fondamentali", art: "artt. 2 e 3", acceptBias: -0.05, national: { giustizia: 0.12 }, rapporto: "magistratura" },
+    { id: "omnibus", label: "stralciare le norme estranee alla materia della legge", art: "art. 72", acceptBias: 0.1, national: { corruzione: 0.1 }, rapporto: "parlamento" },
+    { id: "deboli", label: "tutelare meglio le fasce più deboli", art: "art. 38", acceptBias: -0.1, national: { welfare: 0.15 }, rapporto: "governo" },
+    { id: "tempi", label: "fissare tempi certi di attuazione e una clausola di valutazione", art: "art. 97", acceptBias: 0.1, national: {}, rapporto: "parlamento", boostsLawMetric: true },
+    { id: "controlli", label: "rafforzare i controlli contro abusi e infiltrazioni criminali", art: "art. 97", acceptBias: 0, national: { corruzione: 0.15, sicurezza: 0.05 }, rapporto: "magistratura" },
+    { id: "europa", label: "adeguare il testo agli obblighi europei e internazionali", art: "art. 117, primo comma", acceptBias: 0.05, national: { relazioniDiplomatiche: 0.12 }, rapporto: "estero" },
+    { id: "ambiente", label: "tutelare ambiente, paesaggio e generazioni future", art: "art. 9", acceptBias: -0.05, national: { ambientalismo: 0.15 }, rapporto: "regioni" },
+    { id: "liberta", label: "proteggere libertà di stampa e riservatezza dei cittadini", art: "art. 21", acceptBias: -0.1, national: { giustizia: 0.08, felicita: 0.05 }, rapporto: "magistratura" }
+  ];
+  function presAmendmentById(id) { return PRES_LAW_AMENDMENTS.filter(function (a) { return a.id === id; })[0]; }
+  function presLawTitle(topic) {
+    var noun = capitalizeFirst(topic.noun);
+    var su = presSu(topic.noun);
+    return topic.shapeId === "decreto" ? "Decreto-Legge " + su : topic.shapeId === "delega" ? "Legge Delega " + su : "Legge " + su;
+  }
+  function buildPresidentLawDossier() {
+    var term = state.presidentTerm;
+    var govId = leadingGovPartyId();
+    var govParty = govId ? partyById(govId) : null;
+    var pool = (govParty && govParty.familyId ? lawTopicsForFamily(govParty.familyId) : []).concat(lawTopicsGeneral());
+    var used = term.lawRecord.map(function (r) { return r.noun; }).concat(term.pendingReturns.map(function (r) { return r.noun; }));
+    pool = pool.filter(function (t) { return used.indexOf(t.noun) === -1; });
+    if (!pool.length) return null;
+    var topic = pickFrom(pool);
+    var isDecree = topic.shapeId === "decreto";
+    var title = presLawTitle(topic);
+    var mods = shuffleN(PRES_LAW_AMENDMENTS, 3);
+    var proposer = presGovPartyName();
+    var votes = 201 + Math.floor(Math.random() * 60);
+    var law = { title: title, noun: topic.noun, metric: topic.metric || null, isDecree: isDecree, proposer: proposer };
+    var brief = isDecree
+      ? "Il Consiglio dei Ministri, su impulso di " + proposer + ", ha approvato un decreto-legge " + presSu(topic.noun) + " e lo trasmette al Quirinale per l'emanazione. Prima di firmarlo puoi chiedere al Governo di correggerlo: l'Ufficio per gli affari giuridici del Colle ha individuato tre punti critici."
+      : "Le Camere hanno approvato in via definitiva una legge " + presSu(topic.noun) + ", proposta da " + proposer + " (" + votes + " voti favorevoli alla Camera). Hai trenta giorni per promulgarla. L'Ufficio per gli affari giuridici del Quirinale segnala tre punti critici, e puoi rinviarla alle Camere chiedendo una modifica precisa (art. 74 Cost.).";
+    brief += " I rilievi: " + mods.map(function (m, i) { return (i + 1) + ") " + m.label + " (" + m.art + ")"; }).join("; ") + ".";
+    var recentReturns = term.lawRecord.filter(function (r) { return r.returned && state.turn - r.week < 52; }).length;
+    var choices = [
+      { label: isDecree ? "Emana il decreto così com'è" : "Promulga la legge", hint: "L'iter prosegue senza intoppi", presLaw: "firma", effects: {} },
+      { label: "Firma, ma con una lettera di osservazioni a Governo e Camere", hint: "Un richiamo pubblico senza fermare la legge: un piccolo segnale di autorevolezza", presLaw: "firma_lettera", effects: {} }
+    ];
+    mods.forEach(function (m) {
+      choices.push({
+        label: (isDecree ? "Rimanda il decreto al Governo: " : "Rinvia alle Camere: ") + m.label,
+        hint: m.art + " — " + (m.acceptBias >= 0.1 ? "un rilievo tecnico, che di solito viene accolto" : m.acceptBias >= 0 ? "esito incerto" : "un rilievo politicamente scomodo, più facile che venga respinto") +
+          (recentReturns >= 2 ? ". Hai già rinviato " + recentReturns + " leggi quest'anno: le Camere sono meno disposte ad ascoltarti" : ""),
+        presLaw: "rinvio", modIds: [m.id], effects: {}
+      });
+    });
+    choices.push({ label: (isDecree ? "Rimanda il decreto al Governo" : "Rinvia alle Camere") + " chiedendo tutte e tre le modifiche", hint: "Il segnale più forte, ma è molto più difficile che venga accolto per intero", presLaw: "rinvio", modIds: mods.map(function (m) { return m.id; }), effects: {} });
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: isDecree ? "Emanazione di un decreto-legge" : "Promulgazione delle leggi",
+      cat: "Quirinale", presidentQuirinale: "legge", presLawData: law, title: title + " attende la tua firma", brief: brief, choices: choices
+    };
+  }
+  function presLawAcceptanceChance(modIds) {
+    var term = state.presidentTerm;
+    var bias = modIds.reduce(function (s, id) { var m = presAmendmentById(id); return s + (m ? m.acceptBias : 0); }, 0) / Math.max(1, modIds.length);
+    var recentReturns = term.lawRecord.filter(function (r) { return r.returned && state.turn - r.week < 52; }).length;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    return clamp(0.4 + bias + (term.prestigio - 50) / 140 + (term.rapporti.parlamento - 50) / 220 + (term.rapporti.governo - 50) / 300 -
+      Math.max(0, recentReturns - 1) * 0.07 - (modIds.length > 1 ? 0.15 : 0) - (cg > 55 ? 0.05 : 0), 0.08, 0.88);
+  }
+  function enactPresidentLaw(law, extraMetricBoost) {
+    var delta = rand(0.1, 0.3) + (extraMetricBoost || 0);
+    if (law.metric) applyCountryMetricDelta(law.metric, delta);
+    recordEnactedPolicy(law.title, "Promulgata dal Presidente della Repubblica (proposta da " + law.proposer + ").", law.metric);
+  }
+  function resolvePresidentLawChoice(dossier, choice) {
+    var term = state.presidentTerm;
+    var law = dossier.presLawData;
+    var text;
+    if (choice.presLaw === "firma" || choice.presLaw === "firma_lettera") {
+      term.actsSigned = (term.actsSigned || 0) + 1;
+      enactPresidentLaw(law);
+      term.lawRecord.unshift({ week: state.turn, title: law.title, noun: law.noun, outcome: "Firmata", returned: false });
+      if (choice.presLaw === "firma_lettera") {
+        applyPresEffects({ prestigio: rand(0.5, 1.5), rapporti: { governo: -rand(1, 2), parlamento: rand(0, 1) } });
+        text = "Firmi " + law.title.toLowerCase() + ", ma accompagni la promulgazione con una lettera ai Presidenti delle Camere e al Presidente del Consiglio, in cui segnali i punti che andranno corretti con un intervento successivo. La legge entra in vigore, e il tuo richiamo resta agli atti.";
+      } else {
+        applyPresEffects({ rapporti: { governo: rand(0, 1) } });
+        text = "Firmi " + law.title.toLowerCase() + " senza rilievi: " + (law.isDecree ? "il decreto è in vigore da domani e andrà convertito in legge entro sessanta giorni." : "la legge viene pubblicata in Gazzetta Ufficiale ed entra in vigore.");
+      }
+    } else {
+      term.vetoesUsed = (term.vetoesUsed || 0) + 1;
+      if (law.isDecree) term.decreesReturned++;
+      var modIds = choice.modIds || [];
+      term.pendingReturns.push({ title: law.title, noun: law.noun, metric: law.metric, isDecree: law.isDecree, proposer: law.proposer, modIds: modIds,
+        dueTurn: state.turn + (law.isDecree ? 1 : 2 + Math.floor(Math.random() * 3)), chance: presLawAcceptanceChance(modIds) });
+      term.lawRecord.unshift({ week: state.turn, title: law.title, noun: law.noun, outcome: law.isDecree ? "Rimandato al Governo" : "Rinviata alle Camere", returned: true });
+      // Un rinvio ogni tanto rafforza il Colle; rinviare tutto lo logora (e irrita la maggioranza).
+      var returnsThisYear = term.lawRecord.filter(function (r) { return r.returned && state.turn - r.week < 52; }).length;
+      applyPresEffects({ prestigio: returnsThisYear <= 2 ? rand(0.5, 1.5) : -rand(1, 2.5), rapporti: { governo: -rand(2, 4), parlamento: -rand(0, 2) } });
+      var modsText = modIds.map(function (id) { var m = presAmendmentById(id); return m ? m.label + " (" + m.art + ")" : id; }).join("; ");
+      text = law.isDecree
+        ? "Non firmi il decreto e lo rimandi a Palazzo Chigi con un messaggio motivato: chiedi di " + modsText + ". Il Consiglio dei Ministri dovrà decidere se correggerlo o insistere."
+        : "Rinvii " + law.title.toLowerCase() + " alle Camere con un messaggio motivato: chiedi di " + modsText + ". Il Parlamento dovrà riesaminarla nelle prossime settimane. Se la riapprova identica, sarai comunque tenuto a firmarla.";
+    }
+    if (term.lawRecord.length > 40) term.lawRecord.length = 40;
+    presDiary(dossier.title, text);
+    state.resultData = { resultText: text, headlines: [] };
+  }
+  // Le Camere (o il Governo, per un decreto) rispondono al rinvio: accolgono il rilievo e correggono il
+  // testo, oppure lo respingono e riapprovano la legge identica — e la firma diventa obbligatoria.
+  function buildPresidentReturnResponseDossier(entry) {
+    var term = state.presidentTerm;
+    term.pendingReturns.splice(term.pendingReturns.indexOf(entry), 1);
+    var accepted = Math.random() < entry.chance;
+    var mods = entry.modIds.map(presAmendmentById).filter(Boolean);
+    // Più rilievi insieme: anche se non passano tutti, le Camere possono accoglierne una parte.
+    var acceptedMods = accepted ? mods : (mods.length > 1 && Math.random() < 0.45 ? [mods[0]] : []);
+    var who = entry.isDecree ? "Il Consiglio dei Ministri" : "Le Camere";
+    if (acceptedMods.length) {
+      var partial = acceptedMods.length < mods.length;
+      var brief = who + " " + (partial ? "accolgono solo in parte" : "accolgono") + " il tuo rinvio su " + entry.title.toLowerCase() + ": il testo viene corretto per " +
+        acceptedMods.map(function (m) { return m.label; }).join(" e ") + "." + (partial ? " Gli altri rilievi vengono invece respinti." : "") + " Il nuovo testo torna sulla tua scrivania.";
+      return {
+        id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: entry.isDecree ? "Il Governo corregge il decreto" : "Le Camere accolgono il rinvio",
+        cat: "Quirinale", presidentQuirinale: "return_accepted", presReturn: { title: entry.title, noun: entry.noun, metric: entry.metric, proposer: entry.proposer, isDecree: entry.isDecree, modIds: acceptedMods.map(function (m) { return m.id; }), partial: partial },
+        title: entry.title + ": il testo è stato modificato", brief: brief,
+        choices: [{ label: "Promulga il testo modificato", hint: "La legge entra in vigore con le correzioni che hai chiesto", effects: {} }]
+      };
+    }
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: entry.isDecree ? "Il Governo insiste sul decreto" : "Le Camere riapprovano la legge",
+      cat: "Quirinale", presidentQuirinale: "return_rejected", presReturn: { title: entry.title, noun: entry.noun, metric: entry.metric, proposer: entry.proposer, isDecree: entry.isDecree },
+      title: entry.title + (entry.isDecree ? ": il Governo insiste senza modifiche" : ": riapprovata senza modifiche"),
+      brief: entry.isDecree
+        ? "Il Consiglio dei Ministri respinge i tuoi rilievi e ti ritrasmette il decreto identico, rivendicandone la necessità e l'urgenza. Per prassi costituzionale, davanti a un Governo che insiste non puoi bloccarlo all'infinito: devi emanarlo."
+        : "Le Camere respingono i tuoi rilievi e riapprovano " + entry.title.toLowerCase() + " con lo stesso identico testo. L'art. 74 della Costituzione è chiaro: se le Camere approvano di nuovo la legge, questa deve essere promulgata. Sei costretto a firmare.",
+      choices: [
+        { label: "Firma, come impone la Costituzione", hint: "Rispetti il Parlamento: nessuna polemica, il rilievo resta agli atti", presForced: "silenzio", effects: {} },
+        { label: "Firma, ma spiega in un comunicato perché non eri d'accordo", hint: "Il dissenso diventa pubblico: piace a una parte del paese, irrita la maggioranza", presForced: "comunicato", effects: {} }
+      ]
+    };
+  }
+  function resolvePresidentReturnChoice(dossier, choice) {
+    var term = state.presidentTerm;
+    var r = dossier.presReturn;
+    var text;
+    term.actsSigned = (term.actsSigned || 0) + 1;
+    if (dossier.presidentQuirinale === "return_accepted") {
+      var mods = r.modIds.map(presAmendmentById).filter(Boolean);
+      var boost = 0;
+      mods.forEach(function (m) {
+        applyPresEffects({ national: m.national });
+        var rel = {}; rel[m.rapporto] = rand(1, 3);
+        applyPresEffects({ rapporti: rel });
+        if (m.boostsLawMetric) boost += 0.15;
+      });
+      enactPresidentLaw(r, boost);
+      term.lawsModified++;
+      applyPresEffects({ prestigio: rand(2, 4) + (r.partial ? 0 : 1), gradimento: rand(0.5, 2) });
+      text = "Promulghi " + r.title.toLowerCase() + " nella versione corretta: " + mods.map(function (m) { return m.label; }).join(" e ") + ". Un rinvio andato a buon fine rafforza l'autorevolezza del Colle.";
+      term.lawRecord.unshift({ week: state.turn, title: r.title, noun: r.noun, outcome: r.partial ? "Firmata, modificata in parte" : "Firmata, modificata come chiesto", returned: false });
+    } else {
+      term.forcedSignatures++;
+      enactPresidentLaw(r);
+      if (choice.presForced === "comunicato") {
+        applyPresEffects({ prestigio: -rand(0, 1.5), gradimento: rand(0, 2), rapporti: { governo: -rand(3, 6), parlamento: -rand(2, 4) } });
+        text = "Firmi, come la Costituzione impone, ma con un comunicato del Quirinale spieghi perché quella legge resta, a tuo giudizio, sbagliata nei punti che avevi segnalato. La maggioranza protesta per l'ingerenza, una parte dell'opinione pubblica apprezza la franchezza.";
+      } else {
+        applyPresEffects({ prestigio: -rand(1, 2.5), rapporti: { parlamento: rand(1, 3) } });
+        text = "Firmi senza commenti: la volontà delle Camere prevale, come prevede l'art. 74. Il tuo rilievo resta agli atti, ma questa volta non è servito a cambiare il testo.";
+      }
+      term.lawRecord.unshift({ week: state.turn, title: r.title, noun: r.noun, outcome: "Firma obbligata (art. 74)", returned: false });
+    }
+    if (term.lawRecord.length > 40) term.lawRecord.length = 40;
+    presDiary(dossier.title, text);
+    state.resultData = { resultText: text, headlines: [] };
+  }
+
+  // ---------- Calamità naturali ----------
+  var PRES_DISASTERS = [
+    { id: "terremoto", regions: ["Abruzzo", "Marche", "Umbria", "Calabria", "Sicilia", "Campania", "Friuli-Venezia Giulia", "Emilia-Romagna", "Basilicata", "Molise", "Lazio"],
+      title: function (city) { return "Terremoto nella zona di " + city; },
+      brief: function (city, region, sev) { return "Una scossa di magnitudo " + (4.6 + sev * 0.6).toFixed(1) + " colpisce la zona di " + city + " (" + region + "): " + (sev >= 2 ? "si contano vittime e decine di sfollati, interi borghi sono inagibili" : sev >= 1 ? "case lesionate, alcuni feriti e centinaia di persone fuori casa" : "tanta paura e danni diffusi, ma per fortuna nessuna vittima") + ". Vigili del Fuoco e Protezione Civile sono al lavoro."; } },
+    { id: "alluvione", regions: ["Emilia-Romagna", "Liguria", "Toscana", "Piemonte", "Veneto", "Marche", "Sardegna", "Campania", "Sicilia"],
+      title: function (city) { return "Alluvione a " + city; },
+      brief: function (city, region, sev) { return "Piogge record fanno esondare i fiumi intorno a " + city + " (" + region + "): " + (sev >= 2 ? "interi quartieri sott'acqua, vittime e migliaia di evacuati" : sev >= 1 ? "strade e campagne allagate, centinaia di sfollati" : "danni a strade e coltivazioni, scuole chiuse per giorni") + "."; } },
+    { id: "incendi", regions: ["Sicilia", "Sardegna", "Calabria", "Puglia", "Campania", "Lazio", "Basilicata"],
+      title: function (city) { return "Incendi devastanti intorno a " + city; },
+      brief: function (city, region, sev) { return "Un fronte di incendi, spinto dal vento e dal caldo, brucia ettari di bosco intorno a " + city + " (" + region + "): " + (sev >= 2 ? "case distrutte e vittime tra i residenti" : sev >= 1 ? "evacuate frazioni intere, Canadair al lavoro senza sosta" : "un patrimonio naturale in fumo, nessuna vittima") + ". Si sospetta l'origine dolosa."; } },
+    { id: "eruzione", regions: ["Campania", "Sicilia"],
+      title: function (city, region) { return region === "Campania" ? "Crisi bradisismica ai Campi Flegrei" : "L'Etna in piena attività"; },
+      brief: function (city, region, sev) { return (region === "Campania" ? "Uno sciame sismico e il sollevamento del suolo ai Campi Flegrei allarmano Pozzuoli e l'area flegrea" : "Una fase eruttiva intensa dell'Etna copre di cenere Catania e i paesi alle pendici") + ": " + (sev >= 1 ? "scattano le prime evacuazioni preventive e l'aeroporto viene chiuso" : "la popolazione è in allarme, la Protezione Civile alza il livello di attenzione") + "."; } },
+    { id: "siccita", regions: ["Sicilia", "Sardegna", "Puglia", "Basilicata", "Calabria", "Piemonte"],
+      title: function (city, region) { return "Siccità e ondata di calore " + presInRegion(region); },
+      brief: function (city, region, sev) { return "Un'estate senza precedenti mette in ginocchio l'agricoltura " + presInRegion(region) + ": acqua razionata a " + city + ", raccolti perduti, " + (sev >= 1 ? "anziani ricoverati per il caldo" : "allevatori e agricoltori in difficoltà") + ". La Regione chiede lo stato di emergenza."; } },
+    { id: "frana", regions: ["Liguria", "Campania", "Calabria", "Trentino-Alto Adige", "Valle d'Aosta", "Piemonte", "Abruzzo"],
+      title: function (city) { return "Frana a " + city; },
+      brief: function (city, region, sev) { return "Una frana si stacca dalla montagna sopra " + city + " (" + region + "): " + (sev >= 2 ? "case travolte e dispersi sotto il fango" : "strade interrotte e un paese isolato") + ". Il dissesto idrogeologico torna al centro del dibattito."; } }
+  ];
+  function buildPresidentDisasterDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.calamita = state.turn + 9;
+    var dis = pickFrom(PRES_DISASTERS);
+    var region = pickFrom(dis.regions);
+    var cities = citiesForRegion(region);
+    var city = cities.length ? pickFrom(cities) : region;
+    var sev = Math.floor(Math.random() * 3);
+    // Il danno arriva comunque, qualunque cosa scelga il Presidente: le scelte cambiano come il paese lo vive.
+    applyCountryMetricDelta("economia", -rand(0.05, 0.12) * (sev + 1));
+    applyCountryMetricDelta("felicita", -rand(0.04, 0.1) * (sev + 1));
+    var choices = [
+      { label: "Vai subito sui luoghi colpiti", hint: "La presenza del Capo dello Stato tra la gente, nelle ore più difficili", presEff: { gradimento: rand(3, 5) + sev, prestigio: rand(1, 2), rapporti: { regioni: rand(3, 5) }, national: { felicita: 0.06 } },
+        result: "Raggiungi " + city + " poche ore dopo, tra macerie e soccorritori. Le immagini del Presidente che abbraccia gli sfollati fanno il giro del paese." },
+      { label: "Sollecita il Governo a stanziare subito fondi e dichiarare lo stato di emergenza", hint: "Un'azione concreta, anche se meno visibile", presEff: { prestigio: rand(1, 2), rapporti: { governo: rand(0, 2), regioni: rand(2, 4) }, national: { sicurezza: 0.06, economia: 0.04 }, consensoGoverno: rand(0, 1) },
+        result: "Chiami il Presidente del Consiglio e chiedi un intervento immediato: il Consiglio dei Ministri dichiara lo stato di emergenza e stanzia i primi fondi per le zone colpite." },
+      { label: "Segui l'emergenza da Roma, in contatto con la Protezione Civile", hint: "Lasci lavorare i soccorsi senza intralciarli", presEff: { gradimento: -rand(0, 2), rapporti: { regioni: rand(0, 1) } },
+        result: "Segui l'emergenza dal Quirinale, in costante contatto con il Capo della Protezione Civile. Qualcuno nota la tua assenza sul posto." }
+    ];
+    if (sev >= 2) {
+      choices.splice(1, 0, { label: "Proclama il lutto nazionale e parla al paese", hint: "Un gesto di unità nazionale, nel momento del dolore", presEff: { gradimento: rand(2, 4), prestigio: rand(1, 3), national: { felicita: 0.04 } },
+        result: "Il Governo proclama, su tuo impulso, una giornata di lutto nazionale. Il tuo breve messaggio televisivo, sobrio e commosso, unisce il paese." });
+    }
+    return {
+      id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Emergenza nazionale", cat: "Quirinale", presidentQuirinale: "evento", presCounter: "emergenciesManaged",
+      title: dis.title(city, region), brief: dis.brief(city, region, sev) + " Il paese guarda al Quirinale.", choices: choices
+    };
+  }
+
+  // ---------- Eventi sportivi ----------
+  var PRES_SPORT_EVENTS = [
+    { title: "La Nazionale in finale agli Europei di calcio", place: "Berlino", winChance: 0.45 },
+    { title: "La Nazionale si gioca la finale dei Mondiali di calcio", place: "lo stadio della finale", winChance: 0.4 },
+    { title: "L'Italia in finale di Coppa Davis", place: "Malaga", winChance: 0.6 },
+    { title: "Le Olimpiadi: l'Italia sogna il record di medaglie", place: "la città olimpica", winChance: 0.55 },
+    { title: "Le Paralimpiadi: gli azzurri tra i favoriti", place: "la città paralimpica", winChance: 0.6 },
+    { title: "Il Giro d'Italia arriva a Roma", place: "i Fori Imperiali", winChance: 0.35 },
+    { title: "La Nazionale di pallavolo femminile in finale mondiale", place: "il palazzetto della finale", winChance: 0.55 },
+    { title: "L'Italia nella finale degli Europei di basket", place: "il palazzetto della finale", winChance: 0.3 },
+    { title: "Le Olimpiadi invernali: l'Italia sulle piste di casa", place: "Cortina d'Ampezzo", winChance: 0.5 }
+  ];
+  function buildPresidentSportDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.sport = state.turn + 12;
+    var ev = pickFrom(PRES_SPORT_EVENTS);
+    return {
+      id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Sport e Nazione", cat: "Quirinale", presidentQuirinale: "sport", presSport: ev, presCounter: "sportsEvents",
+      title: ev.title, brief: ev.title + ": il paese è col fiato sospeso, e il CONI ti invita a essere presente a " + ev.place + ". Gli azzurri sono il volto dell'Italia nel mondo, e la tua presenza conta.",
+      choices: [
+        { label: "Vai a " + ev.place + " e assisti dal vivo", hint: "Se vincono è una festa nazionale anche tua; se perdono, sarai lì a consolarli", presSportMode: "dal_vivo", effects: {} },
+        { label: "Segui da Roma e ricevi la squadra al Quirinale dopo la gara", hint: "Un riconoscimento solenne, comunque vada", presSportMode: "quirinale", effects: {} },
+        { label: "Invia un messaggio di incoraggiamento", hint: "Nessun impegno in agenda, poca visibilità", presSportMode: "messaggio", effects: {} }
+      ]
+    };
+  }
+  function resolvePresidentSportChoice(dossier, choice) {
+    var ev = dossier.presSport;
+    var won = Math.random() < ev.winChance;
+    var text, eff;
+    if (choice.presSportMode === "dal_vivo") {
+      eff = won ? { gradimento: rand(4, 7), prestigio: rand(1, 2), national: { felicita: 0.12 } } : { gradimento: rand(1, 2), national: { felicita: -0.03 } };
+      text = won ? "Sei in tribuna quando arriva la vittoria: la tua esultanza composta e l'abbraccio con gli atleti diventano l'immagine simbolo di una giornata storica per tutto il paese."
+        : "Sei in tribuna, ma questa volta va male. Scendi negli spogliatoi a consolare gli azzurri: \"L'Italia è orgogliosa di voi comunque\". Un gesto che il paese apprezza.";
+    } else if (choice.presSportMode === "quirinale") {
+      eff = won ? { gradimento: rand(2, 4), prestigio: rand(1, 2), national: { felicita: 0.1 } } : { gradimento: rand(1, 2), national: { felicita: 0.02 } };
+      text = won ? "Il trionfo arriva, e pochi giorni dopo ricevi la squadra al Quirinale tra applausi e foto ricordo: conferisci le onorificenze agli atleti."
+        : "Non arriva la vittoria, ma ricevi comunque la squadra al Quirinale per ringraziarla dell'impegno: un riconoscimento che gli atleti non dimenticheranno.";
+    } else {
+      eff = won ? { gradimento: rand(0.5, 1.5), national: { felicita: 0.08 } } : {};
+      text = won ? "Gli azzurri vincono, e il tuo messaggio di congratulazioni viene letto in diretta. Qualcuno avrebbe preferito vederti lì."
+        : "Gli azzurri perdono: il tuo messaggio di incoraggiamento passa quasi inosservato.";
+    }
+    applyPresEffects(eff);
+    state.presidentTerm.sportsEvents++;
+    presDiary(dossier.title, text);
+    state.resultData = { resultText: text, headlines: [] };
+  }
+
+  // ---------- Ricorrenze civili a data fissa ----------
+  // Una sola volta l'anno ciascuna, nella settimana che contiene davvero quella data (vedi weekLabel:
+  // la settimana 1 inizia il 6 ottobre 2026).
+  var PRES_CEREMONIES = [
+    { id: "memoria", month: 0, day: 27, title: "Giorno della Memoria", brief: "Al Quirinale si celebra il Giorno della Memoria, con i sopravvissuti alla Shoah e gli studenti delle scuole.",
+      choices: [
+        { label: "Tieni un discorso contro ogni forma di antisemitismo e razzismo", presEff: { prestigio: rand(1, 3), gradimento: rand(0, 2), national: { scuola: 0.04 } }, result: "Il tuo discorso, netto e commosso, viene ripreso da tutta la stampa internazionale." },
+        { label: "Accompagna una classe in visita ad Auschwitz", presEff: { gradimento: rand(2, 3), rapporti: { estero: rand(1, 3) }, national: { scuola: 0.06 } }, result: "Accompagni un gruppo di studenti ad Auschwitz: le immagini del Presidente con i ragazzi davanti al cancello restano nella memoria di molti." }
+      ] },
+    { id: "liberazione", month: 3, day: 25, title: "Festa della Liberazione", brief: "Il 25 aprile: l'anniversario della Liberazione dal nazifascismo, una ricorrenza che ogni anno divide e unisce il paese.",
+      choices: [
+        { label: "Depone una corona all'Altare della Patria e parla di Resistenza e Costituzione", presEff: { prestigio: rand(1, 2), gradimento: rand(0, 2) }, result: "Deponi la corona al Milite Ignoto e ricordi che la Costituzione nasce dalla Resistenza: un messaggio istituzionale, che pochi contestano." },
+        { label: "Visita un luogo simbolo delle stragi nazifasciste", presEff: { prestigio: rand(1, 3), gradimento: rand(1, 2), rapporti: { regioni: rand(1, 2) } }, result: "Celebri il 25 aprile a Marzabotto, tra i parenti delle vittime: una scelta che parla al cuore del paese." }
+      ] },
+    { id: "capaci", month: 4, day: 23, title: "Anniversario della strage di Capaci", brief: "A Palermo si ricordano Giovanni Falcone, Francesca Morvillo e gli uomini della scorta, uccisi dalla mafia a Capaci.",
+      choices: [
+        { label: "Vai a Palermo all'aula bunker", presEff: { prestigio: rand(1, 3), rapporti: { magistratura: rand(3, 5) }, national: { corruzione: 0.05 } }, result: "Sei a Palermo tra magistrati, studenti e familiari delle vittime: \"La mafia non è invincibile\". Un messaggio forte, nella città che ha pagato il prezzo più alto." },
+        { label: "Invia un messaggio e ricevi i familiari al Quirinale", presEff: { rapporti: { magistratura: rand(1, 2) } }, result: "Ricevi al Quirinale i familiari delle vittime e invii un messaggio alla cerimonia di Palermo." }
+      ] },
+    { id: "repubblica", month: 5, day: 2, title: "Festa della Repubblica", brief: "Il 2 giugno: la parata ai Fori Imperiali, le Frecce Tricolori e il ricevimento nei Giardini del Quirinale.",
+      choices: [
+        { label: "Presiedi la parata militare ai Fori Imperiali", presEff: { gradimento: rand(2, 4), rapporti: { difesa: rand(3, 6) }, national: { difesa: 0.04 } }, result: "Passi in rassegna i reparti ai Fori Imperiali, tra gli applausi della folla e il volo delle Frecce Tricolori." },
+        { label: "Dedica la festa a sindaci, volontari e cittadini comuni", presEff: { gradimento: rand(3, 5), prestigio: rand(0, 2), rapporti: { regioni: rand(2, 4) }, national: { felicita: 0.05 } }, result: "Una festa diversa: sfilano anche sindaci, volontari della Protezione Civile e medici. Il messaggio è chiaro, la Repubblica siamo tutti." }
+      ] },
+    { id: "borsellino", month: 6, day: 19, title: "Anniversario della strage di via D'Amelio", brief: "Si ricorda Paolo Borsellino, ucciso dalla mafia insieme agli agenti della scorta in via D'Amelio.",
+      choices: [
+        { label: "Chiedi pubblicamente piena verità sulla strage", presEff: { prestigio: rand(1, 3), rapporti: { magistratura: rand(2, 4), governo: -rand(0, 2) }, national: { corruzione: 0.05 } }, result: "Chiedi senza giri di parole che si arrivi finalmente alla piena verità su via D'Amelio. Le tue parole riaprono il dibattito." },
+        { label: "Partecipa in silenzio alla commemorazione", presEff: { rapporti: { magistratura: rand(1, 2) } }, result: "Partecipi alla commemorazione con un gesto sobrio: una corona e un lungo silenzio." }
+      ] },
+    { id: "bologna", month: 7, day: 2, title: "Anniversario della strage di Bologna", brief: "Alla stazione di Bologna si ricordano le 85 vittime della strage neofascista del 2 agosto 1980.",
+      choices: [
+        { label: "Invia un messaggio contro il terrorismo e ogni depistaggio", presEff: { prestigio: rand(1, 2), gradimento: rand(0, 1) }, result: "Il tuo messaggio viene letto in piazza Medaglie d'Oro tra gli applausi dei familiari delle vittime." },
+        { label: "Vai di persona a Bologna", presEff: { prestigio: rand(1, 2), gradimento: rand(1, 2), rapporti: { regioni: rand(1, 3) } }, result: "Sei alla stazione di Bologna alle 10:25, nel minuto di silenzio: una presenza che i familiari aspettavano da anni." }
+      ] },
+    { id: "forzearmate", month: 10, day: 4, title: "Giornata dell'Unità Nazionale e delle Forze Armate", brief: "Il 4 novembre: la cerimonia all'Altare della Patria e il pensiero ai militari impegnati nelle missioni all'estero.",
+      choices: [
+        { label: "Visita un contingente italiano in missione all'estero", presEff: { rapporti: { difesa: rand(4, 7), estero: rand(1, 3) }, prestigio: rand(1, 2), national: { difesa: 0.05 } }, result: "Voli in Libano dai militari della missione UNIFIL: una visita che le Forze Armate apprezzano molto." },
+        { label: "Celebra all'Altare della Patria con le più alte cariche", presEff: { rapporti: { difesa: rand(2, 4) }, gradimento: rand(0, 2) }, result: "Celebri la giornata all'Altare della Patria con le alte cariche dello Stato, ricordando il valore della pace." }
+      ] },
+    { id: "scala", month: 11, day: 7, title: "La Prima della Scala", brief: "Milano inaugura la stagione del Teatro alla Scala: il palco reale aspetta il Capo dello Stato.",
+      choices: [
+        { label: "Partecipa alla Prima, accolto da minuti di applausi", presEff: { gradimento: rand(1, 3), prestigio: rand(0, 1), national: { felicita: 0.03 } }, result: "Il teatro ti tributa una lunga ovazione prima dell'Inno: un momento che la stampa racconta per giorni." },
+        { label: "Declina l'invito e trascorri la serata in un centro per senzatetto", presEff: { gradimento: rand(2, 4), national: { welfare: 0.04 } }, result: "Declini l'invito alla Scala e passi la serata in un dormitorio della Caritas a Milano: una scelta che fa discutere, e piace a molti." }
+      ] },
+    { id: "fineanno", month: 11, day: 31, title: "Il Messaggio di fine anno", brief: "La sera del 31 dicembre milioni di italiani ti aspettano in televisione: il messaggio di fine anno è il momento più seguito del tuo mandato.", isNewYear: true }
+  ];
+  var PRES_NEWYEAR_THEMES = [
+    { label: "Lavoro e futuro dei giovani", national: { disoccupazione: 0.06, scuola: 0.04 } },
+    { label: "Unità nazionale e coesione tra Nord e Sud", national: { felicita: 0.06 }, rapporti: { regioni: 3 } },
+    { label: "Legalità e lotta alle mafie", national: { corruzione: 0.07 }, rapporti: { magistratura: 3 } },
+    { label: "Europa, pace e ruolo dell'Italia nel mondo", national: { relazioniDiplomatiche: 0.07 }, rapporti: { estero: 3 } },
+    { label: "Sanità pubblica e anziani soli", national: { sanita: 0.06, welfare: 0.03 } },
+    { label: "Ambiente e responsabilità verso le generazioni future", national: { ambientalismo: 0.07 } },
+    { label: "Fiducia nelle istituzioni e partecipazione al voto", national: { corruzione: 0.04 }, rapporti: { parlamento: 3 } }
+  ];
+  // I valori di PRES_CEREMONIES sono estratti una volta sola al caricamento della pagina: qui li si
+  // rimescola un po' a ogni ricorrenza, così due anni di fila non danno mai lo stesso identico effetto.
+  function jitterPresEff(eff) {
+    if (!eff) return eff;
+    var out = {};
+    Object.keys(eff).forEach(function (k) {
+      if (typeof eff[k] === "number") out[k] = eff[k] * rand(0.7, 1.3);
+      else { out[k] = {}; Object.keys(eff[k]).forEach(function (j) { out[k][j] = eff[k][j] * rand(0.7, 1.3); }); }
+    });
+    return out;
+  }
+  function presWeekContainsDate(turn, month, day) {
+    var start = new Date(2026, 9, 6);
+    var d0 = new Date(start.getTime() + (turn - 1) * 7 * 86400000);
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(d0.getTime() + i * 86400000);
+      if (d.getMonth() === month && d.getDate() === day) return d.getFullYear();
+    }
+    return null;
+  }
+  function duePresidentCeremony() {
+    var term = state.presidentTerm;
+    for (var i = 0; i < PRES_CEREMONIES.length; i++) {
+      var c = PRES_CEREMONIES[i];
+      var year = presWeekContainsDate(state.turn, c.month, c.day);
+      if (year === null) continue;
+      var key = c.id + "_" + year;
+      if (term.firedCeremonies[key]) continue;
+      term.firedCeremonies[key] = true;
+      return c;
+    }
+    return null;
+  }
+  function buildPresidentCeremonyDossier(c) {
+    var choices;
+    if (c.isNewYear) {
+      choices = shuffleN(PRES_NEWYEAR_THEMES, 3).map(function (t) {
+        return { label: "Dedica il messaggio a: " + t.label, hint: "Il tema scelto orienta il dibattito pubblico dei prossimi mesi",
+          presEff: { gradimento: rand(2, 4), prestigio: rand(1, 2), national: t.national, rapporti: t.rapporti },
+          result: "Il tuo messaggio di fine anno, dedicato a " + t.label.toLowerCase() + ", viene seguito da oltre dieci milioni di italiani e commentato per giorni." };
+      });
+    } else {
+      choices = c.choices.map(function (ch) { return { label: ch.label, presEff: jitterPresEff(ch.presEff), result: ch.result }; });
+    }
+    return {
+      id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Ricorrenze della Repubblica", cat: "Quirinale", presidentQuirinale: "evento", presCounter: c.isNewYear ? "messages" : "ceremonies",
+      title: c.title, brief: c.brief, choices: choices
+    };
+  }
+
+  // ---------- Altri dossier del Quirinale ----------
+  var PRES_AUTHORITARIAN_NATIONS = ["russia", "cina", "arabiasaudita", "egitto", "turchia", "emiratiarabi"];
+  function buildPresidentForeignGuestDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.ospite = state.turn + 8;
+    var nation = pickFrom(WORLD_NATIONS.filter(function (n) { return n.id !== "russia"; }));
+    var guest = generateStaffName();
+    var authoritarian = PRES_AUTHORITARIAN_NATIONS.indexOf(nation.id) !== -1;
+    var foreignUp = {}; foreignUp[nation.id] = 6;
+    var foreignDown = {}; foreignDown[nation.id] = -5;
+    var choices = [
+      { label: "Accoglilo con una visita di Stato solenne e un pranzo al Quirinale", hint: "Il massimo degli onori: rafforza i rapporti bilaterali", presEff: { foreign: foreignUp, rapporti: { estero: rand(2, 4) }, national: { relazioniDiplomatiche: 0.08, commercio: 0.04 } },
+        result: "Picchetto d'onore, inni nazionali e pranzo di Stato nel Salone delle Feste: la visita di " + guest + " si chiude con diversi accordi di cooperazione." },
+      { label: "Un incontro cordiale ma breve, senza cerimonie", hint: "Rapporti corretti, niente di più", presEff: { rapporti: { estero: rand(0, 1) } },
+        result: "Un colloquio di un'ora nello Studio alla Vetrata: cordiale, ma senza impegni particolari." }
+    ];
+    if (authoritarian) {
+      choices.push({ label: "Solleva pubblicamente il tema dei diritti umani", hint: "Coerente con i valori della Costituzione, ma l'ospite non gradirà", presEff: { foreign: foreignDown, prestigio: rand(2, 3), gradimento: rand(1, 2), rapporti: { governo: -rand(1, 3) } },
+        result: "Nella conferenza stampa congiunta ricordi che i diritti umani non sono negoziabili. L'ospite si irrigidisce, Palazzo Chigi è imbarazzato, ma la stampa ti dà ragione." });
+    }
+    return {
+      id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Capi di Stato in visita", cat: "Quirinale", presidentQuirinale: "evento",
+      title: "Un Capo di Stato in visita a Roma: " + nation.name, brief: guest + " arriva a Roma in visita ufficiale, alla guida della delegazione del suo paese (" + nation.name + "). Il cerimoniale del Quirinale aspetta le tue indicazioni.", choices: choices
+    };
+  }
+  function buildPresidentMafiaDissolutionDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.mafia = state.turn + 14;
+    var region = pickFrom(["Calabria", "Sicilia", "Campania", "Puglia", "Lazio", "Piemonte", "Liguria"]);
+    var cities = citiesForRegion(region);
+    var city = cities.length ? pickFrom(cities) : region;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Decreti del Presidente della Repubblica", cat: "Quirinale", presidentQuirinale: "evento", presCounter: "mafiaDissolutions",
+      title: "Scioglimento del consiglio comunale di " + city + " per infiltrazioni mafiose",
+      brief: "Il Ministro dell'Interno, dopo la relazione della commissione d'accesso della Prefettura, propone lo scioglimento del consiglio comunale di " + city + " (" + region + ") per condizionamenti della criminalità organizzata. Il decreto di scioglimento è un atto che porta la tua firma.",
+      choices: [
+        { label: "Firma il decreto di scioglimento", hint: "Arrivano i commissari: un segnale netto contro le mafie", presEff: { national: { corruzione: 0.1, sicurezza: 0.05 }, rapporti: { governo: rand(1, 2), magistratura: rand(1, 3) }, prestigio: rand(0, 1) },
+          result: "Firmi il decreto: il consiglio comunale di " + city + " viene sciolto e il comune passa a una commissione straordinaria per diciotto mesi." },
+        { label: "Chiedi al Viminale un supplemento di istruttoria", hint: "Garantista: lo scioglimento colpisce anche chi è stato eletto onestamente", presEff: { rapporti: { governo: -rand(1, 3) }, prestigio: rand(-1, 1) },
+          result: "Chiedi al Ministero dell'Interno di approfondire la relazione prima di firmare: una scelta garantista che a " + city + " divide la cittadinanza." }
+      ]
+    };
+  }
+  var PRES_TREATIES = ["un accordo di cooperazione militare", "un trattato commerciale bilaterale", "un accordo sui rimpatri dei migranti", "una convenzione internazionale sul clima", "un accordo sulla cooperazione energetica", "un trattato di estradizione"];
+  function buildPresidentTreatyDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.trattato = state.turn + 16;
+    var nation = pickFrom(WORLD_NATIONS);
+    var treaty = pickFrom(PRES_TREATIES);
+    var fUp = {}; fUp[nation.id] = 4;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Ratifica dei trattati (art. 87 e 80 Cost.)", cat: "Quirinale", presidentQuirinale: "evento",
+      title: "Ratifica di " + treaty + " (" + nation.name + ")",
+      brief: "Il Governo ha firmato " + treaty + " con le autorità di un altro paese (" + nation.name + ") e ti chiede di ratificarlo. L'Ufficio giuridico osserva che il trattato potrebbe comportare oneri finanziari: in quel caso la Costituzione richiede una legge di autorizzazione delle Camere (art. 80).",
+      choices: [
+        { label: "Ratifica il trattato", hint: "Il Governo ottiene subito il risultato", presEff: { foreign: fUp, national: { relazioniDiplomatiche: 0.06, commercio: 0.04 }, rapporti: { governo: rand(1, 2), estero: rand(1, 2) } },
+          result: "Ratifichi " + treaty + " (" + nation.name + "): l'accordo entra in vigore." },
+        { label: "Chiedi che passi prima dal Parlamento con una legge di autorizzazione", hint: "Più garanzie costituzionali, qualche mese di ritardo", presEff: { prestigio: rand(1, 2), rapporti: { parlamento: rand(2, 4), governo: -rand(1, 2) } },
+          result: "Chiedi che il trattato passi prima dalle Camere: il Governo presenta un disegno di legge di ratifica, e il Parlamento apprezza il rispetto delle sue prerogative." }
+      ]
+    };
+  }
+  var PRES_HONOURS = [
+    { who: "un vigile del fuoco che ha salvato tre bambini da un incendio", medal: "la Medaglia d'oro al valor civile" },
+    { who: "una dottoressa che per quarant'anni ha curato gratis i poveri in un quartiere di periferia", medal: "il titolo di Commendatore della Repubblica" },
+    { who: "un ragazzo di diciassette anni che ha fermato un'aggressione su un autobus", medal: "l'Attestato d'onore di Alfiere della Repubblica" },
+    { who: "un'imprenditrice che ha riaperto una fabbrica chiusa assumendo cento operai", medal: "il titolo di Cavaliere del Lavoro" },
+    { who: "un maestro elementare che ha fondato una scuola di musica gratuita in un paese di montagna", medal: "il titolo di Cavaliere della Repubblica" },
+    { who: "una giornalista minacciata dalla mafia per le sue inchieste", medal: "il titolo di Grande Ufficiale della Repubblica" }
+  ];
+  function buildPresidentHonourDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.onorificenza = state.turn + 14;
+    var h = pickFrom(PRES_HONOURS);
+    var name = generateStaffName();
+    return {
+      id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Onorificenze della Repubblica", cat: "Quirinale", presidentQuirinale: "evento", presCounter: "honours",
+      title: "Un'onorificenza per " + name, brief: "La storia di " + name + ", " + h.who + ", ha commosso il paese. Il Cerimoniale propone di conferirgli " + h.medal + ".",
+      choices: [
+        { label: "Consegnala di persona, con una cerimonia al Quirinale", hint: "Un esempio civile da additare a tutto il paese", presEff: { gradimento: rand(2, 4), national: { felicita: 0.03 } }, result: "Consegni personalmente a " + name + " " + h.medal + ", in una cerimonia semplice e commovente al Quirinale." },
+        { label: "Firma il decreto di conferimento", hint: "Il riconoscimento arriva, senza clamore", presEff: { gradimento: rand(0, 1) }, result: "Firmi il decreto che conferisce a " + name + " " + h.medal + "." }
+      ]
+    };
+  }
+  var PRES_ATTACK_REASONS = ["i troppi rinvii delle leggi approvate dalla maggioranza", "il tuo silenzio su una vicenda giudiziaria che tocca il Governo", "un passaggio del tuo ultimo discorso, letto come un attacco politico", "la tua presunta vicinanza al tuo vecchio partito"];
+  function buildPresidentControversyDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.polemica = state.turn + 18;
+    var pool = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 3; });
+    var attacker = pool.length ? pickFrom(pool) : null;
+    var reason = term.vetoesUsed >= 3 ? PRES_ATTACK_REASONS[0] : pickFrom(PRES_ATTACK_REASONS);
+    var impeach = term.prestigio < 35 && Math.random() < 0.5;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: impeach ? "Messa in stato d'accusa (art. 90 Cost.)" : "Polemica contro il Colle", cat: "Quirinale", presidentQuirinale: "evento",
+      title: impeach ? (attacker ? attacker.name : "Un partito") + " chiede la tua messa in stato d'accusa" : (attacker ? attacker.name : "Un partito") + " attacca il Quirinale",
+      brief: (attacker ? "Il leader di " + attacker.name : "Un leader di partito") + " ti accusa pubblicamente per " + reason + "." +
+        (impeach ? " Annuncia di voler presentare la richiesta di messa in stato d'accusa per attentato alla Costituzione: un'iniziativa quasi senza speranza di successo, ma che per settimane terrà il Colle sotto i riflettori." : " L'attacco rimbalza su tutti i telegiornali."),
+      choices: [
+        { label: "Rispondi con il silenzio istituzionale", hint: "Il Capo dello Stato non polemizza", presEff: { prestigio: rand(1, 2), gradimento: -rand(0, 1) }, result: "Non replichi: \"Il Presidente non commenta\". Il silenzio istituzionale, alla lunga, toglie fiato alla polemica." },
+        { label: "Replica con una nota ufficiale, punto per punto", hint: "Difendi le tue scelte, ma scendi nell'arena politica", presEff: { gradimento: rand(1, 3), prestigio: -rand(1, 2), rapporti: { parlamento: -rand(1, 3) } }, result: "Una nota del Quirinale smonta le accuse una per una. I tuoi sostenitori applaudono, i critici parlano di un Presidente che fa politica." },
+        { label: "Convoca il leader al Quirinale per un chiarimento riservato", hint: "La via della moral suasion", presEff: { rapporti: { parlamento: rand(1, 3) }, prestigio: rand(0, 1) }, result: "Ricevi il leader al Quirinale per un'ora di colloquio riservato. All'uscita, toni molto più bassi." }
+      ]
+    };
+  }
+  function buildPresidentHealthDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.salute = state.turn + 60;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Il Presidente in ospedale", cat: "Quirinale", presidentQuirinale: "evento",
+      title: "Un ricovero improvviso al Policlinico Gemelli",
+      brief: "Un malore durante una cerimonia ti costringe a un ricovero di qualche giorno. Niente di grave, dicono i medici, ma l'Italia è in ansia e la stampa chiede notizie.",
+      choices: [
+        { label: "Fai diffondere un bollettino medico completo e trasparente", hint: "La trasparenza rassicura il paese", presEff: { gradimento: rand(2, 4), prestigio: rand(0, 1) }, result: "Il bollettino medico, chiaro e completo, rassicura il paese. Dopo pochi giorni torni al Quirinale tra gli auguri di tutti." },
+        { label: "Mantieni il massimo riserbo", hint: "La salute del Presidente è un fatto privato, ma le voci corrono", presEff: { gradimento: -rand(1, 3), prestigio: -rand(0, 2) }, result: "Il riserbo alimenta voci e retroscena per giorni, finché non torni al lavoro e le smentisci con la tua presenza." }
+      ]
+    };
+  }
+  var PRES_GOV_BILL_TOPICS = ["la riforma della giustizia civile", "il riordino delle forze di polizia", "la riforma del fisco", "l'autonomia differenziata", "la riforma della Rai", "la separazione delle carriere dei magistrati", "il premierato"];
+  function buildPresidentBillAuthorizationDossier() {
+    var term = state.presidentTerm;
+    term.cooldowns.autorizzazione = state.turn + 20;
+    var topic = pickFrom(PRES_GOV_BILL_TOPICS);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Autorizzazione dei disegni di legge (art. 87 Cost.)", cat: "Quirinale", presidentQuirinale: "evento",
+      title: "Il Governo chiede di presentare un disegno di legge " + presSu(topic),
+      brief: "Per presentare alle Camere un proprio disegno di legge il Governo ha bisogno della tua autorizzazione. Questa volta il testo riguarda " + topic + ", e una parte della giurisprudenza costituzionale solleva dubbi.",
+      choices: [
+        { label: "Autorizza la presentazione", hint: "Sarà il Parlamento a discuterne", presEff: { rapporti: { governo: rand(1, 3) } }, result: "Autorizzi la presentazione del disegno di legge " + presSu(topic) + ": il dibattito si sposta in Parlamento." },
+        { label: "Autorizza, ma chiedi informalmente di correggere i punti più delicati", hint: "Moral suasion prima ancora che la legge esista", presEff: { prestigio: rand(1, 2), rapporti: { governo: -rand(0, 1), magistratura: rand(1, 2) }, national: { giustizia: 0.04 } }, result: "Autorizzi, ma in un incontro riservato con il Ministro competente suggerisci le correzioni necessarie: il testo arriva in Parlamento già più equilibrato." }
+      ]
+    };
+  }
+  function presCooldownOk(key) { return state.turn >= (state.presidentTerm.cooldowns[key] || 0); }
+  // Il dossier della settimana: prima le scadenze che non si possono rimandare (le risposte ai rinvii,
+  // le ricorrenze a data fissa), poi un'estrazione pesata tra tutti i tipi di dossier del Colle.
   function pickPresidentDutyDossier() {
     var term = state.presidentTerm;
+    ensurePresidentTermFields(term);
+    var due = term.pendingReturns.filter(function (r) { return state.turn >= r.dueTurn; })[0];
+    if (due) return buildPresidentReturnResponseDossier(due);
+    var ceremony = duePresidentCeremony();
+    if (ceremony) return buildPresidentCeremonyDossier(ceremony);
     var options = [];
-    if (state.turn >= (term.graziaCooldownTurn || 0) && Math.random() < 0.10) options.push("grazia");
-    if ((term.judgesAppointed || 0) < 5 && state.turn >= (term.lastJudgeAppointTurn || 0) + 90 && Math.random() < 0.5) options.push("giudice");
-    if ((term.senatorsAppointed || 0) < 3 && state.turn >= (term.lastSenatorAppointTurn || 0) + 120 && Math.random() < 0.3) options.push("senatore");
-    if (options.length) {
-      var pick = options[Math.floor(Math.random() * options.length)];
-      if (pick === "grazia") return buildGraziaDossier();
-      if (pick === "giudice") return buildJudgeAppointmentDossier();
-      if (pick === "senatore") return buildSenatorAppointmentDossier();
+    var add = function (id, w) { options.push({ id: id, w: w }); };
+    add("legge", 24);
+    if (state.turn >= (term.graziaCooldownTurn || 0)) add("grazia", 4);
+    if ((term.judgesAppointed || 0) < 5 && state.turn >= (term.lastJudgeAppointTurn || 0) + 90) add("giudice", 8);
+    if ((term.senatorsAppointed || 0) < 5 && state.turn >= (term.lastSenatorAppointTurn || 0) + 120) add("senatore", 4);
+    if (presCooldownOk("calamita")) add("calamita", 7);
+    if (presCooldownOk("sport")) add("sport", 6);
+    if (presCooldownOk("ospite")) add("ospite", 6);
+    if (presCooldownOk("mafia")) add("mafia", 4);
+    if (presCooldownOk("trattato")) add("trattato", 4);
+    if (presCooldownOk("onorificenza")) add("onorificenza", 4);
+    if (presCooldownOk("autorizzazione")) add("autorizzazione", 3);
+    if (presCooldownOk("polemica")) add("polemica", (term.prestigio < 45 || term.vetoesUsed >= 3) ? 6 : 2);
+    if (presCooldownOk("salute") && state.turn - term.electedTurn > 100) add("salute", 1.5);
+    var pick = pickWeighted(options, function (o) { return o.w; }).id;
+    var built = null;
+    if (pick === "grazia") built = buildGraziaDossier();
+    else if (pick === "giudice") built = buildJudgeAppointmentDossier();
+    else if (pick === "senatore") built = buildSenatorAppointmentDossier();
+    else if (pick === "calamita") built = buildPresidentDisasterDossier();
+    else if (pick === "sport") built = buildPresidentSportDossier();
+    else if (pick === "ospite") built = buildPresidentForeignGuestDossier();
+    else if (pick === "mafia") built = buildPresidentMafiaDissolutionDossier();
+    else if (pick === "trattato") built = buildPresidentTreatyDossier();
+    else if (pick === "onorificenza") built = buildPresidentHonourDossier();
+    else if (pick === "autorizzazione") built = buildPresidentBillAuthorizationDossier();
+    else if (pick === "polemica") built = buildPresidentControversyDossier();
+    else if (pick === "salute") built = buildPresidentHealthDossier();
+    return built || buildPresidentLawDossier() || buildRoutinePresidentDossier();
+  }
+  // Tutti i dossier del Quirinale (cat "Quirinale") passano da qui, vedi resolveDossierChoice.
+  function resolvePresidentQuirinaleChoice(dossier, choice) {
+    var term = state.presidentTerm;
+    ensurePresidentTermFields(term);
+    if (dossier.presidentQuirinale === "legge") return resolvePresidentLawChoice(dossier, choice);
+    if (dossier.presidentQuirinale === "return_accepted" || dossier.presidentQuirinale === "return_rejected") return resolvePresidentReturnChoice(dossier, choice);
+    if (dossier.presidentQuirinale === "sport") return resolvePresidentSportChoice(dossier, choice);
+    applyPresEffects(choice.presEff);
+    if (dossier.presCounter) term[dossier.presCounter] = (term[dossier.presCounter] || 0) + 1;
+    var text = choice.result || "";
+    presDiary(dossier.title, text);
+    state.resultData = { resultText: text, headlines: [] };
+  }
+
+  // ---------- L'agenda del Presidente (una iniziativa a settimana) ----------
+  var PRES_SOCIAL_VISITS = [
+    { id: "scuola", label: "Una scuola di periferia", metric: "scuola", text: "Visiti una scuola di periferia e resti a lungo con studenti e insegnanti: \"La scuola è il primo presidio della Repubblica\"." },
+    { id: "ospedale", label: "Un ospedale in difficoltà", metric: "sanita", text: "Visiti un pronto soccorso sovraffollato e ringrazi medici e infermieri, chiedendo pubblicamente più risorse per la sanità pubblica." },
+    { id: "carcere", label: "Un carcere sovraffollato", metric: "giustizia", text: "Visiti un carcere sovraffollato: le tue parole sulla dignità dei detenuti e sul lavoro della polizia penitenziaria riaprono il dibattito." },
+    { id: "accoglienza", label: "Un centro di accoglienza per migranti", metric: "immigrazione", text: "Visiti un centro di accoglienza a Lampedusa e chiedi all'Europa di fare la propria parte." },
+    { id: "fabbrica", label: "Una fabbrica a rischio chiusura", metric: "disoccupazione", text: "Incontri gli operai di una fabbrica in crisi: la tua visita spinge azienda e sindacati a riaprire il tavolo." },
+    { id: "ricerca", label: "Un centro di ricerca scientifica", metric: "ricercaSviluppo", text: "Visiti un laboratorio di ricerca e incontri giovani scienziati: \"Non possiamo permetterci di perdere i nostri talenti\"." }
+  ];
+  var PRES_AGENDA_ACTIONS = [
+    { id: "visita_stato", label: "Visita di Stato all'estero", cooldown: 6, needs: "nation" },
+    { id: "visita_regione", label: "Visita ufficiale in una Regione", cooldown: 3, needs: "region" },
+    { id: "premier", label: "Ricevi il Presidente del Consiglio (moral suasion)", cooldown: 4, needs: "metric" },
+    { id: "camere", label: "Ricevi i Presidenti di Camera e Senato", cooldown: 8 },
+    { id: "csm", label: "Presiedi il plenum del CSM", cooldown: 12 },
+    { id: "difesa", label: "Convoca il Consiglio Supremo di Difesa", cooldown: 12 },
+    { id: "regioni_conf", label: "Incontra la Conferenza delle Regioni", cooldown: 12 },
+    { id: "sociale", label: "Iniziativa sul territorio", cooldown: 4, needs: "social" },
+    { id: "messaggio_camere", label: "Invia un messaggio formale alle Camere (art. 87)", cooldown: 52, needs: "metric" },
+    { id: "messaggio_nazione", label: "Messaggio televisivo alla Nazione", cooldown: 26 }
+  ];
+  function presAgendaReady(action) {
+    var term = state.presidentTerm;
+    return term.agendaUsedTurn !== state.turn && state.turn >= (term.cooldowns["agenda_" + action.id] || 0);
+  }
+  function presRegionGovernorName(regionId) {
+    var r = state.regions && state.regions[regionId];
+    if (!r) return generateStaffName();
+    if (r.regionalLeaderName) return r.regionalLeaderName;
+    if (!r.quirinaleGovernorName) r.quirinaleGovernorName = generateStaffName();
+    return r.quirinaleGovernorName;
+  }
+  function runPresidentAgendaAction(actionId, param) {
+    var term = state.presidentTerm;
+    ensurePresidentTermFields(term);
+    var action = PRES_AGENDA_ACTIONS.filter(function (a) { return a.id === actionId; })[0];
+    if (!action || !presAgendaReady(action)) return null;
+    var title = action.label, text = "", eff = {};
+    if (actionId === "visita_stato") {
+      var nation = WORLD_NATIONS.filter(function (n) { return n.id === param; })[0];
+      if (!nation) return null;
+      var f = {};
+      var controversial = PRES_AUTHORITARIAN_NATIONS.indexOf(nation.id) !== -1;
+      f[nation.id] = rand(6, 11);
+      eff = { foreign: f, rapporti: { estero: rand(3, 5) }, prestigio: controversial ? -rand(0, 2) : rand(1, 3), national: { relazioniDiplomatiche: rand(0.08, 0.15), commercio: rand(0.03, 0.08) } };
+      if (nation.id === "russia") { eff.rapporti.governo = -rand(4, 7); eff.gradimento = -rand(2, 4); eff.prestigio = -rand(2, 4); }
+      term.stateVisits++;
+      if (term.nationsVisited.indexOf(nation.name) === -1) term.nationsVisited.push(nation.name);
+      title = "Visita di Stato: " + nation.name;
+      text = nation.id === "russia"
+        ? "La tua visita di Stato a Mosca scatena una bufera: gli alleati europei e atlantici protestano, il Governo prende le distanze. Il dialogo con la Russia resta aperto, ma il prezzo politico è alto."
+        : "Visita di Stato, " + nation.name + ": colloqui con le massime autorità, un discorso al Parlamento locale e un incontro con la comunità italiana." + (controversial ? " Qualcuno in Italia critica la scelta, per la situazione dei diritti civili nel paese." : " Le relazioni bilaterali ne escono rafforzate.");
+    } else if (actionId === "visita_regione") {
+      var region = regionById(param);
+      if (!region) return null;
+      var governor = presRegionGovernorName(region.id);
+      var cities = citiesForRegion(region.id);
+      var city = cities.length ? pickFrom(cities) : region.id;
+      var issueTheme = pickFrom(region.issues);
+      var rr = state.regions && state.regions[region.id];
+      if (rr && rr.metrics && rr.metrics[issueTheme] !== undefined) rr.metrics[issueTheme] = clamp(rr.metrics[issueTheme] + rand(0.1, 0.25), 1, 10);
+      eff = { rapporti: { regioni: rand(3, 5) }, gradimento: rand(1, 3), national: { felicita: 0.02 } };
+      term.regionalVisits++;
+      if (term.regionsVisited.indexOf(region.id) === -1) term.regionsVisited.push(region.id);
+      title = "Visita " + presInRegion(region.id);
+      text = "Sei in visita ufficiale " + presInRegion(region.id) + " insieme al Presidente della Regione, " + governor + ": un incontro in Consiglio regionale, una tappa a " + city + " e un confronto pubblico sui problemi del territorio, a partire da " + (issueTheme === "infrastrutture" ? "infrastrutture" : issueTheme) + ".";
+    } else if (actionId === "premier") {
+      if (!state.countryProfile[param]) return null;
+      eff = { national: {}, rapporti: { governo: term.rapporti.governo >= 45 ? rand(1, 3) : -rand(0, 2) } };
+      eff.national[param] = rand(0.1, 0.22) * (term.rapporti.governo >= 45 ? 1 : 0.5);
+      term.institutionalMeetings++;
+      title = "Colloquio con il Presidente del Consiglio";
+      text = "Ricevi al Quirinale il Presidente del Consiglio e, con il garbo della moral suasion, chiedi un impegno concreto su " + countryMetricLabel(param).toLowerCase() + "." + (term.rapporti.governo >= 45 ? " Palazzo Chigi raccoglie l'invito." : " Il rapporto con il Governo è freddo: l'invito viene accolto solo a parole.");
+    } else if (actionId === "camere") {
+      eff = { rapporti: { parlamento: rand(4, 7) }, prestigio: rand(0, 1) };
+      term.institutionalMeetings++;
+      text = "Ricevi i Presidenti di Camera e Senato per un punto sui lavori parlamentari: un'occasione per ricordare il valore del confronto tra maggioranza e opposizione.";
+    } else if (actionId === "csm") {
+      eff = { rapporti: { magistratura: rand(4, 7) }, national: { giustizia: rand(0.06, 0.14) } };
+      term.institutionalMeetings++;
+      text = "Presiedi il plenum del Consiglio Superiore della Magistratura: nel tuo intervento difendi l'indipendenza dei giudici e chiedi alla magistratura rigore e sobrietà.";
+    } else if (actionId === "difesa") {
+      eff = { rapporti: { difesa: rand(4, 7) }, national: { difesa: rand(0.06, 0.14) } };
+      term.institutionalMeetings++;
+      text = "Convochi il Consiglio Supremo di Difesa al Quirinale: un punto sulle missioni internazionali, sugli investimenti e sugli scenari di crisi nel mondo.";
+    } else if (actionId === "regioni_conf") {
+      eff = { rapporti: { regioni: rand(4, 7) }, prestigio: rand(0, 1) };
+      term.institutionalMeetings++;
+      text = "Incontri al Quirinale la Conferenza delle Regioni: i Presidenti ti consegnano le loro richieste su sanità, trasporti e autonomia.";
+    } else if (actionId === "sociale") {
+      var sv = PRES_SOCIAL_VISITS.filter(function (s) { return s.id === param; })[0];
+      if (!sv) return null;
+      eff = { gradimento: rand(1, 3), national: {} };
+      eff.national[sv.metric] = rand(0.05, 0.12);
+      title = "Visita: " + sv.label.toLowerCase();
+      text = sv.text;
+    } else if (actionId === "messaggio_camere") {
+      if (!state.countryProfile[param]) return null;
+      eff = { national: {}, prestigio: rand(2, 4), rapporti: { parlamento: rand(1, 3), governo: -rand(1, 3) } };
+      eff.national[param] = rand(0.2, 0.35);
+      term.messages++;
+      title = "Messaggio formale alle Camere";
+      text = "Eserciti uno dei poteri più rari del Capo dello Stato: un messaggio formale alle Camere (art. 87 Cost.) su " + countryMetricLabel(param).toLowerCase() + ". Il testo viene letto in Aula e il Parlamento apre un dibattito dedicato.";
+    } else if (actionId === "messaggio_nazione") {
+      eff = { gradimento: rand(3, 6), prestigio: rand(0, 2), national: { felicita: 0.05 } };
+      term.messages++;
+      text = "Parli al paese a reti unificate: un messaggio sobrio sui valori della Costituzione e sulla fiducia nel futuro, seguito da milioni di italiani.";
     }
-    return buildRoutinePresidentDossier();
+    applyPresEffects(eff);
+    term.agendaUsedTurn = state.turn;
+    term.cooldowns["agenda_" + actionId] = state.turn + action.cooldown;
+    presDiary(title, text);
+    return text;
+  }
+  // Le dimissioni: un atto personale e irrevocabile, che chiude il settennato in anticipo.
+  function resignFromPresidency() {
+    var term = state.presidentTerm;
+    ensurePresidentTermFields(term);
+    term.resigned = true;
+    term.resignedTurn = state.turn;
+    presDiary("Le dimissioni del Presidente della Repubblica", "Rassegni le dimissioni da Presidente della Repubblica con una lettera ai Presidenti delle Camere. Le funzioni passano al Presidente del Senato, in attesa dell'elezione del successore.");
+    state.phase = "president_epilogue";
+  }
+  function presGauge(label, value) {
+    var v = Math.round(value);
+    var color = v < 35 ? "var(--critical)" : v < 55 ? "var(--warning)" : "var(--good)";
+    return '<div class="stat-tile"><div class="label">' + label + '</div><div class="row"><span class="value">' + v + '/100</span></div>' +
+      '<div class="gauge"><span style="width:' + v + '%;background:' + color + '"></span></div></div>';
+  }
+  var PRES_PAGE_DEFS = [
+    { id: "quirinale", label: "Il Quirinale", icon: "🏛️", nav: "Quirinale" },
+    { id: "agenda", label: "Agenda del Presidente", icon: "📅", nav: "Agenda" },
+    { id: "leggi", label: "Leggi e Atti", icon: "⚖️", nav: "Leggi" },
+    { id: "paese", label: "Il Paese", icon: "🇮🇹", nav: "Paese" }
+  ];
+  function renderPresidentPageNav() {
+    var current = state.presidentUiPage || "quirinale";
+    return '<nav aria-label="Sezioni del Quirinale" class="page-nav-bar">' + PRES_PAGE_DEFS.map(function (pg) {
+      return '<button type="button" class="page-nav-btn' + (pg.id === current ? " active" : "") + '" data-pres-nav-page="' + pg.id + '" title="' + pg.label + '">' +
+        '<span class="page-nav-icon">' + pg.icon + '</span><span class="page-nav-label">' + pg.nav + '</span></button>';
+    }).join("") + "</nav>";
+  }
+  function renderPresidentAgendaPage() {
+    var term = state.presidentTerm;
+    var usedThisWeek = term.agendaUsedTurn === state.turn;
+    var selStyle = 'style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;margin-bottom:.6rem;"';
+    var html = '<section aria-label="Agenda del Presidente"><p class="eyebrow">Agenda del Presidente</p>' +
+      '<p class="ci-hint">Ogni settimana puoi prendere <strong>una</strong> iniziativa personale, oltre al dossier della settimana.' + (usedThisWeek ? " <strong>Hai già usato l'agenda di questa settimana.</strong>" : "") + '</p>';
+    var nationOptions = WORLD_NATIONS.map(function (n) { return '<option value="' + n.id + '">' + n.name + "</option>"; }).join("");
+    var regionOptions = ITALIAN_REGIONS.map(function (r) { return '<option value="' + r.id.replace(/'/g, "&#39;") + '">' + r.id + (term.regionsVisited.indexOf(r.id) !== -1 ? " (già visitata)" : "") + "</option>"; }).join("");
+    var weakest = COUNTRY_PROFILE_METRICS.slice().sort(function (a, b) { return (state.countryProfile[a.key] || 5) - (state.countryProfile[b.key] || 5); });
+    var metricOptions = weakest.map(function (m) { return '<option value="' + m.key + '">' + m.label + " (" + fmt1(state.countryProfile[m.key] || 5) + "/10)</option>"; }).join("");
+    var socialOptions = PRES_SOCIAL_VISITS.map(function (s) { return '<option value="' + s.id + '">' + s.label + "</option>"; }).join("");
+    PRES_AGENDA_ACTIONS.forEach(function (a) {
+      var wait = Math.max(0, (term.cooldowns["agenda_" + a.id] || 0) - state.turn);
+      var ready = presAgendaReady(a);
+      html += '<div class="stat-tile" style="margin-bottom:.6rem"><div class="label">' + a.label + "</div>";
+      if (a.needs === "nation") html += '<select id="pres-param-' + a.id + '" ' + selStyle + ">" + nationOptions + "</select>";
+      if (a.needs === "region") html += '<select id="pres-param-' + a.id + '" ' + selStyle + ">" + regionOptions + "</select>";
+      if (a.needs === "metric") html += '<select id="pres-param-' + a.id + '" ' + selStyle + ">" + metricOptions + "</select>";
+      if (a.needs === "social") html += '<select id="pres-param-' + a.id + '" ' + selStyle + ">" + socialOptions + "</select>";
+      html += '<button type="button" class="option-card" data-pres-agenda="' + a.id + '"' + (ready ? "" : " disabled") + '><span class="olabel">' +
+        (ready ? "Metti in agenda" : wait > 0 ? "Di nuovo disponibile tra " + wait + " settiman" + (wait === 1 ? "a" : "e") : "Agenda della settimana già occupata") + "</span></button></div>";
+    });
+    html += "</section>";
+    html += '<section aria-label="Dimissioni"><details class="log"><summary>Dimissioni dalla Presidenza<span>▾</span></summary>' +
+      '<p class="ci-hint">Puoi rassegnare le dimissioni in qualunque momento: è un atto irrevocabile, che chiude il tuo settennato e la partita con l\'epilogo del mandato.</p>' +
+      '<div class="option-grid"><button type="button" class="option-card" id="pres-resign-btn"><span class="olabel">Rassegna le dimissioni</span><span class="odesc">Irrevocabile</span></button></div></details></section>';
+    return html;
+  }
+  function renderPresidentLawsPage() {
+    var term = state.presidentTerm;
+    var html = '<section aria-label="Leggi e Atti"><p class="eyebrow">Leggi e Atti del Presidente</p><div class="stat-grid">' +
+      '<div class="stat-tile"><div class="label">Atti firmati</div><div class="row"><span class="value">' + (term.actsSigned || 0) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Rinvii e decreti rimandati</div><div class="row"><span class="value">' + (term.vetoesUsed || 0) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Leggi corrette su tuo rilievo</div><div class="row"><span class="value">' + term.lawsModified + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Firme obbligate (art. 74)</div><div class="row"><span class="value">' + term.forcedSignatures + "</span></div></div></div>";
+    if (term.pendingReturns.length) {
+      html += '<p class="ci-hint" style="margin-top:.6rem"><strong>In attesa di risposta:</strong></p><ul class="enacted-policy-list">' + term.pendingReturns.map(function (r) {
+        var mods = r.modIds.map(function (id) { var m = presAmendmentById(id); return m ? m.label : id; }).join("; ");
+        return "<li><strong>" + r.title + "</strong> — " + (r.isDecree ? "al Governo" : "alle Camere") + ", chiesto di " + mods + ". Probabilità stimata di accoglimento: " + Math.round(r.chance * 100) + "%.</li>";
+      }).join("") + "</ul>";
+    }
+    html += '<details class="log" open><summary>Registro delle leggi (' + term.lawRecord.length + ')<span>▾</span></summary>';
+    html += term.lawRecord.length ? '<ul class="enacted-policy-list">' + term.lawRecord.map(function (r) { return "<li>" + weekLabel(r.week) + " — <strong>" + r.title + "</strong>: " + r.outcome + "</li>"; }).join("") + "</ul>" : '<p class="ci-hint">Nessuna legge ancora passata dalla tua scrivania.</p>';
+    html += "</details></section>";
+    return html;
+  }
+  function renderPresidentQuirinalePage() {
+    var term = state.presidentTerm;
+    var years = Math.round((state.turn - term.electedTurn) / 52 * 10) / 10;
+    var yearsLeft = Math.max(0, Math.round((term.termEndTurn - state.turn) / 52 * 10) / 10);
+    var html = '<section aria-label="Il tuo settennato"><p class="eyebrow">Il tuo settennato al Quirinale</p><div class="stat-grid">';
+    html += '<div class="stat-tile"><div class="label">Anni di mandato</div><div class="row"><span class="value">' + years + " / 7</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Anni al termine del mandato</div><div class="row"><span class="value">' + yearsLeft + "</span></div></div>";
+    html += presGauge("Prestigio istituzionale", term.prestigio) + presGauge("Gradimento popolare", term.gradimento);
+    html += "</div></section>";
+    html += '<section aria-label="Rapporti istituzionali"><p class="eyebrow">Rapporti con gli organi dello Stato</p><div class="stat-grid">' +
+      Object.keys(PRES_RELATION_LABELS).map(function (k) { return presGauge(PRES_RELATION_LABELS[k], term.rapporti[k]); }).join("") + "</div>" +
+      '<p class="ci-hint" style="margin-top:.5rem">Prestigio e rapporti con Governo e Parlamento pesano su quanto le Camere accolgono i tuoi rinvii e su come si chiudono le crisi di governo.</p></section>';
+    html += '<section aria-label="Bilancio del mandato"><p class="eyebrow">Il mandato in numeri</p><div class="stat-grid">' +
+      [["Visite di Stato", term.stateVisits], ["Regioni visitate", term.regionsVisited.length + " / 20"], ["Incontri istituzionali", term.institutionalMeetings], ["Messaggi", term.messages],
+       ["Emergenze affrontate", term.emergenciesManaged], ["Eventi sportivi", term.sportsEvents], ["Ricorrenze civili", term.ceremonies], ["Grazie concesse", term.graziesGranted || 0],
+       ["Giudici costituzionali", (term.judgesAppointed || 0) + " / 5"], ["Senatori a vita", term.senatorsAppointed || 0], ["Crisi di governo gestite", term.crisesManaged || 0], ["Comuni sciolti per mafia", term.mafiaDissolutions]]
+        .map(function (r) { return '<div class="stat-tile"><div class="label">' + r[0] + '</div><div class="row"><span class="value">' + r[1] + "</span></div></div>"; }).join("") + "</div>" +
+      '<p class="ci-hint" style="margin-top:0.6rem">Hai lasciato la guida di ' + term.formerPartyName + ", ora nelle mani di " + (state.player ? (state.player.interimLeaderName || "un successore") : "un successore") + ".</p></section>";
+    html += '<section aria-label="Diario del Quirinale"><details class="log" open><summary>Diario del Quirinale<span>▾</span></summary>' +
+      (term.diary.length ? '<ul class="enacted-policy-list">' + term.diary.slice(0, 15).map(function (d) { return "<li><strong>" + weekLabel(d.week) + " — " + d.title + ":</strong> " + d.text + "</li>"; }).join("") + "</ul>" : '<p class="ci-hint">Il diario si riempirà settimana dopo settimana.</p>') +
+      "</details></section>";
+    return html;
+  }
+  function bindPresidentInteractions() {
+    if (state.mode !== "president" || !state.presidentTerm) return;
+    app.querySelectorAll("[data-pres-nav-page]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.presidentUiPage = btn.getAttribute("data-pres-nav-page");
+        save();
+        render();
+        scrollToPageContent();
+      });
+    });
+    app.querySelectorAll("[data-pres-agenda]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var id = btn.getAttribute("data-pres-agenda");
+        var sel = document.getElementById("pres-param-" + id);
+        var text = runPresidentAgendaAction(id, sel ? sel.value : null);
+        if (!text) return;
+        showSaveStatus("Fatto: trovi il resoconto nel Diario del Quirinale.", false);
+        save();
+        render();
+      });
+    });
+    var resignBtn = document.getElementById("pres-resign-btn");
+    if (resignBtn) {
+      resignBtn.addEventListener("click", function () {
+        if (!window.confirm("Sei sicuro/a di voler rassegnare le dimissioni da Presidente della Repubblica? È irrevocabile: la partita si chiude con l'epilogo del mandato.")) return;
+        resignFromPresidency();
+        save();
+        render();
+      });
+    }
+  }
+  // Il giudizio della storia, in base a come il paese ti ha vissuto e all'autorevolezza conquistata.
+  function presHistoricalJudgement(term) {
+    var score = term.gradimento * 0.5 + term.prestigio * 0.5;
+    if (score >= 75) return "Un Presidente amatissimo: per molti italiani resterai il volto stesso della Repubblica.";
+    if (score >= 60) return "Un Presidente autorevole e rispettato, un punto di riferimento nei momenti difficili.";
+    if (score >= 45) return "Un settennato ordinato, senza grandi slanci ma senza ombre.";
+    if (score >= 30) return "Un mandato discusso: in molti ti hanno rimproverato di essere sceso troppo spesso nell'arena politica.";
+    return "Un settennato tormentato, che lascia il Quirinale più debole di come lo avevi trovato.";
   }
   // La crisi di governo, vista dalla Presidenza, è una decisione istituzionale vera: a differenza di un
   // partito qualunque (vedi buildMandatoEsplorativoDossier), il Presidente può anche scegliere di
@@ -17282,7 +18198,8 @@
         ? "Sei nel semestre bianco del tuo stesso mandato: la Costituzione ti vieta di sciogliere le Camere in questo periodo, quindi l'unica strada percorribile è un mandato esplorativo per una nuova maggioranza in questo stesso Parlamento."
         : "Come Presidente, decidi tu come procedere: tentare un mandato esplorativo per una maggioranza alternativa, o sciogliere subito le Camere.");
     var choices = [
-      { label: "Avvia un mandato esplorativo per una nuova maggioranza", hint: "La strada più prudente: eviti le urne se trovi un accordo", presidentCrisisChoice: "mandato", effects: {}, result: "Avvii un mandato esplorativo per verificare se esiste, in questo Parlamento, una maggioranza alternativa." }
+      { label: "Avvia un mandato esplorativo per una nuova maggioranza", hint: "La strada più prudente: eviti le urne se trovi un accordo", presidentCrisisChoice: "mandato", effects: {}, result: "Avvii un mandato esplorativo per verificare se esiste, in questo Parlamento, una maggioranza alternativa." },
+      { label: "Affida l'incarico a una personalità tecnica di alto profilo", hint: "Un \"governo del Presidente\": riesce più facilmente se il tuo prestigio è alto, ma lega il tuo nome al suo destino", presidentCrisisChoice: "tecnico", effects: {}, result: "Convochi al Quirinale una personalità tecnica di grande prestigio e le affidi l'incarico di formare un nuovo governo." }
     ];
     if (!semestreBianco) {
       choices.push({ label: "Sciogli subito le Camere: si torna al voto", hint: "Nessun tentativo di mediazione: elezioni anticipate certe", presidentCrisisChoice: "scioglimento", effects: {}, result: "Decidi di sciogliere subito le Camere, senza tentare un mandato esplorativo: si torna alle urne." });
@@ -17299,7 +18216,10 @@
       formerPartyName: term.formerPartyName, playerName: term.playerName,
       years: Math.round((state.turn - term.electedTurn) / 52 * 10) / 10,
       actsSigned: term.actsSigned || 0, vetoesUsed: term.vetoesUsed || 0, graziesGranted: term.graziesGranted || 0,
-      judgesAppointed: term.judgesAppointed || 0, senatorsAppointed: term.senatorsAppointed || 0, crisesManaged: term.crisesManaged || 0
+      judgesAppointed: term.judgesAppointed || 0, senatorsAppointed: term.senatorsAppointed || 0, crisesManaged: term.crisesManaged || 0,
+      lawsModified: term.lawsModified || 0, forcedSignatures: term.forcedSignatures || 0, stateVisits: term.stateVisits || 0,
+      regionsVisited: (term.regionsVisited || []).length, emergenciesManaged: term.emergenciesManaged || 0, sportsEvents: term.sportsEvents || 0,
+      prestigio: Math.round(term.prestigio || 0), gradimento: Math.round(term.gradimento || 0), resigned: !!term.resigned, judgement: presHistoricalJudgement(term)
     };
   }
   // Il "turno" della Presidenza: sostituisce interamente la catena di dossier di partito di
@@ -17309,11 +18229,13 @@
   // presentarsi: quel ruolo, per il giocatore, semplicemente non esiste più.
   function advancePresidentTurnLogic() {
     var term = state.presidentTerm;
-    if (state.turn >= term.termEndTurn) {
+    ensurePresidentTermFields(term);
+    if (state.turn >= term.termEndTurn || term.resigned) {
       state.phase = "president_epilogue";
       return;
     }
     recomputePeriodic();
+    presidentWeeklyDrift();
     updateCoalitionTrust();
     updateCpuOnlyCoalitionTrust();
     var allyDepartureDossierPres = checkAllyDepartureDossier();
@@ -17371,7 +18293,9 @@
     // Stessa correzione del controllo equivalente nella catena di turno normale (vedi lì il commento
     // completo): niente più anno di "grazia" dopo l'elezione che ignorava in silenzio un consenso già
     // sotto il 20%.
-    if (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+    if (state.govMajorityLostCrisis && (state.regime || state.snapElectionPending)) state.govMajorityLostCrisis = false;
+    if (!state.snapElectionPending && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
+      state.govMajorityLostCrisis = false;
       state.mandatoEsplorativoCooldownTurn = state.turn + 6;
       state.aiDynamicDossier = buildPresidentCrisisDossier();
       state.currentDossierId = "ai_dynamic";
@@ -23416,7 +24340,7 @@
     // difficile far passare mozioni/leggi/modifiche quando il governo è un'intesa tenuta insieme a
     // fatica (vedi governmentCohesionPenalty) — un compromesso vero deve pesare anche DOPO la
     // formazione del governo, non solo nel giorno dell'insediamento.
-    state.govEntity = { id: winner.id, memberIds: winnerMemberIds, seatSplit: seatSplit, minority: !hasRealMajority, extraAllyIds: extraAllies.map(function (a) { return a.id; }), forcedAllyIds: extraAllies.filter(function (a) { return a.wasIdeologicallyForced; }).map(function (a) { return a.id; }) };
+    state.govEntity = { id: winner.id, formedTurn: state.turn, memberIds: winnerMemberIds, seatSplit: seatSplit, minority: !hasRealMajority, extraAllyIds: extraAllies.map(function (a) { return a.id; }), forcedAllyIds: extraAllies.filter(function (a) { return a.wasIdeologicallyForced; }).map(function (a) { return a.id; }) };
     // Un nuovo governo riparte da una fiducia standard del 50% SOLO se nasce con una maggioranza vera e
     // senza dover allargare l'intesa oltre il blocco uscito naturalmente dalle urne: ogni alleato affine
     // in più negoziato dopo il voto costa un po' di fiducia iniziale, un alleato ideologicamente
@@ -23430,7 +24354,10 @@
     // andato storto) per far scattare subito la crisi di fiducia, senza alcun margine reale per
     // provare a recuperare. Portato a 30: resta un partito fin dal primo giorno (il prossimo
     // mandatoEsplorativoDossier è comunque a un passo), ma non più condannato all'istante.
-    state.consensoGoverno = hasRealMajority ? clamp(50 - compatibleAlliesCount * 5 - forcedAlliesCount * 10, 20, 50) : 30;
+    // Stessa logica anche per un governo con maggioranza vera ma molti alleati di necessità: con 3+
+    // alleati "forzati" la formula sopra arrivava esattamente al 20%, la soglia di collasso — il governo
+    // nasceva già in crisi. Pavimento al 30%, come per il governo di minoranza.
+    state.consensoGoverno = hasRealMajority ? clamp(50 - compatibleAlliesCount * 5 - forcedAlliesCount * 10, 30, 50) : 30;
     openNewEpoch();
     if (extraAllies.length) {
       var alliesLabel = extraAllies.map(function (a) { return a.label; }).join(", ");
@@ -26023,33 +26950,24 @@
   // da un punto di vista super partes.
   function renderPresidentModePage() {
     var term = state.presidentTerm;
-    var years = Math.round((state.turn - term.electedTurn) / 52 * 10) / 10;
-    var yearsLeft = Math.max(0, Math.round((term.termEndTurn - state.turn) / 52 * 10) / 10);
-    var html = '<section aria-label="Il tuo settennato"><p class="eyebrow">Il tuo settennato al Quirinale</p><div class="stat-grid">';
-    html += '<div class="stat-tile"><div class="label">Anni di mandato</div><div class="row"><span class="value">' + years + " / 7</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Anni al termine del mandato</div><div class="row"><span class="value">' + yearsLeft + "</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Atti firmati</div><div class="row"><span class="value">' + (term.actsSigned || 0) + "</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Leggi rinviate alle Camere</div><div class="row"><span class="value">' + (term.vetoesUsed || 0) + "</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Grazie concesse</div><div class="row"><span class="value">' + (term.graziesGranted || 0) + "</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Giudici costituzionali nominati</div><div class="row"><span class="value">' + (term.judgesAppointed || 0) + " / 5</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Senatori a vita nominati</div><div class="row"><span class="value">' + (term.senatorsAppointed || 0) + "</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Crisi di governo gestite</div><div class="row"><span class="value">' + (term.crisesManaged || 0) + "</span></div></div>";
-    html += "</div>" +
-      '<p class="ci-hint" style="margin-top:0.6rem">Hai lasciato la guida di ' + term.formerPartyName + ", ora nelle mani di " + (state.player ? (state.player.interimLeaderName || "un successore") : "un successore") +
-      ": il partito prosegue la propria storia in Parlamento, ma da qui in avanti la segui solo come una qualunque altra forza politica del paese, non più come sua guida.</p></section>";
-    html += renderNationalStrip();
-    html += renderCountryProfile();
-    return html;
+    ensurePresidentTermFields(term);
+    var page = state.presidentUiPage || "quirinale";
+    if (page === "agenda") return renderPresidentAgendaPage();
+    if (page === "leggi") return renderPresidentLawsPage();
+    if (page === "paese") return renderNationalStrip() + renderCountryProfile();
+    return renderPresidentQuirinalePage();
   }
 
   // Schermata finale: allo scadere del settennato la partita si conclude qui, con un epilogo dedicato —
   // coerente con come è pensata la Presidenza (un traguardo che chiude la storia, non una carica da cui
   // si torna alla guida di un partito). Stesso stile a schermo intero di renderSetup/renderCrashRecovery.
   function renderPresidentEpilogue() {
+    ensurePresidentTermFields(state.presidentTerm);
     var summary = buildPresidentEpilogue();
     app.innerHTML = '<div class="setup-card"><p class="eyebrow">Fine del Settennato</p>' +
       "<h2>" + summary.playerName + ": sette anni al Quirinale</h2>" +
-      '<p class="lead">Il tuo mandato da Presidente della Repubblica si conclude dopo ' + summary.years + ' anni. Da leader di ' + summary.formerPartyName + ' a Capo dello Stato, al di sopra delle parti: qui si chiude la tua storia in questa partita.</p>' +
+      '<p class="lead">Il tuo mandato da Presidente della Repubblica si conclude dopo ' + summary.years + ' anni' + (summary.resigned ? ', con le tue dimissioni anticipate' : '') + '. Da leader di ' + summary.formerPartyName + ' a Capo dello Stato, al di sopra delle parti: qui si chiude la tua storia in questa partita.</p>' +
+      '<p class="lead"><strong>' + summary.judgement + '</strong></p>' +
       '<ul class="enacted-policy-list">' +
       "<li><strong>Atti firmati:</strong> " + summary.actsSigned + "</li>" +
       "<li><strong>Leggi rinviate alle Camere:</strong> " + summary.vetoesUsed + "</li>" +
@@ -26057,6 +26975,10 @@
       "<li><strong>Giudici costituzionali nominati:</strong> " + summary.judgesAppointed + " su 5</li>" +
       "<li><strong>Senatori a vita nominati:</strong> " + summary.senatorsAppointed + "</li>" +
       "<li><strong>Crisi di governo gestite:</strong> " + summary.crisesManaged + "</li>" +
+      "<li><strong>Leggi corrette su tuo rilievo:</strong> " + summary.lawsModified + " (firme obbligate: " + summary.forcedSignatures + ")</li>" +
+      "<li><strong>Visite di Stato:</strong> " + summary.stateVisits + " · <strong>Regioni visitate:</strong> " + summary.regionsVisited + " su 20</li>" +
+      "<li><strong>Emergenze affrontate:</strong> " + summary.emergenciesManaged + " · <strong>Eventi sportivi:</strong> " + summary.sportsEvents + "</li>" +
+      "<li><strong>Prestigio finale:</strong> " + summary.prestigio + "/100 · <strong>Gradimento finale:</strong> " + summary.gradimento + "/100</li>" +
       "</ul>" +
       '<p class="ci-hint">Puoi esportare questa partita dalla barra in alto per conservarne un ricordo. Per continuare a giocare serve una nuova partita: la Presidenza, una volta conclusa, non torna alla guida di un partito.</p>' +
       '<div class="choices"><button type="button" class="choice-btn" id="president-epilogue-newgame-btn"><span class="clabel">Inizia una nuova partita</span></button></div></div>';
@@ -28332,11 +29254,15 @@
     if (idx !== -1) coal.members.splice(idx, 1);
     var effectiveCount = coal.members.length + (state.player && state.player.allianceId === coalId ? 1 : 0);
     if (effectiveCount < 2) { return dissolveCoalition(coalId, reasonText); }
-    if (state.govEntity && state.govEntity.memberIds) {
-      var gidx = state.govEntity.memberIds.indexOf(allyId);
-      if (gidx !== -1) state.govEntity.memberIds.splice(gidx, 1);
+    // Se l'alleato sedeva anche al governo, ne esce davvero: stesso ricalcolo della maggioranza di
+    // departGoverningAlly (prima toglieva solo il nome dall'elenco, senza mai verificare i numeri).
+    if (state.govEntity && state.govEntity.memberIds && state.govEntity.memberIds.indexOf(allyId) !== -1) {
+      var lostMajorityByAlly = detachFromGovernmentMajority(allyId).lostMajority;
+      applyGovAllyDepartureConsensusHit(4, 10, lostMajorityByAlly);
+      if (lostMajorityByAlly) reasonText += " Senza i suoi seggi il governo perde la maggioranza in Parlamento: si apre la crisi di governo.";
+    } else {
+      vacateCabinetMinistries(allyId);
     }
-    vacateCabinetMinistries(allyId);
     var allyParty = partyById(allyId);
     state.log.unshift({
       week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : allyId,
@@ -28418,6 +29344,31 @@
   // numeri) ha una probabilità di uscita molto più alta di uno affine: non c'era convinzione dall'inizio,
   // e la tensione cresce quanto più a lungo la fiducia di governo (consensoGoverno) resta bassa.
   var GOV_ALLY_DEFECTION_COOLDOWN_TURNS = 20;
+  // Prime settimane di un governo appena nato: nessuno rompe a ridosso del giuramento, né nella realtà
+  // né qui (vale per gli alleati di necessità sotto e per la crisi di governo CPU più in basso).
+  var GOV_HONEYMOON_TURNS = 26;
+  function govFormedTurn(ge) {
+    return ge && ge.formedTurn !== undefined ? ge.formedTurn : (state.lastElectionTurn || 0);
+  }
+  // Segnalato da un giocatore ("quando salgo al governo, la prima volta la CPU ha abbandonato la
+  // coalizione nonostante l'alleanza fosse al 60 e il governo è caduto — mi è successo due volte"):
+  // la probabilità di uscita qui sotto non guardava MAI i rapporti reali col partito del giocatore né la
+  // fiducia della sua coalizione, solo un tasso fisso (3% a settimana per un alleato di necessità: oltre
+  // l'80% di probabilità di rottura nel primo anno, qualunque cosa facesse il giocatore). Ora, quando il
+  // giocatore è al governo, un alleato con cui i rapporti sono buoni (e dentro una coalizione solida)
+  // quasi non se ne va più; uno trascurato resta invece a rischio, anche più di prima.
+  function govAllyLoyaltyFactor(allyId) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return 1;
+    var rel = state.partyRelations && state.partyRelations[allyId] !== undefined ? state.partyRelations[allyId] : 50;
+    var factor = clamp((62 - rel) / 30, 0.05, 1.6);
+    var coal = p.allianceId ? coalitionById(p.allianceId) : null;
+    if (coal && coal.members.indexOf(allyId) !== -1 && state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined) {
+      var trust = state.coalitionTrust[p.allianceId];
+      factor *= trust >= 55 ? 0.4 : trust >= 40 ? 0.8 : 1.3;
+    }
+    return factor;
+  }
   function triggerGoverningAllyDefection() {
     var ge = state.govEntity;
     if (!ge || !ge.extraAllyIds || !ge.extraAllyIds.length) return;
@@ -28425,57 +29376,177 @@
     var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
     var crisisFactor = cg < 30 ? (30 - cg) * 0.01 : 0;
     var volatility = politicalVolatilityMultiplier();
+    var honeymoon = state.turn - govFormedTurn(ge) < GOV_HONEYMOON_TURNS ? 0.15 : 1;
     for (var i = 0; i < ge.extraAllyIds.length; i++) {
       var allyId = ge.extraAllyIds[i];
       var forced = (ge.forcedAllyIds || []).indexOf(allyId) !== -1;
-      var chance = clamp(((forced ? 0.03 : 0.006) + crisisFactor) * volatility, 0, 0.5);
+      var chance = clamp(((forced ? 0.03 : 0.006) + crisisFactor) * volatility * honeymoon * govAllyLoyaltyFactor(allyId), 0, 0.5);
       if (Math.random() < chance) {
         state.govAllyDefectionCooldownTurn = state.turn + GOV_ALLY_DEFECTION_COOLDOWN_TURNS;
         return departGoverningAlly(allyId, forced);
       }
     }
   }
-  function departGoverningAlly(allyId, wasForced) {
-    var ge = state.govEntity;
-    if (!ge) return;
-    var ally = partyById(allyId);
-    var idxE = ge.extraAllyIds.indexOf(allyId);
-    if (idxE !== -1) ge.extraAllyIds.splice(idxE, 1);
-    var idxF = (ge.forcedAllyIds || []).indexOf(allyId);
-    if (idxF !== -1) ge.forcedAllyIds.splice(idxF, 1);
-    var idxM = ge.memberIds.indexOf(allyId);
-    if (idxM !== -1) ge.memberIds.splice(idxM, 1);
-    vacateCabinetMinistries(allyId);
-    // Ricalcola se il governo ha ancora una vera maggioranza senza questo alleato, sui seggi reali salvati
-    // in seatSplit al momento della formazione (vedi finishGovernmentFormation), non su una stima.
+  // Seggi reali della maggioranza di governo, su seatSplit (salvato alla formazione, vedi
+  // finishGovernmentFormation) con ripiego sui seggi dell'ultima elezione per chi non vi compare, più
+  // quelli del giocatore se è al governo.
+  function govMajoritySeatTotals(ge) {
     var totalCamera = 0, totalSenato = 0;
-    ge.memberIds.forEach(function (mid) {
+    var seats = state.parliamentSeats || {};
+    (ge.memberIds || []).forEach(function (mid) {
+      if (mid === "player") return;
       var s = ge.seatSplit && ge.seatSplit[mid];
-      if (s) { totalCamera += s.camera; totalSenato += s.senato; }
+      totalCamera += s ? s.camera : ((seats.camera && seats.camera[mid]) || 0);
+      totalSenato += s ? s.senato : ((seats.senato && seats.senato[mid]) || 0);
     });
     if (state.player && state.player.parliamentRole === "governo") {
       totalCamera += state.player.seatsCamera || 0;
       totalSenato += state.player.seatsSenato || 0;
     }
+    return { camera: totalCamera, senato: totalSenato };
+  }
+  // Toglie un partito (alleato CPU o il giocatore stesso, id "player") dalla maggioranza di governo:
+  // elenchi dei membri, ministeri tappati da tecnici, ricalcolo della maggioranza vera. Restituisce
+  // se il governo ha appena perso la maggioranza. Il chiamante decide il resto (testo, consenso).
+  function detachFromGovernmentMajority(partyId) {
+    var ge = state.govEntity;
+    if (!ge) return { lostMajority: false };
+    [ge.memberIds, ge.extraAllyIds, ge.forcedAllyIds].forEach(function (list) {
+      if (!list) return;
+      var idx = list.indexOf(partyId);
+      if (idx !== -1) list.splice(idx, 1);
+    });
+    vacateCabinetMinistries(partyId);
+    var totals = govMajoritySeatTotals(ge);
     var wasMinority = ge.minority;
-    ge.minority = totalCamera < CAMERA_MAJORITY_SEATS || totalSenato < SENATO_MAJORITY_SEATS;
-    var lostMajority = !wasMinority && ge.minority;
-    state.consensoGoverno = clamp((state.consensoGoverno !== undefined ? state.consensoGoverno : 50) - rand(wasForced ? 10 : 6, wasForced ? 20 : 14), 0, 100);
+    ge.minority = totals.camera < CAMERA_MAJORITY_SEATS || totals.senato < SENATO_MAJORITY_SEATS;
+    return { lostMajority: !wasMinority && ge.minority };
+  }
+  // Un governo che perde davvero la maggioranza in Aula non tira avanti per inerzia: si apre la crisi, e
+  // la settimana dopo il Presidente della Repubblica avvia il mandato esplorativo (vedi il controllo su
+  // state.govMajorityLostCrisis nelle catene di turno). Il flag serve perché la deriva settimanale del
+  // consenso potrebbe riportarlo sopra il 20% prima ancora che il controllo scatti.
+  function openGovernmentCrisisForLostMajority() {
+    if (state.regime || state.snapElectionPending) return;
+    state.govMajorityLostCrisis = true;
+    state.consensoGoverno = Math.min(state.consensoGoverno !== undefined ? state.consensoGoverno : 50, 19);
+  }
+  // Un rimpasto senza perdere la maggioranza costa consenso, ma da solo non fa cadere il governo: la
+  // caduta arriva solo se i numeri in Aula non ci sono più (sopra), non per un semplice colpo d'immagine.
+  function applyGovAllyDepartureConsensusHit(minDrop, maxDrop, lostMajority) {
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var after = cg - rand(minDrop, maxDrop);
+    state.consensoGoverno = clamp(lostMajority ? after : Math.max(after, Math.min(cg, 21)), 0, 100);
+    if (lostMajority) openGovernmentCrisisForLostMajority();
+  }
+  function departGoverningAlly(allyId, wasForced, reasonOverride) {
+    var ge = state.govEntity;
+    if (!ge) return;
+    var ally = partyById(allyId);
+    var lostMajority = detachFromGovernmentMajority(allyId).lostMajority;
+    applyGovAllyDepartureConsensusHit(wasForced ? 10 : 6, wasForced ? 20 : 14, lostMajority);
     var allyName = ally ? ally.name : allyId;
-    var reasonText = wasForced
+    var reasonText = reasonOverride || (wasForced
       ? allyName + " lascia la maggioranza di governo: un'alleanza di necessità, mai davvero convinta, si rompe non appena i rapporti si raffreddano."
-      : allyName + " lascia la maggioranza di governo, denunciando pubblicamente scelte politiche ormai troppo distanti dalla propria linea.";
-    if (lostMajority) reasonText += " Il governo perde così la maggioranza vera in Parlamento.";
+      : allyName + " lascia la maggioranza di governo, denunciando pubblicamente scelte politiche ormai troppo distanti dalla propria linea.");
+    if (lostMajority) reasonText += " Il governo perde così la maggioranza vera in Parlamento: si apre la crisi, e il Presidente della Repubblica avvierà le consultazioni.";
     state.log.unshift({ week: state.turn, title: "Un alleato lascia la maggioranza di governo", choiceLabel: allyName, result: reasonText, headlines: [], type: "istituzioni", cat: "Governo" });
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Governo", text: reasonText });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
     return {
       id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Crisi di governo",
-      cat: "Governo", title: "Un alleato lascia la maggioranza di governo",
+      cat: "Governo", title: lostMajority ? "Crisi di governo: " + allyName + " ritira la fiducia" : "Un alleato lascia la maggioranza di governo",
       brief: reasonText,
-      choices: [{ label: "Prendo atto", hint: lostMajority ? "Il governo resta in carica, ma senza più una vera maggioranza" : "Il governo resta in carica, con una maggioranza più risicata", effects: {}, result: "Prendi atto della rottura: il governo resta in carica, ma la squadra che lo sostiene è un po' più piccola di prima." }]
+      choices: [{ label: "Prendo atto", hint: lostMajority ? "Il governo non ha più i numeri: si va verso il mandato esplorativo" : "Il governo resta in carica, con una maggioranza più risicata", effects: {},
+        result: lostMajority ? "Prendi atto della rottura: senza più una maggioranza in Aula, la parola passa al Quirinale." : "Prendi atto della rottura: il governo resta in carica, ma la squadra che lo sostiene è un po' più piccola di prima." }]
     };
+  }
+  // ---------- Crisi di governo tra partiti CPU ----------
+  // Segnalato da un giocatore: "i governi CPU durano tutto il mandato, cosa quasi impossibile ai giorni
+  // d'oggi". Un governo guidato dalla CPU cadeva solo se il consenso scendeva sotto il 20%, ma la deriva
+  // settimanale verso il 45% (driftConsensoGoverno) lo impediva quasi sempre; e i partner della
+  // coalizione uscita dalle urne non potevano mai rompere (solo gli alleati reclutati dopo il voto).
+  // Nella realtà italiana quasi ogni legislatura ha visto almeno un cambio di governo (Conte I-II-Draghi,
+  // Renzi-Gentiloni, Letta-Renzi...): ora un partner junior può ritirare la fiducia, con una probabilità
+  // che cresce con l'età del governo, con un consenso basso, con la distanza ideologica dal partito del
+  // Premier e con il numero di partner — dopo la luna di miele iniziale e mai a pochi mesi dal voto.
+  // Ordine di grandezza: circa 3 legislature su 4 vedono almeno una crisi. Se il giocatore guida il
+  // governo vale invece triggerGoverningAllyDefection (legata ai rapporti col giocatore).
+  var CPU_GOV_CRISIS_COOLDOWN_TURNS = 26;
+  var CPU_GOV_CRISIS_REASONS = [
+    function (ally, premier) { return ally + " ritira la propria delegazione dal governo: dopo mesi di scontri con " + premier + " sulla legge di bilancio, il partito annuncia che non voterà più la fiducia."; },
+    function (ally, premier) { return ally + " apre formalmente la crisi di governo: i ministri del partito rassegnano le dimissioni, accusando " + premier + " di aver tradito il programma comune."; },
+    function (ally, premier) { return "Strappo in maggioranza: " + ally + " non vota la fiducia posta dal governo su un decreto chiave, e certifica così la rottura definitiva con " + premier + "."; },
+    function (ally, premier) { return ally + " esce dalla maggioranza: forte di sondaggi in crescita, il partito sceglie di passare all'incasso e rompe con " + premier + ", puntando a nuovi equilibri."; },
+    function (ally, premier) { return "Dopo settimane di vertici falliti a Palazzo Chigi, " + ally + " annuncia l'uscita dal governo: le distanze con " + premier + " su riforme e nomine sono ormai incolmabili."; },
+    function (ally, premier) { return ally + " stacca la spina al governo: in una conferenza stampa il leader del partito annuncia il ritiro del sostegno, lasciando " + premier + " senza i numeri in Aula."; }
+  ];
+  function triggerCpuGovernmentCrisis() {
+    var ge = state.govEntity;
+    if (!ge || !ge.memberIds || state.regime || state.snapElectionPending || state.govMajorityLostCrisis) return;
+    if (state.pendingGovFormationNegotiation || state.pendingConsultazioni || state.pendingCabinetFormation) return;
+    if (state.cabinet && state.cabinet.premierId === "player") return;
+    if (state.turn < (state.cpuGovCrisisCooldownTurn || 0)) return;
+    var age = state.turn - govFormedTurn(ge);
+    if (age < GOV_HONEYMOON_TURNS) return;
+    if ((state.nextElectionTurn || 0) - state.turn < 20) return;
+    var premierId = (state.cabinet && state.cabinet.premierId && state.cabinet.premierId !== "player") ? state.cabinet.premierId : leadingGovPartyId();
+    var activeIds = activeParties().map(function (party) { return party.id; });
+    var partners = ge.memberIds.filter(function (id) { return id !== "player" && id !== premierId && activeIds.indexOf(id) !== -1; });
+    if (!partners.length) return;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var ageFactor = clamp((age - GOV_HONEYMOON_TURNS) / 52, 0.35, 1);
+    var forcedCount = partners.filter(function (id) { return (ge.forcedAllyIds || []).indexOf(id) !== -1; }).length;
+    var chance = (0.005 + Math.max(0, 50 - cg) * 0.0004 + forcedCount * 0.003) * (1 + 0.25 * (partners.length - 1)) * ageFactor * (ge.minority ? 1.3 : 1);
+    if (Math.random() >= clamp(chance, 0, 0.04)) return;
+    var premierParty = partyById(premierId);
+    var premierFam = premierParty ? premierParty.familyId : null;
+    var leaving = pickWeighted(partners.map(partyById).filter(Boolean), function (pt) {
+      var dist = (pt.familyId && premierFam && LEFT_RIGHT_POSITION[pt.familyId] !== undefined && LEFT_RIGHT_POSITION[premierFam] !== undefined)
+        ? Math.abs(LEFT_RIGHT_POSITION[pt.familyId] - LEFT_RIGHT_POSITION[premierFam]) : 1;
+      return 0.4 + dist * 0.5 + ((ge.forcedAllyIds || []).indexOf(pt.id) !== -1 ? 1 : 0);
+    });
+    if (!leaving) return;
+    state.cpuGovCrisisCooldownTurn = state.turn + CPU_GOV_CRISIS_COOLDOWN_TURNS;
+    var reason = CPU_GOV_CRISIS_REASONS[Math.floor(Math.random() * CPU_GOV_CRISIS_REASONS.length)](leaving.name, premierParty ? premierParty.name : "il Presidente del Consiglio");
+    return departGoverningAlly(leaving.id, (ge.forcedAllyIds || []).indexOf(leaving.id) !== -1, reason);
+  }
+  // Un mandato esplorativo riuscito fa nascere un governo nuovo, con una maggioranza vera trovata in
+  // Aula: riparte da qui anche la sua luna di miele (vedi GOV_HONEYMOON_TURNS).
+  function markGovernmentRebornFromMandato() {
+    if (!state.govEntity) return;
+    state.govEntity.formedTurn = state.turn;
+    state.govEntity.minority = false;
+  }
+  // Catena di turno della presidenza regionale: il giocatore non segue la politica nazionale, quindi
+  // una crisi del governo nazionale si risolve da sola, con le stesse probabilità di un mandato
+  // esplorativo "neutro" — prima, in questa catena, il governo nazionale non poteva cadere mai.
+  function resolveNationalGovCrisisInBackground() {
+    if (state.regime || state.snapElectionPending || !state.govEntity) return;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    if (!state.govMajorityLostCrisis && !(cg < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0))) return;
+    state.govMajorityLostCrisis = false;
+    state.mandatoEsplorativoCooldownTurn = state.turn + 6;
+    var semestreBianco = isSemestreBianco();
+    var text;
+    if (Math.random() < (semestreBianco ? 0.5 : 0.35)) {
+      state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+      markGovernmentRebornFromMandato();
+      text = "Crisi di governo a Roma: il mandato esplorativo del Presidente della Repubblica va a buon fine e nasce un nuovo governo, senza elezioni anticipate.";
+    } else if (semestreBianco) {
+      state.consensoGoverno = 22;
+      text = "Crisi di governo a Roma: il mandato esplorativo fallisce, ma nel semestre bianco le Camere non possono essere sciolte — il governo resta per gli affari correnti.";
+    } else {
+      state.snapElectionPending = true;
+      state.nextElectionTurn = state.turn + 8;
+      applyGovernmentCollapseLeadershipShock();
+      text = "Crisi di governo a Roma: il mandato esplorativo fallisce e il Presidente della Repubblica scioglie le Camere. Elezioni politiche anticipate tra 8 settimane.";
+    }
+    state.log.unshift({ week: state.turn, title: "Crisi del governo nazionale", choiceLabel: "Mandato Esplorativo", result: text, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Governo", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
   }
   // Richiesto da un giocatore: finora solo gli alleati CPU potevano lasciare la maggioranza di
   // governo di propria iniziativa (sopra); il giocatore stesso, se al governo ma senza la Presidenza,
@@ -28483,36 +29554,37 @@
   // maggioranza vera sui seggi reali, niente più ministeri in cabinet, colpo al consenso di governo),
   // applicata al partito del giocatore invece che a un alleato CPU: è lui stesso a rompere, non lo
   // subisce — l'instabilità che ne segue è esattamente quella richiesta.
+  // Segnalato da un giocatore ("se sei al governo ma non il partito più votato non puoi togliere la
+  // fiducia, e quindi non puoi far cadere il governo"): il controllo richiedeva "player" dentro
+  // state.govEntity.memberIds, dove però il giocatore entra solo accettando un invito post-voto
+  // (resolveGovInviteAccept) — mai quando governa perché la sua coalizione ha vinto le elezioni. Ora
+  // basta essere davvero al governo (p.parliamentRole). E se senza i suoi seggi il governo non ha più
+  // la maggioranza, ritirare la fiducia apre la crisi vera, come nella realtà.
+  function playerCanLeaveGovernmentMajority() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || state.regime || !state.govEntity) return false;
+    return !(state.cabinet && state.cabinet.premierId === "player");
+  }
   function playerLeavesGovernmentMajority() {
     var p = state.player;
-    var ge = state.govEntity;
-    if (!p || !ge || p.parliamentRole !== "governo" || !ge.memberIds || ge.memberIds.indexOf("player") === -1) return null;
-    var idxM = ge.memberIds.indexOf("player");
-    ge.memberIds.splice(idxM, 1);
-    vacateCabinetMinistries("player");
+    if (!playerCanLeaveGovernmentMajority()) return null;
     state.playerMinistry = null;
     p.parliamentRole = "opposizione";
-    var totalCamera = 0, totalSenato = 0;
-    ge.memberIds.forEach(function (mid) {
-      var s = ge.seatSplit && ge.seatSplit[mid];
-      if (s) { totalCamera += s.camera; totalSenato += s.senato; }
-    });
-    var wasMinority = ge.minority;
-    ge.minority = totalCamera < CAMERA_MAJORITY_SEATS || totalSenato < SENATO_MAJORITY_SEATS;
-    var lostMajority = !wasMinority && ge.minority;
-    state.consensoGoverno = clamp((state.consensoGoverno !== undefined ? state.consensoGoverno : 50) - rand(10, 18), 0, 100);
+    var lostMajority = detachFromGovernmentMajority("player").lostMajority;
+    applyGovAllyDepartureConsensusHit(10, 18, lostMajority);
     p.reputazione = clamp(p.reputazione + rand(-1, 3), 0, 100);
-    var reasonText = p.name + " lascia la maggioranza di governo e passa all'opposizione, denunciando scelte politiche ormai troppo distanti dalla propria linea." +
-      (lostMajority ? " Il governo " + govEntityLabel() + " perde così la maggioranza vera in Parlamento." : " Il governo " + govEntityLabel() + " resta in carica, ma con una maggioranza più risicata.");
+    var reasonText = p.name + " ritira la fiducia al governo e passa all'opposizione, denunciando scelte politiche ormai troppo distanti dalla propria linea." +
+      (lostMajority ? " Senza i vostri seggi il governo " + govEntityLabel() + " non ha più la maggioranza in Parlamento: si apre la crisi di governo, e la parola passa al Presidente della Repubblica." : " Il governo " + govEntityLabel() + " resta in carica, ma con una maggioranza più risicata.");
     state.log.unshift({ week: state.turn, title: "Lasci la maggioranza di governo", choiceLabel: p.name, result: reasonText, headlines: [], type: "istituzioni", cat: "Governo" });
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Governo", text: reasonText });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
     return {
       id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Rompi con il governo",
-      cat: "Governo", title: "Lasci la maggioranza di governo",
+      cat: "Governo", title: lostMajority ? "Ritiri la fiducia: si apre la crisi" : "Lasci la maggioranza di governo",
       brief: reasonText,
-      choices: [{ label: "Prendo atto", hint: "Il partito è ora all'opposizione", effects: {}, result: "Il partito passa formalmente all'opposizione: piena libertà di critica, ma anche niente più ministeri né dossier di governo." }]
+      choices: [{ label: "Prendo atto", hint: lostMajority ? "Il governo non ha più i numeri: si va verso il mandato esplorativo" : "Il partito è ora all'opposizione", effects: {},
+        result: lostMajority ? "Il partito passa all'opposizione e il governo resta senza maggioranza: nelle prossime settimane il Quirinale tenterà un mandato esplorativo, oppure si tornerà al voto." : "Il partito passa formalmente all'opposizione: piena libertà di critica, ma anche niente più ministeri né dossier di governo." }]
     };
   }
   // Richiama entrambi i controlli sugli alleati (alleanza elettorale e coalizione di governo) in un colpo
@@ -28523,7 +29595,8 @@
   function checkAllyDepartureDossier() {
     var allianceDossier = triggerCoalitionAllyReaction();
     var govAllyDossier = triggerGoverningAllyDefection();
-    return allianceDossier || govAllyDossier;
+    var cpuCrisisDossier = (allianceDossier || govAllyDossier) ? null : triggerCpuGovernmentCrisis();
+    return allianceDossier || govAllyDossier || cpuCrisisDossier;
   }
   function coalitionLabelForPartyId(id) {
     if (COALITIONS.centrodestra.members.indexOf(id) !== -1) return COALITIONS.centrodestra.label;
@@ -29003,7 +30076,7 @@
         : " La coalizione è solida.";
       html += '<p class="ci-hint">Sei alleato con <strong>' + (coal ? coal.label : p.allianceId) +
         '</strong>: correrete insieme alle prossime elezioni politiche, con soglia di sbarramento comune al 10%.</p>' +
-        '<p class="ci-hint">Fiducia della coalizione: <strong>' + trust + '/100</strong> (sotto il 30% si scioglie da sola).' + trustNote + '</p>' +
+        '<p class="ci-hint">Fiducia della coalizione: <strong>' + trust + '/100</strong> (sotto il ' + COALITION_DISSOLVE_THRESHOLD + '% si scioglie da sola).' + trustNote + '</p>' +
         '<div class="gauge"><span style="width:' + trust + '%;background:' + trustColor + '"></span></div>';
       // La fiducia sopra è un aggregato: dietro ci sono singoli alleati che possono lasciare la coalizione
       // per conto proprio se trascurati a lungo, o coprirti le spalle se coltivati davvero (vedi
@@ -29544,7 +30617,7 @@
     html += standingsHtml;
     html += '<p class="eyebrow" style="margin-top:1.1rem">Classifica dei singoli partiti</p>';
     html += bars;
-    html += '<button class="primary-btn" id="election-continue-btn" type="button">Continua a costruire il partito</button></div>';
+    html += '<button class="primary-btn" id="election-continue-btn" type="button">' + (state.mode === "president" ? "Torna al Quirinale" : "Continua a costruire il partito") + '</button></div>';
     return html;
   }
 
@@ -30839,7 +31912,7 @@
       // La modalità Presidente non ha pagine di partito: nessuna barra di navigazione, nessuna statistica
       // di partito, nessun pannello di sondaggi — solo il dossier della settimana (i veri poteri
       // costituzionali, vedi advancePresidentTurnLogic) e un cruscotto dedicato al settennato in corso.
-      body = "";
+      body = renderPresidentPageNav();
       if (state.phase === "building") {
         var presDossier = currentDossier();
         if (!presDossier) { advancePresidentTurnLogic(); presDossier = currentDossier(); }
@@ -31951,6 +33024,7 @@
         var mandatoText;
         if (mandatoSuccess) {
           state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+          markGovernmentRebornFromMandato();
           if (choice.mandatoStance === "sostegno" && state.player.inParliament) {
             state.player.parliamentRole = "governo";
             resignPlayerFromGovernedRegions("il partito è appena entrato nel nuovo governo nato dal mandato esplorativo");
@@ -31970,6 +33044,8 @@
           state.log.unshift({ week: state.turn, title: "Mandato Esplorativo fallito: Camere sciolte", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
         }
         state.resultData = { resultText: mandatoText, headlines: [] };
+      } else if (dossier.presidentQuirinale) {
+        resolvePresidentQuirinaleChoice(dossier, choice);
       } else if (dossier.cat === "Atto Presidenziale") {
         var termAct = state.presidentTerm;
         if (choice.presidentAct === "firma") {
@@ -32001,10 +33077,31 @@
           state.nextElectionTurn = state.turn + 8;
           applyGovernmentCollapseLeadershipShock();
           crisisText = "Sciogli le Camere senza tentare un mandato esplorativo: il paese torna al voto con una campagna lampo.";
+        } else if (choice.presidentCrisisChoice === "tecnico") {
+          ensurePresidentTermFields(termCrisi);
+          var tecnicoChance = clamp(0.3 + (termCrisi.prestigio - 50) / 80 + (termCrisi.rapporti.parlamento - 50) / 150 + (crisisCtx.semestreBianco ? 0.1 : 0), 0.1, 0.85);
+          var premierTecnico = generateStaffName();
+          if (Math.random() < tecnicoChance) {
+            state.consensoGoverno = Math.max(state.consensoGoverno, rand(48, 60));
+            markGovernmentRebornFromMandato();
+            applyPresEffects({ prestigio: rand(3, 6), rapporti: { parlamento: rand(1, 3) } });
+            crisisText = premierTecnico + " accetta l'incarico e ottiene la fiducia di un'ampia maggioranza: nasce un governo tecnico di unità nazionale, sostenuto da partiti di schieramenti diversi. Lo chiamano già \"il governo del Presidente\".";
+          } else if (crisisCtx.semestreBianco) {
+            state.consensoGoverno = 22;
+            applyPresEffects({ prestigio: -rand(2, 4) });
+            crisisText = premierTecnico + " rinuncia all'incarico: i partiti non trovano un accordo. Nel semestre bianco non puoi sciogliere le Camere, e il governo resta per gli affari correnti.";
+          } else {
+            state.snapElectionPending = true;
+            state.nextElectionTurn = state.turn + 8;
+            applyGovernmentCollapseLeadershipShock();
+            applyPresEffects({ prestigio: -rand(3, 5) });
+            crisisText = premierTecnico + " non ottiene la fiducia delle Camere: il tentativo fallisce e sei costretto a sciogliere il Parlamento. Si torna al voto, e il fallimento pesa anche sul tuo prestigio.";
+          }
         } else {
-          var presMandatoChance = clamp(0.4 + (crisisCtx.semestreBianco ? 0.15 : 0), 0.1, 0.85);
+          var presMandatoChance = clamp(0.4 + (crisisCtx.semestreBianco ? 0.15 : 0) + (state.presidentTerm && state.presidentTerm.prestigio !== undefined ? (state.presidentTerm.prestigio - 50) / 200 : 0), 0.1, 0.85);
           if (Math.random() < presMandatoChance) {
             state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+            markGovernmentRebornFromMandato();
             crisisText = "Il mandato esplorativo va a buon fine: nasce un nuovo governo senza bisogno di elezioni anticipate.";
           } else if (crisisCtx.semestreBianco) {
             state.consensoGoverno = 22;
@@ -32064,6 +33161,7 @@
     bindPageNavDrawer(null);
     bindRegionalPageNavDrawer();
     bindRegionalActionButtons();
+    bindPresidentInteractions();
     app.querySelectorAll("[data-minister-initiative]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var p = state.player;
@@ -33755,7 +34853,9 @@
     // partire già esattamente al 20% (vedi finishGovernmentFormation) e scivolare sotto poco dopo: con
     // quella soglia aggiuntiva, restava comunque intoccabile per un anno intero. Tolta: resta solo il
     // cooldown di 6 settimane già previsto sotto per non far ripartire il dossier troppo di fila.
-    if (!state.snapElectionPending && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+    if (state.govMajorityLostCrisis && (state.regime || state.snapElectionPending)) state.govMajorityLostCrisis = false;
+    if (!state.snapElectionPending && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
+      state.govMajorityLostCrisis = false;
       // Non più elezioni immediate: prima il Presidente della Repubblica tenta un mandato esplorativo
       // per evitare le urne (vedi buildMandatoEsplorativoDossier e la sua risoluzione in
       // resolveDossierChoice) — le elezioni anticipate restano possibili, ma solo come ESITO di quel
