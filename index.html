@@ -26852,6 +26852,8 @@
     var seats = careerDhondt(shares, 4);
     s.lists.forEach(function (l, i) { l.seats = seats[i]; l.lastShare = Math.round(shares[i] / total * 1000) / 10; });
     var ranking = s.lists.slice().sort(function (a, b) { return b.lastShare - a.lastShare; });
+    // la lista arrivata prima ottiene un canale diretto con la presidenza fino alle elezioni successive
+    s.winnerListId = ranking[0].id;
     lines.push(ranking.map(function (l) { return l.name + " " + fmt1(l.lastShare) + "% (" + l.seats + " seggi)"; }).join(" · "));
     var prevRole = c.role;
     c.role = null;
@@ -26885,6 +26887,7 @@
     }
     else { outcome = "Non vieni eletto/a. Brucia, ma il prossimo anno si riparte."; careerApplyEffects(c, { rep: -rand(0.5, 2), studenti: -2, fiducia: -6 }); }
     if (prevRole && !c.role) outcome += " Perdi la carica che avevi.";
+    if (playerList && ranking[0].id === playerList.id) outcome += " Da lista più votata avete ora un dialogo diretto con " + careerPresideWho(s).art + " (scheda Lista).";
     // la forza delle liste si assesta sul risultato, così le elezioni dell'anno dopo partono dalla realtà
     s.lists.forEach(function (l) { l.forza = Math.round(l.forza * 0.5 + l.lastShare * 0.35); });
     // chi stravince diventa il bersaglio di tutti: le altre liste si riorganizzano contro il primo
@@ -28057,7 +28060,7 @@
     addCareerDiaryEntry("Diploma!", "Ti diplomi " + careerAlSchool(c.school.name) + " con " + total + "/100" + (lode ? " e lode" : "") + " (crediti " + credits + ", prove " + m.scores.join(" + ") + "). Finisce un'epoca: comincia la vita politica da adulto/a.");
   }
 
-  // --- Richieste al preside (solo dalla presidenza del Comitato Studentesco) ---
+  // --- Dialogo con la presidenza (riservato a chi sta nella lista più votata alle ultime elezioni) ---
   var CAREER_PRESIDE_REQUESTS = [
     { id: "assemblea_mensile", label: "Assemblea d'istituto ogni mese", cost: 0, base: 0.55, studenti: 4 },
     { id: "calendario_verifiche", label: "Massimo una verifica scritta al giorno", cost: 0, base: 0.5, studenti: 4, genitori: 2 },
@@ -28074,22 +28077,108 @@
     { id: "edificio", label: "Messa in sicurezza dell'edificio", cost: 45, base: 0.2, studenti: 6, genitori: 6, solve: "edificio" },
     { id: "aule", label: "Nuove aule per sdoppiare le classi pollaio", cost: 45, base: 0.18, studenti: 5, genitori: 3, solve: "sovraffollamento" },
     { id: "ingresso_flessibile", label: "Ingresso flessibile per i pendolari", cost: 0, base: 0.4, studenti: 3, genitori: 2, solve: "trasporti" },
-    { id: "bullismo", label: "Protocollo anti-bullismo con formazione dei docenti", cost: 8, base: 0.5, studenti: 3, genitori: 4, solve: "bullismo" }
+    { id: "bullismo", label: "Protocollo anti-bullismo con formazione dei docenti", cost: 8, base: 0.5, studenti: 3, genitori: 4, solve: "bullismo" },
+    { id: "giornalino", label: "Fondi per il giornalino e la web radio della scuola", cost: 4, base: 0.55, studenti: 3, genitori: 1 },
+    { id: "telefono_intervallo", label: "Telefono consentito durante l'intervallo", cost: 0, base: 0.28, studenti: 5, genitori: -2 },
+    { id: "doppio_intervallo", label: "Due intervalli da dieci minuti invece di uno", cost: 0, base: 0.4, studenti: 4 },
+    { id: "armadietti", label: "Armadietti per lasciare libri e zaini a scuola", cost: 12, base: 0.4, studenti: 4, genitori: 2 },
+    { id: "orientamento", label: "Giornate di orientamento all'università e al lavoro", cost: 3, base: 0.6, studenti: 3, genitori: 4 },
+    { id: "recupero", label: "Sportello di recupero pomeridiano gratuito", cost: 10, base: 0.45, studenti: 4, genitori: 4 },
+    { id: "borracce", label: "Raccolta differenziata e borracce al posto della plastica", cost: 4, base: 0.6, studenti: 2, genitori: 2 },
+    { id: "tornei", label: "Tornei sportivi d'istituto tra le classi", cost: 3, base: 0.55, studenti: 4 },
+    { id: "gita", label: "Viaggio d'istruzione di cinque giorni per quarte e quinte", cost: 6, base: 0.35, studenti: 6, genitori: -1 },
+    { id: "assorbenti", label: "Assorbenti gratuiti nei bagni", cost: 4, base: 0.5, studenti: 3, genitori: 1 },
+    { id: "affettivita", label: "Corsi di educazione affettiva e sessuale", cost: 2, base: 0.35, studenti: 3, genitori: -2 },
+    { id: "rastrelliere", label: "Rastrelliere per bici e monopattini in cortile", cost: 6, base: 0.55, studenti: 2, genitori: 1 },
+    { id: "primo_soccorso", label: "Corso di primo soccorso e defibrillatore a scuola", cost: 8, base: 0.55, studenti: 2, genitori: 4 },
+    { id: "correzioni", label: "Verifiche corrette e riconsegnate entro due settimane", cost: 0, base: 0.42, studenti: 3, genitori: 2 },
+    { id: "cortile", label: "Cortile aperto durante l'intervallo", cost: 0, base: 0.5, studenti: 3 }
   ];
+  function careerPresideWho(s) {
+    var f = /^prof\.ssa/.test(s.preside || "");
+    return { art: f ? "la preside" : "il preside", Art: f ? "La preside" : "Il preside", dal: f ? "dalla preside" : "dal preside", f: f };
+  }
+  function careerPresideDialogue(c) {
+    return !!(c.stage === "scuola" && c.school && c.list && (c.role === "presidente" || (c.school.winnerListId && c.school.winnerListId === c.list.id)));
+  }
+  // chi ha la carica pesa di più al tavolo: il presidente del comitato più del semplice militante
+  function careerPresideRoleMult(c) {
+    return c.role === "presidente" ? 1 : c.role === "rappresentante" ? 0.9 : c.list && (c.list.isOwn || c.list.role === "capolista") ? 0.8 : 0.7;
+  }
+  function careerPresideLog(c, text, ok, reply) {
+    c.presideLog = c.presideLog || [];
+    c.presideLog.unshift({ turn: state.turn, text: text, ok: ok, reply: reply });
+    if (c.presideLog.length > 6) c.presideLog.length = 6;
+  }
+  function careerPresideCanMeet(c) {
+    if (!careerPresideDialogue(c)) { showSaveStatus("Solo chi sta nella lista più votata può trattare direttamente con la presidenza.", true); return false; }
+    if (!careerCalendar(state.turn).lezioni) { showSaveStatus("D'estate la presidenza è chiusa: riprova a settembre.", true); return false; }
+    if (state.turn - (c.requestTurn || -99) < 2) { showSaveStatus("La presidenza ti riceve al massimo una volta ogni due settimane.", true); return false; }
+    return true;
+  }
+  // Proposta scritta di pugno: la presidenza la legge come i compagni leggono il programma, ma con
+  // criteri da dirigente: problemi veri e concretezza aiutano, demagogia, vaghezza e toni duri no.
+  function careerFreePresideChance(c, a) {
+    var cost = 3;
+    a.problems.forEach(function (p) {
+      CAREER_PRESIDE_REQUESTS.forEach(function (r) { if (r.solve === p.id) cost = Math.max(cost, r.cost); });
+    });
+    var base = 0.32;
+    if (a.realProblems.length) base += 0.14;
+    else if (a.problems.length) base += 0.04;
+    if (a.concrete) base += 0.08;
+    if (a.demagogic) base -= 0.3;
+    if (!a.problems.length && !a.themes.length && !a.concrete) base -= 0.15;
+    if (a.words < 6) base -= 0.1;
+    if (a.tone === "aggressivo") base -= 0.14;
+    else if (a.tone === "istituzionale") base += 0.06;
+    var ch = clamp(base + (c.metrics.preside - 50) / 120 + (c.school.budget - cost - 25) / 160 + (c.metrics.usr - 50) / 300, 0.03, 0.85) * careerPresideRoleMult(c);
+    return { chance: ch, cost: cost };
+  }
+  function careerFreePresideProposal(c, text) {
+    if (!text || text.length < 10) { showSaveStatus("Scrivi la proposta per intero prima di portarla in presidenza.", true); return; }
+    if (!careerPresideCanMeet(c)) return;
+    if (!careerSpendAction(c)) return;
+    c.requestTurn = state.turn;
+    var s = c.school, who = careerPresideWho(s);
+    var a = careerAnalyzeText(text);
+    var ev = careerFreePresideChance(c, a);
+    var ok = Math.random() < ev.chance;
+    var reply;
+    if (ok) {
+      var solve = a.realProblems.length ? a.realProblems[0].id : null;
+      careerApplyEffects(c, { studenti: 2 + (a.realProblems.length ? 3 : 0), genitori: a.concrete ? 1.5 : 0, preside: -0.5, rep: 1.5, fiducia: 2, budget: -Math.round(ev.cost / 2), solve: solve });
+      if (solve) careerFulfilProgram(c, solve, null);
+      reply = (a.realProblems.length ? "«È un problema che conosco bene. Va bene, procediamo: ne parlo al prossimo consiglio d'istituto.»" :
+        a.concrete ? "«Proposta chiara e fattibile. Mi avete convinto: si può fare.»" : "«Non era nei miei piani, ma ci sto. Vediamo come va.»");
+      addCareerDiaryEntry("Proposta accolta in presidenza", who.Art + " " + s.preside + " accoglie la tua proposta: «" + text.slice(0, 90) + (text.length > 90 ? "…" : "") + "».");
+      showSaveStatus("Proposta accolta " + who.dal + ".", false);
+    } else {
+      if (a.demagogic) { reply = "«Questa è una promessa elettorale, non una proposta. Non prendiamo in giro gli studenti.»"; careerApplyEffects(c, { preside: -3, studenti: -0.5 }); }
+      else if (a.tone === "aggressivo") { reply = "«Con questi toni non si tratta. Tornate quando avrete voglia di discutere.»"; careerApplyEffects(c, { preside: -2.5 }); }
+      else if (!a.problems.length && !a.themes.length && !a.concrete) { reply = "«Non ho capito cosa mi state chiedendo esattamente. Portatemi qualcosa di concreto.»"; careerApplyEffects(c, { preside: -0.5, studenti: -0.5 }); }
+      else if (s.budget < ev.cost + 20) { reply = "«L'idea non è sbagliata, ma i fondi non ci sono. Non quest'anno.»"; careerApplyEffects(c, { studenti: -1 }); }
+      else { reply = "«Ci ho pensato, ma la risposta è no. Non è il momento.»"; careerApplyEffects(c, { studenti: -1, preside: -0.5 }); }
+      addCareerDiaryEntry("Proposta respinta in presidenza", who.Art + " " + s.preside + " respinge la tua proposta: " + reply);
+      showSaveStatus("Proposta respinta " + who.dal + ".", true);
+    }
+    careerPresideLog(c, text, ok, reply);
+  }
   function careerRequestChance(c, r) {
     var s = c.school;
-    return clamp(r.base + (c.metrics.preside - 50) / 120 + (s.budget - r.cost - 25) / 160 + (c.metrics.usr - 50) / 300, 0.04, 0.88);
+    return clamp(r.base + (c.metrics.preside - 50) / 120 + (s.budget - r.cost - 25) / 160 + (c.metrics.usr - 50) / 300, 0.04, 0.88) * careerPresideRoleMult(c);
   }
   function careerMakeRequest(c, id) {
     var r = CAREER_PRESIDE_REQUESTS.filter(function (x) { return x.id === id; })[0];
-    if (!r || c.role !== "presidente") return;
-    if (state.turn - (c.requestTurn || -99) < 2) { showSaveStatus("Il preside ti riceve al massimo una volta ogni due settimane.", true); return; }
+    if (!r) return;
     if (c.requestsDone[id]) { showSaveStatus("Hai già presentato questa richiesta quest'anno.", true); return; }
+    if (!careerPresideCanMeet(c)) return;
     if (!careerSpendAction(c)) return;
     c.requestTurn = state.turn;
     var ok = Math.random() < careerRequestChance(c, r);
     c.requestsDone[id] = ok ? "accolta" : "respinta";
     var s = c.school;
+    careerPresideLog(c, r.label, ok, ok ? "«D'accordo, si fa.»" : s.budget < r.cost + 20 ? "«Non ci sono i fondi.»" : "«Non è il momento.»");
     if (ok) {
       careerApplyEffects(c, { studenti: r.studenti, genitori: r.genitori || 0, preside: -1, rep: 1.5, budget: -Math.round(r.cost / 2), solve: r.solve || null });
       careerFulfilProgram(c, r.solve, r.id);
@@ -28486,14 +28575,29 @@
       html += '<p class="ci-hint">La campagna si apre a metà settembre e si vota a fine ottobre.' + (c.history && c.history.length ? " Ultimo risultato: " + (function (h) { return h.role === "presidente" ? "presidente" : h.role ? "eletto/a" : "non eletto/a"; })(c.history[c.history.length - 1]) + "." : "") + "</p>";
     }
     html += "</section>";
-    if (c.role === "presidente") {
+    if (careerPresideDialogue(c)) {
+      var who = careerPresideWho(s);
       var used = state.turn - (c.requestTurn || -99) < 2;
-      html += '<section aria-label="Richieste al preside"><h3>Richieste al preside</h3><p class="ci-hint">Solo da presidente puoi portare richieste formali. Il preside decide in base alla fiducia in te, ai fondi della scuola (' + Math.round(s.budget) + "/100) e al costo della richiesta." + (used ? " <strong>Hai già incontrato il preside di recente: riprova la settimana prossima.</strong>" : "") + '</p><div class="option-grid">' +
+      var closed = !cal.lezioni;
+      var dis = used || closed || c.actionsLeft <= 0;
+      html += '<section aria-label="Dialogo con la presidenza"><h3>Dialogo diretto con ' + who.art + '</h3><p class="ci-hint">La tua lista è la più votata: puoi trattare direttamente con ' + who.art + " " + s.preside + ". Decide in base alla fiducia in te (" + Math.round(c.metrics.preside) + "%), ai fondi della scuola (" + Math.round(s.budget) + "/100), al costo e al tuo ruolo. Ogni incontro costa un'azione, al massimo uno ogni due settimane." +
+        (closed ? " <strong>D'estate la presidenza è chiusa.</strong>" : used ? " <strong>Hai già incontrato " + who.art + " di recente: riprova la settimana prossima.</strong>" : c.actionsLeft <= 0 ? " <strong>Non hai più azioni questa settimana.</strong>" : "") + "</p>";
+      html += '<div class="field"><label class="field-label" for="career-preside-select">Proposte già pronte</label><select id="career-preside-select" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;">' +
         CAREER_PRESIDE_REQUESTS.map(function (r) {
           var done = c.requestsDone[r.id];
-          var dis = used || !!done;
-          return '<button type="button" class="option-card" data-career-request="' + r.id + '"' + (dis ? " disabled" : "") + '><span class="olabel">' + r.label + '</span><span class="odesc">' + (done ? "Già presentata: " + done : "Probabilità stimata " + Math.round(careerRequestChance(c, r) * 100) + "% · costo " + (r.cost ? r.cost : "nessuno")) + "</span></button>";
-        }).join("") + "</div></section>";
+          return '<option value="' + r.id + '"' + (done ? " disabled" : "") + ">" + r.label + (done ? " (già " + done + " quest'anno)" : " · " + Math.round(careerRequestChance(c, r) * 100) + "%" + (r.cost ? " · costo " + r.cost : "")) + "</option>";
+        }).join("") + "</select></div>" +
+        '<div class="choices"><button type="button" class="choice-btn" id="career-preside-preset-btn"' + (dis ? " disabled" : "") + '><span class="clabel">Presenta la proposta</span></button></div>';
+      html += '<div class="field"><label class="field-label" for="career-preside-free">Proposta di pugno</label><textarea id="career-preside-free" class="autogrow-textarea" rows="2" maxlength="300" placeholder="Es. Proponiamo di aprire la biblioteca due pomeriggi a settimana con i turni dei rappresentanti"></textarea></div>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="career-preside-free-btn"' + (dis ? " disabled" : "") + '><span class="clabel">Porta la tua proposta in presidenza</span><span class="chint">Conta cosa scrivi: problemi veri e proposte concrete convincono, promesse impossibili e toni duri no.</span></button></div>';
+      if (c.presideLog && c.presideLog.length) {
+        html += '<ul class="enacted-policy-list">' + c.presideLog.map(function (e) {
+          return "<li>" + (e.ok ? "✔ Accolta: " : "✘ Respinta: ") + e.text.replace(/</g, "&lt;") + '<br><span class="ci-hint">' + who.Art + ": " + e.reply + "</span></li>";
+        }).join("") + "</ul>";
+      }
+      html += "</section>";
+    } else if (c.list) {
+      html += '<section aria-label="Dialogo con la presidenza"><h3>Dialogo con la presidenza</h3><p class="ci-hint">Solo la lista più votata alle elezioni d\'istituto ha un canale diretto con ' + careerPresideWho(s).art + ". Vincete le prossime elezioni per poter presentare proposte.</p></section>";
     }
     return html;
   }
@@ -28656,8 +28760,18 @@
       addCareerDiaryEntry("Candidatura", "Ti candidi alle elezioni studentesche con «" + c.list.name + "».");
       rerender();
     });
-    app.querySelectorAll("[data-career-request]").forEach(function (btn) {
-      btn.addEventListener("click", function () { if (btn.disabled) return; careerMakeRequest(c, btn.getAttribute("data-career-request")); rerender(); });
+    var presetBtn = document.getElementById("career-preside-preset-btn");
+    if (presetBtn) presetBtn.addEventListener("click", function () {
+      if (presetBtn.disabled) return;
+      var sel = document.getElementById("career-preside-select");
+      if (sel && sel.value) careerMakeRequest(c, sel.value);
+      rerender();
+    });
+    var freeBtn = document.getElementById("career-preside-free-btn");
+    if (freeBtn) freeBtn.addEventListener("click", function () {
+      if (freeBtn.disabled) return;
+      careerFreePresideProposal(c, (document.getElementById("career-preside-free").value || "").trim());
+      rerender();
     });
     app.querySelectorAll("[data-career-school-action]").forEach(function (btn) {
       btn.addEventListener("click", function () {
