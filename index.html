@@ -27933,6 +27933,40 @@
   }
 
   // --- Scrutini, debiti, nuovo anno, maturità ---
+  // Richiesto da un giocatore: la pagella deve comparire come dossier, materia per materia.
+  function careerPagellaHtml(c, condotta) {
+    var rows = Object.keys(c.grades).map(function (k) {
+      var g = Math.round(c.grades[k]);
+      return (g < 6 ? "✘ " : "") + k + ": <strong>" + g + "</strong>";
+    });
+    if (condotta !== undefined) rows.push((condotta < 6 ? "✘ " : "") + "Condotta: <strong>" + condotta + "</strong>");
+    return rows.join("<br>") + "<br><br>Media: <strong>" + fmt1(careerGradeAvg(c)) + "</strong>";
+  }
+  function careerPagellaDossier(c, title, esito, condotta, choices) {
+    c.pending.unshift({ id: "pagella_" + state.turn, cat: "Scuola", title: title,
+      brief: esito + "<br><br>" + careerPagellaHtml(c, condotta), choices: choices });
+  }
+  function careerPagellaChoices(c, esito) {
+    if (esito === "promosso") return [
+      { label: "Festeggi con la famiglia", eff: { genitori: 3 }, result: "Cena fuori e complimenti: a casa l'aria è serena." },
+      { label: "Pubblichi la pagella sui social", eff: { studenti: careerGradeAvg(c) >= 8 ? 1 : -1, rep: 0.5 }, result: careerGradeAvg(c) >= 8 ? "Qualcuno ti prende in giro come secchione, ma molti apprezzano." : "Una pagella normale non fa notizia: pochi like." },
+      { label: "Ti prepari già per l'anno prossimo", eff: { genitori: 1.5, rep: 0.3 }, result: "Un'estate tranquilla, ma con qualche libro sul comodino." }
+    ];
+    if (esito === "rimandato") return [
+      { label: "Prometti ai tuoi genitori di studiare tutta l'estate", eff: { genitori: 3 }, result: "Ti credono, per ora. A fine agosto si vedrà." },
+      { label: "Prendi ripetizioni private", eff: { genitori: 2 }, result: "Costano, ma con un prof accanto i debiti fanno meno paura." },
+      { label: "Minimizzi: «Sono solo debiti»", eff: { genitori: -4, studenti: 1 }, result: "A casa la discussione è lunga e non finisce bene." }
+    ];
+    if (esito === "ammesso") return [
+      { label: "Festeggi l'ammissione", eff: { genitori: 2, studenti: 1 }, result: "Ammesso/a all'esame: ora manca solo l'ultimo sforzo." },
+      { label: "Ti chiudi in casa a ripassare", eff: { genitori: 2 }, result: "Mappe, schemi e caffè: la maturità non ti coglierà impreparato/a." }
+    ];
+    return [
+      { label: "Accetti e riparti da capo", eff: { genitori: 2, rep: 0.5 }, result: "Fa male, ma l'anno prossimo andrà diversamente." },
+      { label: "Fai ricorso al TAR", chance: 0.08, eff: { genitori: 3, rep: 1 }, result: "Incredibile: il ricorso viene accolto per un vizio di forma.", fail: { eff: { genitori: -3, preside: -5, rep: -1 }, result: "Il ricorso viene respinto e la scuola non la prende bene." } },
+      { label: "Pensi di cambiare scuola", eff: { genitori: -2 }, result: "Ne parli a casa, ma alla fine resti: scappare non risolve." }
+    ];
+  }
   function careerYearCredit(avg) { return clamp(Math.round(2 * avg - 4), 7, 15); }
   function careerRunScrutinio(c) {
     var s = c.school;
@@ -27949,27 +27983,32 @@
         c.yearAverages.push(avg);
         c.maturita = { step: 0, scores: [] };
         addCareerDiaryEntry("Ammissione alla maturità", "Sei ammesso/a all'esame di Stato. Pagella: " + pagella + ".");
+        careerPagellaDossier(c, "La pagella di fine anno", "<strong>Ammesso/a all'esame di Stato.</strong>", condotta, careerPagellaChoices(c, "ammesso"));
         return;
       }
       c.yearResult = "bocciato";
       careerApplyEffects(c, { genitori: -15, rep: -3, studenti: -4 });
       addCareerDiaryEntry("Non ammesso/a alla maturità", "Il consiglio di classe non ti ammette all'esame. Ripeterai il quinto anno. Pagella: " + pagella + ".");
+      careerPagellaDossier(c, "La pagella di fine anno", "<strong>Non ammesso/a alla maturità:</strong> ripeterai il quinto anno.", condotta, careerPagellaChoices(c, "bocciato"));
       return;
     }
     if (condotta <= 5 || insuff.length >= 4 || severe.length >= 2 || (insuff.length === 3 && severe.length >= 1)) {
       c.yearResult = "bocciato";
       careerApplyEffects(c, { genitori: -15, rep: -3, studenti: -4, fiducia: -5 });
       addCareerDiaryEntry("Bocciatura", (condotta <= 5 ? "Il 5 in condotta pesa come un macigno: " : "Troppe insufficienze: ") + "non sei ammesso/a all'anno successivo. Pagella: " + pagella + ".");
+      careerPagellaDossier(c, "La pagella di fine anno", "<strong>Bocciato/a:</strong> " + (condotta <= 5 ? "il 5 in condotta pesa come un macigno." : "troppe insufficienze per passare all'anno successivo."), condotta, careerPagellaChoices(c, "bocciato"));
     } else if (insuff.length) {
       c.yearResult = "rimandato";
       c.debiti = insuff.slice();
       careerApplyEffects(c, { genitori: -6 });
       addCareerDiaryEntry("Rimandato/a a settembre", "Giudizio sospeso in " + insuff.join(", ") + ": esami di riparazione a fine agosto. Pagella: " + pagella + ".");
+      careerPagellaDossier(c, "La pagella di fine anno", "<strong>Giudizio sospeso</strong> in " + insuff.join(", ") + ": esami di riparazione a fine agosto.", condotta, careerPagellaChoices(c, "rimandato"));
     } else {
       c.yearResult = "promosso";
       c.yearAverages.push(avg);
       careerApplyEffects(c, { genitori: avg >= 8 ? 6 : 3, rep: avg >= 8.5 ? 1.5 : 0 });
       addCareerDiaryEntry("Promosso/a", "Passi all'anno successivo con " + fmt1(avg) + " di media. Pagella: " + pagella + ".");
+      careerPagellaDossier(c, "La pagella di fine anno", "<strong>Promosso/a</strong> all'anno successivo.", condotta, careerPagellaChoices(c, "promosso"));
     }
   }
   function careerRunRiparazione(c) {
@@ -28348,7 +28387,18 @@
       if (c.list) c.list.fiducia = clamp(c.list.fiducia - 0.6, 0, 100);
       if (c.role === "presidente" && c.metrics.studenti < 30) c.lowStudentWeeks++; else c.lowStudentWeeks = 0;
       if (cal.elezioni) careerRunElection(c);
-      if (cal.pagella) addCareerDiaryEntry("Pagella del primo quadrimestre", Object.keys(c.grades).map(function (k) { return k + " " + Math.round(c.grades[k]); }).join(", ") + ". Media " + fmt1(careerGradeAvg(c)) + ".");
+      if (cal.pagella && c.lastPagellaTurn !== state.turn - 1) {
+        c.lastPagellaTurn = state.turn;
+        addCareerDiaryEntry("Pagella del primo quadrimestre", Object.keys(c.grades).map(function (k) { return k + " " + Math.round(c.grades[k]); }).join(", ") + ". Media " + fmt1(careerGradeAvg(c)) + ".");
+        var insuffQ = Object.keys(c.grades).filter(function (k) { return Math.round(c.grades[k]) < 6; });
+        careerPagellaDossier(c, "La pagella del primo quadrimestre", insuffQ.length ? "Insufficienze in " + insuffQ.join(", ") + ": c'è tempo per recuperare entro giugno." : "Nessuna insufficienza: un primo quadrimestre senza problemi.", undefined, insuffQ.length ? [
+          { label: "Ti metti sotto sulle materie insufficienti", eff: { genitori: 2 }, result: "Più ore sui libri: i tuoi genitori lo notano." },
+          { label: "Dai la colpa ai professori", eff: { genitori: -3, studenti: 0.5 }, result: "A casa non la bevono: la discussione dura tutta la cena." }
+        ] : [
+          { label: "Mostri la pagella ai tuoi genitori", eff: { genitori: 2.5 }, result: "Sorrisi a tavola: la fiducia a casa sale." },
+          { label: "Non ti monti la testa", eff: { rep: 0.3 }, result: "Metà anno è andata, ma la parte difficile viene adesso." }
+        ]);
+      }
       if (cal.scrutinio) careerRunScrutinio(c);
       if (cal.riparazione) careerRunRiparazione(c);
       if (c.maturita && c.maturita.step >= 3) careerFinishMaturita(c);
