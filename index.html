@@ -313,6 +313,11 @@
     margin: 0 0 1.1rem; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
   }
   .page-nav-bar::-webkit-scrollbar { height: 5px; }
+  .career-nav-sticky.is-fixed {
+    position: fixed; top: 0; z-index: 30; margin: 0; padding-left: 0.4rem; padding-right: 0.4rem;
+    background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border); box-sizing: border-box;
+  }
   .page-nav-bar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: var(--radius-pill); }
   .page-nav-btn {
     flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 0.3rem;
@@ -28322,6 +28327,51 @@
     if (c.classRep) return "Rappresentante di classe";
     return "Studente/ssa";
   }
+  // Segnalato da un giocatore (da telefono): toccando un'icona in fondo alla barra delle schede, la barra
+  // tornava all'inizio e l'icona scelta spariva di nuovo fuori schermo; e la pagina restava in alto invece
+  // di portare al contenuto della sezione. Ora la barra resta centrata sulla scheda attiva e, dopo un
+  // cambio di scheda, la pagina scorre fino all'inizio della sezione.
+  // La barra resta agganciata in alto mentre si scorre (il body del sito è un contenitore con overflow,
+  // quindi position: sticky non funziona: la si fissa via JS con un segnaposto della stessa altezza).
+  function careerStickyNavCheck() {
+    var nav = document.querySelector(".career-nav-sticky");
+    var ph = document.getElementById("career-nav-ph");
+    if (!nav || !ph) return;
+    var r = ph.getBoundingClientRect();
+    if (r.top < 0) {
+      if (!nav.classList.contains("is-fixed")) { ph.style.height = nav.offsetHeight + "px"; nav.classList.add("is-fixed"); }
+      nav.style.left = r.left + "px"; nav.style.width = r.width + "px";
+    } else if (nav.classList.contains("is-fixed")) {
+      nav.classList.remove("is-fixed"); nav.style.left = ""; nav.style.width = ""; ph.style.height = "0px";
+    }
+  }
+  var careerStickyBound = false;
+  function careerAfterRenderNav(c) {
+    var navEl = app.querySelector(".career-nav-sticky");
+    if (navEl && !document.getElementById("career-nav-ph")) {
+      var ph = document.createElement("div");
+      ph.id = "career-nav-ph"; ph.style.height = "0px";
+      navEl.parentNode.insertBefore(ph, navEl);
+    }
+    if (!careerStickyBound) {
+      careerStickyBound = true;
+      window.addEventListener("scroll", careerStickyNavCheck, { passive: true });
+      document.body.addEventListener("scroll", careerStickyNavCheck, { passive: true });
+      window.addEventListener("resize", careerStickyNavCheck);
+    }
+    var nav = app.querySelector(".page-nav-bar");
+    var active = nav && nav.querySelector(".page-nav-btn.active");
+    if (nav && active) nav.scrollLeft = Math.max(0, active.offsetLeft - nav.clientWidth / 2 + active.offsetWidth / 2);
+    if (c.navJump) {
+      c.navJump = false;
+      var anchor = document.getElementById("career-tab-anchor");
+      if (anchor && typeof anchor.scrollIntoView === "function") {
+        anchor.scrollIntoView({ block: "start", behavior: "auto" });
+        window.scrollBy(0, -((nav ? nav.offsetHeight : 0) + 12));
+      }
+    }
+    careerStickyNavCheck();
+  }
   function renderCareerDossiers(c) {
     if (!c.pending.length) return "";
     return c.pending.map(function (d, i) {
@@ -28491,9 +28541,10 @@
     // Richiesto da un giocatore: appena si entra, in alto devono esserci subito le schede (barra di
     // icone orizzontale) e sotto i dossier della settimana; l'intestazione col nome viene dopo.
     var tabs = CAREER_UI_TABS.filter(function (t) { return c.stage === "scuola" || (t.id !== "scuola" && t.id !== "lista"); });
-    html = '<nav aria-label="Sezioni della carriera" class="page-nav-bar">' + tabs.map(function (pg) {
+    html = '<nav aria-label="Sezioni della carriera" class="page-nav-bar career-nav-sticky">' + tabs.map(function (pg) {
       return '<button type="button" class="page-nav-btn' + (pg.id === c.ui ? " active" : "") + '" data-career-nav="' + pg.id + '" title="' + pg.label + '"><span class="page-nav-icon">' + pg.icon + '</span><span class="page-nav-label">' + pg.nav + "</span></button>";
     }).join("") + "</nav>" + renderCareerDossiers(c) + html;
+    html += '<div id="career-tab-anchor"></div>';
     if (c.ui === "scuola") html += renderCareerSchoolTab(c);
     else if (c.ui === "lista") html += renderCareerListTab(c);
     else if (c.ui === "azioni") html += renderCareerActionsTab(c);
@@ -28509,6 +28560,7 @@
       (c.pending.length ? "Affronta prima i dossier della settimana" : "Passa alla settimana successiva") + "</button></div>";
     app.innerHTML = html;
     bindCareerInteractions();
+    careerAfterRenderNav(c);
   }
   function bindCareerInteractions() {
     var c = state.career;
@@ -28517,7 +28569,7 @@
     bindAutoGrowTextarea("career-post-input");
     var rerender = function () { save(); render(); };
     app.querySelectorAll("[data-career-nav]").forEach(function (btn) {
-      btn.addEventListener("click", function () { c.ui = btn.getAttribute("data-career-nav"); rerender(); });
+      btn.addEventListener("click", function () { c.ui = btn.getAttribute("data-career-nav"); c.navJump = true; rerender(); });
     });
     app.querySelectorAll("[data-career-dossier]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -29974,9 +30026,10 @@
     var fam = familyById(c.family);
     var html = '<div class="setup-card"><p class="eyebrow">Carriera da politico · ' + weekLabel(state.turn) + "</p><h2>" + c.name + "</h2>" +
       '<p class="lead">' + careerAge(c) + " anni · " + c.city + " · " + (fam ? fam.label : c.family) + "<br>" + careerAdultRoleLine(c) + "</p></div>";
-    html = '<nav aria-label="Sezioni della carriera" class="page-nav-bar">' + CAREER_ADULT_TABS.map(function (pg) {
+    html = '<nav aria-label="Sezioni della carriera" class="page-nav-bar career-nav-sticky">' + CAREER_ADULT_TABS.map(function (pg) {
       return '<button type="button" class="page-nav-btn' + (pg.id === c.ui ? " active" : "") + '" data-career-nav="' + pg.id + '" title="' + pg.label + '"><span class="page-nav-icon">' + pg.icon + '</span><span class="page-nav-label">' + pg.nav + "</span></button>";
     }).join("") + "</nav>" + renderCareerDossiers(c) + html;
+    html += '<div id="career-tab-anchor"></div>';
     if (c.ui === "profilo") html += renderCareerAdultProfile(c);
     else if (c.ui === "partito") html += renderCareerAdultParty(c);
     else if (c.ui === "elezioni") html += renderCareerAdultElections(c);
@@ -29991,6 +30044,7 @@
       (c.pending.length ? "Affronta prima i dossier della settimana" : "Passa alla settimana successiva") + "</button></div>";
     app.innerHTML = html;
     bindCareerAdultInteractions();
+    careerAfterRenderNav(c);
   }
   function bindCareerAdultInteractions() {
     var c = state.career;
@@ -29999,7 +30053,7 @@
     var rerender = function () { save(); render(); };
     var on = function (sel, fn) { app.querySelectorAll(sel).forEach(function (btn) { btn.addEventListener("click", function () { if (btn.disabled) return; fn(btn); }); }); };
     var byId = function (id, fn) { var el = document.getElementById(id); if (el) el.addEventListener("click", function () { if (el.disabled) return; fn(el); }); };
-    on("[data-career-nav]", function (btn) { c.ui = btn.getAttribute("data-career-nav"); rerender(); });
+    on("[data-career-nav]", function (btn) { c.ui = btn.getAttribute("data-career-nav"); c.navJump = true; rerender(); });
     on("[data-career-dossier]", function (btn) { careerResolveDossier(parseInt(btn.getAttribute("data-career-dossier"), 10), parseInt(btn.getAttribute("data-career-choice"), 10)); });
     on("[data-career-focus]", function (btn) {
       var before = careerActionsPerWeek(c);
