@@ -877,7 +877,7 @@
     <span>Punto di partenza (7 ottobre 2026: sondaggi, spread, debito e rating dei partiti esistenti) basato su dati reali; il tuo partito, i dossier e gli esiti da qui in poi sono generati dal gioco e sono fittizi. Salvataggio automatico nel browser; usa "Esporta partita" qui sopra per portarla su un altro dispositivo o metterla al sicuro.</span>
     <span style="flex-basis:100%">Per informazioni, feedback, consigli o segnalazione bug scrivete a <a href="mailto:politisitgioco@gmail.com" style="color:inherit">politisitgioco@gmail.com</a></span>
     <!-- Versione visibile: aggiornarla a ogni rilascio, così chi gioca capisce subito se ha l'ultima. -->
-    <span style="flex-basis:100%;opacity:0.7">Versione 2026.10.28g — città della carriera raggruppate per regione · nuova schermata iniziale con le tre modalità · leggi approvate archiviate per sempre · Carriera da politico completa: scuola, università, partito, cariche, sindacato, forze armate, magistratura, logge</span>
+    <span style="flex-basis:100%;opacity:0.7">Versione 2026.10.28h — repubblica presidenziale vera · città della carriera raggruppate per regione · nuova schermata iniziale con le tre modalità · leggi approvate archiviate per sempre · Carriera da politico completa: scuola, università, partito, cariche, sindacato, forze armate, magistratura, logge</span>
     <div class="footer-actions">
       <button class="reset" id="reset-btn" type="button">Nuova partita</button>
     </div>
@@ -5400,6 +5400,7 @@
     triggerLocalElectionCycle();
     resolveEuropeanElection();
     resolveNationalGovCrisisInBackground();
+    runPresidentElectionInBackground();
     if (!state.regime && state.turn >= state.nextElectionTurn) { resolveElection(); }
     // Stesso guard delle altre due catene di turno (nazionale e presidenziale): se l'elezione appena
     // risolta ha aperto una trattativa interattiva per la maggioranza nazionale, ha priorità assoluta su
@@ -13716,6 +13717,17 @@
   }
   function generatePrimeMinisterResignationDossier() {
     if (!state.cabinet || state.cabinet.premierId !== "player") return null;
+    if (playerIsExecutivePresident()) {
+      return {
+        id: "gov_dimissioni_premier", kind: "notizia", cat: "Governo",
+        title: "Dimissioni da Presidente della Repubblica",
+        brief: "In una repubblica presidenziale le dimissioni del Presidente non aprono consultazioni: si torna alle urne per eleggere un nuovo Presidente entro 8 settimane. Fino ad allora il governo resta in carica per gli affari correnti.",
+        choices: [
+          { label: "Ti dimetti: nuove elezioni presidenziali", hint: "Potrai ricandidarti, ma il gesto peserà sulla tua immagine", resignPresident: true, effects: {}, result: "" },
+          { label: "Resta al tuo posto, per ora", hint: "Nessun cambiamento", effects: {}, result: "Decidi di restare al tuo posto fino alla fine del mandato." }
+        ]
+      };
+    }
     var allyIds = ((state.govEntity && state.govEntity.memberIds) || []).filter(function (id) { return id !== "player"; });
     var brief = allyIds.length
       ? "Decidi di lasciare la guida del governo. Il Presidente della Repubblica avvierà le consultazioni: la coalizione potrebbe trovare un nuovo Presidente del Consiglio senza tornare al voto, oppure la crisi potrebbe portare dritta a elezioni anticipate."
@@ -13926,7 +13938,9 @@
       items.push({ id: "gov_abolisci_partito", label: "Abolisci un Partito", desc: hasAbolishTargets ? "Sciogli con la forza un partito ancora attivo" : "Nessun partito da sciogliere resta sulla scena", disabled: !hasAbolishTargets });
     }
     if (state.cabinet && state.cabinet.premierId === "player") {
-      items.push({ id: "gov_dimissioni_premier", label: "Dimettiti da Presidente del Consiglio", desc: "Apri una crisi di governo: nuovo premier dalla coalizione, o elezioni anticipate", disabled: false });
+      items.push(playerIsExecutivePresident()
+        ? { id: "gov_dimissioni_premier", label: "Dimettiti da Presidente della Repubblica", desc: "Nuove elezioni presidenziali entro 8 settimane", disabled: false }
+        : { id: "gov_dimissioni_premier", label: "Dimettiti da Presidente del Consiglio", desc: "Apri una crisi di governo: nuovo premier dalla coalizione, o elezioni anticipate", disabled: false });
     }
     if (state.playerMinistry && state.cabinet && state.cabinet.premierId !== "player") {
       items.push({ id: "gov_dimissioni_ministro", label: "Dimettiti da Ministro", desc: "Lasci il dicastero " + diLabel(state.playerMinistry.ministry) + ", senza crisi di governo", disabled: false });
@@ -16836,7 +16850,7 @@
       passText: "Il \"sì\" prevale: l'obbligo vaccinale pediatrico viene rafforzato in nome della sanità pubblica.",
       failText: "Il \"no\" prevale: le vaccinazioni pediatriche restano su base perlopiù raccomandata." },
     { id: "presidenzialismo", title: "Referendum: eleggere direttamente il Presidente della Repubblica?", constitutional: true,
-      brief: "Un referendum costituzionale chiede se passare all'elezione diretta del Presidente della Repubblica, con poteri rafforzati.",
+      brief: "Un referendum costituzionale chiede se passare a una repubblica presidenziale: Presidente eletto dai cittadini, a capo del governo per cinque anni.",
       metric: "corruzione", passDelta: -0.3, failDelta: 0.15,
       passText: "Il \"sì\" prevale: si va verso l'elezione diretta del Capo dello Stato, tra chi vede più stabilità e chi teme un eccessivo accentramento di potere.",
       failText: "Il \"no\" prevale: la forma di governo parlamentare resta quella attuale, con i suoi pesi e contrappesi." },
@@ -17036,6 +17050,7 @@
     if (passed) {
       if (!state.passedNationalReferendumIds) state.passedNationalReferendumIds = [];
       state.passedNationalReferendumIds.push(topic.id);
+      if (topic.id === "presidenzialismo") onPresidentialismEnacted();
       recordEnactedPolicy(topic.title, esito + " Il paese prende atto del cambiamento: questo referendum non verrà riproposto.", topic.metric);
       if (topic.electoralSystem) state.electoralSystem = topic.electoralSystem;
     }
@@ -17134,6 +17149,355 @@
   // reali dei due schieramenti, non solo chi guida il governo del momento).
   function presidentElectionIsPopular() {
     return !!(state.passedNationalReferendumIds && state.passedNationalReferendumIds.indexOf("presidenzialismo") !== -1);
+  }
+  // ---------- Repubblica presidenziale ----------
+  // Segnalato da un giocatore: con il presidenzialismo in Costituzione non cambiava nulla, se non il testo
+  // dell'elezione del Colle. Ora la riforma cambia davvero la forma di governo:
+  // - il Presidente è eletto direttamente dai cittadini, a doppio turno (ballottaggio tra i primi due se
+  //   nessuno supera il 50%), con un mandato di 5 anni rinnovabile una sola volta;
+  // - a candidarsi sono i leader dei partiti e delle coalizioni, e anche il giocatore (se guida il partito
+  //   e ha almeno 40 anni), senza più i 25 anni di carriera richiesti al Presidente "di garanzia";
+  // - il Presidente eletto guida il governo: la sua coalizione forma l'esecutivo e il capo del governo è
+  //   lui (se vince il giocatore, governa lui, restando in modalità partito);
+  // - niente più voto di fiducia, mandato esplorativo o crisi parlamentari: l'esecutivo dura fino alla
+  //   scadenza del mandato. Le elezioni politiche eleggono solo il Parlamento: se la maggioranza delle
+  //   Camere è di segno opposto nasce un "governo diviso", e le leggi passano molto più a fatica;
+  // - il Presidente può porre il veto (rinvio) alle leggi dell'opposizione, mai a quelle della propria parte.
+  var PRESIDENTIAL_TERM_TURNS = 260;
+  var PRESIDENTIAL_MIN_AGE = 40;
+  function isPresidentialSystem() {
+    return constitutionHas("presidenzialismo") || presidentElectionIsPopular();
+  }
+  function presidentialExecutiveActive() {
+    return !!(isPresidentialSystem() && state.president && state.president.executive && !state.regime);
+  }
+  function playerIsExecutivePresident() {
+    return presidentialExecutiveActive() && !!state.president.isPlayer;
+  }
+  function headOfGovernmentLabel() {
+    return presidentialExecutiveActive() ? "Presidente della Repubblica" : "Presidente del Consiglio";
+  }
+  function presidentialLean(partyIdOrPlayer) {
+    if (partyIdOrPlayer === "player") return LEFT_RIGHT_POSITION[state.player.family] || 0;
+    var pt = partyById(partyIdOrPlayer);
+    return pt && LEFT_RIGHT_POSITION[pt.familyId] !== undefined ? LEFT_RIGHT_POSITION[pt.familyId] : 0;
+  }
+  function presidentialLeaningFromLean(v) { return v <= -0.8 ? "sinistra" : v >= 0.8 ? "destra" : "centro"; }
+  function playerLeaderName() {
+    var p = state.player;
+    if (!p.leaderName) p.leaderName = generateStaffName();
+    return p.leaderName;
+  }
+  function presidentialPoll(id) { return id === "player" ? (state.player.sondaggi || 0) : (state.parties[id] || 0); }
+  // Chi può correre per il Colle da leader del proprio partito.
+  function playerPresidentialEligibility() {
+    var p = state.player;
+    if (!p || !p.playerIsLeader) return "Non guidi il partito.";
+    if (p.permanentlyBanned || (p.incarceratedUntilTurn && state.turn < p.incarceratedUntilTurn)) return "Una condanna ti impedisce di candidarti.";
+    if (leaderAge(p) < PRESIDENTIAL_MIN_AGE) return "Servono almeno " + PRESIDENTIAL_MIN_AGE + " anni.";
+    if (state.president && state.president.isPlayer && (state.president.termCount || 1) >= 2) return "Hai già fatto due mandati consecutivi.";
+    return null;
+  }
+  // Blocchi elettorali (coalizioni fisse e dinamiche) con i loro membri ancora attivi.
+  function presidentialBlocs() {
+    var active = activeParties().map(function (pt) { return pt.id; });
+    var p = state.player;
+    var list = [COALITIONS.centrodestra, COALITIONS.campolargo].map(function (c, i) { return { id: i === 0 ? "centrodestra" : "campolargo", label: c.label, members: c.members.slice() }; })
+      .concat((state.dynamicCoalitions || []).map(function (c) { return { id: c.id, label: c.label, members: (c.members || []).slice() }; }));
+    return list.map(function (b) {
+      var members = b.members.filter(function (id) { return active.indexOf(id) !== -1; });
+      if (p && p.allianceId === b.id && members.indexOf("player") === -1) members.push("player");
+      return { id: b.id, label: b.label, members: members };
+    }).filter(function (b) { return b.members.length; });
+  }
+  function presidentialCandidateName(id) {
+    if (id === "player") return playerLeaderName();
+    var pt = activeParties().filter(function (x) { return x.id === id; })[0];
+    var name = pt ? pt.leader : generateStaffName();
+    // un Presidente CPU al secondo mandato non può ricandidarsi: il suo partito sceglie un altro nome
+    if (state.president && !state.president.isPlayer && state.president.partyId === id && state.president.name === name && (state.president.termCount || 1) >= 2) {
+      if (!state.presidentialSuccessorNames) state.presidentialSuccessorNames = {};
+      if (!state.presidentialSuccessorNames[id]) state.presidentialSuccessorNames[id] = generateStaffName();
+      name = state.presidentialSuccessorNames[id];
+    }
+    return name;
+  }
+  function buildPresidentialCandidates() {
+    var p = state.player;
+    var eligible = !playerPresidentialEligibility();
+    var cands = [];
+    var inBloc = {};
+    presidentialBlocs().forEach(function (b) {
+      b.members.forEach(function (id) { inBloc[id] = b.id; });
+      var lead = b.members.slice().sort(function (a, c) { return presidentialPoll(c) - presidentialPoll(a); })[0];
+      if (lead === "player" && !eligible) lead = b.members.filter(function (id) { return id !== "player"; }).sort(function (a, c) { return presidentialPoll(c) - presidentialPoll(a); })[0];
+      if (!lead) return;
+      cands.push({ id: "c_" + b.id, leadId: lead, base: b.members.slice(), label: b.label, isPlayer: lead === "player" });
+    });
+    // i partiti fuori dalle coalizioni con un peso reale (almeno il 4%) corrono con un proprio candidato
+    activeParties().filter(function (pt) { return !inBloc[pt.id] && (state.parties[pt.id] || 0) >= 4; })
+      .sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); }).slice(0, 2)
+      .forEach(function (pt) { cands.push({ id: "c_" + pt.id, leadId: pt.id, base: [pt.id], label: pt.name, isPlayer: false }); });
+    // il giocatore fuori dalle coalizioni può correre con il proprio partito
+    if (p && !inBloc.player && eligible) cands.push({ id: "c_player", leadId: "player", base: ["player"], label: p.name, isPlayer: true });
+    cands.forEach(function (c) {
+      c.name = presidentialCandidateName(c.leadId);
+      c.partyName = c.leadId === "player" ? p.name : (partyById(c.leadId) || {}).name;
+      c.lean = presidentialLean(c.leadId);
+      c.leaning = presidentialLeaningFromLean(c.lean);
+      c.incumbent = !!(state.president && state.president.executive && state.president.name === c.name);
+    });
+    return cands;
+  }
+  function generateDirectPresidentialDossier() {
+    var p = state.player;
+    var cands = buildPresidentialCandidates();
+    var playerCand = cands.filter(function (c) { return c.isPlayer; })[0];
+    var playerBlocCand = cands.filter(function (c) { return !c.isPlayer && c.base.indexOf("player") !== -1; })[0];
+    var why = playerPresidentialEligibility();
+    var choices = [];
+    if (playerCand) {
+      choices.push({ label: "Campagna moderata: parli a tutto il paese", hint: "Guadagni al centro, convinci meno la base", presStyle: "moderata", effects: {} });
+      choices.push({ label: "Campagna identitaria: mobiliti la tua base", hint: "Base compatta, ma al ballottaggio trovi pochi alleati", presStyle: "identitaria", effects: {} });
+      choices.push({ label: "Campagna contro il sistema", hint: "Può sfondare o affondare", presStyle: "populista", effects: {} });
+    } else if (playerBlocCand && !why) {
+      choices.push({ label: "Sfidi " + playerBlocCand.name + " e corri da solo/a", hint: "Dividi la tua coalizione: rischioso, ma è la tua occasione", presStyle: "solo", effects: {} });
+    }
+    cands.forEach(function (c) {
+      if (c.isPlayer) return;
+      choices.push({ label: "Sostieni " + c.name + " (" + c.partyName + ")", hint: c.label + (c.incumbent ? " · Presidente uscente" : ""), presEndorse: c.id, effects: {} });
+    });
+    choices.push({ label: "Nessuna indicazione di voto", hint: "Il partito resta alla finestra", presEndorse: null, effects: {} });
+    var list = cands.map(function (c) { return c.name + " (" + c.label + ")"; }).join(", ");
+    return {
+      id: "presidential_r1", kind: "notizia", cat: "Elezioni Presidenziali", eyebrow: "Repubblica presidenziale — primo turno",
+      title: "Elezioni presidenziali: il primo turno",
+      brief: "Con il presidenzialismo in Costituzione sono i cittadini a scegliere il Presidente della Repubblica, che guida anche il governo per cinque anni. Al primo turno si presentano: " + list + ". Se nessuno supera il 50% si va al ballottaggio tra i primi due." +
+        (playerCand ? " Il candidato della tua parte sei tu: scegli come impostare la campagna." : why ? " Tu non puoi candidarti: " + why.charAt(0).toLowerCase() + why.slice(1) : ""),
+      candidates: cands, choices: choices
+    };
+  }
+  function presidentialFirstRound(cands, choice) {
+    var p = state.player;
+    if (choice.presStyle === "solo") {
+      var blocC = cands.filter(function (c) { return !c.isPlayer && c.base.indexOf("player") !== -1; })[0];
+      if (blocC) blocC.base = blocC.base.filter(function (id) { return id !== "player"; });
+      cands.push({ id: "c_player", leadId: "player", base: ["player"], label: p.name, isPlayer: true, name: playerLeaderName(), partyName: p.name, lean: presidentialLean("player"), leaning: presidentialLeaningFromLean(presidentialLean("player")) });
+    }
+    var counted = {};
+    var votes = cands.map(function (c) {
+      var v = c.base.reduce(function (s, id) { counted[id] = true; return s + presidentialPoll(id); }, 0);
+      var factor = 1 + rand(-0.08, 0.1) + (c.incumbent ? 0.05 : 0);
+      if (c.isPlayer) {
+        factor = 0.9 + clamp((p.reputazione || 50) - 50, -30, 40) / 200;
+        if (choice.presStyle === "moderata") factor += Math.abs(c.lean) <= 1 ? 0.1 : 0.05;
+        else if (choice.presStyle === "identitaria") factor += 0.04;
+        else if (choice.presStyle === "populista") factor += rand(-0.12, 0.2);
+        else if (choice.presStyle === "solo") factor += 0.05;
+      }
+      return v * factor;
+    });
+    // il partito del giocatore che sostiene un altro candidato porta lì i propri voti
+    if (choice.presEndorse) {
+      cands.forEach(function (c, i) {
+        if (c.base.indexOf("player") !== -1 && c.id !== choice.presEndorse) votes[i] -= p.sondaggi;
+        if (c.id === choice.presEndorse) votes[i] += p.sondaggi * (c.base.indexOf("player") !== -1 ? 0.15 : 0.8);
+      });
+      counted.player = true;
+    }
+    // chi non corre vota il candidato più vicino alle proprie idee
+    var loose = activeParties().filter(function (pt) { return !counted[pt.id]; }).map(function (pt) { return { lean: presidentialLean(pt.id), v: state.parties[pt.id] || 0 }; });
+    if (!counted.player && p) loose.push({ lean: presidentialLean("player"), v: p.sondaggi || 0 });
+    loose.forEach(function (lp) {
+      var ws = cands.map(function (c) { return 1 / (0.5 + Math.abs(c.lean - lp.lean)); });
+      var tot = ws.reduce(function (a, b) { return a + b; }, 0);
+      ws.forEach(function (w, i) { votes[i] += lp.v * 0.75 * w / tot; });
+    });
+    votes = votes.map(function (v) { return Math.max(0.5, v * (1 + rand(-0.05, 0.05))); });
+    var total = votes.reduce(function (a, b) { return a + b; }, 0);
+    cands.forEach(function (c, i) { c.share = votes[i] / total * 100; });
+    return cands.slice().sort(function (a, b) { return b.share - a.share; });
+  }
+  function resolveDirectPresidentialRound1(dossier, choice) {
+    var cands = (dossier.candidates || buildPresidentialCandidates()).map(function (c) { return Object.assign({}, c, { base: c.base.slice() }); });
+    var ranked = presidentialFirstRound(cands, choice);
+    var table = ranked.map(function (c) { return c.name + " " + fmt1(c.share) + "%"; }).join(" · ");
+    state.player.lastPresidentialStyle = choice.presStyle || null;
+    state.player.lastPresidentialEndorse = choice.presEndorse || null;
+    if (ranked[0].share >= 50 || ranked.length < 2) {
+      applyPresidentialWinner(ranked[0], ranked[0].share, "al primo turno", table);
+      return;
+    }
+    state.pendingPresidentialRunoff = { turn: state.turn + 2, finalists: [ranked[0], ranked[1]], others: ranked.slice(2), table: table };
+    var playerIn = ranked[0].isPlayer || ranked[1].isPlayer;
+    var playerOut = cands.some(function (c) { return c.isPlayer; }) && !playerIn;
+    var text = "Primo turno delle presidenziali: " + table + ". Nessuno supera il 50%: tra due settimane ballottaggio tra " + ranked[0].name + " e " + ranked[1].name + "." +
+      (playerIn ? " Sei al ballottaggio." : playerOut ? " Sei fuori dalla corsa." : "");
+    if (playerOut) state.player.reputazione = clamp(state.player.reputazione - rand(1, 3), 0, 100);
+    state.log.unshift({ week: state.turn, title: "Presidenziali: primo turno", choiceLabel: choice.label, result: text, headlines: [], type: "election", cat: "Elezioni Presidenziali" });
+    state.resultData = { resultText: text, headlines: [] };
+  }
+  function buildPresidentialRunoffDossier() {
+    var r = state.pendingPresidentialRunoff;
+    var a = r.finalists[0], b = r.finalists[1];
+    var mine = a.isPlayer ? a : b.isPlayer ? b : null;
+    var choices;
+    if (mine) {
+      var third = r.others[0];
+      choices = [
+        { label: "Appello agli elettori moderati", hint: "Funziona meglio se le tue posizioni sono già vicine al centro", runoffStyle: "centro", effects: {} },
+        { label: "Mobiliti la base: tutti alle urne", hint: "Porta a votare chi è già con te", runoffStyle: "base", effects: {} }
+      ];
+      if (third) choices.push({ label: "Accordo con " + third.name + " (" + fmt1(third.share) + "% al primo turno)", hint: "I suoi voti vengono quasi tutti da te, ma l'accordo costa in coerenza", runoffStyle: "accordo", effects: {} });
+    } else {
+      choices = [a, b].map(function (c) { return { label: "Sostieni " + c.name, hint: c.label, runoffEndorse: c.id, effects: {} }; })
+        .concat([{ label: "Nessuna indicazione", hint: "Libertà di voto", runoffEndorse: null, effects: {} }]);
+    }
+    return {
+      id: "presidential_runoff", kind: "notizia", cat: "Elezioni Presidenziali", eyebrow: "Repubblica presidenziale — ballottaggio",
+      title: "Ballottaggio: " + a.name + " contro " + b.name,
+      brief: "Primo turno: " + r.table + ". Ora restano in due: " + a.name + " (" + fmt1(a.share) + "%) e " + b.name + " (" + fmt1(b.share) + "%). Gli elettori degli altri candidati sceglieranno chi sentono più vicino, o resteranno a casa." + (mine ? " Sei in corsa per il Colle." : ""),
+      choices: choices
+    };
+  }
+  function resolvePresidentialRunoff(dossier, choice) {
+    var r = state.pendingPresidentialRunoff;
+    state.pendingPresidentialRunoff = null;
+    if (!r) return;
+    var p = state.player;
+    var fin = r.finalists;
+    var votes = [fin[0].share, fin[1].share];
+    r.others.forEach(function (o, k) {
+      var ws = fin.map(function (c) { return 1 / (0.6 + Math.abs(c.lean - o.lean)); });
+      var tot = ws[0] + ws[1];
+      var turnout = 0.65;
+      if (choice.runoffStyle === "accordo" && k === 0) {
+        var pi = fin[0].isPlayer ? 0 : 1;
+        votes[pi] += o.share * 0.8; votes[1 - pi] += o.share * 0.05;
+        return;
+      }
+      votes[0] += o.share * turnout * ws[0] / tot;
+      votes[1] += o.share * turnout * ws[1] / tot;
+    });
+    fin.forEach(function (c, i) {
+      if (!c.isPlayer) return;
+      if (choice.runoffStyle === "centro") votes[i] += Math.abs(c.lean) <= 1 ? 5 : 2;
+      if (choice.runoffStyle === "base") votes[i] += 3 + (p.reputazione || 50) / 40;
+      if (choice.runoffStyle === "accordo") p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
+      if (p.lastPresidentialStyle === "identitaria") votes[i] -= 2;
+    });
+    if (choice.runoffEndorse) fin.forEach(function (c, i) { if (c.id === choice.runoffEndorse) votes[i] += (p.sondaggi || 0) * 0.5; });
+    votes = votes.map(function (v) { return Math.max(1, v * (1 + rand(-0.04, 0.04))); });
+    var tot2 = votes[0] + votes[1];
+    var w = votes[0] >= votes[1] ? 0 : 1;
+    var share = votes[w] / tot2 * 100;
+    var table = fin[0].name + " " + fmt1(votes[0] / tot2 * 100) + "% · " + fin[1].name + " " + fmt1(votes[1] / tot2 * 100) + "%";
+    if (!fin[w].isPlayer && choice.runoffEndorse === fin[w].id) p.reputazione = clamp(p.reputazione + rand(1, 3), 0, 100);
+    applyPresidentialWinner(fin[w], share, "al ballottaggio", table);
+  }
+  // L'eletto forma l'esecutivo: la sua coalizione governa, lui è il capo del governo, niente fiducia.
+  function applyPresidentialWinner(c, share, how, table) {
+    var p = state.player;
+    var prev = state.president;
+    var reelected = !!(prev && prev.executive && prev.name === c.name);
+    var campIds = c.base.slice();
+    state.president = {
+      name: c.name, leaning: c.leaning, partyId: c.leadId, campIds: campIds, popular: true, executive: true,
+      background: "leader di " + c.partyName + (c.label !== c.partyName ? " (" + c.label + ")" : ""), electedTurn: state.turn,
+      termCount: reelected ? (prev.termCount || 1) + 1 : 1, isPlayer: !!c.isPlayer, share: share
+    };
+    state.nextPresidentElectionTurn = state.turn + PRESIDENTIAL_TERM_TURNS;
+    var seats = state.parliamentSeats || {};
+    var memberIds = campIds.filter(function (id) { return id !== "player"; });
+    var seatSplit = {};
+    memberIds.forEach(function (mid) { seatSplit[mid] = { camera: (seats.camera && seats.camera[mid]) || 0, senato: (seats.senato && seats.senato[mid]) || 0 }; });
+    state.govEntity = { id: campIds.length > 1 ? (c.id.indexOf("c_") === 0 ? c.id.slice(2) : c.id) : (c.leadId === "player" ? "player" : c.leadId), formedTurn: state.turn, memberIds: memberIds, seatSplit: seatSplit, minority: false, extraAllyIds: [], forcedAllyIds: [], presidential: true };
+    var prevRole = p.parliamentRole;
+    var playerInCamp = campIds.indexOf("player") !== -1;
+    p.parliamentRole = c.isPlayer ? "governo" : (p.inParliament ? (playerInCamp ? "governo" : "opposizione") : null);
+    var totals = govMajoritySeatTotals(state.govEntity);
+    state.govEntity.minority = totals.camera < CAMERA_MAJORITY_SEATS || totals.senato < SENATO_MAJORITY_SEATS;
+    state.consensoGoverno = clamp(50 + (share - 50) * 0.8, 45, 68);
+    state.pendingConsultazioni = null;
+    state.pendingGovFormationNegotiation = null;
+    state.govMajorityLostCrisis = false;
+    finishGovernmentCabinetSetup();
+    state.pendingConfidenceVote = false; // nessun voto di fiducia in una repubblica presidenziale
+    if (prevRole !== "governo" && p.parliamentRole === "governo") resignPlayerFromGovernedRegions("il partito entra nel governo del Presidente");
+    if (p.parliamentRole !== prevRole) p.mozioneCandidates = null;
+    var divided = state.govEntity.minority;
+    var text = (c.isPlayer
+      ? "Vinci " + how + " (" + table + "): " + c.name + " è " + (reelected ? "rieletto/a" : "eletto/a") + " Presidente della Repubblica. Sei tu: guidi il governo per i prossimi cinque anni, con i ministri della tua coalizione."
+      : c.name + " (" + c.label + ") è " + (reelected ? "rieletto/a" : "eletto/a") + " Presidente della Repubblica " + how + " (" + table + ") e forma il nuovo governo." +
+        (playerInCamp ? " Il tuo partito fa parte della sua coalizione: siete al governo." : " Il tuo partito è all'opposizione del Presidente.")) +
+      (divided ? " Attenzione: la coalizione del Presidente non ha la maggioranza in Parlamento. È un governo diviso: le leggi passeranno a fatica fino alle prossime politiche." : " La coalizione del Presidente ha anche la maggioranza in Parlamento.");
+    if (c.isPlayer) {
+      addDiaryEntry(reelected ? "Altri cinque anni" : "Eletto/a dal popolo", reelected ? "Gli italiani mi hanno confermato la fiducia per un secondo e ultimo mandato." : "Non mi ha scelto un'aula di Palazzo: mi hanno scelto milioni di persone, una per una. Da domani governo io, e non avrò alibi.");
+      p.reputazione = clamp(p.reputazione + rand(3, 7), 0, 100);
+    }
+    state.log.unshift({ week: state.turn, title: "Elezioni presidenziali: il nuovo Presidente", choiceLabel: c.name, result: text, headlines: [], type: "election", cat: "Elezioni Presidenziali" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    state.resultData = { resultText: text, headlines: [] };
+  }
+  // Entrata in vigore: norma transitoria, prime presidenziali dirette entro sei mesi (o alla scadenza del
+  // mandato del giocatore, se è lui il Presidente "di garanzia" in carica).
+  function onPresidentialismEnacted() {
+    if (state.presidentialEnactedTurn) return;
+    state.presidentialEnactedTurn = state.turn;
+    if (state.constitution) delete state.constitution.premierato;
+    var firstTurn = state.mode === "president" && state.presidentTerm ? state.presidentTerm.termEndTurn : state.turn + 26;
+    state.nextPresidentElectionTurn = Math.min(state.nextPresidentElectionTurn || firstTurn, firstTurn);
+    if (state.mode === "president") state.nextPresidentElectionTurn = firstTurn;
+    var text = "Entra in vigore il presidenzialismo: il Presidente della Repubblica sarà eletto direttamente dai cittadini, a doppio turno, e guiderà il governo per cinque anni. Le prime elezioni presidenziali dirette si terranno alla settimana " + state.nextPresidentElectionTurn + ": fino ad allora resta in carica il sistema attuale.";
+    state.log.unshift({ week: state.turn, title: "Nasce la Repubblica presidenziale", choiceLabel: "Riforma costituzionale", result: text, headlines: [], type: "istituzioni", cat: "Istituzioni" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
+  // Elezioni politiche in una repubblica presidenziale: si rinnova solo il Parlamento, il governo resta.
+  function presidentialLegislativeAftermath() {
+    var p = state.player;
+    var pres = state.president;
+    var ge = state.govEntity;
+    var seats = state.parliamentSeats || {};
+    if (ge) (ge.memberIds || []).forEach(function (mid) { if (!ge.seatSplit) ge.seatSplit = {}; ge.seatSplit[mid] = { camera: (seats.camera && seats.camera[mid]) || 0, senato: (seats.senato && seats.senato[mid]) || 0 }; });
+    var inCamp = pres.isPlayer || (pres.campIds || []).indexOf("player") !== -1;
+    p.parliamentRole = pres.isPlayer ? "governo" : (p.inParliament ? (inCamp ? "governo" : "opposizione") : null);
+    if (!ge) return "";
+    var wasMinority = ge.minority;
+    var totals = govMajoritySeatTotals(ge);
+    ge.minority = totals.camera < CAMERA_MAJORITY_SEATS || totals.senato < SENATO_MAJORITY_SEATS;
+    state.pendingGovFormationNegotiation = null;
+    state.pendingConsultazioni = null;
+    state.pendingConfidenceVote = false;
+    return ge.minority
+      ? " In una repubblica presidenziale il governo non cambia: resta quello del Presidente " + pres.name + ", ma la sua coalizione non ha la maggioranza nelle Camere" + (wasMinority ? " (come prima)" : "") + ": governo diviso, leggi più difficili."
+      : " In una repubblica presidenziale il governo non cambia: resta quello del Presidente " + pres.name + ", che ora ha anche la maggioranza in Parlamento.";
+  }
+  // Quando il giocatore non segue la politica nazionale (presidenza regionale) le elezioni del Colle si
+  // svolgono comunque, senza che il suo partito prenda posizione.
+  function runPresidentElectionInBackground() {
+    var saved = state.resultData;
+    if (isPresidentialSystem()) {
+      if (state.pendingPresidentialRunoff) {
+        if (state.turn >= state.pendingPresidentialRunoff.turn) resolvePresidentialRunoff({}, { label: "Nessuna indicazione", runoffEndorse: null, effects: {} });
+      } else if (state.turn >= (state.nextPresidentElectionTurn || 260)) {
+        state.nextPresidentElectionTurn = state.turn + PRESIDENTIAL_TERM_TURNS;
+        resolveDirectPresidentialRound1(generateDirectPresidentialDossier(), { label: "Nessuna indicazione", presEndorse: null, effects: {} });
+      }
+    } else if (state.turn >= (state.nextPresidentElectionTurn || 260)) {
+      state.nextPresidentElectionTurn = state.turn + 364;
+      resolvePresidentElection(generatePresidentDossier(), { candidateId: null, label: "Non prendere posizione", effects: {} });
+    }
+    state.resultData = saved;
+  }
+  // Probabilità di approvazione delle leggi con un governo diviso.
+  function presidentialLawModifier(isGovProposer) {
+    if (!presidentialExecutiveActive() || !state.govEntity) return 0;
+    if (!state.govEntity.minority) return isGovProposer ? 0.04 : 0;
+    return isGovProposer ? -0.18 : 0.08;
   }
   function campPollingShare(campCheckFn) {
     var p = state.player;
@@ -18415,7 +18779,8 @@
     // completo): niente più anno di "grazia" dopo l'elezione che ignorava in silenzio un consenso già
     // sotto il 20%.
     if (state.govMajorityLostCrisis && (state.regime || state.snapElectionPending)) state.govMajorityLostCrisis = false;
-    if (!state.snapElectionPending && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
+    if (presidentialExecutiveActive()) state.govMajorityLostCrisis = false;
+    if (!state.snapElectionPending && !presidentialExecutiveActive() && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
       state.govMajorityLostCrisis = false;
       state.mandatoEsplorativoCooldownTurn = state.turn + 6;
       state.aiDynamicDossier = buildPresidentCrisisDossier();
@@ -18757,7 +19122,7 @@
         // Il governo cade per un'unica, chiara ragione: la fiducia scende sotto il 20%, non un tiro di
         // dado indipendente da quel numero — vale identicamente qui, nel crollo settimanale e in ogni
         // altro punto che tocca state.consensoGoverno (vedi checkGovernmentConsensusCollapse).
-        if (!state.regime && !state.snapElectionPending && state.consensoGoverno < 20) {
+        if (!state.regime && !state.snapElectionPending && !presidentialExecutiveActive() && state.consensoGoverno < 20) {
           // Non più elezioni immediate: prima il Presidente della Repubblica tenta un mandato
           // esplorativo, esattamente come nel crollo settimanale "normale" (vedi
           // buildMandatoEsplorativoDossier) — la caduta vera e propria, se arriva, è una conseguenza
@@ -19042,7 +19407,7 @@
     { id: "premierato", label: "Premierato: elezione diretta del Presidente del Consiglio", lean: 1.5, minSondaggi: 15,
       effect: "Governi più stabili: crisi e uscite degli alleati diventano molto più rare, e ogni nuovo governo parte con più fiducia." },
     { id: "presidenzialismo", label: "Presidenzialismo: elezione diretta del Presidente della Repubblica", lean: 2.2, minSondaggi: 18,
-      effect: "Il Capo dello Stato non lo elegge più il Parlamento, ma direttamente i cittadini." },
+      effect: "Repubblica presidenziale: il Presidente è eletto dai cittadini a doppio turno, ogni 5 anni (massimo due mandati), e guida il governo. Niente più fiducia né crisi parlamentari, ma con un Parlamento contrario si governa a fatica. Sostituisce il premierato." },
     { id: "senato_regioni", label: "Fine del bicameralismo paritario: nasce il Senato delle Regioni", lean: -0.3, minSondaggi: 12,
       effect: "Leggi più rapide: ogni proposta di legge ha più probabilità di essere approvata in via definitiva." },
     { id: "sfiducia_costruttiva", label: "Sfiducia costruttiva sul modello tedesco", lean: 0.2, minSondaggi: 6,
@@ -19089,6 +19454,8 @@
     var p = state.player;
     if (!p || !p.inParliament || state.regime || state.pendingConstReform) return false;
     if (constitutionHas(reform.id)) return false;
+    if (reform.id === "presidenzialismo" && isPresidentialSystem()) return false;
+    if (reform.id === "premierato" && isPresidentialSystem()) return false;
     if (p.sondaggi < reform.minSondaggi || p.fondi < CONST_REFORM_COST) return false;
     var retry = state.constReformRetry && state.constReformRetry[reform.id];
     return !(retry && state.turn < retry);
@@ -19238,6 +19605,7 @@
     if (reform.id === "presidenzialismo") {
       if (!state.passedNationalReferendumIds) state.passedNationalReferendumIds = [];
       if (state.passedNationalReferendumIds.indexOf("presidenzialismo") === -1) state.passedNationalReferendumIds.push("presidenzialismo");
+      onPresidentialismEnacted();
     } else if (reform.id === "pareggio_bilancio") {
       state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -1, 12);
       state.spreadBps = clamp(state.spreadBps - rand(8, 20), 40, 500);
@@ -19255,7 +19623,7 @@
     recordEnactedPolicy("Riforma Costituzionale: " + reform.label, reform.effect, reform.id === "separazione_carriere" ? "giustizia" : null);
   }
   // Punti di aggancio delle riforme approvate (usati altrove nel codice).
-  function constLawBonus() { return constitutionHas("senato_regioni") ? 0.07 : 0; }
+  function constLawBonus(isGovProposer) { return (constitutionHas("senato_regioni") ? 0.07 : 0) + presidentialLawModifier(!!isGovProposer); }
   function constStabilityFactor() { return constitutionHas("premierato") ? 0.5 : 1; }
   function constMandatoBonus() { return constitutionHas("sfiducia_costruttiva") ? 0.25 : 0; }
   function renderConstitutionalReformPanel() {
@@ -19274,10 +19642,10 @@
     }
     html += '<div class="option-grid">';
     CONST_REFORMS.forEach(function (rf) {
-      var inForce = constitutionHas(rf.id);
+      var inForce = constitutionHas(rf.id) || (rf.id === "presidenzialismo" && isPresidentialSystem());
       var ok = canProposeConstReform(rf);
       var retry = state.constReformRetry && state.constReformRetry[rf.id] && state.turn < state.constReformRetry[rf.id];
-      var why = inForce ? "In vigore" : !p.inParliament ? "Serve essere in Parlamento" : r ? "C'è già una riforma in corso"
+      var why = inForce ? "In vigore" : (rf.id === "premierato" && isPresidentialSystem()) ? "Incompatibile con il presidenzialismo in vigore" : !p.inParliament ? "Serve essere in Parlamento" : r ? "C'è già una riforma in corso"
         : p.sondaggi < rf.minSondaggi ? "Servono almeno il " + rf.minSondaggi + "% nei sondaggi" : retry ? "Riproponibile tra " + (state.constReformRetry[rf.id] - state.turn) + " settimane"
         : p.fondi < CONST_REFORM_COST ? "Fondi insufficienti (" + fmtEuro(CONST_REFORM_COST) + ")" : "Avvia l'iter · " + fmtEuro(CONST_REFORM_COST);
       html += '<button type="button" class="option-card' + (inForce ? " selected" : "") + '" data-const-reform="' + rf.id + '"' + (ok ? "" : " disabled") + '>' +
@@ -20067,6 +20435,12 @@
     if (!state.president) return false;
     if (!state.presidentReturnedLawTitles) state.presidentReturnedLawTitles = [];
     if (state.presidentReturnedLawTitles.indexOf(topic.title) !== -1) return false;
+    // Repubblica presidenziale: il Presidente non rinvia mai le leggi della propria parte, ma usa il veto
+    // con molta più decisione contro quelle dell'opposizione.
+    if (presidentialExecutiveActive()) {
+      if (state.president.isPlayer || state.player.parliamentRole === "governo") return false;
+      return Math.random() < 0.3;
+    }
     var camp = FAMILY_CAMP[state.player.family];
     var opposesPresident = ((camp === "destra" || camp === "centrodestra") && state.president.leaning === "sinistra") ||
       ((camp === "sinistra" || camp === "centrosinistra" || camp === "movimentista") && state.president.leaning === "destra");
@@ -20080,7 +20454,7 @@
     if (maybeApplyBureaucraticDelay(p.pendingLegge, "Proposta di Legge", "legge")) return null;
     var topic = p.pendingLegge;
     p.pendingLegge = null;
-    var passed = Math.random() < topic.acceptProb + constLawBonus();
+    var passed = Math.random() < topic.acceptProb + constLawBonus(p.parliamentRole === "governo");
     if (passed && !topic.presidentReturned && checkPresidentialReturn(topic)) {
       state.presidentReturnedLawTitles.push(topic.title);
       p.pendingLegge = { title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, acceptProb: 1, resolveTurn: state.turn + 2, presidentReturned: true };
@@ -20405,7 +20779,7 @@
     var p = state.player;
     var meta = dossier.cpuLeggeMeta || {};
     var voteAdj = choice.mozioneVote === "favore" ? 0.06 : choice.mozioneVote === "contro" ? -0.06 : 0;
-    var prob = clamp((meta.baseProb === undefined ? 0.3 : meta.baseProb) + voteAdj + constLawBonus(), 0.03, 0.95);
+    var prob = clamp((meta.baseProb === undefined ? 0.3 : meta.baseProb) + voteAdj + constLawBonus(meta.isGovProposer), 0.03, 0.95);
     var passed = Math.random() < prob;
     var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
     if (meta.metric) state.countryProfile[meta.metric] = clamp(state.countryProfile[meta.metric] + delta, 1, 10);
@@ -20472,7 +20846,7 @@
       var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
       baseProb = (myPos === undefined || govPos === undefined) ? 0.2 : clamp(0.55 - (Math.abs(myPos - govPos) / 6) * 0.5, 0.03, 0.55);
     }
-    var passed = Math.random() < baseProb + constLawBonus();
+    var passed = Math.random() < baseProb + constLawBonus(isGovProposer);
     var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
     if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
     if (state.consensoGoverno !== undefined) {
@@ -24883,7 +25257,11 @@
     state.lastElectionWinnerId = winner ? winner.id : null;
     var extraAllies = [];
     var governingMemberIds = winner ? winner.members.slice() : [];
-    if (winner) {
+    // Repubblica presidenziale: le politiche eleggono solo il Parlamento, il governo resta quello del
+    // Presidente eletto dai cittadini (vedi presidentialLegislativeAftermath).
+    var presidentialLegislature = presidentialExecutiveActive();
+    if (presidentialLegislature) governingMemberIds = (state.president.campIds || []).slice();
+    if (winner && !presidentialLegislature) {
       var winnerAloneSeats = blocChamberSeats(governingMemberIds);
       var winnerHasMajorityAlone = winnerAloneSeats.camera >= CAMERA_MAJORITY_SEATS && winnerAloneSeats.senato >= SENATO_MAJORITY_SEATS;
       var playerInWinner = winner.members.indexOf("player") !== -1;
@@ -25063,7 +25441,9 @@
     // fiducia restano in attesa — non ha senso scegliere i ministri di un governo la cui composizione
     // finale non è ancora decisa. finishGovernmentCabinetSetup() viene richiamata più avanti da
     // finishElectionGovernmentAfterNegotiation, appena la trattativa si chiude.
-    if (!state.pendingGovFormationNegotiation) finishGovernmentCabinetSetup();
+    var presidentialNote = "";
+    if (presidentialLegislature) presidentialNote = presidentialLegislativeAftermath();
+    else if (!state.pendingGovFormationNegotiation) finishGovernmentCabinetSetup();
 
     state.electionResults.unshift({
       turn: state.turn, legislature: state.legislature, sondaggi: p.sondaggi,
@@ -25075,7 +25455,7 @@
       week: state.turn, title: "Elezioni Politiche — Legislatura " + state.legislature,
       choiceLabel: p.inParliament ? "Il partito entra in Parlamento" : "Il partito resta fuori dal Parlamento",
       result: p.inParliament
-        ? p.name + " conquista " + p.seatsCamera + " seggi alla Camera e " + p.seatsSenato + " al Senato."
+        ? p.name + " conquista " + p.seatsCamera + " seggi alla Camera e " + p.seatsSenato + " al Senato." + presidentialNote
         : p.name + " non raggiunge la soglia utile e resta fuori dal Parlamento in questa legislatura.",
       headlines: [], type: "election"
     });
@@ -30237,7 +30617,7 @@
     var html = '<section aria-label="Presidente della Repubblica"><p class="eyebrow">Capo dello Stato</p><div class="stat-grid">';
     if (!state.president) {
       html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Presidente della Repubblica</div>' +
-        '<p class="ci-hint" style="margin:0.3rem 0 0">Nessun Presidente è ancora stato eletto in questa partita: il Parlamento in seduta comune lo eleggerà alla settimana ' + (state.nextPresidentElectionTurn || 260) + ".</p></div>";
+        '<p class="ci-hint" style="margin:0.3rem 0 0">Nessun Presidente è ancora stato eletto in questa partita: ' + (isPresidentialSystem() ? "i cittadini lo eleggeranno direttamente" : "il Parlamento in seduta comune lo eleggerà") + " alla settimana " + (state.nextPresidentElectionTurn || 260) + ".</p></div>";
     } else {
       var pres = state.president;
       var weeksInCarica = Math.max(0, state.turn - pres.electedTurn);
@@ -30253,6 +30633,20 @@
         (semestreBianco
           ? "Negli ultimi sei mesi di mandato, la Costituzione gli vieta di sciogliere le Camere: un'eventuale crisi di governo dovrà per forza risolversi senza elezioni anticipate."
           : "Prossima elezione presidenziale tra " + weeksToNext + " settimane.") + "</p></div>";
+    }
+    if (isPresidentialSystem()) {
+      var ge = state.govEntity;
+      var execLine;
+      if (presidentialExecutiveActive()) {
+        execLine = "Repubblica presidenziale: il Presidente guida il governo per cinque anni (massimo due mandati), senza voto di fiducia." +
+          (ge && ge.minority ? " <strong>Governo diviso:</strong> la sua coalizione non ha la maggioranza in Parlamento, le leggi della maggioranza passano a fatica." : " La sua coalizione ha la maggioranza in Parlamento.") +
+          (state.president.isPlayer ? " Mandato " + (state.president.termCount || 1) + " di 2." : "");
+      } else {
+        execLine = "Il presidenzialismo è in Costituzione: le prime elezioni presidenziali dirette (doppio turno) si terranno alla settimana " + (state.nextPresidentElectionTurn || 0) + ". Da allora il Presidente eletto guiderà anche il governo.";
+      }
+      var why = state.player ? playerPresidentialEligibility() : null;
+      html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Forma di governo</div><p class="ci-hint" style="margin:0.3rem 0 0">' + execLine +
+        (state.player && !(state.president && state.president.isPlayer && presidentialExecutiveActive()) ? " " + (why ? "Per ora non puoi candidarti: " + why.charAt(0).toLowerCase() + why.slice(1) : "Puoi candidarti tu stesso/a alle prossime presidenziali.") : "") + "</p></div>";
     }
     html += "</div></section>";
     return html;
@@ -31953,6 +32347,14 @@
       return 0;
     });
     var counts = hamiltonApportion(sorted.map(function (s) { return s.w; }), MINISTRIES.length);
+    // Repubblica presidenziale: a capo del governo c'è il Presidente eletto, non il partito con più seggi.
+    if (presidentialExecutiveActive()) {
+      var presHead = state.president.isPlayer ? "player" : state.president.partyId;
+      if (presHead && sorted.some(function (x) { return x.id === presHead; })) {
+        sorted.sort(function (a, b) { return a.id === presHead ? -1 : b.id === presHead ? 1 : b.w - a.w; });
+        counts = hamiltonApportion(sorted.map(function (x) { return x.w; }), MINISTRIES.length);
+      }
+    }
     var allocation = { premierId: sorted[0].id, ministries: {} };
     var mIdx = 0;
     sorted.forEach(function (s, i) {
@@ -32750,6 +33152,9 @@
   // consenso potrebbe riportarlo sopra il 20% prima ancora che il controllo scatti.
   function openGovernmentCrisisForLostMajority() {
     if (state.regime || state.snapElectionPending) return;
+    // Repubblica presidenziale: il governo non dipende dalla fiducia delle Camere, perdere la maggioranza
+    // significa solo governare con un Parlamento contrario (governo diviso), non cadere.
+    if (presidentialExecutiveActive()) return;
     state.govMajorityLostCrisis = true;
     state.consensoGoverno = Math.min(state.consensoGoverno !== undefined ? state.consensoGoverno : 50, 19);
   }
@@ -32771,7 +33176,9 @@
     var reasonText = reasonOverride || (wasForced
       ? allyName + " lascia la maggioranza di governo: un'alleanza di necessità, mai davvero convinta, si rompe non appena i rapporti si raffreddano."
       : allyName + " lascia la maggioranza di governo, denunciando pubblicamente scelte politiche ormai troppo distanti dalla propria linea.");
-    if (lostMajority) reasonText += " Il governo perde così la maggioranza vera in Parlamento: si apre la crisi, e il Presidente della Repubblica avvierà le consultazioni.";
+    if (lostMajority) reasonText += presidentialExecutiveActive()
+      ? " La coalizione del Presidente perde la maggioranza in Parlamento: il governo resta in carica (nessuna fiducia da votare), ma da ora è un governo diviso."
+      : " Il governo perde così la maggioranza vera in Parlamento: si apre la crisi, e il Presidente della Repubblica avvierà le consultazioni.";
     state.log.unshift({ week: state.turn, title: "Un alleato lascia la maggioranza di governo", choiceLabel: allyName, result: reasonText, headlines: [], type: "istituzioni", cat: "Governo" });
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Governo", text: reasonText });
@@ -32847,6 +33254,7 @@
   // esplorativo "neutro" — prima, in questa catena, il governo nazionale non poteva cadere mai.
   function resolveNationalGovCrisisInBackground() {
     if (state.regime || state.snapElectionPending || !state.govEntity) return;
+    if (presidentialExecutiveActive()) { state.govMajorityLostCrisis = false; return; }
     var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
     if (!state.govMajorityLostCrisis && !(cg < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0))) return;
     state.govMajorityLostCrisis = false;
@@ -32897,7 +33305,7 @@
     applyGovAllyDepartureConsensusHit(10, 18, lostMajority);
     p.reputazione = clamp(p.reputazione + rand(-1, 3), 0, 100);
     var reasonText = p.name + " ritira la fiducia al governo e passa all'opposizione, denunciando scelte politiche ormai troppo distanti dalla propria linea." +
-      (lostMajority ? " Senza i vostri seggi il governo " + govEntityLabel() + " non ha più la maggioranza in Parlamento: si apre la crisi di governo, e la parola passa al Presidente della Repubblica." : " Il governo " + govEntityLabel() + " resta in carica, ma con una maggioranza più risicata.");
+      (lostMajority ? (presidentialExecutiveActive() ? " Senza i vostri seggi la coalizione del Presidente non ha più la maggioranza in Parlamento: il governo resta in carica, ma ora è un governo diviso." : " Senza i vostri seggi il governo " + govEntityLabel() + " non ha più la maggioranza in Parlamento: si apre la crisi di governo, e la parola passa al Presidente della Repubblica.") : " Il governo " + govEntityLabel() + " resta in carica, ma con una maggioranza più risicata.");
     state.log.unshift({ week: state.turn, title: "Lasci la maggioranza di governo", choiceLabel: p.name, result: reasonText, headlines: [], type: "istituzioni", cat: "Governo" });
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Governo", text: reasonText });
@@ -35748,6 +36156,10 @@
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "president_election") {
         resolvePresidentElection(dossier, choice);
+      } else if (dossier.id === "presidential_r1") {
+        resolveDirectPresidentialRound1(dossier, choice);
+      } else if (dossier.id === "presidential_runoff") {
+        resolvePresidentialRunoff(dossier, choice);
       } else if (dossier.id === "gov_instaura_regime") {
         if (choice.instauraRegime) {
           applyRegimeConsequences({ type: choice.regimeTypeChoice, winnerLabel: state.player.name, votes: state.player.sondaggi, isPlayer: true });
@@ -35820,6 +36232,13 @@
           choice.result = (targetPartyName || "Il partito") + " viene sciolto con la forza, i suoi dirigenti messi a tacere: una parte della sua base si rifugia nel regime per paura, il resto si ritira dalla vita pubblica.";
           addDiaryEntry("Un'altra voce messa a tacere", "Oggi abbiamo sciolto con la forza " + (targetPartyName || "un partito") + ". So cosa significa mettere a tacere un avversario invece di batterlo alle urne — e so che non sarà facile tornare indietro da qui.");
         }
+        state.resultData = applyChoice(dossier, choice);
+      } else if (dossier.id === "gov_dimissioni_premier" && choice.resignPresident) {
+        state.president.resigned = true;
+        state.nextPresidentElectionTurn = state.turn + 8;
+        state.player.reputazione = clamp(state.player.reputazione - rand(2, 5), 0, 100);
+        choice.result = "Ti dimetti da Presidente della Repubblica. Tra 8 settimane i cittadini torneranno alle urne per eleggere il tuo successore; fino ad allora il governo resta in carica per gli affari correnti.";
+        addDiaryEntry("Lascio il Colle", "Mi sono dimesso/a. Saranno di nuovo i cittadini a decidere chi deve guidare il paese.");
         state.resultData = applyChoice(dossier, choice);
       } else if (dossier.id === "gov_dimissioni_premier") {
         if (choice.resignPremier) {
@@ -36465,6 +36884,11 @@
         if (choice.formationMedia) state.player.formationMediaCooldownTurn = state.turn + FORMATION_MEDIA_COOLDOWN;
         if (choice.successionAnnounced) state.player.successionAnnounced = true;
         if (choice.conflictBlindTrust) state.player.ownedOutletId = null;
+        if (choice.retireLeader && playerIsExecutivePresident()) {
+          state.president.resigned = true;
+          state.nextPresidentElectionTurn = state.turn + 8;
+          state.log.unshift({ week: state.turn, title: "Il Presidente si dimette", choiceLabel: state.president.name, result: "Il Presidente della Repubblica lascia l'incarico: nuove elezioni presidenziali tra 8 settimane. Fino ad allora il governo resta in carica per gli affari correnti.", headlines: [], type: "istituzioni", cat: "Istituzioni" });
+        }
         if (choice.retireLeader) {
           var agingSuccessor = choice.forcedSuccessorName || primariesChallengerName(state.player);
           state.player.playerIsLeader = false;
@@ -38197,7 +38621,8 @@
     // quella soglia aggiuntiva, restava comunque intoccabile per un anno intero. Tolta: resta solo il
     // cooldown di 6 settimane già previsto sotto per non far ripartire il dossier troppo di fila.
     if (state.govMajorityLostCrisis && (state.regime || state.snapElectionPending)) state.govMajorityLostCrisis = false;
-    if (!state.snapElectionPending && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
+    if (presidentialExecutiveActive()) state.govMajorityLostCrisis = false;
+    if (!state.snapElectionPending && !presidentialExecutiveActive() && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
       state.govMajorityLostCrisis = false;
       // Non più elezioni immediate: prima il Presidente della Repubblica tenta un mandato esplorativo
       // per evitare le urne (vedi buildMandatoEsplorativoDossier e la sua risoluzione in
@@ -38232,7 +38657,7 @@
     // Un'interdizione perpetua dai pubblici uffici (vedi resolveTrialIfDue) è l'unica uscita di scena
     // davvero senza ritorno: a differenza di primarie perse, detenzione scontata o pensionamento per età,
     // qui il dossier delle primarie non deve MAI più ripresentarsi, qualunque sia il cooldown residuo.
-    var primariesDue = pPrimaries.permanentlyBanned ? false : (pPrimaries.playerIsLeader
+    var primariesDue = (pPrimaries.permanentlyBanned || playerIsExecutivePresident()) ? false : (pPrimaries.playerIsLeader
       ? pPrimaries.leaderTrust < PRIMARIES_TRUST_THRESHOLD && state.turn >= (pPrimaries.primariesCooldownTurn || 0)
       : state.turn >= (pPrimaries.primariesCooldownTurn || 0));
     if (primariesDue) {
@@ -38726,7 +39151,27 @@
     // per mozioni/leggi/modifiche (vedi resolveCpuMozioneSilently e affini): senza un gruppo del
     // giocatore da consultare, si risolve subito con "non prendere posizione", lo stesso esito di un
     // giocatore IN Parlamento che sceglie di non schierarsi, senza occupare la sua settimana.
-    if (state.turn >= (state.nextPresidentElectionTurn || 260)) {
+    if (state.pendingPresidentialRunoff && state.turn >= state.pendingPresidentialRunoff.turn) {
+      if (p.playerIsLeader) {
+        state.aiDynamicDossier = buildPresidentialRunoffDossier();
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
+      resolvePresidentialRunoff({}, { label: "Nessuna indicazione", runoffEndorse: null, effects: {} });
+    }
+    if (isPresidentialSystem() && !state.pendingPresidentialRunoff && state.turn >= (state.nextPresidentElectionTurn || 260)) {
+      state.nextPresidentElectionTurn = state.turn + PRESIDENTIAL_TERM_TURNS;
+      var presDossier = generateDirectPresidentialDossier();
+      if (p.playerIsLeader) {
+        state.aiDynamicDossier = presDossier;
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
+      resolveDirectPresidentialRound1(presDossier, { label: "Nessuna indicazione", presEndorse: null, effects: {} });
+    }
+    if (!isPresidentialSystem() && state.turn >= (state.nextPresidentElectionTurn || 260)) {
       state.nextPresidentElectionTurn = state.turn + 364;
       if (p.inParliament) {
         state.aiDynamicDossier = generatePresidentDossier();
