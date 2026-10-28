@@ -26509,8 +26509,8 @@
     var members = ge ? (ge.memberIds || []).map(partyById).filter(Boolean) : [];
     var html = '<section aria-label="Governo in carica"><h3>Il governo in carica</h3>';
     if (ge) {
-      html += '<p class="ci-hint">' + (presidentialExecutiveActive() ? "Governo del Presidente della Repubblica " + state.president.name : "Governo " + govEntityLabel()) +
-        (lead ? (presidentialExecutiveActive() ? "" : ", guidato da " + lead.leader + " (" + lead.name + ")") : "") + ". In carica dalla settimana " + (ge.formedTurn || 1) + "." +
+      html += '<p class="ci-hint">' + (presidentialExecutiveActive() ? "Governo del Presidente della Repubblica " + state.president.name : ge.tecnico ? "Governo tecnico" : "Governo " + govEntityLabel()) +
+        (lead ? (presidentialExecutiveActive() ? "" : ", guidato da " + careerPremierText()) : "") + ". In carica dalla settimana " + (ge.formedTurn || 1) + "." +
         (ge.minority ? " Governo di minoranza." : "") + "</p>";
       html += '<ul class="enacted-policy-list">' + members.map(function (pt) { return "<li><strong>" + pt.name + "</strong> — " + pt.leader + " · " + fmt1(state.parties[pt.id] || 0) + "% nei sondaggi</li>"; }).join("") + "</ul>";
       if (state.consensoGoverno !== undefined) html += '<div class="stat-grid" style="margin-top:0.6rem">' + careerGauge("Fiducia nel governo", state.consensoGoverno, 25) + "</div>";
@@ -29062,17 +29062,125 @@
     });
     if (state.log.length > 80) state.log.length = 80;
     careerPresidentElection();
+    careerGovConfidenceTick();
+    careerGovCrisisTick(c);
     if (state.careerNextPolitiche && state.turn >= state.careerNextPolitiche) {
       state.careerNextPolitiche = state.turn + 260;
       var cd = careerCoalitionPoll("centrodestra") + rand(-3, 3), cl = careerCoalitionPoll("campolargo") + rand(-3, 3);
       var winner = cd >= cl ? "centrodestra" : "campolargo";
-      state.govEntity = { id: winner, memberIds: COALITIONS[winner].members.filter(function (id) { return activeParties().some(function (p) { return p.id === id; }); }) };
+      state.govEntity = { id: winner, memberIds: COALITIONS[winner].members.filter(function (id) { return activeParties().some(function (p) { return p.id === id; }); }), formedTurn: state.turn };
       var lead = partyById(leadingGovPartyId());
+      if (lead) { state.govEntity.premierName = lead.leader; state.govEntity.premierPartyId = lead.id; }
+      state.consensoGoverno = rand(52, 62);
       addCareerDiaryEntry("Elezioni politiche", "Vince " + COALITIONS[winner].label + " (" + fmt1(Math.max(cd, cl)) + "% contro " + fmt1(Math.min(cd, cl)) + "%). Il nuovo governo è guidato da " + (lead ? lead.leader + " (" + lead.name + ")" : "la coalizione vincente") + ".");
       careerPolitichePush(c, winner, cd, cl, lead);
       return true;
     }
     return false;
+  }
+  // --- Fiducia nel governo e crisi in carriera ---
+  // Richiesto da un giocatore: in carriera il governo nazionale durava sempre cinque anni pieni. Ora ha
+  // una fiducia che si muove con i sondaggi dei partiti di maggioranza e con l'andamento del paese, e
+  // può cadere con la stessa logica della modalità partito (vedi triggerCpuGovernmentCrisis): il rischio
+  // nasce quasi tutto da una fiducia bassa, così un governo apprezzato di rado cade per caso.
+  function careerPremierText() {
+    var ge = state.govEntity;
+    if (!ge) return "";
+    if (ge.tecnico) return ge.premierName + " (governo tecnico)";
+    var pp = partyById(ge.premierPartyId) || partyById(leadingGovPartyId());
+    var name = ge.premierName || (pp ? pp.leader : "");
+    return name + (pp ? " (" + pp.name + ")" : "");
+  }
+  function careerGovConfidenceTick() {
+    var ge = state.govEntity;
+    if (!ge) return;
+    if (state.consensoGoverno === undefined || state.consensoGoverno === null) state.consensoGoverno = 50;
+    var pollTrend = 0;
+    (ge.memberIds || []).forEach(function (id) { var d = careerPollDelta(id, 4); if (d) pollTrend += d; });
+    var countryTrend = clamp(computeCountryTrendDelta() * 1.5, -1.5, 1.5);
+    state.consensoGoverno = clamp(state.consensoGoverno + (45 - state.consensoGoverno) * 0.03 + (Math.random() - 0.5) * 2.4 + clamp(pollTrend * 0.25, -1.2, 1.2) + countryTrend, 0, 100);
+  }
+  function careerGovCrisisTick(c) {
+    var ge = state.govEntity;
+    if (!ge || !ge.memberIds || presidentialExecutiveActive()) return;
+    if (state.turn < (state.cpuGovCrisisCooldownTurn || 0)) return;
+    var age = state.turn - (ge.formedTurn || 0);
+    if (age < GOV_HONEYMOON_TURNS) return;
+    if (!state.careerNextPolitiche || state.careerNextPolitiche - state.turn < 20) return;
+    var premierId = ge.tecnico ? null : (ge.premierPartyId || leadingGovPartyId());
+    var activeIds = activeParties().map(function (p) { return p.id; });
+    var partners = ge.memberIds.filter(function (id) { return id !== premierId && activeIds.indexOf(id) !== -1; });
+    if (!partners.length) return;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var ageFactor = clamp((age - GOV_HONEYMOON_TURNS) / 52, 0.35, 1);
+    var chance = (0.0004 + Math.pow(Math.max(0, 58 - cg), 1.5) * 0.00006) * (1 + 0.25 * (Math.min(partners.length, 4) - 1)) * ageFactor * constStabilityFactor();
+    if (Math.random() >= clamp(chance, 0, 0.04)) return;
+    state.cpuGovCrisisCooldownTurn = state.turn + CPU_GOV_CRISIS_COOLDOWN_TURNS;
+    var premierParty = partyById(premierId);
+    var premierFam = premierParty ? premierParty.familyId : null;
+    var leaving = pickWeighted(partners.map(partyById).filter(Boolean), function (pt) {
+      var dist = (pt.familyId && premierFam && LEFT_RIGHT_POSITION[pt.familyId] !== undefined && LEFT_RIGHT_POSITION[premierFam] !== undefined)
+        ? Math.abs(LEFT_RIGHT_POSITION[pt.familyId] - LEFT_RIGHT_POSITION[premierFam]) : 1;
+      return 0.4 + dist * 0.5;
+    });
+    if (!leaving) return;
+    var oldPremier = careerPremierText();
+    var reason = CPU_GOV_CRISIS_REASONS[Math.floor(Math.random() * CPU_GOV_CRISIS_REASONS.length)](leaving.name, premierParty ? premierParty.name : "il Presidente del Consiglio");
+    ge.memberIds = ge.memberIds.filter(function (id) { return id !== leaving.id; });
+    var sum = function () { return ge.memberIds.reduce(function (t, id) { return t + (state.parties[id] || 0); }, 0); };
+    var roll = Math.random(), outcome, title;
+    var semestreBianco = typeof isSemestreBianco === "function" && isSemestreBianco();
+    if (roll < 0.45 || semestreBianco) {
+      // nuova maggioranza in Parlamento: se i numeri non bastano entra un partito vicino al premier
+      var joined = null;
+      if (sum() < 42) {
+        var leadFam = premierFam ? LEFT_RIGHT_POSITION[premierFam] || 0 : 0;
+        var cands = activeParties().filter(function (p) { return ge.memberIds.indexOf(p.id) === -1 && p.id !== leaving.id && Math.abs((LEFT_RIGHT_POSITION[p.familyId] || 0) - leadFam) <= 1.6; });
+        cands.sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); });
+        if (cands[0]) { joined = cands[0]; ge.memberIds.push(joined.id); }
+      }
+      var bis = Math.random() < 0.5 && !ge.tecnico;
+      if (!bis) {
+        var lp = partyById(leadingGovPartyId());
+        ge.premierPartyId = lp ? lp.id : null;
+        ge.premierName = generateStaffName();
+      }
+      ge.tecnico = false;
+      title = "Crisi di governo: nasce un nuovo esecutivo";
+      outcome = "Il Presidente della Repubblica affida l'incarico e nasce un nuovo governo senza tornare alle urne" + (joined ? ", con l'ingresso di " + joined.name + " in maggioranza" : "") + ". " + (bis ? "Resta Presidente del Consiglio " + careerPremierText() + ": è un governo bis." : "Nuovo Presidente del Consiglio: " + careerPremierText() + ".");
+      ge.formedTurn = state.turn;
+      state.consensoGoverno = rand(44, 54);
+    } else if (roll < 0.65) {
+      ge.tecnico = true;
+      ge.premierName = generateStaffName();
+      ge.premierPartyId = null;
+      activeParties().forEach(function (p) { if (ge.memberIds.indexOf(p.id) === -1 && p.id !== leaving.id && (state.parties[p.id] || 0) >= 6 && Math.random() < 0.5) ge.memberIds.push(p.id); });
+      title = "Crisi di governo: arriva un governo tecnico";
+      outcome = "I partiti non trovano un accordo politico: il Presidente della Repubblica affida l'incarico all'economista " + ge.premierName + ", che forma un governo tecnico sostenuto da un'ampia maggioranza.";
+      ge.formedTurn = state.turn;
+      state.consensoGoverno = rand(50, 60);
+    } else {
+      state.careerNextPolitiche = state.turn + 8;
+      title = "Crisi di governo: elezioni anticipate";
+      outcome = "Nessuna maggioranza alternativa: il Presidente della Repubblica scioglie le Camere. Elezioni politiche anticipate tra 8 settimane; il governo " + oldPremier + " resta in carica per gli affari correnti.";
+    }
+    addCareerDiaryEntry(title, reason + " " + outcome);
+    var school = c.stage === "scuola";
+    if (!school && c.office && c.office.id === "ministro" && !careerPartyInGov(c)) {
+      addCareerDiaryEntry("Fine dell'incarico di governo", "Con la crisi il tuo partito esce dal governo: lasci il ministero.");
+      outcome += " Il tuo partito non fa più parte del governo: lasci il ministero.";
+      c.office = null;
+    }
+    var mineIn = c.partyId && careerPartyInGov(c);
+    c.pending.unshift({ id: "crisi_governo_" + state.turn, cat: "Crisi di governo", title: title,
+      brief: reason + "<br><br>" + outcome + "<br><br>Fiducia nel governo: <strong>" + Math.round(state.consensoGoverno) + "%</strong>." + (c.partyId ? (mineIn ? " Il tuo partito è nella maggioranza." : " Il tuo partito è fuori dalla maggioranza.") : ""),
+      choices: school ? [
+        { label: "Ne discuti con i compagni in cortile", eff: { studenti: 0.5, rep: 0.3 }, result: "Mezza scuola ha un'opinione sulla crisi: tu almeno sai di cosa parli." },
+        { label: "Proponi un'assemblea sulla crisi", eff: { studenti: 1, preside: -0.5, rep: 0.5 }, result: "L'assemblea è piena: per un giorno la politica vera entra a scuola." }
+      ] : [
+        { label: "Commenti la crisi sui giornali", eff: { rep: 0.5 }, result: "La tua dichiarazione viene ripresa da un paio di agenzie." },
+        { label: "Lavori dietro le quinte nel partito", eff: { trust: 1.5, rete: 1 }, result: "Telefonate, riunioni, mediazioni: nel partito si accorgono di te." }
+      ] });
   }
   // Segnalato da un giocatore: da studente le politiche finivano solo nel diario e non si capiva quale
   // governo fosse salito. Ora l'esito arriva come dossier, con coalizioni, partiti e nuovo esecutivo.
@@ -29089,7 +29197,7 @@
     var lean = LEFT_RIGHT_POSITION[currentGoverningFamilyId()] || 0;
     var close = Math.abs(lean - careerLean()) <= 1;
     var brief = "<strong>Vince " + COALITIONS[winner].label + "</strong> con il " + fmt1(Math.max(cd, cl)) + "% contro il " + fmt1(Math.min(cd, cl)) + "% di " + COALITIONS[loser].label + ".<br><br>" +
-      "<strong>Nuovo governo:</strong> " + (lead ? "Presidente del Consiglio " + lead.leader + " (" + lead.name + ")" : "guidato dalla coalizione vincente") + ".<br>" +
+      "<strong>Nuovo governo:</strong> " + (lead ? "Presidente del Consiglio " + careerPremierText() : "guidato dalla coalizione vincente") + ".<br>" +
       "<strong>Maggioranza:</strong> " + (members.length ? members.join(", ") : COALITIONS[winner].label) + ".<br><br>" +
       "<strong>I partiti:</strong><br>" + rows + "<br><br>" +
       (mine ? "Il tuo partito è al governo." : c.partyId ? "Il tuo partito va all'opposizione." : close ? "È un governo vicino alle tue idee." : "È un governo lontano dalle tue idee.") +
