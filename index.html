@@ -17199,6 +17199,7 @@
     state.president = { name: winner.name, leaning: winner.leaning, background: winner.background, electedTurn: state.turn, popular: popular, termCount: 1, isPlayer: true };
     state.presidentTerm = {
       playerName: winner.name, formerPartyName: formerPartyName, electedTurn: state.turn, termEndTurn: state.turn + 364,
+      ageAtElection: leaderAge(p), termNumber: 1,
       actsSigned: 0, vetoesUsed: 0, graziesGranted: 0, judgesAppointed: 0, senatorsAppointed: 0, crisesManaged: 0,
       lastJudgeAppointTurn: state.turn, lastSenatorAppointTurn: state.turn, cooldownTurn: state.turn + 4
     };
@@ -17933,10 +17934,53 @@
     else if (pick === "salute") built = buildPresidentHealthDossier();
     return built || buildPresidentLawDossier() || buildRoutinePresidentDossier();
   }
+  // ---------- Il secondo settennato ----------
+  // Età all'elezione: salvata in beginPlayerPresidency; per i salvataggi precedenti si ricava dall'età
+  // attuale del leader meno gli anni già passati al Quirinale.
+  var PRESIDENT_SECOND_TERM_MAX_AGE = 80;
+  function presidentAgeAtElection(term) {
+    if (term.ageAtElection !== undefined) return term.ageAtElection;
+    return leaderAge(state.player) - Math.floor(Math.max(0, state.turn - term.electedTurn) / 52);
+  }
+  function presidentCanSeekSecondTerm(term) {
+    return (term.termNumber || 1) === 1 && presidentAgeAtElection(term) < PRESIDENT_SECOND_TERM_MAX_AGE;
+  }
+  function buildPresidentSecondTermDossier(term) {
+    var ageNow = presidentAgeAtElection(term) + 7;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Fine del settennato",
+      cat: "Quirinale", presidentQuirinale: "bis", title: "Il Parlamento ti chiede un secondo mandato",
+      brief: "Sette anni dopo il tuo giuramento, il Parlamento in seduta comune non trova un accordo su un nome nuovo e si rivolge a te: hai " + ageNow +
+        " anni, e la Costituzione non vieta la rielezione. Puoi accettare un secondo settennato, l'ultimo possibile, oppure chiudere qui il tuo mandato.",
+      choices: [
+        { label: "Accetta il secondo settennato", hint: "Altri sette anni al Quirinale: sarà l'ultimo mandato", presBis: true, effects: {} },
+        { label: "Ringrazia e lascia il Quirinale", hint: "Chiudi il mandato: la partita termina con l'epilogo", presBis: false, effects: {} }
+      ]
+    };
+  }
+  function resolvePresidentSecondTermChoice(dossier, choice) {
+    var term = state.presidentTerm;
+    var text;
+    if (choice.presBis) {
+      term.termNumber = 2;
+      term.secondTermStart = state.turn;
+      term.termEndTurn = state.turn + 364;
+      state.nextPresidentElectionTurn = state.turn + 364;
+      if (state.president) { state.president.termCount = 2; }
+      applyPresEffects({ prestigio: rand(3, 6), gradimento: rand(2, 4) });
+      text = "Accetti la rielezione: giuri per la seconda volta davanti al Parlamento in seduta comune, tra lunghi applausi. Comincia il tuo secondo e ultimo settennato.";
+    } else {
+      term.secondTermDeclined = true;
+      text = "Ringrazi il Parlamento ma declini: il tuo compito al Quirinale si chiude qui, e le Camere eleggeranno un nuovo Presidente.";
+    }
+    presDiary(dossier.title, text);
+    state.resultData = { resultText: text, headlines: [] };
+  }
   // Tutti i dossier del Quirinale (cat "Quirinale") passano da qui, vedi resolveDossierChoice.
   function resolvePresidentQuirinaleChoice(dossier, choice) {
     var term = state.presidentTerm;
     ensurePresidentTermFields(term);
+    if (dossier.presidentQuirinale === "bis") return resolvePresidentSecondTermChoice(dossier, choice);
     if (dossier.presidentQuirinale === "legge") return resolvePresidentLawChoice(dossier, choice);
     if (dossier.presidentQuirinale === "return_accepted" || dossier.presidentQuirinale === "return_rejected") return resolvePresidentReturnChoice(dossier, choice);
     if (dossier.presidentQuirinale === "sport") return resolvePresidentSportChoice(dossier, choice);
@@ -18140,7 +18184,7 @@
     var years = Math.round((state.turn - term.electedTurn) / 52 * 10) / 10;
     var yearsLeft = Math.max(0, Math.round((term.termEndTurn - state.turn) / 52 * 10) / 10);
     var html = '<section aria-label="Il tuo settennato"><p class="eyebrow">Il tuo settennato al Quirinale</p><div class="stat-grid">';
-    html += '<div class="stat-tile"><div class="label">Anni di mandato</div><div class="row"><span class="value">' + years + " / 7</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Anni di mandato' + ((term.termNumber || 1) === 2 ? " (secondo settennato)" : "") + '</div><div class="row"><span class="value">' + years + " / " + (7 * (term.termNumber || 1)) + "</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Anni al termine del mandato</div><div class="row"><span class="value">' + yearsLeft + "</span></div></div>";
     html += presGauge("Prestigio istituzionale", term.prestigio) + presGauge("Gradimento popolare", term.gradimento);
     html += "</div></section>";
@@ -18231,7 +18275,12 @@
       judgesAppointed: term.judgesAppointed || 0, senatorsAppointed: term.senatorsAppointed || 0, crisesManaged: term.crisesManaged || 0,
       lawsModified: term.lawsModified || 0, forcedSignatures: term.forcedSignatures || 0, stateVisits: term.stateVisits || 0,
       regionsVisited: (term.regionsVisited || []).length, emergenciesManaged: term.emergenciesManaged || 0, sportsEvents: term.sportsEvents || 0,
-      prestigio: Math.round(term.prestigio || 0), gradimento: Math.round(term.gradimento || 0), resigned: !!term.resigned, judgement: presHistoricalJudgement(term)
+      prestigio: Math.round(term.prestigio || 0), gradimento: Math.round(term.gradimento || 0), resigned: !!term.resigned, judgement: presHistoricalJudgement(term),
+      termNumber: term.termNumber || 1,
+      endNote: term.resigned ? "" : (term.termNumber || 1) === 2 ? "Dopo due settennati non è possibile un terzo mandato: lasci il Quirinale per sempre."
+        : term.secondTermDeclined ? "Hai scelto di non accettare un secondo mandato."
+        : "Eri salito al Colle a " + presidentAgeAtElection(term) + " anni: a " + (presidentAgeAtElection(term) + 7) + " non ti viene proposto un secondo settennato."
+
     };
   }
   // Il "turno" della Presidenza: sostituisce interamente la catena di dossier di partito di
@@ -18242,7 +18291,19 @@
   function advancePresidentTurnLogic() {
     var term = state.presidentTerm;
     ensurePresidentTermFields(term);
-    if (state.turn >= term.termEndTurn || term.resigned) {
+    if (term.resigned) {
+      state.phase = "president_epilogue";
+      return;
+    }
+    if (state.turn >= term.termEndTurn) {
+      // Richiesto: un secondo settennato solo a chi è salito al Colle con meno di 80 anni; dopo il
+      // secondo, o per chi aveva già 80 anni o più all'elezione, la partita si chiude con l'epilogo.
+      if (presidentCanSeekSecondTerm(term) && !term.secondTermDeclined) {
+        state.aiDynamicDossier = buildPresidentSecondTermDossier(term);
+        state.currentDossierId = "ai_dynamic";
+        state.phase = "building";
+        return;
+      }
       state.phase = "president_epilogue";
       return;
     }
@@ -27237,7 +27298,8 @@
     ensurePresidentTermFields(state.presidentTerm);
     var summary = buildPresidentEpilogue();
     app.innerHTML = '<div class="setup-card"><p class="eyebrow">Fine del Settennato</p>' +
-      "<h2>" + summary.playerName + ": sette anni al Quirinale</h2>" +
+      "<h2>" + summary.playerName + ": " + (summary.termNumber === 2 ? "quattordici" : "sette") + " anni al Quirinale</h2>" +
+      (summary.endNote ? '<p class="lead">' + summary.endNote + "</p>" : "") +
       '<p class="lead">Il tuo mandato da Presidente della Repubblica si conclude dopo ' + summary.years + ' anni' + (summary.resigned ? ', con le tue dimissioni anticipate' : '') + '. Da leader di ' + summary.formerPartyName + ' a Capo dello Stato, al di sopra delle parti: qui si chiude la tua storia in questa partita.</p>' +
       '<p class="lead"><strong>' + summary.judgement + '</strong></p>' +
       '<ul class="enacted-policy-list">' +
