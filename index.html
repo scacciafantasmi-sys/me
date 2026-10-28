@@ -26800,6 +26800,26 @@
     c.history = c.history || [];
     c.history.push({ turn: state.turn, year: s.year, role: c.role, list: c.list ? c.list.name : null, share: playerList ? playerList.lastShare : null });
     addCareerDiaryEntry("Elezioni studentesche", outcome + " Risultati: " + lines[0] + "." + (c.classRep ? " In classe ti eleggono anche rappresentante di classe." : ""));
+    // Segnalato da un giocatore: l'esito finiva solo nel diario, senza un dossier che lo mostrasse.
+    var wasCandidate = c.campaign.candidate;
+    var resultRows = ranking.map(function (l, i) {
+      return (i + 1) + ". <strong>" + l.name + "</strong>" + (playerList && l.id === playerList.id ? " (la tua lista)" : "") + " — " + fmt1(l.lastShare) + "%, " + l.seats + " segg" + (l.seats === 1 ? "io" : "i");
+    }).join("<br>");
+    var resultChoices = !wasCandidate ? [
+      { label: "Prendi atto e guardi al prossimo anno", eff: { rep: 0.3 }, result: "Ti segni tutto: l'anno prossimo potresti esserci tu sulla scheda." },
+      { label: "Ti congratuli pubblicamente con i nuovi eletti", eff: { studenti: 1.5, rete: 1 }, result: "Un gesto che viene notato: qualcuno dei nuovi eletti ti propone di collaborare." }
+    ] : c.role ? [
+      { label: "Festeggi con la lista", eff: { fiducia: 5, studenti: 1 }, result: "Pizza, musica e abbracci: la lista è più unita che mai." },
+      { label: "Ringrazi tutti, anche chi non ti ha votato", eff: { studenti: 3, preside: 1, rep: 0.5 }, result: "«Da oggi rappresento tutta la scuola»: il post fa il giro delle classi." },
+      { label: "Ti metti subito al lavoro sul programma", eff: { studenti: 1.5, rep: 1, fiducia: 2 }, result: "Il giorno dopo sei già in presidenza con la lista delle priorità." }
+    ] : [
+      { label: "Riconosci la sconfitta e fai i complimenti", eff: { rep: 1, studenti: 1.5 }, result: "Una sconfitta affrontata con stile: in molti lo apprezzano." },
+      { label: "Contesti il conteggio dei voti", chance: 0.15, eff: { fiducia: 3, rep: 1 }, result: "La commissione ricontrolla e trova davvero un errore: un piccolo risarcimento morale.", fail: { eff: { rep: -1.5, preside: -4, studenti: -2 }, result: "Il riconteggio conferma tutto: ora sembri solo un cattivo perdente." } },
+      { label: "Analizzi gli errori con la lista", eff: { fiducia: 4, rete: 0.5 }, result: "Una riunione lunga e sincera: si riparte con le idee più chiare." }
+    ];
+    c.pending.unshift({ id: "risultati_elezioni_scuola", cat: "Elezioni studentesche", title: "I risultati delle elezioni d'istituto",
+      brief: outcome + "<br><br>" + resultRows + (c.classRep ? "<br><br>In classe ti eleggono anche rappresentante di classe." : ""),
+      choices: resultChoices });
     c.campaign = { score: 0, posts: 0, lastTheme: null, candidate: false };
     return outcome;
   }
@@ -28530,6 +28550,23 @@
       careerAdultApply(c, { rep: -1.5, trust: -3 });
       addCareerDiaryEntry(CAREER_ELECTION_TYPES.filter(function (t) { return t.id === typeId; })[0].label, "Non vieni eletto/a come " + CAREER_OFFICES[o].label.toLowerCase() + (cand.place ? " a " + cand.place : "") + ". " + pickText(["Il vento tirava dall'altra parte.", "Ti sono mancati poche centinaia di voti.", "Una sconfitta che insegna più di tante vittorie."]));
     }
+    // anche qui l'esito diventa un dossier, non solo una riga di diario
+    var typeLabel = CAREER_ELECTION_TYPES.filter(function (t) { return t.id === typeId; })[0].label;
+    var executiveRace = o === "sindaco" || o === "presidente_regione";
+    var myShare = executiveRace ? (won ? rand(50.5, 61) : rand(36, 49.5)) : null;
+    var prefs = !executiveRace ? Math.round((o === "deputato" ? 18000 : o === "consigliere_regionale" ? 6000 : 900) * (0.4 + c.rete / 60 + c.reputazione / 80) * rand(0.8, 1.2)) : null;
+    var detail = executiveRace ? "Hai preso il " + fmt1(myShare) + "% dei voti" + (won ? "." : ": non basta.") : "Hai raccolto " + fmtInt(prefs) + " preferenze" + (won ? ", abbastanza per un seggio." : ", non abbastanza per un seggio.");
+    c.pending.unshift({ id: "risultati_elezioni_adulto", cat: typeLabel, adult: true, title: (won ? "Eletto/a: " : "Non eletto/a: ") + CAREER_OFFICES[o].label.toLowerCase() + (cand.place ? " — " + cand.place : ""),
+      brief: typeLabel + (cand.place ? " a " + cand.place : "") + ". " + detail + (won ? " Da oggi sei " + careerOfficeLabel(c) + "." : " Il seggio va a un altro candidato."),
+      choices: won ? [
+        { label: "Festa con militanti e volontari", eff: { trust: 3, rete: 1 }, result: "Una serata di festa: chi ha fatto campagna con te se lo è meritato." },
+        { label: "Ringrazi tutti, anche chi non ti ha votato", eff: { cons: 3, rep: 0.5 }, result: "«Sarò al servizio di tutti»: un inizio che piace." },
+        { label: "Subito al lavoro", eff: { cons: 2, rep: 1 }, result: "Il giorno dopo sei già in ufficio con le prime pratiche." }
+      ] : [
+        { label: "Riconosci la sconfitta", eff: { rep: 1 }, result: "Telefoni al vincitore per complimentarti. Un gesto che non costa nulla e vale molto." },
+        { label: "Chiedi il riconteggio", chance: 0.1, eff: { rep: 1, trust: 2 }, result: "Il riconteggio sposta qualche voto, ma il risultato non cambia: almeno hai lottato fino in fondo.", fail: { eff: { rep: -2 }, result: "Il riconteggio conferma tutto, e passi per cattivo perdente." } },
+        { label: "Analizzi la sconfitta con il partito", eff: { trust: 2 }, result: "Una riunione dura ma utile: la prossima volta si parte prima." }
+      ] });
     c.candidacy = null;
   }
 
