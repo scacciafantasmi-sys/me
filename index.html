@@ -1633,6 +1633,8 @@
         state.countryProfile.aziende = clamp(state.countryProfile.aziende - fpIdx * 0.01, 1, 10);
       }
     }
+    // Pareggio di bilancio in Costituzione (vedi le Riforme Costituzionali): la spesa frena ogni settimana.
+    if (constitutionHas("pareggio_bilancio")) b.uscite = Math.max(400, b.uscite - 0.15);
     var saldo = b.entrate - b.uscite;
     state.deficitPil = clamp(-saldo / 2100 * 100, -1, 12);
     state.debitoPil = clamp(state.debitoPil + (saldo < 0 ? 0.04 : -0.03), 80, 220);
@@ -18917,6 +18919,264 @@
       choices: choices
     };
   }
+  // ---------- Riforme Costituzionali (art. 138 Cost.) ----------
+  // Richiesto da un giocatore: "dividere le leggi e i procedimenti di approvazione per le norme
+  // costituzionali: se si acquista più popolarità nei sondaggi si potrebbe pure cambiare la forma di
+  // governo o fare riforme più importanti". Finora la Costituzione cambiava solo per referendum
+  // spontanei (vedi topic.constitutional). Qui il giocatore avvia un vero iter di revisione: doppia
+  // deliberazione di ciascuna Camera a distanza di almeno tre mesi, maggioranza assoluta nella seconda
+  // lettura, approvazione diretta con i due terzi, altrimenti referendum confermativo senza quorum. Ogni
+  // riforma approvata cambia davvero le regole del gioco (vedi constitutionHas e i suoi punti di
+  // aggancio). Le riforme più grandi richiedono più forza nei sondaggi. La forma repubblicana non è
+  // revisionabile (art. 139).
+  var CONST_REFORMS = [
+    { id: "premierato", label: "Premierato: elezione diretta del Presidente del Consiglio", lean: 1.5, minSondaggi: 15,
+      effect: "Governi più stabili: crisi e uscite degli alleati diventano molto più rare, e ogni nuovo governo parte con più fiducia." },
+    { id: "presidenzialismo", label: "Presidenzialismo: elezione diretta del Presidente della Repubblica", lean: 2.2, minSondaggi: 18,
+      effect: "Il Capo dello Stato non lo elegge più il Parlamento, ma direttamente i cittadini." },
+    { id: "senato_regioni", label: "Fine del bicameralismo paritario: nasce il Senato delle Regioni", lean: -0.3, minSondaggi: 12,
+      effect: "Leggi più rapide: ogni proposta di legge ha più probabilità di essere approvata in via definitiva." },
+    { id: "sfiducia_costruttiva", label: "Sfiducia costruttiva sul modello tedesco", lean: 0.2, minSondaggi: 6,
+      effect: "Un governo cade solo se c'è già una maggioranza alternativa: molte meno elezioni anticipate dopo una crisi." },
+    { id: "pareggio_bilancio", label: "Pareggio di bilancio rafforzato in Costituzione", lean: 1.0, minSondaggi: 6,
+      effect: "Conti più rigorosi: deficit e spread scendono e la spesa pubblica frena ogni settimana, ma il welfare ne risente." },
+    { id: "autonomia", label: "Autonomia differenziata delle Regioni", lean: 1.2, minSondaggi: 8,
+      effect: "Più risorse e poteri alle Regioni del Nord, meno a quelle del Sud: i partiti regionalisti crescono." },
+    { id: "separazione_carriere", label: "Separazione delle carriere tra giudici e pubblici ministeri", lean: 1.4, minSondaggi: 8,
+      effect: "L'efficienza della giustizia migliora nella Scheda Paese." }
+  ];
+  var CONST_REFORM_COST = 2000;
+  var CONST_REFORM_RETRY_TURNS = 52;
+  // tappe: settimane dall'avvio di ciascuna lettura (la seconda deliberazione almeno 3 mesi dopo la prima)
+  var CONST_STAGES = [
+    { label: "Prima lettura alla Camera", chamber: "camera", weeks: 3 },
+    { label: "Prima lettura al Senato", chamber: "senato", weeks: 7 },
+    { label: "Seconda lettura alla Camera", chamber: "camera", weeks: 20, second: true },
+    { label: "Seconda lettura al Senato", chamber: "senato", weeks: 24, second: true }
+  ];
+  function constReformById(id) { return CONST_REFORMS.filter(function (r) { return r.id === id; })[0]; }
+  function constitutionHas(id) { return !!(state.constitution && state.constitution[id]); }
+  // Chi vota la riforma: il gruppo del giocatore sempre; ogni altro partito in base alla distanza
+  // ideologica dalla riforma, al fatto di governare insieme e a un eventuale accordo largo cercato.
+  function constReformVotes(reform, chamber, accordo, salt) {
+    var p = state.player;
+    var seats = (state.parliamentSeats && state.parliamentSeats[chamber]) || projectSeats(chamber === "camera" ? 400 : 200);
+    var govIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var yes = chamber === "camera" ? (p.seatsCamera || 0) : (p.seatsSenato || 0);
+    var R = constRng((state.turn + 1) * 31 + salt);
+    Object.keys(seats).forEach(function (id) {
+      if (id === "player") return;
+      var party = partyById(id);
+      var pos = party && LEFT_RIGHT_POSITION[party.familyId] !== undefined ? LEFT_RIGHT_POSITION[party.familyId] : 0;
+      var score = 0.75 - Math.abs(pos - reform.lean) * 0.28 + (accordo ? 0.25 : 0) +
+        (p.parliamentRole === "governo" && govIds.indexOf(id) !== -1 ? 0.15 : 0);
+      if (reform.id === "autonomia" && party) score += party.familyId === "regionalista" ? 0.4 : party.familyId === "meridionalista" ? -0.6 : 0;
+      if (score + (R() - 0.5) * 0.3 > 0.5) yes += seats[id];
+    });
+    return yes;
+  }
+  function constRng(seed) { return function () { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }; }
+  function canProposeConstReform(reform) {
+    var p = state.player;
+    if (!p || !p.inParliament || state.regime || state.pendingConstReform) return false;
+    if (constitutionHas(reform.id)) return false;
+    if (p.sondaggi < reform.minSondaggi || p.fondi < CONST_REFORM_COST) return false;
+    var retry = state.constReformRetry && state.constReformRetry[reform.id];
+    return !(retry && state.turn < retry);
+  }
+  function startConstReform(id) {
+    var reform = constReformById(id);
+    if (!reform || !canProposeConstReform(reform)) return null;
+    var p = state.player;
+    p.fondi -= CONST_REFORM_COST;
+    state.pendingConstReform = { id: id, startTurn: state.turn, stage: 0, accordo: false, votes: [] };
+    var text = p.name + " deposita in Parlamento un disegno di legge costituzionale: " + reform.label + ". Comincia l'iter dell'articolo 138: due letture per ciascuna Camera, la seconda dopo almeno tre mesi e con la maggioranza assoluta.";
+    state.log.unshift({ week: state.turn, title: "Avviata una riforma costituzionale", choiceLabel: reform.label, result: text, headlines: [], type: "istituzioni", cat: "Riforma Costituzionale" });
+    return text;
+  }
+  function resolveConstReformIfDue() {
+    var r = state.pendingConstReform;
+    if (!r) return null;
+    var reform = constReformById(r.id);
+    if (r.stage < CONST_STAGES.length) {
+      if (state.turn < r.startTurn + CONST_STAGES[r.stage].weeks) return null;
+      return buildConstReadingDossier(reform, r);
+    }
+    if (r.referendumTurn && state.turn >= r.referendumTurn) return buildConstReferendumDossier(reform, r);
+    return null;
+  }
+  function buildConstReadingDossier(reform, r) {
+    var st = CONST_STAGES[r.stage];
+    var need = st.chamber === "camera" ? CAMERA_MAJORITY_SEATS : SENATO_MAJORITY_SEATS;
+    var preview = constReformVotes(reform, st.chamber, r.accordo, r.stage);
+    var brief = st.label + " della riforma costituzionale: " + reform.label + ". " +
+      (st.second ? "È la seconda deliberazione: serve la maggioranza assoluta dei componenti (" + need + "). Con i due terzi la riforma passa senza referendum." : "Basta la maggioranza dei voti, ma il clima di questa lettura peserà anche sulla seconda.") +
+      " Secondo i capigruppo, oggi la riforma conta su circa " + preview + " voti su " + (st.chamber === "camera" ? 400 : 200) + ".";
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Riforma Costituzionale — " + st.label + " (art. 138)",
+      cat: "Riforma Costituzionale", constReform: { stage: r.stage }, title: st.label + ": " + reform.label, brief: brief,
+      choices: [
+        { label: "Cerca un accordo largo con le opposizioni", hint: "Più voti, e più probabilità di arrivare ai due terzi: un compromesso che costa un po' di reputazione", constChoice: "accordo", effects: {} },
+        { label: "Tira dritto con i tuoi numeri", hint: "Nessuna concessione: la riforma resta tua, ma i voti sono quelli che sono", constChoice: "dritto", effects: {} },
+        { label: "Ritira la riforma", hint: "L'iter si ferma qui: potrai riproporla solo fra un anno", constChoice: "ritira", effects: {} }
+      ]
+    };
+  }
+  function resolveConstReadingChoice(dossier, choice) {
+    var p = state.player;
+    var r = state.pendingConstReform;
+    var reform = constReformById(r.id);
+    var st = CONST_STAGES[r.stage];
+    var text;
+    if (choice.constChoice === "ritira") {
+      state.pendingConstReform = null;
+      if (!state.constReformRetry) state.constReformRetry = {};
+      state.constReformRetry[reform.id] = state.turn + CONST_REFORM_RETRY_TURNS;
+      p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
+      text = "Ritiri la riforma costituzionale prima della votazione: l'iter si interrompe, e gli avversari parlano di una sconfitta politica.";
+    } else {
+      if (choice.constChoice === "accordo") { r.accordo = true; p.reputazione = clamp(p.reputazione - rand(0.5, 1.5), 0, 100); }
+      var yes = constReformVotes(reform, st.chamber, r.accordo, r.stage);
+      var total = st.chamber === "camera" ? 400 : 200;
+      var need = st.chamber === "camera" ? CAMERA_MAJORITY_SEATS : SENATO_MAJORITY_SEATS;
+      r.votes.push(yes / total);
+      var chamberName = st.chamber === "camera" ? "La Camera" : "Il Senato";
+      if (yes < need) {
+        state.pendingConstReform = null;
+        if (!state.constReformRetry) state.constReformRetry = {};
+        state.constReformRetry[reform.id] = state.turn + CONST_REFORM_RETRY_TURNS;
+        p.reputazione = clamp(p.reputazione - rand(2, 4), 0, 100);
+        text = chamberName + " boccia la riforma: " + yes + " voti favorevoli su " + total + ", ne servivano " + need + ". L'iter costituzionale si chiude qui.";
+      } else {
+        r.stage++;
+        p.visibilita = clamp((p.visibilita || 0) + rand(2, 4), 0, 100);
+        text = chamberName + " approva in " + (st.second ? "seconda" : "prima") + " lettura con " + yes + " voti su " + total + ".";
+        if (r.stage >= CONST_STAGES.length) {
+          var twoThirds = r.votes.slice(2).every(function (v) { return v >= 2 / 3; });
+          if (twoThirds) {
+            text += " Entrambe le Camere hanno superato i due terzi nella seconda lettura: la riforma è approvata senza bisogno di referendum.";
+            applyConstReform(reform);
+            state.pendingConstReform = null;
+          } else {
+            r.referendumTurn = state.turn + 8;
+            text += " Senza i due terzi, la riforma va a referendum confermativo: si vota tra otto settimane, senza quorum.";
+          }
+        } else {
+          var nextLabel = CONST_STAGES[r.stage].label;
+          text += " Prossima tappa: " + nextLabel.charAt(0).toLowerCase() + nextLabel.slice(1) + ".";
+        }
+      }
+    }
+    state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: text, headlines: [], type: "istituzioni", cat: "Riforma Costituzionale" });
+    state.resultData = { resultText: text, headlines: [] };
+  }
+  function buildConstReferendumDossier(reform, r) {
+    var p = state.player;
+    var isGov = p.parliamentRole === "governo";
+    var choices = [
+      { label: "Campagna capillare per il SÌ in tutto il Paese", hint: "Costa " + fmtEuro(1500) + ", sposta voti in proporzione al peso del partito", constRef: "campagna", effects: {} },
+      { label: "Campagna sobria, solo nel merito della riforma", hint: "Nessun rischio, effetto più contenuto", constRef: "merito", effects: {} }
+    ];
+    if (isGov) choices.push({ label: "Trasformalo in un voto sul governo: \"se perdo, mi dimetto\"", hint: "Se il governo è popolare spinge molto il SÌ; se perde, il contraccolpo è pesantissimo", constRef: "plebiscito", effects: {} });
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Referendum Costituzionale Confermativo (art. 138)",
+      cat: "Riforma Costituzionale", constReferendum: true, title: "Referendum: " + reform.label,
+      brief: "La riforma non ha raggiunto i due terzi in Parlamento: ora decidono gli italiani. Nessun quorum, conta solo la maggioranza di chi vota. Come fai campagna?",
+      choices: choices
+    };
+  }
+  function resolveConstReferendumChoice(dossier, choice) {
+    var p = state.player;
+    var r = state.pendingConstReform;
+    var reform = constReformById(r.id);
+    state.pendingConstReform = null;
+    var support = r.votes.length ? r.votes.reduce(function (a, b) { return a + b; }, 0) / r.votes.length : 0.55;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var prob = 0.42 + (support - 0.55) * 0.8;
+    if (choice.constRef === "campagna") { p.fondi -= 1500; prob += clamp(institutionalPowerMultiplier(p) * 0.02, 0, 0.12); }
+    if (choice.constRef === "merito") prob += 0.03;
+    if (choice.constRef === "plebiscito") prob += (cg - 50) / 120;
+    prob = clamp(prob, 0.12, 0.85);
+    var passed = Math.random() < prob;
+    var siPct = passed ? rand(50.5, 62) : rand(38, 49.5);
+    var text;
+    if (passed) {
+      applyConstReform(reform);
+      p.reputazione = clamp(p.reputazione + rand(3, 6), 0, 100);
+      p.sondaggi = clamp(p.sondaggi + rand(0.3, 1), 0, 40);
+      text = "Il SÌ vince con il " + fmt1(siPct) + "%: la riforma entra in Costituzione. " + reform.effect;
+    } else {
+      if (!state.constReformRetry) state.constReformRetry = {};
+      state.constReformRetry[reform.id] = state.turn + CONST_REFORM_RETRY_TURNS;
+      p.reputazione = clamp(p.reputazione - rand(3, 6), 0, 100);
+      text = "Vince il NO con il " + fmt1(100 - siPct) + "%: la riforma è bocciata dagli elettori.";
+      if (choice.constRef === "plebiscito") {
+        state.consensoGoverno = clamp(cg - rand(12, 18), 0, 100);
+        p.sondaggi = clamp(p.sondaggi - rand(0.8, 1.8), 0, 40);
+        text += " Avevi legato il destino del governo al voto: la sconfitta lo indebolisce pesantemente.";
+      }
+    }
+    state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: text, headlines: [], type: "istituzioni", cat: "Riforma Costituzionale" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    state.resultData = { resultText: text, headlines: [] };
+  }
+  function applyConstReform(reform) {
+    if (!state.constitution) state.constitution = {};
+    state.constitution[reform.id] = state.turn;
+    var cp = state.countryProfile;
+    if (reform.id === "presidenzialismo") {
+      if (!state.passedNationalReferendumIds) state.passedNationalReferendumIds = [];
+      if (state.passedNationalReferendumIds.indexOf("presidenzialismo") === -1) state.passedNationalReferendumIds.push("presidenzialismo");
+    } else if (reform.id === "pareggio_bilancio") {
+      state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -1, 12);
+      state.spreadBps = clamp(state.spreadBps - rand(8, 20), 40, 500);
+      applyCountryMetricDelta("welfare", -rand(0.2, 0.4));
+    } else if (reform.id === "autonomia") {
+      if (state.regions) Object.keys(state.regions).forEach(function (rid) {
+        var def = regionById(rid), reg = state.regions[rid];
+        if (!def || reg.fondiRegionali === null || reg.fondiRegionali === undefined) return;
+        reg.fondiRegionali = Math.round(reg.fondiRegionali * (def.area === "nord" ? 1.25 : (def.area === "sud" || def.area === "isole") ? 0.85 : 1));
+      });
+      activeParties().forEach(function (pt) { if (pt.familyId === "regionalista") state.parties[pt.id] = (state.parties[pt.id] || 0) + rand(0.3, 0.6); });
+    } else if (reform.id === "separazione_carriere") {
+      applyCountryMetricDelta("giustizia", rand(0.3, 0.5));
+    }
+    recordEnactedPolicy("Riforma Costituzionale: " + reform.label, reform.effect, reform.id === "separazione_carriere" ? "giustizia" : null);
+  }
+  // Punti di aggancio delle riforme approvate (usati altrove nel codice).
+  function constLawBonus() { return constitutionHas("senato_regioni") ? 0.07 : 0; }
+  function constStabilityFactor() { return constitutionHas("premierato") ? 0.5 : 1; }
+  function constMandatoBonus() { return constitutionHas("sfiducia_costruttiva") ? 0.25 : 0; }
+  function renderConstitutionalReformPanel() {
+    var p = state.player;
+    if (!p || state.regime) return "";
+    var html = '<section aria-label="Riforme Costituzionali"><details class="log"><summary>Riforme Costituzionali (art. 138)<span>▾</span></summary>' +
+      '<p class="ci-hint">Una legge costituzionale segue un iter tutto suo: due letture per ciascuna Camera, la seconda dopo almeno tre mesi e con la maggioranza assoluta. Con i due terzi passa subito, altrimenti decide un referendum confermativo senza quorum. Le riforme più profonde richiedono più forza nei sondaggi. La forma repubblicana non si può cambiare (art. 139).</p>';
+    var r = state.pendingConstReform;
+    if (r) {
+      var reform = constReformById(r.id);
+      html += '<p class="ci-hint"><strong>In corso:</strong> ' + reform.label + '</p><ul class="enacted-policy-list">' +
+        CONST_STAGES.map(function (st, i) {
+          var status = i < r.stage ? "✓ approvata (" + Math.round(r.votes[i] * 100) + "% dei voti)" : i === r.stage ? "settimana " + (r.startTurn + st.weeks) : "in attesa";
+          return "<li><strong>" + st.label + ":</strong> " + status + "</li>";
+        }).join("") + (r.referendumTurn ? "<li><strong>Referendum confermativo:</strong> settimana " + r.referendumTurn + "</li>" : "") + "</ul>";
+    }
+    html += '<div class="option-grid">';
+    CONST_REFORMS.forEach(function (rf) {
+      var inForce = constitutionHas(rf.id);
+      var ok = canProposeConstReform(rf);
+      var retry = state.constReformRetry && state.constReformRetry[rf.id] && state.turn < state.constReformRetry[rf.id];
+      var why = inForce ? "In vigore" : !p.inParliament ? "Serve essere in Parlamento" : r ? "C'è già una riforma in corso"
+        : p.sondaggi < rf.minSondaggi ? "Servono almeno il " + rf.minSondaggi + "% nei sondaggi" : retry ? "Riproponibile tra " + (state.constReformRetry[rf.id] - state.turn) + " settimane"
+        : p.fondi < CONST_REFORM_COST ? "Fondi insufficienti (" + fmtEuro(CONST_REFORM_COST) + ")" : "Avvia l'iter · " + fmtEuro(CONST_REFORM_COST);
+      html += '<button type="button" class="option-card' + (inForce ? " selected" : "") + '" data-const-reform="' + rf.id + '"' + (ok ? "" : " disabled") + '>' +
+        '<span class="olabel">' + rf.label + '</span><span class="odesc">' + rf.effect + " " + why + "</span></button>";
+    });
+    html += "</div></details></section>";
+    return html;
+  }
   function renderElectoralLawProposal() {
     var p = state.player;
     if (!p || p.parliamentRole !== "governo") return "";
@@ -19711,7 +19971,7 @@
     if (maybeApplyBureaucraticDelay(p.pendingLegge, "Proposta di Legge", "legge")) return null;
     var topic = p.pendingLegge;
     p.pendingLegge = null;
-    var passed = Math.random() < topic.acceptProb;
+    var passed = Math.random() < topic.acceptProb + constLawBonus();
     if (passed && !topic.presidentReturned && checkPresidentialReturn(topic)) {
       state.presidentReturnedLawTitles.push(topic.title);
       p.pendingLegge = { title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, acceptProb: 1, resolveTurn: state.turn + 2, presidentReturned: true };
@@ -20034,7 +20294,7 @@
     var p = state.player;
     var meta = dossier.cpuLeggeMeta || {};
     var voteAdj = choice.mozioneVote === "favore" ? 0.06 : choice.mozioneVote === "contro" ? -0.06 : 0;
-    var prob = clamp((meta.baseProb === undefined ? 0.3 : meta.baseProb) + voteAdj, 0.03, 0.95);
+    var prob = clamp((meta.baseProb === undefined ? 0.3 : meta.baseProb) + voteAdj + constLawBonus(), 0.03, 0.95);
     var passed = Math.random() < prob;
     var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
     if (meta.metric) state.countryProfile[meta.metric] = clamp(state.countryProfile[meta.metric] + delta, 1, 10);
@@ -20100,7 +20360,7 @@
       var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
       baseProb = (myPos === undefined || govPos === undefined) ? 0.2 : clamp(0.55 - (Math.abs(myPos - govPos) / 6) * 0.5, 0.03, 0.55);
     }
-    var passed = Math.random() < baseProb;
+    var passed = Math.random() < baseProb + constLawBonus();
     var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
     if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
     if (state.consensoGoverno !== undefined) {
@@ -24368,6 +24628,8 @@
     // alleati "forzati" la formula sopra arrivava esattamente al 20%, la soglia di collasso — il governo
     // nasceva già in crisi. Pavimento al 30%, come per il governo di minoranza.
     state.consensoGoverno = hasRealMajority ? clamp(50 - compatibleAlliesCount * 5 - forcedAlliesCount * 10, 30, 50) : 30;
+    // Con il premierato in Costituzione il governo nasce con un'investitura diretta: parte più forte.
+    if (constitutionHas("premierato")) state.consensoGoverno = Math.min(60, state.consensoGoverno + 8);
     openNewEpoch();
     if (extraAllies.length) {
       var alliesLabel = extraAllies.map(function (a) { return a.label; }).join(", ");
@@ -29397,7 +29659,7 @@
       // maggioranza solo per scelta sua (vedi playerLeavesGovernmentMajority).
       if (allyId === "player") continue;
       var forced = (ge.forcedAllyIds || []).indexOf(allyId) !== -1;
-      var chance = clamp(((forced ? 0.03 : 0.006) + crisisFactor) * volatility * honeymoon * govAllyLoyaltyFactor(allyId), 0, 0.5);
+      var chance = clamp(((forced ? 0.03 : 0.006) + crisisFactor) * volatility * honeymoon * govAllyLoyaltyFactor(allyId) * constStabilityFactor(), 0, 0.5);
       if (Math.random() < chance) {
         state.govAllyDefectionCooldownTurn = state.turn + GOV_ALLY_DEFECTION_COOLDOWN_TURNS;
         return departGoverningAlly(allyId, forced);
@@ -29516,6 +29778,7 @@
     var ageFactor = clamp((age - GOV_HONEYMOON_TURNS) / 52, 0.35, 1);
     var forcedCount = partners.filter(function (id) { return (ge.forcedAllyIds || []).indexOf(id) !== -1; }).length;
     var chance = (0.005 + Math.max(0, 50 - cg) * 0.0004 + forcedCount * 0.003) * (1 + 0.25 * (partners.length - 1)) * ageFactor * (ge.minority ? 1.3 : 1);
+    chance *= constStabilityFactor();
     if (Math.random() >= clamp(chance, 0, 0.04)) return;
     var premierParty = partyById(premierId);
     var premierFam = premierParty ? premierParty.familyId : null;
@@ -29547,7 +29810,7 @@
     state.mandatoEsplorativoCooldownTurn = state.turn + 6;
     var semestreBianco = isSemestreBianco();
     var text;
-    if (Math.random() < (semestreBianco ? 0.5 : 0.35)) {
+    if (Math.random() < (semestreBianco ? 0.5 : 0.35) + constMandatoBonus()) {
       state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
       markGovernmentRebornFromMandato();
       text = "Crisi di governo a Roma: il mandato esplorativo del Presidente della Repubblica va a buon fine e nasce un nuovo governo, senza elezioni anticipate.";
@@ -31054,7 +31317,7 @@
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
     { id: "parlamento", label: "Parlamento e Governo", icon: "⚖️", nav: "Parlamento", render: function () {
-        return renderParliamentHemicycles() + renderGovernmentReforms() + renderLeaveGovernmentPanel() + renderNoConfidenceMotionPanel() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderIniziativaLiberaPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
+        return renderParliamentHemicycles() + renderGovernmentReforms() + renderLeaveGovernmentPanel() + renderNoConfidenceMotionPanel() + renderBigForeignPolicyChoices() + renderSpaceProgramPanel() + renderCivilWarPanel() + renderReferendumProposal() + renderElectoralLawProposal() + renderConstitutionalReformPanel() + renderMozioniPanel() + renderLeggiPanel() + renderAmendmentPanel() + renderIniziativaLiberaPanel() + renderQuestionTimePanel() + renderCommissioniPanel() + renderParliament();
       } },
     // Richiesto da un giocatore: fare il Ministro dava troppo poco da fare (solo un piccolo pannello
     // "Iniziativa Ministeriale" in mezzo a tutto il resto). Una scheda dedicata, visibile SOLO mentre si
@@ -33036,7 +33299,7 @@
         var mandatoCtx = dossier.mandatoContext || {};
         var mandatoSuccessChance = clamp(0.35 +
           (choice.mandatoStance === "sostegno" ? 0.25 : choice.mandatoStance === "elezioni" ? -0.25 : 0) +
-          (mandatoCtx.semestreBianco ? 0.15 : 0), 0.05, 0.9);
+          (mandatoCtx.semestreBianco ? 0.15 : 0) + constMandatoBonus(), 0.05, 0.9);
         var mandatoSuccess = Math.random() < mandatoSuccessChance;
         var mandatoText;
         if (mandatoSuccess) {
@@ -33061,6 +33324,10 @@
           state.log.unshift({ week: state.turn, title: "Mandato Esplorativo fallito: Camere sciolte", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
         }
         state.resultData = { resultText: mandatoText, headlines: [] };
+      } else if (dossier.constReform) {
+        resolveConstReadingChoice(dossier, choice);
+      } else if (dossier.constReferendum) {
+        resolveConstReferendumChoice(dossier, choice);
       } else if (dossier.presidentQuirinale) {
         resolvePresidentQuirinaleChoice(dossier, choice);
       } else if (dossier.cat === "Atto Presidenziale") {
@@ -33115,7 +33382,7 @@
             crisisText = premierTecnico + " non ottiene la fiducia delle Camere: il tentativo fallisce e sei costretto a sciogliere il Parlamento. Si torna al voto, e il fallimento pesa anche sul tuo prestigio.";
           }
         } else {
-          var presMandatoChance = clamp(0.4 + (crisisCtx.semestreBianco ? 0.15 : 0) + (state.presidentTerm && state.presidentTerm.prestigio !== undefined ? (state.presidentTerm.prestigio - 50) / 200 : 0), 0.1, 0.85);
+          var presMandatoChance = clamp(0.4 + constMandatoBonus() + (crisisCtx.semestreBianco ? 0.15 : 0) + (state.presidentTerm && state.presidentTerm.prestigio !== undefined ? (state.presidentTerm.prestigio - 50) / 200 : 0), 0.1, 0.85);
           if (Math.random() < presMandatoChance) {
             state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
             markGovernmentRebornFromMandato();
@@ -33981,6 +34248,16 @@
         if (btn.disabled) return;
         var outcome = startCivilWarAttempt();
         showSaveStatus(outcome.resultText, false);
+        save();
+        render();
+      });
+    });
+    app.querySelectorAll("[data-const-reform]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var text = startConstReform(btn.getAttribute("data-const-reform"));
+        if (!text) return;
+        showSaveStatus("Riforma costituzionale avviata: la prima lettura alla Camera arriva tra qualche settimana.", false);
         save();
         render();
       });
@@ -35146,6 +35423,14 @@
     var electoralLawDossier = resolveElectoralLawIfDue();
     if (electoralLawDossier) {
       state.aiDynamicDossier = electoralLawDossier;
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
+    var constReformDossier = resolveConstReformIfDue();
+    if (constReformDossier) {
+      state.aiDynamicDossier = constReformDossier;
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
