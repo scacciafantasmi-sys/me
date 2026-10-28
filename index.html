@@ -5371,6 +5371,7 @@
     triggerNucleoUpdate();
     triggerLocalElectionCycle();
     resolveEuropeanElection();
+    resolveNationalGovCrisisInBackground();
     if (!state.regime && state.turn >= state.nextElectionTurn) { resolveElection(); }
     // Stesso guard delle altre due catene di turno (nazionale e presidenziale): se l'elezione appena
     // risolta ha aperto una trattativa interattiva per la maggioranza nazionale, ha priorità assoluta su
@@ -11393,13 +11394,18 @@
   // governo (Presidenza) resta escluso apposta: andarsene vorrebbe dire far cadere l'intero esecutivo
   // che lui stesso presiede, una conseguenza ben più grande di questa scelta, non ancora coperta qui.
   function renderLeaveGovernmentPanel() {
+    if (!playerCanLeaveGovernmentMajority()) return "";
     var p = state.player;
-    if (!p || p.parliamentRole !== "governo" || state.regime) return "";
-    if (!state.cabinet || state.cabinet.premierId === "player") return "";
-    if (!state.govEntity || !state.govEntity.memberIds || state.govEntity.memberIds.indexOf("player") === -1) return "";
-    return '<section aria-label="Lascia la maggioranza di governo"><details class="log"><summary>Lascia la maggioranza di governo<span>▾</span></summary>' +
-      '<p class="ci-hint">Puoi far uscire il partito dalla maggioranza e passare all\'opposizione. È una scelta pesante e irreversibile per questa legislatura: perdi subito i ministeri eventualmente ottenuti, il governo ' + govEntityLabel() + ' incassa un colpo di credibilità e può perdere la maggioranza reale in Parlamento, e la tua reputazione ne risente nell\'immediato — in cambio riacquisti piena libertà di opposizione.</p>' +
-      '<div class="option-grid"><button type="button" class="option-card" data-leave-government><span class="olabel">Lascia la maggioranza e vai all\'opposizione</span><span class="odesc">Instabilità immediata per il governo in carica</span></button></div>' +
+    // Anteprima onesta: i seggi del governo SENZA quelli del tuo partito dicono già se ritirare la
+    // fiducia lo farebbe cadere (stesso calcolo di detachFromGovernmentMajority).
+    var totals = govMajoritySeatTotals(state.govEntity);
+    var cameraWithout = totals.camera - (p.seatsCamera || 0), senatoWithout = totals.senato - (p.seatsSenato || 0);
+    var decisive = !state.govEntity.minority && (cameraWithout < CAMERA_MAJORITY_SEATS || senatoWithout < SENATO_MAJORITY_SEATS);
+    return '<section aria-label="Lascia la maggioranza di governo"><details class="log"><summary>Ritira la fiducia al governo<span>▾</span></summary>' +
+      '<p class="ci-hint">Puoi ritirare la fiducia al governo ' + govEntityLabel() + ' e passare all\'opposizione. È una scelta pesante e irreversibile per questa legislatura: perdi subito i ministeri eventualmente ottenuti, il governo incassa un colpo di credibilità e la tua reputazione ne risente nell\'immediato — in cambio riacquisti piena libertà di opposizione.</p>' +
+      '<p class="ci-hint">Senza i tuoi seggi la maggioranza scenderebbe a ' + cameraWithout + ' alla Camera (soglia ' + CAMERA_MAJORITY_SEATS + ') e ' + senatoWithout + ' al Senato (soglia ' + SENATO_MAJORITY_SEATS + '): ' +
+      (decisive ? '<strong>i tuoi voti sono decisivi, il governo cadrebbe</strong> e si aprirebbe la crisi, con il mandato esplorativo del Quirinale o il ritorno alle urne.' : 'il governo resterebbe comunque in carica, indebolito.') + '</p>' +
+      '<div class="option-grid"><button type="button" class="option-card" data-leave-government><span class="olabel">' + (decisive ? 'Ritira la fiducia e apri la crisi di governo' : 'Lascia la maggioranza e vai all\'opposizione') + '</span><span class="odesc">' + (decisive ? 'Il governo perde la maggioranza in Aula' : 'Instabilità immediata per il governo in carica') + '</span></button></div>' +
       "</details></section>";
   }
 
@@ -12020,7 +12026,19 @@
     },
     {
       id: "crisi_di_coalizione", label: "Crisi di coalizione", totalStages: 4,
-      eligible: function (p) { return !!p.allianceId && !!coalitionById(p.allianceId) && liveCoalitionMemberIds(coalitionById(p.allianceId)).length >= 1; },
+      // Segnalato da un giocatore: l'arco partiva anche con una coalizione solida (fiducia 60) e poteva
+      // finire con l'uscita di un alleato. Ora serve una crisi vera: fiducia di coalizione fragile, o
+      // almeno un alleato con cui i rapporti sono davvero deteriorati.
+      eligible: function (p) {
+        var coal = p.allianceId ? coalitionById(p.allianceId) : null;
+        if (!coal) return false;
+        var live = liveCoalitionMemberIds(coal);
+        if (!live.length) return false;
+        var trust = state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined ? state.coalitionTrust[p.allianceId] : 50;
+        var relations = state.partyRelations || {};
+        var worstRel = Math.min.apply(null, live.map(function (mid) { return relations[mid] !== undefined ? relations[mid] : 50; }));
+        return trust < 50 || worstRel < 40;
+      },
       startData: function () {
         var p = state.player;
         var coal = coalitionById(p.allianceId);
@@ -17371,7 +17389,9 @@
     // Stessa correzione del controllo equivalente nella catena di turno normale (vedi lì il commento
     // completo): niente più anno di "grazia" dopo l'elezione che ignorava in silenzio un consenso già
     // sotto il 20%.
-    if (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+    if (state.govMajorityLostCrisis && (state.regime || state.snapElectionPending)) state.govMajorityLostCrisis = false;
+    if (!state.snapElectionPending && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
+      state.govMajorityLostCrisis = false;
       state.mandatoEsplorativoCooldownTurn = state.turn + 6;
       state.aiDynamicDossier = buildPresidentCrisisDossier();
       state.currentDossierId = "ai_dynamic";
@@ -23416,7 +23436,7 @@
     // difficile far passare mozioni/leggi/modifiche quando il governo è un'intesa tenuta insieme a
     // fatica (vedi governmentCohesionPenalty) — un compromesso vero deve pesare anche DOPO la
     // formazione del governo, non solo nel giorno dell'insediamento.
-    state.govEntity = { id: winner.id, memberIds: winnerMemberIds, seatSplit: seatSplit, minority: !hasRealMajority, extraAllyIds: extraAllies.map(function (a) { return a.id; }), forcedAllyIds: extraAllies.filter(function (a) { return a.wasIdeologicallyForced; }).map(function (a) { return a.id; }) };
+    state.govEntity = { id: winner.id, formedTurn: state.turn, memberIds: winnerMemberIds, seatSplit: seatSplit, minority: !hasRealMajority, extraAllyIds: extraAllies.map(function (a) { return a.id; }), forcedAllyIds: extraAllies.filter(function (a) { return a.wasIdeologicallyForced; }).map(function (a) { return a.id; }) };
     // Un nuovo governo riparte da una fiducia standard del 50% SOLO se nasce con una maggioranza vera e
     // senza dover allargare l'intesa oltre il blocco uscito naturalmente dalle urne: ogni alleato affine
     // in più negoziato dopo il voto costa un po' di fiducia iniziale, un alleato ideologicamente
@@ -23430,7 +23450,10 @@
     // andato storto) per far scattare subito la crisi di fiducia, senza alcun margine reale per
     // provare a recuperare. Portato a 30: resta un partito fin dal primo giorno (il prossimo
     // mandatoEsplorativoDossier è comunque a un passo), ma non più condannato all'istante.
-    state.consensoGoverno = hasRealMajority ? clamp(50 - compatibleAlliesCount * 5 - forcedAlliesCount * 10, 20, 50) : 30;
+    // Stessa logica anche per un governo con maggioranza vera ma molti alleati di necessità: con 3+
+    // alleati "forzati" la formula sopra arrivava esattamente al 20%, la soglia di collasso — il governo
+    // nasceva già in crisi. Pavimento al 30%, come per il governo di minoranza.
+    state.consensoGoverno = hasRealMajority ? clamp(50 - compatibleAlliesCount * 5 - forcedAlliesCount * 10, 30, 50) : 30;
     openNewEpoch();
     if (extraAllies.length) {
       var alliesLabel = extraAllies.map(function (a) { return a.label; }).join(", ");
@@ -28332,11 +28355,15 @@
     if (idx !== -1) coal.members.splice(idx, 1);
     var effectiveCount = coal.members.length + (state.player && state.player.allianceId === coalId ? 1 : 0);
     if (effectiveCount < 2) { return dissolveCoalition(coalId, reasonText); }
-    if (state.govEntity && state.govEntity.memberIds) {
-      var gidx = state.govEntity.memberIds.indexOf(allyId);
-      if (gidx !== -1) state.govEntity.memberIds.splice(gidx, 1);
+    // Se l'alleato sedeva anche al governo, ne esce davvero: stesso ricalcolo della maggioranza di
+    // departGoverningAlly (prima toglieva solo il nome dall'elenco, senza mai verificare i numeri).
+    if (state.govEntity && state.govEntity.memberIds && state.govEntity.memberIds.indexOf(allyId) !== -1) {
+      var lostMajorityByAlly = detachFromGovernmentMajority(allyId).lostMajority;
+      applyGovAllyDepartureConsensusHit(4, 10, lostMajorityByAlly);
+      if (lostMajorityByAlly) reasonText += " Senza i suoi seggi il governo perde la maggioranza in Parlamento: si apre la crisi di governo.";
+    } else {
+      vacateCabinetMinistries(allyId);
     }
-    vacateCabinetMinistries(allyId);
     var allyParty = partyById(allyId);
     state.log.unshift({
       week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : allyId,
@@ -28418,6 +28445,31 @@
   // numeri) ha una probabilità di uscita molto più alta di uno affine: non c'era convinzione dall'inizio,
   // e la tensione cresce quanto più a lungo la fiducia di governo (consensoGoverno) resta bassa.
   var GOV_ALLY_DEFECTION_COOLDOWN_TURNS = 20;
+  // Prime settimane di un governo appena nato: nessuno rompe a ridosso del giuramento, né nella realtà
+  // né qui (vale per gli alleati di necessità sotto e per la crisi di governo CPU più in basso).
+  var GOV_HONEYMOON_TURNS = 26;
+  function govFormedTurn(ge) {
+    return ge && ge.formedTurn !== undefined ? ge.formedTurn : (state.lastElectionTurn || 0);
+  }
+  // Segnalato da un giocatore ("quando salgo al governo, la prima volta la CPU ha abbandonato la
+  // coalizione nonostante l'alleanza fosse al 60 e il governo è caduto — mi è successo due volte"):
+  // la probabilità di uscita qui sotto non guardava MAI i rapporti reali col partito del giocatore né la
+  // fiducia della sua coalizione, solo un tasso fisso (3% a settimana per un alleato di necessità: oltre
+  // l'80% di probabilità di rottura nel primo anno, qualunque cosa facesse il giocatore). Ora, quando il
+  // giocatore è al governo, un alleato con cui i rapporti sono buoni (e dentro una coalizione solida)
+  // quasi non se ne va più; uno trascurato resta invece a rischio, anche più di prima.
+  function govAllyLoyaltyFactor(allyId) {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo") return 1;
+    var rel = state.partyRelations && state.partyRelations[allyId] !== undefined ? state.partyRelations[allyId] : 50;
+    var factor = clamp((62 - rel) / 30, 0.05, 1.6);
+    var coal = p.allianceId ? coalitionById(p.allianceId) : null;
+    if (coal && coal.members.indexOf(allyId) !== -1 && state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined) {
+      var trust = state.coalitionTrust[p.allianceId];
+      factor *= trust >= 55 ? 0.4 : trust >= 40 ? 0.8 : 1.3;
+    }
+    return factor;
+  }
   function triggerGoverningAllyDefection() {
     var ge = state.govEntity;
     if (!ge || !ge.extraAllyIds || !ge.extraAllyIds.length) return;
@@ -28425,57 +28477,177 @@
     var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
     var crisisFactor = cg < 30 ? (30 - cg) * 0.01 : 0;
     var volatility = politicalVolatilityMultiplier();
+    var honeymoon = state.turn - govFormedTurn(ge) < GOV_HONEYMOON_TURNS ? 0.15 : 1;
     for (var i = 0; i < ge.extraAllyIds.length; i++) {
       var allyId = ge.extraAllyIds[i];
       var forced = (ge.forcedAllyIds || []).indexOf(allyId) !== -1;
-      var chance = clamp(((forced ? 0.03 : 0.006) + crisisFactor) * volatility, 0, 0.5);
+      var chance = clamp(((forced ? 0.03 : 0.006) + crisisFactor) * volatility * honeymoon * govAllyLoyaltyFactor(allyId), 0, 0.5);
       if (Math.random() < chance) {
         state.govAllyDefectionCooldownTurn = state.turn + GOV_ALLY_DEFECTION_COOLDOWN_TURNS;
         return departGoverningAlly(allyId, forced);
       }
     }
   }
-  function departGoverningAlly(allyId, wasForced) {
-    var ge = state.govEntity;
-    if (!ge) return;
-    var ally = partyById(allyId);
-    var idxE = ge.extraAllyIds.indexOf(allyId);
-    if (idxE !== -1) ge.extraAllyIds.splice(idxE, 1);
-    var idxF = (ge.forcedAllyIds || []).indexOf(allyId);
-    if (idxF !== -1) ge.forcedAllyIds.splice(idxF, 1);
-    var idxM = ge.memberIds.indexOf(allyId);
-    if (idxM !== -1) ge.memberIds.splice(idxM, 1);
-    vacateCabinetMinistries(allyId);
-    // Ricalcola se il governo ha ancora una vera maggioranza senza questo alleato, sui seggi reali salvati
-    // in seatSplit al momento della formazione (vedi finishGovernmentFormation), non su una stima.
+  // Seggi reali della maggioranza di governo, su seatSplit (salvato alla formazione, vedi
+  // finishGovernmentFormation) con ripiego sui seggi dell'ultima elezione per chi non vi compare, più
+  // quelli del giocatore se è al governo.
+  function govMajoritySeatTotals(ge) {
     var totalCamera = 0, totalSenato = 0;
-    ge.memberIds.forEach(function (mid) {
+    var seats = state.parliamentSeats || {};
+    (ge.memberIds || []).forEach(function (mid) {
+      if (mid === "player") return;
       var s = ge.seatSplit && ge.seatSplit[mid];
-      if (s) { totalCamera += s.camera; totalSenato += s.senato; }
+      totalCamera += s ? s.camera : ((seats.camera && seats.camera[mid]) || 0);
+      totalSenato += s ? s.senato : ((seats.senato && seats.senato[mid]) || 0);
     });
     if (state.player && state.player.parliamentRole === "governo") {
       totalCamera += state.player.seatsCamera || 0;
       totalSenato += state.player.seatsSenato || 0;
     }
+    return { camera: totalCamera, senato: totalSenato };
+  }
+  // Toglie un partito (alleato CPU o il giocatore stesso, id "player") dalla maggioranza di governo:
+  // elenchi dei membri, ministeri tappati da tecnici, ricalcolo della maggioranza vera. Restituisce
+  // se il governo ha appena perso la maggioranza. Il chiamante decide il resto (testo, consenso).
+  function detachFromGovernmentMajority(partyId) {
+    var ge = state.govEntity;
+    if (!ge) return { lostMajority: false };
+    [ge.memberIds, ge.extraAllyIds, ge.forcedAllyIds].forEach(function (list) {
+      if (!list) return;
+      var idx = list.indexOf(partyId);
+      if (idx !== -1) list.splice(idx, 1);
+    });
+    vacateCabinetMinistries(partyId);
+    var totals = govMajoritySeatTotals(ge);
     var wasMinority = ge.minority;
-    ge.minority = totalCamera < CAMERA_MAJORITY_SEATS || totalSenato < SENATO_MAJORITY_SEATS;
-    var lostMajority = !wasMinority && ge.minority;
-    state.consensoGoverno = clamp((state.consensoGoverno !== undefined ? state.consensoGoverno : 50) - rand(wasForced ? 10 : 6, wasForced ? 20 : 14), 0, 100);
+    ge.minority = totals.camera < CAMERA_MAJORITY_SEATS || totals.senato < SENATO_MAJORITY_SEATS;
+    return { lostMajority: !wasMinority && ge.minority };
+  }
+  // Un governo che perde davvero la maggioranza in Aula non tira avanti per inerzia: si apre la crisi, e
+  // la settimana dopo il Presidente della Repubblica avvia il mandato esplorativo (vedi il controllo su
+  // state.govMajorityLostCrisis nelle catene di turno). Il flag serve perché la deriva settimanale del
+  // consenso potrebbe riportarlo sopra il 20% prima ancora che il controllo scatti.
+  function openGovernmentCrisisForLostMajority() {
+    if (state.regime || state.snapElectionPending) return;
+    state.govMajorityLostCrisis = true;
+    state.consensoGoverno = Math.min(state.consensoGoverno !== undefined ? state.consensoGoverno : 50, 19);
+  }
+  // Un rimpasto senza perdere la maggioranza costa consenso, ma da solo non fa cadere il governo: la
+  // caduta arriva solo se i numeri in Aula non ci sono più (sopra), non per un semplice colpo d'immagine.
+  function applyGovAllyDepartureConsensusHit(minDrop, maxDrop, lostMajority) {
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var after = cg - rand(minDrop, maxDrop);
+    state.consensoGoverno = clamp(lostMajority ? after : Math.max(after, Math.min(cg, 21)), 0, 100);
+    if (lostMajority) openGovernmentCrisisForLostMajority();
+  }
+  function departGoverningAlly(allyId, wasForced, reasonOverride) {
+    var ge = state.govEntity;
+    if (!ge) return;
+    var ally = partyById(allyId);
+    var lostMajority = detachFromGovernmentMajority(allyId).lostMajority;
+    applyGovAllyDepartureConsensusHit(wasForced ? 10 : 6, wasForced ? 20 : 14, lostMajority);
     var allyName = ally ? ally.name : allyId;
-    var reasonText = wasForced
+    var reasonText = reasonOverride || (wasForced
       ? allyName + " lascia la maggioranza di governo: un'alleanza di necessità, mai davvero convinta, si rompe non appena i rapporti si raffreddano."
-      : allyName + " lascia la maggioranza di governo, denunciando pubblicamente scelte politiche ormai troppo distanti dalla propria linea.";
-    if (lostMajority) reasonText += " Il governo perde così la maggioranza vera in Parlamento.";
+      : allyName + " lascia la maggioranza di governo, denunciando pubblicamente scelte politiche ormai troppo distanti dalla propria linea.");
+    if (lostMajority) reasonText += " Il governo perde così la maggioranza vera in Parlamento: si apre la crisi, e il Presidente della Repubblica avvierà le consultazioni.";
     state.log.unshift({ week: state.turn, title: "Un alleato lascia la maggioranza di governo", choiceLabel: allyName, result: reasonText, headlines: [], type: "istituzioni", cat: "Governo" });
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Governo", text: reasonText });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
     return {
       id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Crisi di governo",
-      cat: "Governo", title: "Un alleato lascia la maggioranza di governo",
+      cat: "Governo", title: lostMajority ? "Crisi di governo: " + allyName + " ritira la fiducia" : "Un alleato lascia la maggioranza di governo",
       brief: reasonText,
-      choices: [{ label: "Prendo atto", hint: lostMajority ? "Il governo resta in carica, ma senza più una vera maggioranza" : "Il governo resta in carica, con una maggioranza più risicata", effects: {}, result: "Prendi atto della rottura: il governo resta in carica, ma la squadra che lo sostiene è un po' più piccola di prima." }]
+      choices: [{ label: "Prendo atto", hint: lostMajority ? "Il governo non ha più i numeri: si va verso il mandato esplorativo" : "Il governo resta in carica, con una maggioranza più risicata", effects: {},
+        result: lostMajority ? "Prendi atto della rottura: senza più una maggioranza in Aula, la parola passa al Quirinale." : "Prendi atto della rottura: il governo resta in carica, ma la squadra che lo sostiene è un po' più piccola di prima." }]
     };
+  }
+  // ---------- Crisi di governo tra partiti CPU ----------
+  // Segnalato da un giocatore: "i governi CPU durano tutto il mandato, cosa quasi impossibile ai giorni
+  // d'oggi". Un governo guidato dalla CPU cadeva solo se il consenso scendeva sotto il 20%, ma la deriva
+  // settimanale verso il 45% (driftConsensoGoverno) lo impediva quasi sempre; e i partner della
+  // coalizione uscita dalle urne non potevano mai rompere (solo gli alleati reclutati dopo il voto).
+  // Nella realtà italiana quasi ogni legislatura ha visto almeno un cambio di governo (Conte I-II-Draghi,
+  // Renzi-Gentiloni, Letta-Renzi...): ora un partner junior può ritirare la fiducia, con una probabilità
+  // che cresce con l'età del governo, con un consenso basso, con la distanza ideologica dal partito del
+  // Premier e con il numero di partner — dopo la luna di miele iniziale e mai a pochi mesi dal voto.
+  // Ordine di grandezza: circa 3 legislature su 4 vedono almeno una crisi. Se il giocatore guida il
+  // governo vale invece triggerGoverningAllyDefection (legata ai rapporti col giocatore).
+  var CPU_GOV_CRISIS_COOLDOWN_TURNS = 26;
+  var CPU_GOV_CRISIS_REASONS = [
+    function (ally, premier) { return ally + " ritira la propria delegazione dal governo: dopo mesi di scontri con " + premier + " sulla legge di bilancio, il partito annuncia che non voterà più la fiducia."; },
+    function (ally, premier) { return ally + " apre formalmente la crisi di governo: i ministri del partito rassegnano le dimissioni, accusando " + premier + " di aver tradito il programma comune."; },
+    function (ally, premier) { return "Strappo in maggioranza: " + ally + " non vota la fiducia posta dal governo su un decreto chiave, e certifica così la rottura definitiva con " + premier + "."; },
+    function (ally, premier) { return ally + " esce dalla maggioranza: forte di sondaggi in crescita, il partito sceglie di passare all'incasso e rompe con " + premier + ", puntando a nuovi equilibri."; },
+    function (ally, premier) { return "Dopo settimane di vertici falliti a Palazzo Chigi, " + ally + " annuncia l'uscita dal governo: le distanze con " + premier + " su riforme e nomine sono ormai incolmabili."; },
+    function (ally, premier) { return ally + " stacca la spina al governo: in una conferenza stampa il leader del partito annuncia il ritiro del sostegno, lasciando " + premier + " senza i numeri in Aula."; }
+  ];
+  function triggerCpuGovernmentCrisis() {
+    var ge = state.govEntity;
+    if (!ge || !ge.memberIds || state.regime || state.snapElectionPending || state.govMajorityLostCrisis) return;
+    if (state.pendingGovFormationNegotiation || state.pendingConsultazioni || state.pendingCabinetFormation) return;
+    if (state.cabinet && state.cabinet.premierId === "player") return;
+    if (state.turn < (state.cpuGovCrisisCooldownTurn || 0)) return;
+    var age = state.turn - govFormedTurn(ge);
+    if (age < GOV_HONEYMOON_TURNS) return;
+    if ((state.nextElectionTurn || 0) - state.turn < 20) return;
+    var premierId = (state.cabinet && state.cabinet.premierId && state.cabinet.premierId !== "player") ? state.cabinet.premierId : leadingGovPartyId();
+    var activeIds = activeParties().map(function (party) { return party.id; });
+    var partners = ge.memberIds.filter(function (id) { return id !== "player" && id !== premierId && activeIds.indexOf(id) !== -1; });
+    if (!partners.length) return;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    var ageFactor = clamp((age - GOV_HONEYMOON_TURNS) / 52, 0.35, 1);
+    var forcedCount = partners.filter(function (id) { return (ge.forcedAllyIds || []).indexOf(id) !== -1; }).length;
+    var chance = (0.005 + Math.max(0, 50 - cg) * 0.0004 + forcedCount * 0.003) * (1 + 0.25 * (partners.length - 1)) * ageFactor * (ge.minority ? 1.3 : 1);
+    if (Math.random() >= clamp(chance, 0, 0.04)) return;
+    var premierParty = partyById(premierId);
+    var premierFam = premierParty ? premierParty.familyId : null;
+    var leaving = pickWeighted(partners.map(partyById).filter(Boolean), function (pt) {
+      var dist = (pt.familyId && premierFam && LEFT_RIGHT_POSITION[pt.familyId] !== undefined && LEFT_RIGHT_POSITION[premierFam] !== undefined)
+        ? Math.abs(LEFT_RIGHT_POSITION[pt.familyId] - LEFT_RIGHT_POSITION[premierFam]) : 1;
+      return 0.4 + dist * 0.5 + ((ge.forcedAllyIds || []).indexOf(pt.id) !== -1 ? 1 : 0);
+    });
+    if (!leaving) return;
+    state.cpuGovCrisisCooldownTurn = state.turn + CPU_GOV_CRISIS_COOLDOWN_TURNS;
+    var reason = CPU_GOV_CRISIS_REASONS[Math.floor(Math.random() * CPU_GOV_CRISIS_REASONS.length)](leaving.name, premierParty ? premierParty.name : "il Presidente del Consiglio");
+    return departGoverningAlly(leaving.id, (ge.forcedAllyIds || []).indexOf(leaving.id) !== -1, reason);
+  }
+  // Un mandato esplorativo riuscito fa nascere un governo nuovo, con una maggioranza vera trovata in
+  // Aula: riparte da qui anche la sua luna di miele (vedi GOV_HONEYMOON_TURNS).
+  function markGovernmentRebornFromMandato() {
+    if (!state.govEntity) return;
+    state.govEntity.formedTurn = state.turn;
+    state.govEntity.minority = false;
+  }
+  // Catena di turno della presidenza regionale: il giocatore non segue la politica nazionale, quindi
+  // una crisi del governo nazionale si risolve da sola, con le stesse probabilità di un mandato
+  // esplorativo "neutro" — prima, in questa catena, il governo nazionale non poteva cadere mai.
+  function resolveNationalGovCrisisInBackground() {
+    if (state.regime || state.snapElectionPending || !state.govEntity) return;
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
+    if (!state.govMajorityLostCrisis && !(cg < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0))) return;
+    state.govMajorityLostCrisis = false;
+    state.mandatoEsplorativoCooldownTurn = state.turn + 6;
+    var semestreBianco = isSemestreBianco();
+    var text;
+    if (Math.random() < (semestreBianco ? 0.5 : 0.35)) {
+      state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+      markGovernmentRebornFromMandato();
+      text = "Crisi di governo a Roma: il mandato esplorativo del Presidente della Repubblica va a buon fine e nasce un nuovo governo, senza elezioni anticipate.";
+    } else if (semestreBianco) {
+      state.consensoGoverno = 22;
+      text = "Crisi di governo a Roma: il mandato esplorativo fallisce, ma nel semestre bianco le Camere non possono essere sciolte — il governo resta per gli affari correnti.";
+    } else {
+      state.snapElectionPending = true;
+      state.nextElectionTurn = state.turn + 8;
+      applyGovernmentCollapseLeadershipShock();
+      text = "Crisi di governo a Roma: il mandato esplorativo fallisce e il Presidente della Repubblica scioglie le Camere. Elezioni politiche anticipate tra 8 settimane.";
+    }
+    state.log.unshift({ week: state.turn, title: "Crisi del governo nazionale", choiceLabel: "Mandato Esplorativo", result: text, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Governo", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
   }
   // Richiesto da un giocatore: finora solo gli alleati CPU potevano lasciare la maggioranza di
   // governo di propria iniziativa (sopra); il giocatore stesso, se al governo ma senza la Presidenza,
@@ -28483,36 +28655,37 @@
   // maggioranza vera sui seggi reali, niente più ministeri in cabinet, colpo al consenso di governo),
   // applicata al partito del giocatore invece che a un alleato CPU: è lui stesso a rompere, non lo
   // subisce — l'instabilità che ne segue è esattamente quella richiesta.
+  // Segnalato da un giocatore ("se sei al governo ma non il partito più votato non puoi togliere la
+  // fiducia, e quindi non puoi far cadere il governo"): il controllo richiedeva "player" dentro
+  // state.govEntity.memberIds, dove però il giocatore entra solo accettando un invito post-voto
+  // (resolveGovInviteAccept) — mai quando governa perché la sua coalizione ha vinto le elezioni. Ora
+  // basta essere davvero al governo (p.parliamentRole). E se senza i suoi seggi il governo non ha più
+  // la maggioranza, ritirare la fiducia apre la crisi vera, come nella realtà.
+  function playerCanLeaveGovernmentMajority() {
+    var p = state.player;
+    if (!p || p.parliamentRole !== "governo" || state.regime || !state.govEntity) return false;
+    return !(state.cabinet && state.cabinet.premierId === "player");
+  }
   function playerLeavesGovernmentMajority() {
     var p = state.player;
-    var ge = state.govEntity;
-    if (!p || !ge || p.parliamentRole !== "governo" || !ge.memberIds || ge.memberIds.indexOf("player") === -1) return null;
-    var idxM = ge.memberIds.indexOf("player");
-    ge.memberIds.splice(idxM, 1);
-    vacateCabinetMinistries("player");
+    if (!playerCanLeaveGovernmentMajority()) return null;
     state.playerMinistry = null;
     p.parliamentRole = "opposizione";
-    var totalCamera = 0, totalSenato = 0;
-    ge.memberIds.forEach(function (mid) {
-      var s = ge.seatSplit && ge.seatSplit[mid];
-      if (s) { totalCamera += s.camera; totalSenato += s.senato; }
-    });
-    var wasMinority = ge.minority;
-    ge.minority = totalCamera < CAMERA_MAJORITY_SEATS || totalSenato < SENATO_MAJORITY_SEATS;
-    var lostMajority = !wasMinority && ge.minority;
-    state.consensoGoverno = clamp((state.consensoGoverno !== undefined ? state.consensoGoverno : 50) - rand(10, 18), 0, 100);
+    var lostMajority = detachFromGovernmentMajority("player").lostMajority;
+    applyGovAllyDepartureConsensusHit(10, 18, lostMajority);
     p.reputazione = clamp(p.reputazione + rand(-1, 3), 0, 100);
-    var reasonText = p.name + " lascia la maggioranza di governo e passa all'opposizione, denunciando scelte politiche ormai troppo distanti dalla propria linea." +
-      (lostMajority ? " Il governo " + govEntityLabel() + " perde così la maggioranza vera in Parlamento." : " Il governo " + govEntityLabel() + " resta in carica, ma con una maggioranza più risicata.");
+    var reasonText = p.name + " ritira la fiducia al governo e passa all'opposizione, denunciando scelte politiche ormai troppo distanti dalla propria linea." +
+      (lostMajority ? " Senza i vostri seggi il governo " + govEntityLabel() + " non ha più la maggioranza in Parlamento: si apre la crisi di governo, e la parola passa al Presidente della Repubblica." : " Il governo " + govEntityLabel() + " resta in carica, ma con una maggioranza più risicata.");
     state.log.unshift({ week: state.turn, title: "Lasci la maggioranza di governo", choiceLabel: p.name, result: reasonText, headlines: [], type: "istituzioni", cat: "Governo" });
     if (!state.worldNews) state.worldNews = [];
     state.worldNews.unshift({ cat: "Governo", text: reasonText });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
     return {
       id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Rompi con il governo",
-      cat: "Governo", title: "Lasci la maggioranza di governo",
+      cat: "Governo", title: lostMajority ? "Ritiri la fiducia: si apre la crisi" : "Lasci la maggioranza di governo",
       brief: reasonText,
-      choices: [{ label: "Prendo atto", hint: "Il partito è ora all'opposizione", effects: {}, result: "Il partito passa formalmente all'opposizione: piena libertà di critica, ma anche niente più ministeri né dossier di governo." }]
+      choices: [{ label: "Prendo atto", hint: lostMajority ? "Il governo non ha più i numeri: si va verso il mandato esplorativo" : "Il partito è ora all'opposizione", effects: {},
+        result: lostMajority ? "Il partito passa all'opposizione e il governo resta senza maggioranza: nelle prossime settimane il Quirinale tenterà un mandato esplorativo, oppure si tornerà al voto." : "Il partito passa formalmente all'opposizione: piena libertà di critica, ma anche niente più ministeri né dossier di governo." }]
     };
   }
   // Richiama entrambi i controlli sugli alleati (alleanza elettorale e coalizione di governo) in un colpo
@@ -28523,7 +28696,8 @@
   function checkAllyDepartureDossier() {
     var allianceDossier = triggerCoalitionAllyReaction();
     var govAllyDossier = triggerGoverningAllyDefection();
-    return allianceDossier || govAllyDossier;
+    var cpuCrisisDossier = (allianceDossier || govAllyDossier) ? null : triggerCpuGovernmentCrisis();
+    return allianceDossier || govAllyDossier || cpuCrisisDossier;
   }
   function coalitionLabelForPartyId(id) {
     if (COALITIONS.centrodestra.members.indexOf(id) !== -1) return COALITIONS.centrodestra.label;
@@ -29003,7 +29177,7 @@
         : " La coalizione è solida.";
       html += '<p class="ci-hint">Sei alleato con <strong>' + (coal ? coal.label : p.allianceId) +
         '</strong>: correrete insieme alle prossime elezioni politiche, con soglia di sbarramento comune al 10%.</p>' +
-        '<p class="ci-hint">Fiducia della coalizione: <strong>' + trust + '/100</strong> (sotto il 30% si scioglie da sola).' + trustNote + '</p>' +
+        '<p class="ci-hint">Fiducia della coalizione: <strong>' + trust + '/100</strong> (sotto il ' + COALITION_DISSOLVE_THRESHOLD + '% si scioglie da sola).' + trustNote + '</p>' +
         '<div class="gauge"><span style="width:' + trust + '%;background:' + trustColor + '"></span></div>';
       // La fiducia sopra è un aggregato: dietro ci sono singoli alleati che possono lasciare la coalizione
       // per conto proprio se trascurati a lungo, o coprirti le spalle se coltivati davvero (vedi
@@ -31951,6 +32125,7 @@
         var mandatoText;
         if (mandatoSuccess) {
           state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+          markGovernmentRebornFromMandato();
           if (choice.mandatoStance === "sostegno" && state.player.inParliament) {
             state.player.parliamentRole = "governo";
             resignPlayerFromGovernedRegions("il partito è appena entrato nel nuovo governo nato dal mandato esplorativo");
@@ -32005,6 +32180,7 @@
           var presMandatoChance = clamp(0.4 + (crisisCtx.semestreBianco ? 0.15 : 0), 0.1, 0.85);
           if (Math.random() < presMandatoChance) {
             state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
+            markGovernmentRebornFromMandato();
             crisisText = "Il mandato esplorativo va a buon fine: nasce un nuovo governo senza bisogno di elezioni anticipate.";
           } else if (crisisCtx.semestreBianco) {
             state.consensoGoverno = 22;
@@ -33755,7 +33931,9 @@
     // partire già esattamente al 20% (vedi finishGovernmentFormation) e scivolare sotto poco dopo: con
     // quella soglia aggiuntiva, restava comunque intoccabile per un anno intero. Tolta: resta solo il
     // cooldown di 6 settimane già previsto sotto per non far ripartire il dossier troppo di fila.
-    if (!state.snapElectionPending && state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)) {
+    if (state.govMajorityLostCrisis && (state.regime || state.snapElectionPending)) state.govMajorityLostCrisis = false;
+    if (!state.snapElectionPending && (state.govMajorityLostCrisis || (state.consensoGoverno !== undefined && state.consensoGoverno < 20 && state.turn >= (state.mandatoEsplorativoCooldownTurn || 0)))) {
+      state.govMajorityLostCrisis = false;
       // Non più elezioni immediate: prima il Presidente della Repubblica tenta un mandato esplorativo
       // per evitare le urne (vedi buildMandatoEsplorativoDossier e la sua risoluzione in
       // resolveDossierChoice) — le elezioni anticipate restano possibili, ma solo come ESITO di quel
