@@ -29069,9 +29069,40 @@
       state.govEntity = { id: winner, memberIds: COALITIONS[winner].members.filter(function (id) { return activeParties().some(function (p) { return p.id === id; }); }) };
       var lead = partyById(leadingGovPartyId());
       addCareerDiaryEntry("Elezioni politiche", "Vince " + COALITIONS[winner].label + " (" + fmt1(Math.max(cd, cl)) + "% contro " + fmt1(Math.min(cd, cl)) + "%). Il nuovo governo è guidato da " + (lead ? lead.leader + " (" + lead.name + ")" : "la coalizione vincente") + ".");
+      careerPolitichePush(c, winner, cd, cl, lead);
       return true;
     }
     return false;
+  }
+  // Segnalato da un giocatore: da studente le politiche finivano solo nel diario e non si capiva quale
+  // governo fosse salito. Ora l'esito arriva come dossier, con coalizioni, partiti e nuovo esecutivo.
+  function careerPolitichePush(c, winner, cd, cl, lead) {
+    var loser = winner === "centrodestra" ? "campolargo" : "centrodestra";
+    var members = state.govEntity.memberIds.map(function (id) { var p = partyById(id); return p ? p.name : null; }).filter(Boolean);
+    var parties = activeParties().slice().sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); }).slice(0, 7);
+    var rows = parties.map(function (p, i) {
+      var inGov = state.govEntity.memberIds.indexOf(p.id) !== -1;
+      return (i + 1) + ". " + p.name + " — " + fmt1(state.parties[p.id] || 0) + "%" + (inGov ? " (al governo)" : "");
+    }).join("<br>");
+    var school = c.stage === "scuola";
+    var mine = c.partyId && state.govEntity.memberIds.indexOf(c.partyId) !== -1;
+    var lean = LEFT_RIGHT_POSITION[currentGoverningFamilyId()] || 0;
+    var close = Math.abs(lean - careerLean()) <= 1;
+    var brief = "<strong>Vince " + COALITIONS[winner].label + "</strong> con il " + fmt1(Math.max(cd, cl)) + "% contro il " + fmt1(Math.min(cd, cl)) + "% di " + COALITIONS[loser].label + ".<br><br>" +
+      "<strong>Nuovo governo:</strong> " + (lead ? "Presidente del Consiglio " + lead.leader + " (" + lead.name + ")" : "guidato dalla coalizione vincente") + ".<br>" +
+      "<strong>Maggioranza:</strong> " + (members.length ? members.join(", ") : COALITIONS[winner].label) + ".<br><br>" +
+      "<strong>I partiti:</strong><br>" + rows + "<br><br>" +
+      (mine ? "Il tuo partito è al governo." : c.partyId ? "Il tuo partito va all'opposizione." : close ? "È un governo vicino alle tue idee." : "È un governo lontano dalle tue idee.") +
+      (school ? " Dalle sue scelte dipendono i fondi per la tua scuola." : "");
+    var choices = school ? [
+      { label: close ? "Festeggi con gli amici" : "Commenti amaro il risultato", eff: { studenti: 0.5, rep: 0.3 }, result: close ? "Una serata di festa: qualcuno a scuola ti chiede già cosa cambierà." : "Il tuo sfogo sui social raccoglie qualche like e qualche litigio." },
+      { label: "Ne parli in assemblea d'istituto", eff: { studenti: 1, preside: -0.5, rep: 0.5 }, result: "Il dibattito è acceso: per qualche giorno a scuola non si parla d'altro." },
+      { label: "Studi il programma del nuovo governo sulla scuola", eff: { rep: 0.5 }, result: "Ti fai un'idea precisa di cosa cambierà per le scuole: ti tornerà utile." }
+    ] : [
+      { label: mine ? "Rivendichi la vittoria" : "Commenti il risultato", eff: { rep: 0.5, trust: mine ? 2 : 0.5 }, result: mine ? "Nel partito si respira aria di festa e si parla già di incarichi." : "Una dichiarazione misurata: qualcuno la riprende." },
+      { label: mine ? "Ti proponi per un ruolo nel nuovo governo" : "Ti prepari a fare opposizione", eff: { trust: mine ? -0.5 : 1.5, rete: 1 }, result: mine ? "Fai sapere di essere disponibile: il segretario prende nota." : "Ti metti al lavoro sui primi dossier da contestare." }
+    ];
+    c.pending.unshift({ id: "politiche_" + state.turn, cat: "Elezioni politiche", title: "Elezioni politiche: chi governa ora", brief: brief, choices: choices });
   }
   // Anche in carriera il Capo dello Stato si rinnova: eletto dal Parlamento (o dai cittadini, se è in
   // vigore il presidenzialismo) con un profilo vicino a chi governa in quel momento.
