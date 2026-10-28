@@ -26514,15 +26514,52 @@
     html += "</section>";
     var parties = activeParties().slice().sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); });
     var maxPoll = Math.max.apply(null, parties.map(function (pt) { return state.parties[pt.id] || 0; }).concat([1]));
-    html += '<section aria-label="Sondaggi"><h3>Sondaggi</h3>' + parties.map(function (pt) {
+    html += '<section aria-label="Sondaggi"><h3>Sondaggi</h3><p class="ci-hint">A destra la variazione nell\'ultimo mese.</p>' + parties.map(function (pt) {
       var v = state.parties[pt.id] || 0;
       return '<div style="display:flex;align-items:center;gap:0.5rem;margin:0.25rem 0"><span style="flex:0 0 38%;font-size:0.82rem">' + pt.name + '</span>' +
         '<span style="flex:1;height:10px;border-radius:5px;background:rgba(255,255,255,0.08);overflow:hidden"><span style="display:block;height:100%;width:' + Math.round(v / maxPoll * 100) + '%;background:' + (pt.color || "var(--accent)") + '"></span></span>' +
-        '<span style="flex:0 0 3.2rem;text-align:right;font-family:var(--font-mono);font-size:0.8rem">' + fmt1(v) + "%</span></div>";
+        '<span style="flex:0 0 3.2rem;text-align:right;font-family:var(--font-mono);font-size:0.8rem">' + fmt1(v) + "%</span>" +
+        (function () { var d = careerPollDelta(pt.id, 4); if (d === null) return '<span style="flex:0 0 3rem"></span>'; return '<span style="flex:0 0 3rem;text-align:right;font-family:var(--font-mono);font-size:0.75rem;color:' + (d > 0.05 ? "var(--good)" : d < -0.05 ? "var(--critical)" : "var(--text-dim)") + '">' + (d > 0.05 ? "▲" : d < -0.05 ? "▼" : "=") + fmt1(Math.abs(d)) + "</span>"; })() + "</div>";
     }).join("") + "</section>";
     html += renderPresidentCard();
     html += renderCountryProfile().replace('<details class="log">', '<details class="log" open>');
     return html;
+  }
+  // Segnalato da un giocatore: in carriera i sondaggi sembravano fermi (solo un rumore minimo che si
+  // annullava da sé). Ora ogni partito ha una tendenza che dura settimane e cambia lentamente, più gli
+  // scossoni della cronaca; il totale resta lo stesso. Ogni 4 settimane si salva una fotografia, per
+  // mostrare quanto è cambiato ciascun partito nell'ultimo mese e nell'ultimo anno.
+  function careerPollTick() {
+    if (!state.careerPollTrend) state.careerPollTrend = {};
+    var ids = Object.keys(state.parties || {});
+    var before = ids.reduce(function (sum, id) { return sum + (state.parties[id] || 0); }, 0);
+    if (!state.careerPollBase) state.careerPollBase = Object.assign({}, state.parties);
+    ids.forEach(function (id) {
+      var v = state.parties[id] || 0;
+      var base = state.careerPollBase[id] || v;
+      var tr = state.careerPollTrend[id] || 0;
+      // una tendenza dura settimane, ma più un partito si allontana dal suo peso storico, più tende a rientrare
+      tr = tr * 0.92 + rand(-0.045, 0.045) - clamp((v - base) / Math.max(base, 2), -1, 1) * 0.012;
+      if (Math.random() < 0.02) tr += rand(-0.25, 0.25); // svolta improvvisa: uno scandalo, un leader nuovo
+      state.careerPollTrend[id] = clamp(tr, -0.3, 0.3);
+      state.parties[id] = Math.max(0.3, v + state.careerPollTrend[id] * Math.max(0.3, Math.sqrt(v) / 3) + rand(-0.08, 0.08));
+    });
+    var after = ids.reduce(function (sum, id) { return sum + (state.parties[id] || 0); }, 0);
+    if (after > 0) ids.forEach(function (id) { state.parties[id] = Math.max(0.3, state.parties[id] * before / after); });
+    if (!state.careerPollHistory) state.careerPollHistory = [];
+    var h = state.careerPollHistory;
+    if (!h.length || state.turn - h[h.length - 1].turn >= 4) {
+      h.push({ turn: state.turn, values: Object.assign({}, state.parties) });
+      if (h.length > 14) h.shift();
+    }
+  }
+  function careerPollDelta(id, weeks) {
+    var h = state.careerPollHistory || [];
+    var target = state.turn - weeks;
+    var snap = null;
+    for (var i = 0; i < h.length; i++) if (h[i].turn <= target) snap = h[i];
+    if (!snap || snap.values[id] === undefined) return null;
+    return (state.parties[id] || 0) - snap.values[id];
   }
   // il paese si muove anche mentre il personaggio studia: piccola deriva degli indicatori
   function careerCountryDrift() {
@@ -26535,10 +26572,7 @@
   }
   function careerWorldTick(c) {
     // sondaggi: piccolo random walk con ritorno verso la media, così il quadro politico non resta congelato
-    Object.keys(state.parties || {}).forEach(function (id) {
-      var v = state.parties[id] || 0;
-      state.parties[id] = Math.max(0.3, v + rand(-0.12, 0.12));
-    });
+    careerPollTick();
     careerCountryDrift();
     if (c.stage === "scuola") {
       // le prime politiche arrivano nel 2027, come nella realtà; poi ogni cinque anni
@@ -26864,6 +26898,284 @@
       choices: resultChoices });
     c.campaign = { score: 0, posts: 0, lastTheme: null, candidate: false };
     return outcome;
+  }
+  // --- Domande vere per materia e anno (programmi ministeriali) ---
+  // Ogni voce: y = anno di corso, q = domanda, a = risposte (la PRIMA è quella giusta; l'ordine viene
+  // mescolato quando il dossier viene costruito). Rispondere bene alza il voto della materia, sbagliare
+  // lo abbassa: lo studio vero, non solo la quota di tempo, conta.
+  var CAREER_QUIZ_BANK = {
+    Italiano: [
+      { y: 1, q: "Quale poema racconta l'ira di Achille durante la guerra di Troia?", a: ["Iliade", "Odissea", "Eneide", "Divina Commedia"] },
+      { y: 1, q: "Chi è l'autore dell'Eneide?", a: ["Virgilio", "Omero", "Ovidio", "Orazio"] },
+      { y: 1, q: "In «Il libro è sul tavolo», «sul tavolo» è un complemento di…", a: ["stato in luogo", "moto a luogo", "specificazione", "termine"] },
+      { y: 1, q: "Nell'Odissea, come si chiama l'isola di Ulisse?", a: ["Itaca", "Creta", "Sparta", "Lesbo"] },
+      { y: 2, q: "Chi è l'autore de I promessi sposi?", a: ["Alessandro Manzoni", "Giovanni Verga", "Ugo Foscolo", "Giacomo Leopardi"] },
+      { y: 2, q: "Nei Promessi sposi, chi intima a don Abbondio che «questo matrimonio non s'ha da fare»?", a: ["I bravi di don Rodrigo", "L'Innominato", "La monaca di Monza", "Il conte Attilio"] },
+      { y: 2, q: "In quale città imperversa la peste raccontata nei Promessi sposi?", a: ["Milano", "Venezia", "Firenze", "Bergamo"] },
+      { y: 2, q: "Una similitudine è…", a: ["un paragone introdotto da «come» o simili", "la ripetizione di suoni all'inizio delle parole", "un'esagerazione", "l'inversione dell'ordine delle parole"] },
+      { y: 3, q: "Chi accompagna Dante attraverso l'Inferno?", a: ["Virgilio", "Beatrice", "San Bernardo", "Catone"] },
+      { y: 3, q: "In quanti cerchi è diviso l'Inferno dantesco?", a: ["Nove", "Sette", "Dieci", "Dodici"] },
+      { y: 3, q: "Chi è l'autore del Decameron?", a: ["Giovanni Boccaccio", "Francesco Petrarca", "Dante Alighieri", "Ludovico Ariosto"] },
+      { y: 3, q: "Il Canzoniere di Petrarca è dedicato soprattutto a…", a: ["Laura", "Beatrice", "Fiammetta", "Silvia"] },
+      { y: 3, q: "Quale metro usa Dante nella Commedia?", a: ["La terzina di endecasillabi", "L'ottava rima", "Il sonetto", "Il verso libero"] },
+      { y: 4, q: "Chi ha scritto l'Orlando furioso?", a: ["Ludovico Ariosto", "Torquato Tasso", "Matteo Maria Boiardo", "Niccolò Machiavelli"] },
+      { y: 4, q: "Il Principe di Machiavelli è dedicato a…", a: ["Lorenzo de' Medici", "Cesare Borgia", "Papa Leone X", "Carlo V"] },
+      { y: 4, q: "Chi è l'autore de Le ultime lettere di Jacopo Ortis?", a: ["Ugo Foscolo", "Vittorio Alfieri", "Giuseppe Parini", "Carlo Goldoni"] },
+      { y: 4, q: "La Gerusalemme liberata racconta…", a: ["La prima crociata", "La guerra di Troia", "Le guerre di Carlo Magno contro i saraceni", "La scoperta dell'America"] },
+      { y: 4, q: "Chi ha scritto La locandiera?", a: ["Carlo Goldoni", "Vittorio Alfieri", "Pietro Metastasio", "Carlo Gozzi"] },
+      { y: 5, q: "Chi ha scritto L'infinito?", a: ["Giacomo Leopardi", "Ugo Foscolo", "Giovanni Pascoli", "Giosuè Carducci"] },
+      { y: 5, q: "Quale romanzo di Verga racconta la famiglia Toscano di Aci Trezza?", a: ["I Malavoglia", "Mastro-don Gesualdo", "Vita dei campi", "Storia di una capinera"] },
+      { y: 5, q: "Chi è l'autore de Il fu Mattia Pascal?", a: ["Luigi Pirandello", "Italo Svevo", "Gabriele D'Annunzio", "Federigo Tozzi"] },
+      { y: 5, q: "La coscienza di Zeno è un romanzo di…", a: ["Italo Svevo", "Luigi Pirandello", "Alberto Moravia", "Cesare Pavese"] },
+      { y: 5, q: "Quale poeta pubblicò la raccolta Ossi di seppia?", a: ["Eugenio Montale", "Giuseppe Ungaretti", "Salvatore Quasimodo", "Umberto Saba"] },
+      { y: 5, q: "«X Agosto» è una poesia di…", a: ["Giovanni Pascoli", "Gabriele D'Annunzio", "Giosuè Carducci", "Guido Gozzano"] }
+    ],
+    Matematica: [
+      { y: 1, q: "Quanto vale (a + b)²?", a: ["a² + 2ab + b²", "a² + b²", "a² − 2ab + b²", "2a + 2b"] },
+      { y: 1, q: "Qual è la soluzione di 3x − 6 = 0?", a: ["x = 2", "x = −2", "x = 3", "x = 6"] },
+      { y: 1, q: "Il massimo comune divisore di 12 e 18 è…", a: ["6", "3", "36", "2"] },
+      { y: 2, q: "Quante soluzioni reali ha x² + 1 = 0?", a: ["Nessuna", "Una", "Due", "Infinite"] },
+      { y: 2, q: "Il coefficiente angolare della retta y = 3x − 2 è…", a: ["3", "−2", "2/3", "−3"] },
+      { y: 2, q: "Le soluzioni di x² − 5x + 6 = 0 sono…", a: ["2 e 3", "−2 e −3", "1 e 6", "−1 e 6"] },
+      { y: 3, q: "Quanto vale log₁₀(1000)?", a: ["3", "100", "30", "10"] },
+      { y: 3, q: "L'equazione x² + y² = 25 rappresenta…", a: ["Una circonferenza di raggio 5", "Una parabola", "Un'ellisse", "Una retta"] },
+      { y: 3, q: "Il vertice della parabola y = x² − 4x + 3 ha ascissa…", a: ["2", "−2", "4", "3"] },
+      { y: 4, q: "Quanto vale sen(30°)?", a: ["1/2", "√3/2", "1", "√2/2"] },
+      { y: 4, q: "Quanto vale sen²x + cos²x?", a: ["1", "0", "2", "Dipende da x"] },
+      { y: 4, q: "Quanti anagrammi ha la parola ROMA?", a: ["24", "12", "16", "4"] },
+      { y: 5, q: "La derivata di x³ è…", a: ["3x²", "x²", "3x", "x⁴/4"] },
+      { y: 5, q: "Il limite di 1/x per x che tende a +∞ vale…", a: ["0", "+∞", "1", "Non esiste"] },
+      { y: 5, q: "Una primitiva di 2x è…", a: ["x²", "2", "2x²", "x"] },
+      { y: 5, q: "La derivata di sen x è…", a: ["cos x", "−cos x", "−sen x", "tan x"] }
+    ],
+    Latino: [
+      { y: 1, q: "Il genitivo singolare di «rosa» è…", a: ["rosae", "rosam", "rosā", "rosarum"] },
+      { y: 1, q: "«Amo, amas, amat» appartiene alla…", a: ["prima coniugazione", "seconda coniugazione", "terza coniugazione", "quarta coniugazione"] },
+      { y: 2, q: "Cosa significa «puer»?", a: ["fanciullo", "padre", "popolo", "porta"] },
+      { y: 2, q: "L'ablativo assoluto è formato da…", a: ["un nome e un participio in ablativo", "un verbo all'infinito", "un genitivo e un dativo", "un accusativo e un infinito"] },
+      { y: 3, q: "Chi scrisse il De bello Gallico?", a: ["Giulio Cesare", "Cicerone", "Sallustio", "Tito Livio"] },
+      { y: 3, q: "Catullo è famoso soprattutto per i carmi dedicati a…", a: ["Lesbia", "Cinzia", "Delia", "Corinna"] },
+      { y: 4, q: "Di che cosa parlano le Georgiche di Virgilio?", a: ["Di agricoltura", "Di guerra", "D'amore", "Di filosofia"] },
+      { y: 4, q: "Chi scrisse le Odi, con il celebre «carpe diem»?", a: ["Orazio", "Ovidio", "Virgilio", "Lucrezio"] },
+      { y: 5, q: "Le Epistulae morales ad Lucilium sono di…", a: ["Seneca", "Tacito", "Petronio", "Quintiliano"] },
+      { y: 5, q: "Chi è considerato l'autore del Satyricon?", a: ["Petronio", "Apuleio", "Marziale", "Giovenale"] },
+      { y: 5, q: "Tacito scrisse…", a: ["gli Annales e le Historiae", "l'Eneide", "le Metamorfosi", "il De rerum natura"] }
+    ],
+    Greco: [
+      { y: 1, q: "Quante lettere ha l'alfabeto greco?", a: ["24", "21", "26", "22"] },
+      { y: 1, q: "L'articolo maschile singolare al nominativo è…", a: ["ὁ", "ἡ", "τό", "οἱ"] },
+      { y: 2, q: "Il verbo λύω significa…", a: ["sciogliere", "vedere", "dire", "scrivere"] },
+      { y: 3, q: "Chi è l'autore dell'Iliade secondo la tradizione?", a: ["Omero", "Esiodo", "Pindaro", "Saffo"] },
+      { y: 3, q: "Saffo era originaria dell'isola di…", a: ["Lesbo", "Creta", "Samo", "Delo"] },
+      { y: 4, q: "Chi scrisse l'Edipo re?", a: ["Sofocle", "Eschilo", "Euripide", "Aristofane"] },
+      { y: 4, q: "Erodoto è considerato il padre della…", a: ["storiografia", "filosofia", "tragedia", "medicina"] },
+      { y: 5, q: "Chi è l'autore della Repubblica (Politeia)?", a: ["Platone", "Aristotele", "Senofonte", "Isocrate"] },
+      { y: 5, q: "Le Argonautiche sono di…", a: ["Apollonio Rodio", "Callimaco", "Teocrito", "Menandro"] }
+    ],
+    Storia: [
+      { y: 1, q: "A quale anno la tradizione fa risalire la fondazione di Roma?", a: ["753 a.C.", "509 a.C.", "476 d.C.", "1000 a.C."] },
+      { y: 1, q: "La battaglia di Maratona (490 a.C.) vide contrapposti…", a: ["Ateniesi e Persiani", "Spartani e Ateniesi", "Romani e Cartaginesi", "Greci e Macedoni"] },
+      { y: 1, q: "Chi fu sconfitto da Roma nelle guerre puniche?", a: ["Cartagine", "Atene", "Sparta", "L'Egitto"] },
+      { y: 2, q: "In che anno cade convenzionalmente l'Impero romano d'Occidente?", a: ["476 d.C.", "410 d.C.", "1453", "395 d.C."] },
+      { y: 2, q: "Chi fu incoronato imperatore la notte di Natale dell'800?", a: ["Carlo Magno", "Ottone I", "Federico Barbarossa", "Pipino il Breve"] },
+      { y: 2, q: "L'editto di Milano del 313 concesse libertà di culto ai…", a: ["cristiani", "ebrei", "pagani", "musulmani"] },
+      { y: 3, q: "In che anno Cristoforo Colombo arrivò in America?", a: ["1492", "1453", "1517", "1498"] },
+      { y: 3, q: "Chi rese pubbliche le 95 tesi nel 1517?", a: ["Martin Lutero", "Giovanni Calvino", "Enrico VIII", "Erasmo da Rotterdam"] },
+      { y: 3, q: "La pace di Lodi (1454) garantì…", a: ["l'equilibrio tra gli stati italiani", "l'unità d'Italia", "la fine della guerra dei Cent'anni", "la cacciata degli spagnoli"] },
+      { y: 4, q: "In che anno iniziò la Rivoluzione francese?", a: ["1789", "1799", "1776", "1815"] },
+      { y: 4, q: "Il Congresso di Vienna si concluse nel…", a: ["1815", "1848", "1789", "1861"] },
+      { y: 4, q: "In che anno fu proclamato il Regno d'Italia?", a: ["1861", "1848", "1870", "1866"] },
+      { y: 5, q: "In che anno l'Italia entrò nella Prima guerra mondiale?", a: ["1915", "1914", "1917", "1918"] },
+      { y: 5, q: "La Repubblica italiana nasce con il referendum del…", a: ["2 giugno 1946", "25 aprile 1945", "1° gennaio 1948", "8 settembre 1943"] },
+      { y: 5, q: "La Costituzione italiana è entrata in vigore il…", a: ["1° gennaio 1948", "2 giugno 1946", "25 aprile 1945", "1° gennaio 1950"] },
+      { y: 5, q: "La marcia su Roma avvenne nel…", a: ["1922", "1919", "1925", "1929"] }
+    ],
+    Filosofia: [
+      { y: 3, q: "Chi sosteneva che il principio di tutte le cose (archè) fosse l'acqua?", a: ["Talete", "Anassimene", "Eraclito", "Democrito"] },
+      { y: 3, q: "«So di non sapere» è attribuito a…", a: ["Socrate", "Platone", "Aristotele", "Parmenide"] },
+      { y: 3, q: "Il mito della caverna si trova in un'opera di…", a: ["Platone", "Aristotele", "Plotino", "Epicuro"] },
+      { y: 4, q: "«Cogito ergo sum» è di…", a: ["Cartesio", "Spinoza", "Locke", "Hume"] },
+      { y: 4, q: "Chi scrisse la Critica della ragion pura?", a: ["Kant", "Hegel", "Fichte", "Schelling"] },
+      { y: 4, q: "Il Leviatano è un'opera di…", a: ["Thomas Hobbes", "John Locke", "Rousseau", "Montesquieu"] },
+      { y: 5, q: "Chi scrisse Il capitale?", a: ["Karl Marx", "Friedrich Engels", "Hegel", "Feuerbach"] },
+      { y: 5, q: "«Dio è morto» è una celebre affermazione di…", a: ["Nietzsche", "Schopenhauer", "Kierkegaard", "Feuerbach"] },
+      { y: 5, q: "Chi è il fondatore della psicoanalisi?", a: ["Sigmund Freud", "Carl Gustav Jung", "Henri Bergson", "Edmund Husserl"] }
+    ],
+    Inglese: [
+      { y: 1, q: "Qual è il past simple di «go»?", a: ["went", "goed", "gone", "going"] },
+      { y: 1, q: "Completa: «She ___ to school every day.»", a: ["goes", "go", "going", "is go"] },
+      { y: 2, q: "Completa: «If I ___ rich, I would travel.»", a: ["were", "am", "will be", "have been"] },
+      { y: 2, q: "Il plurale di «child» è…", a: ["children", "childs", "childes", "childrens"] },
+      { y: 3, q: "Chi scrisse Romeo and Juliet?", a: ["William Shakespeare", "Christopher Marlowe", "Geoffrey Chaucer", "John Milton"] },
+      { y: 3, q: "Chi scrisse The Canterbury Tales?", a: ["Geoffrey Chaucer", "William Shakespeare", "Edmund Spenser", "John Donne"] },
+      { y: 4, q: "Chi scrisse Robinson Crusoe?", a: ["Daniel Defoe", "Jonathan Swift", "Samuel Richardson", "Henry Fielding"] },
+      { y: 4, q: "Chi pubblicò le Lyrical Ballads insieme a Coleridge?", a: ["William Wordsworth", "Lord Byron", "John Keats", "Percy Shelley"] },
+      { y: 5, q: "Chi scrisse Nineteen Eighty-Four?", a: ["George Orwell", "Aldous Huxley", "James Joyce", "Virginia Woolf"] },
+      { y: 5, q: "The Picture of Dorian Gray è di…", a: ["Oscar Wilde", "Charles Dickens", "Thomas Hardy", "Joseph Conrad"] },
+      { y: 5, q: "Chi scrisse Ulysses (1922)?", a: ["James Joyce", "T. S. Eliot", "Virginia Woolf", "D. H. Lawrence"] }
+    ],
+    Fisica: [
+      { y: 1, q: "L'unità di misura della forza nel Sistema Internazionale è…", a: ["il newton", "il joule", "il watt", "il pascal"] },
+      { y: 1, q: "La velocità media si calcola come…", a: ["spazio diviso tempo", "tempo diviso spazio", "massa per accelerazione", "forza per spostamento"] },
+      { y: 2, q: "Il secondo principio della dinamica è…", a: ["F = m·a", "E = m·c²", "p = m·v", "F = G·m₁m₂/r²"] },
+      { y: 3, q: "L'energia cinetica di un corpo vale…", a: ["½·m·v²", "m·g·h", "m·v", "F·t"] },
+      { y: 3, q: "L'accelerazione di gravità sulla Terra vale circa…", a: ["9,8 m/s²", "3,0 m/s²", "98 m/s²", "1 m/s²"] },
+      { y: 4, q: "Lo zero assoluto corrisponde a…", a: ["−273,15 °C", "0 °C", "−100 °C", "−459 °C"] },
+      { y: 4, q: "Il primo principio della termodinamica esprime la conservazione…", a: ["dell'energia", "della temperatura", "della pressione", "dell'entropia"] },
+      { y: 5, q: "La prima legge di Ohm è…", a: ["V = R·I", "P = V·I", "Q = C·V", "F = q·E"] },
+      { y: 5, q: "L'unità di misura della carica elettrica è…", a: ["il coulomb", "l'ampere", "il volt", "l'ohm"] },
+      { y: 5, q: "Chi formulò E = m·c²?", a: ["Albert Einstein", "Max Planck", "Niels Bohr", "Enrico Fermi"] }
+    ],
+    Scienze: [
+      { y: 1, q: "Qual è il pianeta più vicino al Sole?", a: ["Mercurio", "Venere", "Marte", "Terra"] },
+      { y: 1, q: "Lo strato più esterno della Terra si chiama…", a: ["crosta", "mantello", "nucleo", "astenosfera"] },
+      { y: 2, q: "Dove avviene la fotosintesi nella cellula vegetale?", a: ["Nei cloroplasti", "Nei mitocondri", "Nel nucleo", "Nei ribosomi"] },
+      { y: 2, q: "Quale molecola custodisce l'informazione genetica?", a: ["Il DNA", "L'ATP", "Il glucosio", "Il colesterolo"] },
+      { y: 3, q: "Il simbolo chimico del sodio è…", a: ["Na", "So", "S", "N"] },
+      { y: 3, q: "Chi formulò le leggi dell'ereditarietà studiando le piante di pisello?", a: ["Gregor Mendel", "Charles Darwin", "Louis Pasteur", "Robert Hooke"] },
+      { y: 4, q: "Il pH di una soluzione neutra a 25 °C è…", a: ["7", "0", "14", "1"] },
+      { y: 4, q: "Quale organo produce l'insulina?", a: ["Il pancreas", "Il fegato", "La milza", "La tiroide"] },
+      { y: 5, q: "Quanti legami forma di solito un atomo di carbonio?", a: ["4", "2", "3", "6"] },
+      { y: 5, q: "La teoria che spiega il movimento dei continenti è la…", a: ["tettonica delle placche", "teoria del big bang", "deriva genetica", "teoria cellulare"] }
+    ],
+    "Scienze Umane": [
+      { y: 1, q: "La psicologia studia…", a: ["il comportamento e i processi mentali", "le società antiche", "i sistemi economici", "le leggi dello Stato"] },
+      { y: 2, q: "Chi fondò il primo laboratorio di psicologia sperimentale, a Lipsia?", a: ["Wilhelm Wundt", "Sigmund Freud", "Jean Piaget", "Ivan Pavlov"] },
+      { y: 2, q: "Il condizionamento classico è legato agli esperimenti di…", a: ["Pavlov", "Skinner", "Piaget", "Vygotskij"] },
+      { y: 3, q: "Chi descrisse gli stadi dello sviluppo cognitivo del bambino?", a: ["Jean Piaget", "Lev Vygotskij", "John Watson", "Erik Erikson"] },
+      { y: 4, q: "Il metodo educativo basato su autonomia e materiali strutturati si deve a…", a: ["Maria Montessori", "Don Bosco", "John Dewey", "Rousseau"] },
+      { y: 4, q: "Chi scrisse Il suicidio (1897), opera fondativa della sociologia?", a: ["Émile Durkheim", "Max Weber", "Auguste Comte", "Karl Marx"] },
+      { y: 5, q: "Quale antropologo studiò le isole Trobriand?", a: ["Bronisław Malinowski", "Claude Lévi-Strauss", "Margaret Mead", "Franz Boas"] },
+      { y: 5, q: "L'etica protestante e lo spirito del capitalismo è di…", a: ["Max Weber", "Émile Durkheim", "Georg Simmel", "Talcott Parsons"] }
+    ],
+    Diritto: [
+      { y: 1, q: "Quanti articoli ha la Costituzione italiana?", a: ["139, più le disposizioni transitorie e finali", "100", "200", "54"] },
+      { y: 1, q: "A chi spetta il potere legislativo?", a: ["Al Parlamento", "Al Governo", "Alla magistratura", "Al Presidente della Repubblica"] },
+      { y: 2, q: "Quanto dura il mandato del Presidente della Repubblica?", a: ["7 anni", "5 anni", "4 anni", "9 anni"] },
+      { y: 2, q: "L'inflazione è…", a: ["l'aumento generale dei prezzi", "la diminuzione dei prezzi", "l'aumento della disoccupazione", "la crescita del PIL"] },
+      { y: 3, q: "La capacità giuridica si acquista…", a: ["con la nascita", "a 18 anni", "a 14 anni", "con il matrimonio"] },
+      { y: 3, q: "Che cos'è un contratto?", a: ["Un accordo tra parti che costituisce, regola o estingue un rapporto patrimoniale", "Una legge dello Stato", "Una sentenza", "Un atto amministrativo"] },
+      { y: 4, q: "Chi nomina il Presidente del Consiglio?", a: ["Il Presidente della Repubblica", "Il Parlamento", "I cittadini direttamente", "La Corte costituzionale"] },
+      { y: 4, q: "Secondo l'articolo 1, la Repubblica italiana è fondata…", a: ["sul lavoro", "sulla libertà", "sulla famiglia", "sulla pace"] },
+      { y: 5, q: "Il PIL misura…", a: ["il valore dei beni e servizi finali prodotti in un anno", "il debito pubblico", "le esportazioni", "il risparmio delle famiglie"] },
+      { y: 5, q: "Dove ha sede la Banca Centrale Europea?", a: ["Francoforte", "Bruxelles", "Strasburgo", "Lussemburgo"] }
+    ],
+    "Economia Aziendale": [
+      { y: 1, q: "Il patrimonio aziendale è…", a: ["l'insieme dei beni a disposizione dell'azienda in un dato momento", "il totale dei costi di un anno", "il totale dei ricavi", "l'insieme dei debiti"] },
+      { y: 2, q: "Qual è l'aliquota IVA ordinaria in Italia?", a: ["22%", "20%", "10%", "4%"] },
+      { y: 3, q: "Lo Stato patrimoniale contiene…", a: ["attività, passività e patrimonio netto", "solo costi e ricavi", "solo i flussi di cassa", "il piano marketing"] },
+      { y: 3, q: "Con la partita doppia ogni operazione si registra…", a: ["in dare e in avere", "solo in dare", "solo in avere", "solo nel libro giornale"] },
+      { y: 4, q: "Il break-even point è…", a: ["il punto in cui ricavi e costi totali si eguagliano", "il massimo profitto", "la produzione minima", "il prezzo di vendita"] },
+      { y: 5, q: "Il ROE misura…", a: ["la redditività del capitale proprio", "la liquidità", "il costo del personale", "il fatturato"] },
+      { y: 5, q: "Il budget è…", a: ["un programma di previsione economico-finanziaria", "il bilancio consuntivo", "il registro IVA", "il libro dei soci"] }
+    ],
+    Informatica: [
+      { y: 1, q: "Quanti bit compongono un byte?", a: ["8", "4", "16", "10"] },
+      { y: 1, q: "Il numero 5 in binario è…", a: ["101", "110", "111", "100"] },
+      { y: 2, q: "A che cosa serve l'HTML?", a: ["A strutturare pagine web", "A compilare programmi in C", "A gestire database", "A progettare circuiti"] },
+      { y: 3, q: "Un ciclo «for» serve a…", a: ["ripetere istruzioni", "dichiarare una variabile", "chiudere un programma", "creare una tabella"] },
+      { y: 4, q: "SQL è un linguaggio per…", a: ["interrogare database", "disegnare grafica", "programmare microcontrollori", "scrivere testi"] },
+      { y: 5, q: "Un indirizzo IPv4 è composto da…", a: ["32 bit", "64 bit", "128 bit", "16 bit"] },
+      { y: 5, q: "HTTPS si distingue da HTTP perché…", a: ["cifra la comunicazione", "è più veloce", "non usa server", "funziona solo offline"] }
+    ],
+    Elettronica: [
+      { y: 3, q: "La resistenza elettrica si misura in…", a: ["ohm", "volt", "ampere", "farad"] },
+      { y: 3, q: "Un diodo lascia passare la corrente…", a: ["in un solo verso", "in entrambi i versi", "solo in alternata", "mai"] },
+      { y: 4, q: "Due resistenze uguali R collegate in serie equivalgono a…", a: ["2R", "R/2", "R", "R²"] },
+      { y: 5, q: "Quale porta logica dà 1 solo se entrambi gli ingressi valgono 1?", a: ["AND", "OR", "NOT", "XOR"] }
+    ],
+    Tecnica: [
+      { y: 1, q: "A che cosa serve il CAD?", a: ["A progettare e disegnare al computer", "A calcolare le tasse", "A gestire il personale", "A programmare siti web"] },
+      { y: 2, q: "In un disegno in scala 1:10…", a: ["1 cm sul foglio vale 10 cm reali", "10 cm sul foglio valgono 1 cm reale", "il disegno è in dimensioni reali", "il disegno è dieci volte più grande del reale"] },
+      { y: 3, q: "Il calibro serve a…", a: ["misurare lunghezze con precisione", "tagliare metalli", "saldare", "misurare la tensione"] },
+      { y: 3, q: "In materia di sicurezza, DPI significa…", a: ["dispositivi di protezione individuale", "documento di progettazione interna", "un tipo di saldatura", "pressione interna dichiarata"] },
+      { y: 4, q: "Il multimetro può misurare…", a: ["tensione, corrente e resistenza", "solo la temperatura", "solo la pressione", "la velocità"] },
+      { y: 5, q: "Il Testo unico sulla salute e sicurezza sul lavoro è il…", a: ["D.Lgs. 81/2008", "D.Lgs. 196/2003", "lo Statuto dei lavoratori", "il Codice civile"] }
+    ],
+    Francese: [
+      { y: 1, q: "Come si dice «buongiorno» in francese?", a: ["bonjour", "bonsoir", "bonne nuit", "salut"] },
+      { y: 2, q: "Il passé composé di «aller» alla prima persona singolare è…", a: ["je suis allé", "j'ai allé", "je vais", "j'allais"] },
+      { y: 4, q: "Chi scrisse Les Misérables?", a: ["Victor Hugo", "Émile Zola", "Gustave Flaubert", "Honoré de Balzac"] },
+      { y: 5, q: "Madame Bovary è un romanzo di…", a: ["Gustave Flaubert", "Stendhal", "Guy de Maupassant", "Marcel Proust"] }
+    ],
+    Spagnolo: [
+      { y: 1, q: "Come si dice «grazie» in spagnolo?", a: ["gracias", "por favor", "de nada", "perdón"] },
+      { y: 2, q: "Completa: «Yo ___ estudiante.»", a: ["soy", "estoy", "es", "está"] },
+      { y: 4, q: "Chi scrisse il Don Chisciotte?", a: ["Miguel de Cervantes", "Lope de Vega", "Calderón de la Barca", "Federico García Lorca"] },
+      { y: 5, q: "Cent'anni di solitudine è di…", a: ["Gabriel García Márquez", "Jorge Luis Borges", "Pablo Neruda", "Isabel Allende"] }
+    ],
+    "Storia dell'Arte": [
+      { y: 1, q: "Dove si trova il Partenone?", a: ["Ad Atene", "A Roma", "A Sparta", "A Corinto"] },
+      { y: 2, q: "Chi scolpì la Pietà di San Pietro?", a: ["Michelangelo", "Donatello", "Bernini", "Canova"] },
+      { y: 3, q: "Chi dipinse la Nascita di Venere?", a: ["Sandro Botticelli", "Raffaello", "Leonardo da Vinci", "Tiziano"] },
+      { y: 3, q: "Chi progettò la cupola di Santa Maria del Fiore a Firenze?", a: ["Filippo Brunelleschi", "Leon Battista Alberti", "Bramante", "Michelangelo"] },
+      { y: 4, q: "Chi dipinse la Vocazione di san Matteo?", a: ["Caravaggio", "Annibale Carracci", "Guido Reni", "Artemisia Gentileschi"] },
+      { y: 5, q: "Les Demoiselles d'Avignon è un'opera di…", a: ["Pablo Picasso", "Henri Matisse", "Georges Braque", "Paul Cézanne"] },
+      { y: 5, q: "Chi dipinse la Notte stellata?", a: ["Vincent van Gogh", "Claude Monet", "Paul Gauguin", "Edvard Munch"] }
+    ],
+    "Discipline Pittoriche": [
+      { y: 1, q: "I colori primari della sintesi sottrattiva sono…", a: ["ciano, magenta e giallo", "rosso, verde e blu", "bianco, nero e grigio", "arancio, viola e verde"] },
+      { y: 2, q: "Il chiaroscuro serve a…", a: ["dare volume con luci e ombre", "definire i contorni", "scegliere i complementari", "creare la prospettiva aerea"] },
+      { y: 3, q: "L'affresco si dipinge su…", a: ["intonaco fresco", "tela", "tavola di legno", "carta"] },
+      { y: 4, q: "Il colore complementare del rosso è…", a: ["il verde", "il blu", "il giallo", "il viola"] }
+    ]
+  };
+  // Materie del gioco che pescano dalla stessa banca (es. «Storia e Filosofia» da entrambe).
+  var CAREER_QUIZ_ALIASES = {
+    "Storia e Filosofia": ["Storia", "Filosofia"], "Diritto ed Economia": ["Diritto"], "Laboratorio": ["Tecnica"], "Laboratorio Tecnico": ["Tecnica"],
+    "Tecnologie Applicate": ["Tecnica"], "Tecnologie e Progettazione": ["Tecnica"]
+  };
+  function careerQuizPool(subject, year) {
+    var keys = CAREER_QUIZ_ALIASES[subject] || [subject];
+    var all = [];
+    keys.forEach(function (k) { (CAREER_QUIZ_BANK[k] || []).forEach(function (q) { all.push(q); }); });
+    return all;
+  }
+  // Una domanda della materia, preferibilmente del programma dell'anno in corso e non ancora fatta.
+  function careerPickQuiz(c) {
+    var year = c.school.year;
+    c.quizAsked = c.quizAsked || [];
+    var subs = Object.keys(c.grades).filter(function (s) { return careerQuizPool(s, year).length; });
+    if (!subs.length) return null;
+    var sub = subs[Math.floor(Math.random() * subs.length)];
+    var pool = careerQuizPool(sub, year);
+    var fresh = pool.filter(function (q) { return c.quizAsked.indexOf(q.q) === -1; });
+    var exact = fresh.filter(function (q) { return q.y === year; });
+    var near = fresh.filter(function (q) { return q.y <= year; });
+    var pick = exact.length ? exact : near.length ? near : fresh.length ? fresh : pool;
+    var q = pick[Math.floor(Math.random() * pick.length)];
+    c.quizAsked.push(q.q);
+    if (c.quizAsked.length > 400) c.quizAsked.splice(0, 100);
+    return { sub: sub, q: q };
+  }
+  var CAREER_QUIZ_FRAMES = [
+    { id: "quiz_interrogazione", cat: "Interrogazione", gain: 0.45, loss: -0.4, title: function (sub) { return "Interrogazione di " + sub; },
+      intro: function (t) { return t + " apre il registro, scorre i nomi e si ferma sul tuo. «Vieni alla cattedra.» La domanda è: "; } },
+    { id: "quiz_verifica", cat: "Verifica scritta", gain: 0.55, loss: -0.5, title: function (sub) { return "Verifica scritta di " + sub; },
+      intro: function (t) { return "Verifica in classe con " + t + ". L'esercizio che vale più punti chiede: "; } },
+    { id: "quiz_sorpresa", cat: "Domanda a sorpresa", gain: 0.3, loss: -0.25, title: function (sub) { return "Domanda a sorpresa in " + sub; },
+      intro: function (t) { return "Durante la spiegazione " + t + " si interrompe e ti guarda: "; } },
+    { id: "quiz_compagno", cat: "Studio con i compagni", gain: 0.2, loss: -0.15, title: function (sub) { return "Un compagno ti chiede aiuto in " + sub; },
+      intro: function (t) { return "Prima della lezione di " + t + " un compagno ti chiede, disperato: "; } }
+  ];
+  function careerBuildQuizDossier(c) {
+    var pick = careerPickQuiz(c);
+    if (!pick) return null;
+    var frame = CAREER_QUIZ_FRAMES[Math.floor(Math.random() * CAREER_QUIZ_FRAMES.length)];
+    var teacher = c.school.teachers[pick.sub] || "il docente";
+    var answers = pick.q.a.map(function (txt, i) { return { txt: txt, ok: i === 0 }; });
+    for (var i = answers.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var tmp = answers[i]; answers[i] = answers[j]; answers[j] = tmp; }
+    var right = pick.q.a[0];
+    var good = {}; good[pick.sub] = frame.gain;
+    var bad = {}; bad[pick.sub] = frame.loss;
+    var shy = {}; shy[pick.sub] = frame.loss * 0.5;
+    var choices = answers.map(function (an) {
+      return an.ok
+        ? { label: an.txt, eff: frame.id === "quiz_compagno" ? { study: good, rete: 1, studenti: 0.5 } : { study: good }, result: pickText(["Esatto!", "Risposta corretta.", "Giusto, ottimo."]) + " " + (frame.id === "quiz_compagno" ? "Il tuo compagno ti ringrazia: ti deve un favore." : "Il voto in " + pick.sub + " sale.") }
+        : { label: an.txt, eff: frame.id === "quiz_compagno" ? { study: bad, rete: -0.5 } : { study: bad }, result: "Sbagliato: la risposta giusta era «" + right + "». " + (frame.id === "quiz_compagno" ? "Il tuo compagno sbaglia a sua volta, e ti guarda storto." : "Il voto in " + pick.sub + " scende.") };
+    });
+    if (frame.id !== "quiz_compagno") choices.push({ label: "Non lo so", eff: { study: shy }, result: "Ammetti di non saperlo: la risposta era «" + right + "». Meglio della scena muta, ma non basta." });
+    return { id: frame.id, cat: frame.cat + " · " + pick.sub, title: frame.title(pick.sub), brief: frame.intro(teacher) + "<strong>" + pick.q.q + "</strong>", choices: choices };
   }
   // --- Dossier settimanali della scuola ---
   // Un mazzo ampio di situazioni, ciascuna con condizioni proprie (anno, indirizzo, carica, stagione,
@@ -27396,6 +27708,127 @@
           { label: "Rispondi con ironia", chance: 0.5, eff: { rep: 2.5, studenti: 2 }, result: "Divertente e pungente: piace a tutti.", fail: { eff: { rep: -1, genitori: -1 }, result: "L'ironia viene presa per arroganza." } },
           { label: "Lasci perdere", eff: {}, result: "La lettera resta senza risposta." }
         ] }; } }
+    ,
+    // ---------- Estate ----------
+    { id: "est_compiti", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione; }, build: function (x) {
+      return { title: "I compiti delle vacanze", brief: "Sulla scrivania c'è la pila dei compiti per l'estate: un libro di esercizi di " + x.worst + ", tre romanzi da leggere e una relazione. Fuori c'è il sole.",
+        choices: [
+          { label: "Un'ora al giorno, tutti i giorni", eff: { study: { all: 0.2 }, genitori: 3 }, result: "A settembre arrivi preparato/a: i professori se ne accorgono." },
+          { label: "Tutto nell'ultima settimana di agosto", chance: 0.4, eff: { study: { all: 0.05 } }, result: "Una maratona disperata, ma ce la fai.", fail: { eff: { study: { all: -0.15 }, genitori: -2 }, result: "Metà dei compiti resta in bianco. Settembre parte in salita." } },
+          { label: "Solo i libri da leggere, che ti piacciono", eff: { study: (function () { var o = {}; o[Object.keys(x.c.grades)[0]] = 0.2; return o; })() }, result: "Tre romanzi divorati sotto l'ombrellone. Il resto può aspettare." }
+        ] }; } },
+    { id: "est_viaggio", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione && x.age >= 16; }, build: function (x) {
+      return { title: "Il primo viaggio con gli amici", brief: x.mate + " e " + x.mate2 + " propongono due settimane di InterRail: " + pickText(["Vienna, Praga e Berlino", "Barcellona e il sud della Francia", "la Grecia in traghetto", "Amsterdam e Copenaghen"]) + ". Costa, e i tuoi non sono convinti.",
+        choices: [
+          { label: "Parti, coi risparmi del lavoretto", eff: { rete: 2, studenti: 2, genitori: -1 }, result: "Ostelli, treni notturni e discussioni infinite sull'Europa: torni cambiato/a." },
+          { label: "Convinci i tuoi con un piano dettagliato", chance: 0.6, eff: { genitori: 3, rete: 2 }, result: "Il foglio Excel con tappe e budget li convince: partenza approvata.", fail: { eff: { genitori: -2 }, result: "Niente da fare: quest'anno resti a casa." } },
+          { label: "Rinunci: hai altri progetti", eff: { rep: 0.5 }, result: "L'estate è lunga, la userai in altro modo." }
+        ] }; } },
+    { id: "est_scuola_politica", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione && x.age >= 15; }, build: function (x) {
+      return { title: "Una scuola di formazione politica", brief: "Una fondazione vicina all'area " + ((familyById(x.c.family) || {}).label || "politica") + " organizza una settimana di formazione per giovani: lezioni di economia, comunicazione, diritto costituzionale.",
+        choices: [
+          { label: "Ti iscrivi", eff: { rete: 4, rep: 1.5, study: { all: 0.05 } }, result: "Lezioni intense e compagni da tutta Italia: torni con contatti in dieci regioni." },
+          { label: "Chiedi una borsa di studio", chance: 0.5, eff: { rete: 4, rep: 2 }, result: "La borsa arriva: ci vai gratis e ti notano subito.", fail: { eff: { rete: 1 }, result: "Le borse sono finite. Segui solo le lezioni online." } },
+          { label: "Non fa per te", eff: {}, result: "Preferisci imparare sul campo." }
+        ] }; } },
+    { id: "est_animatore", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione && x.age >= 15; }, build: function (x) {
+      return { title: "Animatore al centro estivo", brief: "La parrocchia (o il centro sociale del quartiere) cerca animatori per il centro estivo: sei settimane con duecento bambini.",
+        choices: [
+          { label: "Accetti", eff: { rete: 3, genitori: 3, rep: 1 }, result: "Esausto/a ma felice. Mezzo quartiere ora sa chi sei." },
+          { label: "Fai il coordinatore degli animatori", chance: 0.55, eff: { rete: 4, rep: 1.5 }, result: "Gestire trenta coetanei è una palestra politica vera.", fail: { eff: { rete: 1, genitori: -1 }, result: "Un litigio tra animatori ti sfugge di mano." } },
+          { label: "Preferisci riposare", eff: {}, result: "Un'estate tranquilla." }
+        ] }; } },
+    { id: "est_incendio", cat: "Estate", when: function (x) { return x.cal.estate && (x.cal.month === 6 || x.cal.month === 7); }, build: function (x) {
+      return { title: "Incendi sulle colline", brief: "Un incendio minaccia il bosco vicino a " + x.s.city + ". La Protezione civile cerca volontari per la logistica, non per il fuoco.",
+        choices: [
+          { label: "Ti offri volontario/a", eff: { rep: 2.5, rete: 2, genitori: 2 }, result: "Tre giorni a distribuire acqua e panini: il sindaco ringrazia pubblicamente i giovani volontari." },
+          { label: "Organizzi una raccolta di beni con la lista", eff: { campagna: 2, rep: 1.5, studenti: 2 }, result: "La raccolta è un successo e la lista ci mette la faccia." },
+          { label: "Segui le notizie da casa", eff: {}, result: "L'incendio viene domato in due giorni." }
+        ] }; } },
+    { id: "est_festival", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione; }, build: function (x) {
+      return { title: "Un festival in città", brief: "Arriva il festival musicale dell'estate. La tua lista potrebbe gestire uno stand per farsi conoscere, ma serve gente per tre sere.",
+        choices: [
+          { label: "Gestite lo stand", chance: 0.65, eff: { rete: 3, campagna: 2, studenti: 2 }, result: "Lo stand è sempre affollato: decine di nuovi contatti per settembre.", fail: { eff: { fiducia: -2 }, result: "La terza sera non si presenta nessuno: figuraccia." } },
+          { label: "Ci vai solo a divertirti", eff: { studenti: 1 }, result: "Tre serate memorabili." },
+          { label: "Proponi un dibattito sul palco tra un concerto e l'altro", chance: 0.35, eff: { rep: 3, rete: 2 }, result: "Gli organizzatori accettano: parli davanti a mille persone.", fail: { eff: {}, result: "«Qui si fa musica, non politica»." } }
+        ] }; } },
+    { id: "est_patente", cat: "Estate", when: function (x) { return x.cal.estate && x.age >= 17; }, build: function (x) {
+      return { title: x.age >= 18 ? "L'esame della patente" : "Il foglio rosa", brief: x.age >= 18 ? "Domani c'è l'esame pratico della patente. L'istruttore dice che sei pronto/a, ma la rotonda davanti alla motorizzazione ti terrorizza." : "Compi diciotto anni a breve: puoi iniziare la scuola guida, ma costa e toglie tempo.",
+        choices: [
+          { label: x.age >= 18 ? "Affronti l'esame con calma" : "Ti iscrivi subito", chance: 0.7, eff: { rete: 1, genitori: 2 }, result: x.age >= 18 ? "Promosso/a! Da oggi niente più autobus." : "Teoria superata al primo colpo.", fail: { eff: { genitori: -1 }, result: x.age >= 18 ? "Una precedenza non data: bocciato/a. Si riprova tra un mese." : "Teoria bocciata per due errori. Si ripete." } },
+          { label: "Rimandi", eff: {}, result: "Ci penserai più avanti." }
+        ] }; } },
+    { id: "est_ripasso_debiti", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione && x.c.debiti && x.c.debiti.length; }, build: function (x) {
+      var o = {}; x.c.debiti.forEach(function (k) { o[k] = 0.4; });
+      return { title: "I debiti da recuperare", brief: "A fine agosto ci sono gli esami di riparazione in " + x.c.debiti.join(", ") + ". Gli amici partono per il mare.",
+        choices: [
+          { label: "Ripetizioni tutte le mattine", eff: { study: o, genitori: 2, studenti: -1 }, result: "Niente mare, ma i debiti fanno meno paura." },
+          { label: "Studi da solo/a, un po' al mare un po' sui libri", eff: { study: (function () { var p = {}; x.c.debiti.forEach(function (k) { p[k] = 0.2; }); return p; })() }, result: "Un compromesso: si vedrà ad agosto." },
+          { label: "Parti con gli amici, studierai dopo", eff: { studenti: 1 }, result: "Il mare è bellissimo. Agosto arriverà in fretta." }
+        ] }; } },
+    { id: "est_lavoro_bar", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione && x.age >= 16; }, build: function (x) {
+      return { title: "Lavoro in nero?", brief: "Il bar della spiaggia ti offre un posto per l'estate: buona paga, ma «senza contratto, così prendi di più».",
+        choices: [
+          { label: "Accetti", eff: { rete: 2 }, result: "Soldi veri in tasca. Ma se un giorno facessi politica sul serio, qualcuno potrebbe ricordarselo." },
+          { label: "Chiedi un contratto regolare", chance: 0.4, eff: { rete: 1, rep: 1 }, result: "Il titolare sbuffa, ma ti mette in regola.", fail: { eff: {}, result: "«Allora cercati un altro posto.»" } },
+          { label: "Rifiuti e lo racconti sui social", eff: { rep: 1.5, studenti: 2, rete: -1 }, result: "Il post sul lavoro nero giovanile fa il giro della città." }
+        ] }; } },
+    { id: "est_amore", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione && x.age >= 15; }, build: function (x) {
+      return { title: "Un amore estivo", brief: "In vacanza conosci " + x.mate + ", che vive in un'altra città e la pensa in modo opposto al tuo su quasi tutto.",
+        choices: [
+          { label: "Vi scrivete tutto l'inverno", eff: { rete: 1, study: { all: -0.05 } }, result: "Lunghe discussioni notturne: impari a capire chi non la pensa come te." },
+          { label: "Resta un bel ricordo d'estate", eff: {}, result: "A settembre si torna alla vita di sempre." }
+        ] }; } },
+    { id: "est_torneo_spiaggia", cat: "Estate", when: function (x) { return x.cal.estate && !x.cal.riparazione; }, build: function (x) {
+      return { title: "Il torneo in spiaggia", brief: "La lista potrebbe organizzare un torneo di beach volley per raccogliere fondi e farsi conoscere dai ragazzi di altre scuole.",
+        choices: [
+          { label: "Lo organizzate", chance: 0.6, eff: { rete: 3, campagna: 2, studenti: 1 }, result: "Sedici squadre, musica e gelati: a settembre la lista parte con la cassa piena.", fail: { eff: { fiducia: -2 }, result: "Un temporale cancella tutto." } },
+          { label: "Partecipi con gli amici", eff: { studenti: 1 }, result: "Arrivate in semifinale." },
+          { label: "Non è il momento", eff: {}, result: "Lasci perdere." }
+        ] }; } },
+    // ---------- Altri dossier di scuola ----------
+    { id: "copia_compito_casa", cat: "Studio", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "I compiti copiati", brief: "Alle 7:55 metà classe copia gli esercizi di " + x.sub + " dal tuo quaderno. " + x.t + " entra in anticipo.",
+        choices: [
+          { label: "Riprendi il quaderno al volo", eff: { studenti: -1 }, result: "Ti salvi, ma qualcuno resta senza compiti e ti incolpa." },
+          { label: "Lasci fare: tra compagni ci si aiuta", chance: 0.5, eff: { studenti: 2, rete: 1 }, result: x.t + " non si accorge di niente. Sei il/la più popolare della classe.", fail: { eff: { studenti: 1, study: (function () { var o = {}; o[x.sub] = -0.3; return o; })() }, result: x.t + " nota i compiti identici: nota per tutti, te compreso/a." } },
+          { label: "Proponi un gruppo di studio la sera prima", eff: { studenti: 1.5, study: (function () { var o = {}; o[x.sub] = 0.15; return o; })() }, result: "Da copiare a studiare insieme: la classe migliora." }
+        ] }; } },
+    { id: "prof_nuovo", cat: "Docenti", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Il nuovo docente di " + x.sub, brief: "Arriva un docente giovanissimo di " + x.sub + ", entusiasta ma senza esperienza: la classe lo mette in difficoltà dal primo giorno.",
+        choices: [
+          { label: "Lo aiuti a tenere la classe", eff: { study: (function () { var o = {}; o[x.sub] = 0.25; return o; })(), studenti: -1 }, result: "Ti è grato: le sue lezioni diventano le migliori dell'anno." },
+          { label: "Ti unisci al caos", eff: { studenti: 1, study: (function () { var o = {}; o[x.sub] = -0.25; return o; })() }, result: "Ridete tanto, imparate poco." },
+          { label: "Ne parli con il coordinatore di classe", eff: { preside: 1, genitori: 1 }, result: "Il coordinatore interviene con discrezione." }
+        ] }; } },
+    { id: "simulazione_onu", cat: "Cultura", when: function (x) { return x.cal.lezioni && x.year >= 3; }, build: function (x) {
+      return { title: "La simulazione dell'ONU", brief: "La scuola partecipa a una simulazione delle Nazioni Unite: ogni studente rappresenta un paese in un'assemblea vera, in inglese.",
+        choices: [
+          { label: "Ti candidi come delegato/a", chance: 0.55, eff: { rep: 2, rete: 3, study: { Inglese: 0.3 } }, result: "Il tuo discorso vince il premio di miglior delegato/a.", fail: { eff: { rete: 1, study: { Inglese: 0.1 } }, result: "Esperienza utile, ma il premio va a un'altra scuola." } },
+          { label: "Fai il segretario della delegazione", eff: { rete: 2, study: { Inglese: 0.15 } }, result: "Lavoro dietro le quinte, ma impari moltissimo." },
+          { label: "Non partecipi", eff: {}, result: "Sarà per un'altra volta." }
+        ] }; } },
+    { id: "consiglio_classe", cat: "Rappresentanza", when: function (x) { return x.cal.lezioni && x.c.classRep; }, build: function (x) {
+      return { title: "Il consiglio di classe", brief: "Da rappresentante di classe partecipi al consiglio con docenti e genitori. Si discute di un compagno con molte assenze e di " + x.tw + ", accusato/a di valutare in modo troppo severo.",
+        choices: [
+          { label: "Difendi il compagno spiegando la sua situazione", eff: { studenti: 2, rete: 1 }, result: "Il consiglio decide di aiutarlo invece di sanzionarlo." },
+          { label: "Riporti le critiche su " + x.tw, eff: { studenti: 3, study: (function () { var o = {}; o[x.worst] = -0.2; return o; })() }, result: "La classe ti ringrazia. " + x.tw + " un po' meno." },
+          { label: "Resti in silenzio", eff: { studenti: -1 }, result: "Il consiglio finisce senza novità." }
+        ] }; } },
+    { id: "vandalismo", cat: "Comunità", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Scritte sui muri della scuola", brief: "Una mattina la facciata della scuola è coperta di scritte, alcune contro la tua lista. Il preside vuole sospendere i responsabili, se li trova.",
+        choices: [
+          { label: "Proponi di ripulire tutto insieme, studenti e docenti", eff: { studenti: 3, preside: 3, genitori: 2 }, result: "Una mattina di lavoro collettivo: la scuola torna pulita e nasce un murale autorizzato." },
+          { label: "Accusi pubblicamente la lista rivale", chance: 0.3, eff: { campagna: 2 }, result: "Avevi ragione: i colpevoli confessano.", fail: { eff: { rep: -2, studenti: -2 }, result: "Non c'erano prove: ora sembri tu quello/a scorretto/a." } },
+          { label: "Lasci fare al preside", eff: {}, result: "Nessuno viene trovato." }
+        ] }; } },
+    { id: "elezioni_consulta", cat: "Rappresentanza", when: function (x) { return x.cal.campagna && x.year >= 2 && x.c.reputazione >= 12; }, build: function (x) {
+      return { title: "La Consulta provinciale degli studenti", brief: "Si vota anche per la Consulta provinciale: due rappresentanti per scuola, che incontrano gli studenti di tutta la provincia e l'Ufficio Scolastico.",
+        choices: [
+          { label: "Ti candidi anche lì", chance: clamp(0.3 + x.c.reputazione / 100, 0.25, 0.7), eff: { rete: 4, usr: 4, rep: 2 }, result: "Eletto/a in Consulta: ora parli con gli studenti di tutta la provincia.", fail: { eff: { rete: 1 }, result: "Non vieni eletto/a in Consulta, ma ti fai conoscere." } },
+          { label: "Sostieni un compagno della tua lista", eff: { fiducia: 3 }, result: "Un gesto di squadra apprezzato." },
+          { label: "Ti concentri sull'istituto", eff: {}, result: "Una cosa alla volta." }
+        ] }; } }
   ];
 
   // --- Dossier speciali: proteste, sfiducia, maturità ---
@@ -27533,6 +27966,16 @@
   }
   function careerStartNewYear(c) {
     var s = c.school;
+    // Richiesto da un giocatore: a settembre i voti ripartono da capo, e la pagella finale dell'anno
+    // appena chiuso resta visibile (materia per materia, con la media) nella scheda Scuola.
+    var finalGrades = {};
+    Object.keys(c.grades).forEach(function (k) { finalGrades[k] = Math.round(c.grades[k]); });
+    c.yearReports = c.yearReports || [];
+    c.yearReports.push({ year: s.year, repeated: !!s.yearsRepeated, esito: c.yearResult || "promosso", avg: Math.round(careerGradeAvg(c) * 10) / 10, grades: finalGrades });
+    c.lastYearGrades = c.yearReports[c.yearReports.length - 1];
+    Object.keys(c.grades).forEach(function (k) {
+      c.grades[k] = Math.round(clamp(6 + (c.grades[k] - 6) * 0.35 + rand(-0.3, 0.4), 4.5, 8) * 100) / 100;
+    });
     if (c.yearResult === "promosso") s.year = Math.min(5, s.year + 1);
     else if (c.yearResult === "bocciato") { s.yearsRepeated = (s.yearsRepeated || 0) + 1; }
     c.yearResult = null;
@@ -27769,6 +28212,11 @@
       c.pending.push(built);
       x = careerDossierContext(c);
     }
+    // domande vere delle materie: interrogazioni, verifiche, domande a sorpresa
+    if (cal.lezioni && !cal.natale && c.pending.length < 3 && Math.random() < 0.6) {
+      var quizD = careerBuildQuizDossier(c);
+      if (quizD) c.pending.push(quizD);
+    }
   }
   function careerAdvanceWeek() {
     var c = state.career;
@@ -27908,8 +28356,14 @@
       'Scegli una materia su cui concentrarti: ogni settimana guadagna un po\' di più.</p><div class="option-grid">' +
       subs.map(function (k) {
         var g = c.grades[k];
-        return '<button type="button" class="option-card' + (c.studySubject === k ? " selected" : "") + '" data-career-subject="' + k.replace(/"/g, "&quot;") + '"><span class="olabel">' + k + " — " + Math.round(g) + '</span><span class="odesc">' + (g < 5.5 ? "Insufficiente" : g < 6 ? "Al limite" : g >= 8 ? "Ottimo" : "Sufficiente") + " (" + fmt1(g) + ")" + (s.teachers[k] ? " · " + s.teachers[k] : "") + "</span></button>";
-      }).join("") + "</div></section>";
+        var last = c.lastYearGrades && c.lastYearGrades.grades ? c.lastYearGrades.grades[k] : undefined;
+        return '<button type="button" class="option-card' + (c.studySubject === k ? " selected" : "") + '" data-career-subject="' + k.replace(/"/g, "&quot;") + '"><span class="olabel">' + k + " — " + Math.round(g) + '</span><span class="odesc">' + (g < 5.5 ? "Insufficiente" : g < 6 ? "Al limite" : g >= 8 ? "Ottimo" : "Sufficiente") + " (" + fmt1(g) + ")" + (s.teachers[k] ? " · " + s.teachers[k] : "") + (last !== undefined ? " · anno scorso: " + last : "") + "</span></button>";
+      }).join("") + "</div>" +
+      (c.yearReports && c.yearReports.length ? '<details class="log" style="margin-top:0.6rem"><summary>Pagelle degli anni precedenti<span>▾</span></summary><ul class="enacted-policy-list">' +
+        c.yearReports.slice().reverse().map(function (r) {
+          return "<li><strong>Classe " + r.year + "ª" + (r.repeated ? " (ripetente)" : "") + "</strong> — media " + fmt1(r.avg) + " · " + r.esito + "<br>" +
+            Object.keys(r.grades).map(function (k) { return k + " " + r.grades[k]; }).join(" · ") + "</li>";
+        }).join("") + "</ul></details>" : "") + "</section>";
     html += '<p class="ci-hint">Calendario: ' + careerSeasonLabel(cal) + ". Elezioni studentesche a fine ottobre, pagella a fine gennaio, scrutinio a inizio giugno" + (s.year === 5 ? ", poi la maturità" : "") + ".</p>";
     return html;
   }
@@ -27947,6 +28401,13 @@
       '<div class="choices"><button type="button" class="choice-btn" id="career-proposal-btn"><span class="clabel">Aggiungi al programma</span></button></div></section>';
     // elezioni
     html += '<section aria-label="Elezioni"><h3>Elezioni dei rappresentanti d\'istituto</h3>';
+    var elTurn = state.turn;
+    while (!careerCalendar(elTurn).elezioni && elTurn < state.turn + 60) elTurn++;
+    var elDate = careerWeekDate(elTurn);
+    var elDays = (elTurn - state.turn) * 7;
+    var elMonths = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+    html += '<div class="stat-tile" style="margin:0.4rem 0 0.8rem"><div class="label">Countdown alle elezioni</div><div class="row"><span class="value">' + (elDays === 0 ? "Si vota questa settimana" : elDays + " giorni") + "</span></div>" +
+      '<p class="ci-hint" style="margin:0.3rem 0 0">Settimana del ' + elDate.getDate() + " " + elMonths[elDate.getMonth()] + " " + elDate.getFullYear() + (careerCalendar(state.turn).campagna ? " · campagna elettorale aperta" : " · la campagna si apre a metà settembre") + "</p></div>";
     if (cal.campagna) {
       html += '<p class="ci-hint">Campagna elettorale in corso: si vota ' + (cal.elezioni ? "<strong>questa settimana</strong>" : "nella settimana del 20-26 ottobre") + ". Punteggio della tua campagna: <strong>" + Math.round(c.campaign.score) + "</strong>. 4 seggi in palio (metodo D'Hondt)" + (s.year === 1 ? ". Da studente di prima è durissima farsi eleggere." : ".") + "</p>";
       if (!c.list) html += '<p class="ci-hint">Per candidarti devi stare in una lista (o fondarne una).</p>';
@@ -28970,7 +29431,7 @@
       else { c.office.termEnd = state.careerNextPolitiche; addCareerDiaryEntry("Riconferma", "Resti Ministro/a " + c.office.ministry + " anche nel nuovo governo."); }
     }
     careerCheckPartyAlive(c);
-    Object.keys(state.parties || {}).forEach(function (id) { state.parties[id] = Math.max(0.3, state.parties[id] + rand(-0.08, 0.08)); });
+    careerPollTick();
   }
   // --- Dossier della vita adulta ---
   // Formato compatto: r = ruoli che lo rendono possibile (vedi careerAdultRoles), ch = scelte
@@ -29158,7 +29619,45 @@
     // --- indagato ---
     { id: "ind_media", r: ["indagato"], cat: "Giustizia", t: "Il processo mediatico", b: "Le intercettazioni della tua inchiesta finiscono sui giornali, anche le parti che non c'entrano nulla.",
       ch: [["Chiedi di essere interrogato/a subito", { rep: 2 }, "Ti presenti dai PM e spieghi tutto: le voci si calmano."], ["Attacchi la fuga di notizie", { trust: 2, rep: -1 }, "Una polemica che non convince molti."], ["Taci e lasci parlare gli avvocati", { rep: -1 }, "Il silenzio viene letto come un'ammissione."]] }
+    ,
+    { id: "a_podcast", r: ["any"], cat: "Media", t: "Un podcast tutto tuo?", b: "Un amico che lavora nell'audio ti propone di lanciare un podcast settimanale di politica: venti minuti, ospiti, domande dagli ascoltatori.",
+      ch: [["Lo lanci", { rep: 2, rete: 2 }, "Dopo due mesi ha diecimila ascoltatori fissi.", 0.5, { rete: 1 }, "Lo ascoltano in trecento. Chiudi dopo sei puntate."], ["Fai l'ospite in podcast altrui", { rep: 1, rete: 1.5 }, "Meno impegno, buona visibilità."], ["Non hai tempo", {}, "Ci penserai più avanti."]] },
+    { id: "a_libro", r: ["any"], when: function (c) { return c.reputazione >= 30; }, cat: "Media", t: "Un editore ti chiede un libro", b: "Una casa editrice ti propone di scrivere un libro sulla tua idea di Italia. Serviranno mesi di lavoro, ma un libro resta.",
+      ch: [["Lo scrivi tu, con calma", { rep: 4, intel: 2 }, "Il libro entra nella classifica della saggistica per due settimane.", 0.5, { rep: 1, intel: 1 }, "Vende poco, ma chi lo legge ti cita."], ["Lo fai scrivere a un ghostwriter", { rep: 2, ombre: 1 }, "Esce in fretta. In una presentazione qualcuno ti chiede di un capitolo che non conosci."], ["Rifiuti", {}, "Il tempo è poco."]] },
+    { id: "a_aereo", r: ["eletto", "ministro"], cat: "Polemiche", t: "Il volo di Stato", b: "Un quotidiano scopre che hai usato un volo di Stato per un impegno che sembrava più privato che istituzionale.",
+      ch: [["Rimborsi tutto e ti scusi", { rep: -1, cons: 1, ombre: -2 }, "La vicenda si chiude in due giorni."], ["Spieghi che era un impegno ufficiale", { rep: -2 }, "Le spiegazioni non convincono del tutto."], ["Attacchi il giornale", { trust: 2, rep: -3, cons: -2 }, "La polemica raddoppia."]] },
+    { id: "a_alluvione_citta", r: ["eletto"], cat: "Emergenza", t: "Il fiume esce dagli argini", b: "Dopo tre giorni di pioggia il fiume esonda in due quartieri di {place}. Famiglie evacuate, cantine allagate.",
+      ch: [["Coordini gli aiuti sul posto", { cons: 5, rep: 2 }, "Stivali nel fango per tre giorni: la gente non lo dimentica."], ["Chiedi subito lo stato di calamità", { cons: 3, rete: 1 }, "Arrivano i primi fondi."], ["Denunci chi non ha pulito gli argini", { cons: 1, trust: 1 }, "Una polemica giusta, ma i cittadini volevano altro."]] },
+    { id: "a_mafia", r: ["eletto"], cat: "Legalità", t: "Una lettera di minacce", b: "Dopo un tuo intervento contro gli appalti truccati, ricevi una lettera anonima con un proiettile. I giornali lo sanno già.",
+      ch: [["Denunci e continui come prima", { rep: 5, cons: 4 }, "Diventi un simbolo di legalità. Ti assegnano una scorta."], ["Abbassi i toni", { rep: -2, ombre: 2 }, "Nessuno ti attacca più. Ma qualcuno ha vinto."], ["Organizzi una manifestazione per la legalità", { rep: 4, cons: 5, rete: 3 }, "In piazza ci sono migliaia di persone."]] },
+    { id: "a_sondaggio_interno", r: ["dirigente"], cat: "Partito", t: "Il sondaggio riservato", b: "Un sondaggio commissionato dal partito dice che sei tra i dirigenti più apprezzati dagli elettori. Il segretario lo sa e non ne è contento.",
+      ch: [["Lo fai uscire sui giornali", { rep: 3, trust: -6 }, "Ora tutti sanno quanto vali. Anche chi ti teme."], ["Lo tieni per te", { trust: 2 }, "Una carta da giocare più avanti."], ["Lo porti al segretario come segno di lealtà", { trust: 5 }, "Il segretario apprezza il gesto."]] },
+    { id: "a_scuola_vecchia", r: ["any"], cat: "Ricordi", t: "Torni nella tua vecchia scuola", b: "La tua vecchia scuola ti invita per parlare agli studenti di politica e partecipazione. In prima fila c'è chi oggi ha la tua età di allora.",
+      ch: [["Racconti successi e sconfitte, senza filtri", { rep: 1.5, rete: 2, cons: 2 }, "Un ragazzo ti ferma all'uscita: vuole fondare una lista."], ["Fai un discorso motivazionale", { rep: 1, cons: 1 }, "Applausi di cortesia."], ["Ne approfitti per una foto elettorale", { cons: -1, rep: -1 }, "Qualche insegnante storce il naso."]] },
+    { id: "a_crisi_azienda", r: ["eletto", "sindacato", "ministro"], cat: "Lavoro", t: "Chiude una fabbrica storica", b: "La {company} annuncia la chiusura: quattrocento lavoratori a casa. Tutti guardano a te.",
+      ch: [["Ti incateni ai cancelli con gli operai", { cons: 5, rep: 3, trust: -1 }, "Le foto fanno il giro d'Italia: si apre un tavolo."], ["Cerchi un compratore nel silenzio", { rete: 3, cons: 2 }, "Dopo due mesi arriva un fondo industriale: trecento posti salvi.", 0.45, { cons: -2 }, "Nessun compratore. La fabbrica chiude."], ["Dici che è il mercato", { cons: -5, rep: -1 }, "Una frase che ti inseguirà a lungo."]] },
+    { id: "a_tv_regionale", r: ["any"], when: function (c) { return c.reputazione >= 18; }, cat: "Media", t: "Il confronto sulla TV regionale", b: "La TV regionale organizza un confronto tra giovani politici di partiti diversi. Ti hanno messo accanto il più aggressivo di tutti.",
+      ch: [["Mantieni la calma e porti dati", { rep: 2.5, cons: 2 }, "Ne esci come la persona più seria in studio.", 0.6, { rep: 0.5 }, "Corretto, ma poco incisivo."], ["Rispondi colpo su colpo", { rep: 2, trust: 2 }, "Una rissa verbale che fa ascolti.", 0.5, { rep: -2 }, "Perdi la calma in diretta."], ["Declini", {}, "Mandano qualcun altro del tuo partito."]] },
+    { id: "a_lobby", r: ["eletto", "ministro", "dirigente"], cat: "Lobby", t: "La lobby del gioco d'azzardo", b: "Un rappresentante delle sale slot ti chiede un incontro: vorrebbe che ti opponessi alle distanze minime dalle scuole. Offre «sostegno» alla tua prossima campagna.",
+      ch: [["Rifiuti e pubblichi l'invito", { rep: 3, cons: 2, rete: -2 }, "La trasparenza paga: gli elettori apprezzano."], ["Incontri e ascolti, senza promettere", { rete: 2, ombre: 2 }, "Formalmente legittimo. Ma la voce gira."], ["Accetti il sostegno", { rete: 4, ombre: 10 }, "Soldi per la campagna. E un debito che qualcuno riscuoterà."]] },
+    { id: "a_caso_umano", r: ["eletto"], cat: "Territorio", t: "Una storia che commuove", b: "Una madre sola di {place} ti scrive: il figlio disabile ha perso l'insegnante di sostegno e lei non sa a chi rivolgersi.",
+      ch: [["Te ne occupi personalmente", { cons: 3, rep: 1 }, "In una settimana il ragazzo ha di nuovo il sostegno. La madre ti scrive una lettera bellissima."], ["Ne fai una battaglia generale sul sostegno", { rep: 2.5, cons: 2, trust: 1 }, "Presenti un atto che cambia le regole per tutti.", 0.4, { rep: 1 }, "L'atto si arena, ma il tema resta acceso."], ["Giri la pratica agli uffici", { cons: -1 }, "La pratica si perde."]] },
+    { id: "u_fuori_corso", r: ["uni"], when: function (c) { return c.uni && c.uni.year > (careerFacultyById(c.uni.faculty) || { years: 9 }).years; }, cat: "Università", t: "Fuori corso", b: "Sei fuori corso: le tasse universitarie aumentano e i tuoi chiedono quando ti laurei.",
+      ch: [["Ti chiudi in biblioteca fino alla laurea", { prep: 20, trust: -3 }, "Il partito ti vede poco, ma gli esami tornano a scorrere."], ["Riduci l'impegno politico a metà", { prep: 10 }, "Un compromesso ragionevole."], ["Lasci perdere l'università", { act: "lascia_uni" }, "La politica viene prima, decidi."]] },
+    { id: "sin_congresso", r: ["sindacato"], cat: "Sindacato", t: "Il congresso del sindacato", b: "Al congresso provinciale si scontrano due linee: chi vuole più conflitto e chi vuole più concertazione con le imprese.",
+      ch: [["Guidi l'ala più combattiva", { merito: 4, rep: 2 }, "La tua mozione vince tra i delegati più giovani.", 0.5, { merito: -2 }, "La tua mozione perde."], ["Proponi una sintesi", { merito: 3, rete: 2 }, "Diventi il punto di equilibrio del congresso."], ["Resti neutrale", { merito: 1 }, "Nessuno ti attacca, nessuno ti segue."]] },
+    { id: "mil_cerimonia", r: ["militare"], cat: "Cerimoniale", t: "La parata del 2 giugno", b: "Il tuo reparto sfila ai Fori Imperiali per la Festa della Repubblica. Il comandante ti affida il comando del picchetto.",
+      ch: [["Prove ogni giorno, perfezione assoluta", { merito: 4, rep: 1 }, "Una sfilata impeccabile: il Capo di Stato Maggiore si complimenta."], ["Fai il minimo indispensabile", { merito: -1 }, "Qualche passo fuori tempo, nessuno se ne accorge."]] },
+    { id: "mag_intercettazioni", r: ["magistratura"], cat: "Inchiesta", t: "Le intercettazioni", b: "Nelle intercettazioni di un'indagine compaiono conversazioni private di un ministro, non rilevanti per il reato. Un giornalista te le chiede.",
+      ch: [["Le stralci dagli atti, come prevede la legge", { merito: 4, rep: 1 }, "Un comportamento esemplare."], ["Le lasci negli atti depositati", { merito: -2, rep: 2, ombre: 3 }, "Escono sui giornali il giorno dopo. Esplode il caso."], ["Le passi al giornalista", { ombre: 15, rete: 2 }, "Hai appena commesso un reato."]] },
+    { id: "car_evasione", r: ["carcere"], cat: "Carcere", t: "Un'evasione", b: "Un detenuto evade durante un permesso premio. La stampa chiede chi ha firmato il permesso: sei tu.",
+      ch: [["Ti assumi la responsabilità", { merito: -3, rep: 1 }, "Il detenuto viene ripreso in due giorni. Il ministero apprezza la trasparenza."], ["Difendi il sistema dei permessi con i dati", { merito: 1, rep: 1 }, "I numeri dicono che funzionano: la polemica si sgonfia.", 0.5, { merito: -4 }, "Nessuno vuole sentire numeri, ora."], ["Scarichi la colpa sul magistrato di sorveglianza", { merito: -2, rete: -2 }, "Ti fai un nemico in tribunale."]] },
+    { id: "avv_pro_bono_politico", r: ["avvocato"], cat: "Studio", t: "Un attivista arrestato", b: "Un giovane attivista è stato arrestato durante una protesta. È un tuo avversario politico, ma rischia una pena sproporzionata.",
+      ch: [["Lo difendi gratis", { merito: 3, rep: 3 }, "Ottieni la scarcerazione. Anche i suoi compagni ti rispettano."], ["Rifiuti: non è un tuo problema", {}, "Qualcun altro lo difenderà."], ["Lo difendi e ne fai un caso pubblico", { rep: 4, trust: -2, merito: 2 }, "Il caso finisce in TV."]] },
+    { id: "log_promozione", r: ["loggia"], cat: "Loggia", t: "Un grado più alto", b: "Il Maestro Venerabile ti propone di salire di grado nella {loggia}: più accesso, più contatti, più responsabilità. E più rischi.",
+      ch: [["Accetti", { act: "loggia_grado", rete: 4, ombre: 4 }, "Una cerimonia solenne. Ora conti di più tra i «fratelli»."], ["Resti dove sei", {}, "Meglio non esporsi troppo."]] }
   ];
+
   function careerAdultContext(c) {
     var rivals = activeParties().filter(function (p) { return p.id !== c.partyId; });
     var rival = rivals.length ? rivals[Math.floor(Math.random() * rivals.length)] : null;
@@ -29256,6 +29755,7 @@
       var type = CAREER_ELECTION_TYPES.filter(function (t) { return t.offices.indexOf(c.office.id) !== -1; })[0];
       if (type) c.candidacy = { type: type.id, office: c.office.id, place: c.office.place, turn: state.turn, campagna: 0 };
     } else if (act === "esci_partito") careerLeaveParty(c);
+    else if (act === "lascia_uni") { addCareerDiaryEntry("Lasci l'università", "Abbandoni gli studi per dedicarti alla politica."); c.uni = c.prevLaurea || null; }
     else if (act) bridge = careerApplyOfferAct(c, ch, outcome);
     if (d.id === "primarie_segreteria" && !bridge) {
       c.primariesCooldown = state.turn + 104;
