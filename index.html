@@ -857,7 +857,7 @@
     <span>Punto di partenza (7 ottobre 2026: sondaggi, spread, debito e rating dei partiti esistenti) basato su dati reali; il tuo partito, i dossier e gli esiti da qui in poi sono generati dal gioco e sono fittizi. Salvataggio automatico nel browser; usa "Esporta partita" qui sopra per portarla su un altro dispositivo o metterla al sicuro.</span>
     <span style="flex-basis:100%">Per informazioni, feedback, consigli o segnalazione bug scrivete a <a href="mailto:politisitgioco@gmail.com" style="color:inherit">politisitgioco@gmail.com</a></span>
     <!-- Versione visibile: aggiornarla a ogni rilascio, così chi gioca capisce subito se ha l'ultima. -->
-    <span style="flex-basis:100%;opacity:0.7">Versione 2026.10.28c — Carriera da politico completa: scuola, università, partito, cariche, sindacato, forze armate, magistratura, logge</span>
+    <span style="flex-basis:100%;opacity:0.7">Versione 2026.10.28d — leggi approvate archiviate per sempre · Carriera da politico completa: scuola, università, partito, cariche, sindacato, forze armate, magistratura, logge</span>
     <div class="footer-actions">
       <button class="reset" id="reset-btn" type="button">Nuova partita</button>
     </div>
@@ -4815,6 +4815,9 @@
       state.worldNews.unshift({ cat: "Governo Regionale", text: text });
       if (!r.lawsHistory) r.lawsHistory = [];
       r.lawsHistory.unshift({ week: state.turn, noun: law.noun, outcome: passed ? "passed" : "failed", themeId: law.themeId });
+      // Archivio permanente (lawsHistory si accorcia a 30 voci): una legge regionale approvata è in vigore,
+      // non deve più ricomparire tra quelle proponibili.
+      if (passed) { if (!r.passedLawNouns) r.passedLawNouns = []; if (r.passedLawNouns.indexOf(law.noun) === -1) r.passedLawNouns.push(law.noun); }
       if (r.lawsHistory.length > 30) r.lawsHistory.length = 30;
       if (r.playerIsGovernor) {
         addRegionalNews(id, text);
@@ -6061,9 +6064,11 @@
         var isOpen = expandedRegionalLawThemeId === t.id;
         html += '<button type="button" class="option-card" data-regional-law-tile="' + t.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + t.label.replace("Politica — ", "") + (isOpen ? " ▴" : " ▾") + '</span><span class="odesc">' + fmt1(r.metrics[t.id]) + "/10</span></button>";
         if (isOpen && !disabled) {
-          html += '<div class="option-grid" style="margin:0.3rem 0 0.6rem">' + t.nouns.map(function (noun, idx) {
-            return '<button type="button" class="option-card" data-regional-law-theme-noun="' + t.id + "::" + idx + '"><span class="olabel">' + noun.charAt(0).toUpperCase() + noun.slice(1) + "</span></button>";
-          }).join("") + "</div>";
+          var passedNouns = regionalPassedLawNouns(r);
+          var openNouns = t.nouns.map(function (noun, idx) { return { noun: noun, idx: idx }; }).filter(function (e) { return passedNouns.indexOf(e.noun) === -1; });
+          html += '<div class="option-grid" style="margin:0.3rem 0 0.6rem">' + (openNouns.length ? openNouns.map(function (e) {
+            return '<button type="button" class="option-card" data-regional-law-theme-noun="' + t.id + "::" + e.idx + '"><span class="olabel">' + e.noun.charAt(0).toUpperCase() + e.noun.slice(1) + "</span></button>";
+          }).join("") : '<p class="ci-hint">Tutte le leggi di questo tema sono già state approvate e sono in vigore.</p>') + "</div>";
         }
       });
       html += "</div>";
@@ -6224,9 +6229,22 @@
   // Logica condivisa tra il click su una voce specifica (data-regional-law/motion-theme-noun) e il
   // deposito di un testo scritto di proprio pugno (classificato da classifyRegionalFreeText): entrambe le
   // strade finiscono per usare esattamente lo stesso effetto di gioco, cambia solo da dove viene il "noun".
+  // Segnalato da un giocatore: una legge già approvata continuava a comparire tra quelle da proporre.
+  // Ora l'elenco delle leggi in vigore (passedLawNouns, più le approvate ancora nello storico per i
+  // salvataggi precedenti) è archiviato per sempre: né le voci del tema né un testo libero identico
+  // possono riproporla.
+  function regionalPassedLawNouns(r) {
+    var list = (r.passedLawNouns || []).slice();
+    (r.lawsHistory || []).forEach(function (l) { if (l.outcome === "passed" && list.indexOf(l.noun) === -1) list.push(l.noun); });
+    return list;
+  }
   function submitRegionalLaw(regionId, themeId, noun) {
     var r = state.regions[regionId];
     if (state.turn < (r.regionalActionCooldownTurn || 0) || r.pendingRegionalLaw) return false;
+    if (regionalPassedLawNouns(r).some(function (n) { return n.trim().toLowerCase() === String(noun).trim().toLowerCase(); })) {
+      showSaveStatus("Questa legge regionale è già stata approvata ed è in vigore: non si può riproporre.", true);
+      return false;
+    }
     if (themeId === "sanita" && r.commissariatoUntilTurn && state.turn < r.commissariatoUntilTurn) return false;
     r.pendingRegionalLaw = { themeId: themeId, noun: noun, resolveTurn: state.turn + 4 + Math.floor(Math.random() * 4) };
     r.regionalActionCooldownTurn = state.turn + 3;
@@ -16705,10 +16723,14 @@
   // fosse mai stato affrontato — la stessa sensazione di un "reset" del progresso. pickCpuTopic segnala
   // esplicitamente quando sta ripescando un tema già chiuso, così chi costruisce il dossier può inquadrarlo
   // come un intervento successivo su un tema già affrontato, non come una proposta inedita.
-  function pickCpuTopic(topicPool) {
+  // lawOnly: per le LEGGI una legge approvata è archiviata per sempre (richiesto da un giocatore): se un
+  // partito CPU ha esaurito i temi ancora aperti non ripresenta una legge già in vigore come "Nuovo
+  // Intervento", semplicemente quella settimana non propone nulla. Le mozioni invece possono tornare.
+  function pickCpuTopic(topicPool, lawOnly) {
     var resolvedNouns = (state.player && state.player.resolvedTopicNouns) || [];
     var fresh = resolvedNouns.length ? topicPool.filter(function (t) { return resolvedNouns.indexOf(t.noun) === -1; }) : topicPool;
     if (fresh.length) return { topic: fresh[Math.floor(Math.random() * fresh.length)], isRevisit: false };
+    if (lawOnly) return null;
     return { topic: topicPool[Math.floor(Math.random() * topicPool.length)], isRevisit: true };
   }
 
@@ -20308,6 +20330,7 @@
       ? "La proposta di modifica di " + proposer.name + " su " + topic.noun + " viene approvata in via definitiva dall'Aula: " + topic.noun + " viene aggiornata."
       : "La proposta di modifica di " + proposer.name + " su " + topic.noun + " viene respinta dall'Aula: il tema resta comunque acceso nel dibattito pubblico.";
     if (passed) {
+      if (state.player) { if (!state.player.acceptedAmendments) state.player.acceptedAmendments = []; if (state.player.acceptedAmendments.indexOf(topic.title) === -1) state.player.acceptedAmendments.push(topic.title); }
       recordEnactedPolicy(title.split(" (")[0], "Modifica approvata (proposta da " + proposer.name + "): " + topic.noun + " viene aggiornata. Il paese prende atto del cambiamento: non verrà riproposta.", topic.metric);
     }
     state.log.unshift({ week: state.turn, title: title, choiceLabel: proposer.short, result: esito, headlines: [], type: "mozione", cat: "Modifica di Legge" });
@@ -20329,7 +20352,8 @@
     topicPool = filterLawTopicsByGovernmentRole(topicPool, isGovProposer);
     topicPool = filterRejectionCooldown(topicPool, "legge");
     if (!topicPool.length) return null;
-    var picked = pickCpuTopic(topicPool);
+    var picked = pickCpuTopic(topicPool, true);
+    if (!picked) return null;
     var topic = picked.topic;
     var baseProb;
     if (isGovProposer) {
@@ -20417,7 +20441,8 @@
     topicPool = filterLawTopicsByGovernmentRole(topicPool, isGovProposer);
     topicPool = filterRejectionCooldown(topicPool, "legge");
     if (!topicPool.length) return;
-    var picked = pickCpuTopic(topicPool);
+    var picked = pickCpuTopic(topicPool, true);
+    if (!picked) return;
     var topic = picked.topic;
     var baseProb;
     if (isGovProposer) {
