@@ -26497,12 +26497,54 @@
     { delta: 4, text: "Approvato il bonus per i libri di testo alle famiglie a basso reddito: i genitori apprezzano." },
     { delta: -4, text: "La nuova riforma del voto in condotta voluta dal governo {party} divide gli studenti e accende le assemblee." }
   ];
+  // Richiesto da un giocatore: anche da studente si deve poter vedere lo stato del paese e chi governa.
+  function renderCareerCountryTab() {
+    var ge = state.govEntity;
+    var lead = partyById(leadingGovPartyId());
+    var members = ge ? (ge.memberIds || []).map(partyById).filter(Boolean) : [];
+    var html = '<section aria-label="Governo in carica"><h3>Il governo in carica</h3>';
+    if (ge) {
+      html += '<p class="ci-hint">' + (presidentialExecutiveActive() ? "Governo del Presidente della Repubblica " + state.president.name : "Governo " + govEntityLabel()) +
+        (lead ? (presidentialExecutiveActive() ? "" : ", guidato da " + lead.leader + " (" + lead.name + ")") : "") + ". In carica dalla settimana " + (ge.formedTurn || 1) + "." +
+        (ge.minority ? " Governo di minoranza." : "") + "</p>";
+      html += '<ul class="enacted-policy-list">' + members.map(function (pt) { return "<li><strong>" + pt.name + "</strong> — " + pt.leader + " · " + fmt1(state.parties[pt.id] || 0) + "% nei sondaggi</li>"; }).join("") + "</ul>";
+      if (state.consensoGoverno !== undefined) html += '<div class="stat-grid" style="margin-top:0.6rem">' + careerGauge("Fiducia nel governo", state.consensoGoverno, 25) + "</div>";
+      if (state.careerNextPolitiche) html += '<p class="ci-hint">Prossime elezioni politiche tra ' + Math.max(0, state.careerNextPolitiche - state.turn) + " settimane.</p>";
+    } else html += '<p class="ci-hint">Nessun governo in carica.</p>';
+    html += "</section>";
+    var parties = activeParties().slice().sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); });
+    var maxPoll = Math.max.apply(null, parties.map(function (pt) { return state.parties[pt.id] || 0; }).concat([1]));
+    html += '<section aria-label="Sondaggi"><h3>Sondaggi</h3>' + parties.map(function (pt) {
+      var v = state.parties[pt.id] || 0;
+      return '<div style="display:flex;align-items:center;gap:0.5rem;margin:0.25rem 0"><span style="flex:0 0 38%;font-size:0.82rem">' + pt.name + '</span>' +
+        '<span style="flex:1;height:10px;border-radius:5px;background:rgba(255,255,255,0.08);overflow:hidden"><span style="display:block;height:100%;width:' + Math.round(v / maxPoll * 100) + '%;background:' + (pt.color || "var(--accent)") + '"></span></span>' +
+        '<span style="flex:0 0 3.2rem;text-align:right;font-family:var(--font-mono);font-size:0.8rem">' + fmt1(v) + "%</span></div>";
+    }).join("") + "</section>";
+    html += renderPresidentCard();
+    html += renderCountryProfile().replace('<details class="log">', '<details class="log" open>');
+    return html;
+  }
+  // il paese si muove anche mentre il personaggio studia: piccola deriva degli indicatori
+  function careerCountryDrift() {
+    var cp = state.countryProfile;
+    if (!cp) return;
+    state.countryProfilePrev = Object.assign({}, cp);
+    COUNTRY_PROFILE_METRICS.forEach(function (m) {
+      if (typeof cp[m.key] === "number") cp[m.key] = clamp(cp[m.key] + rand(-0.04, 0.04) + (5.5 - cp[m.key]) * 0.004, 1, 10);
+    });
+  }
   function careerWorldTick(c) {
     // sondaggi: piccolo random walk con ritorno verso la media, così il quadro politico non resta congelato
     Object.keys(state.parties || {}).forEach(function (id) {
       var v = state.parties[id] || 0;
-      state.parties[id] = Math.max(0.3, v + rand(-0.18, 0.18));
+      state.parties[id] = Math.max(0.3, v + rand(-0.12, 0.12));
     });
+    careerCountryDrift();
+    if (c.stage === "scuola") {
+      // le prime politiche arrivano nel 2027, come nella realtà; poi ogni cinque anni
+      if (!state.careerNextPolitiche) state.careerNextPolitiche = 46 + Math.floor(Math.random() * 8);
+      careerNationalPolitics(c);
+    }
     if (state.turn - (c.worldNewsTurn || 0) >= 7 && Math.random() < 0.35) {
       var famNews = currentGoverningFamilyId();
       var bias = (BUDGET_FAMILY_BIAS[famNews] && BUDGET_FAMILY_BIAS[famNews].istruzione) || 1;
@@ -27206,7 +27248,156 @@
           { label: "Prepari subito il programma", eff: { campagna: 2, rep: 0.5 }, result: "Ti porti avanti: a ottobre si vincerà con le idee." },
           { label: "Parti con calma, prima lo studio", eff: { study: { all: 0.15 } }, result: "Un inizio d'anno ordinato: i voti partono bene." }
         ] }; } }
+    ,
+    { id: "lavoro_gruppo", cat: "Studio", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      var o = {}; o[x.sub] = 0.3; var o2 = {}; o2[x.sub] = -0.2;
+      return { title: "Lavoro di gruppo di " + x.sub, brief: x.t + " assegna un progetto di gruppo da presentare tra due settimane. Nel tuo gruppo ci sono " + x.mate + ", bravissimo/a, e " + x.mate2 + ", che non ha mai fatto niente in vita sua.",
+        choices: [
+          { label: "Fai tu il coordinatore e dividi i compiti", chance: 0.6, eff: { study: o, rete: 1, studenti: 1 }, result: "Il gruppo funziona e prende un bel voto. Ti riconoscono capacità organizzative.", fail: { eff: { study: o2, studenti: -1 }, result: x.mate2 + " non consegna la sua parte e il voto è mediocre per tutti." } },
+          { label: "Lo fai quasi tutto da solo/a", eff: { study: o, fiducia: -2 }, result: "Ottimo voto, ma non hai tempo per la lista per due settimane." },
+          { label: "Lasci fare a " + x.mate, eff: { study: o2 }, result: "Il progetto è bello, ma " + x.t + " capisce benissimo chi ha lavorato." }
+        ] }; } },
+    { id: "ritardo_mattina", cat: "Disciplina", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Terzo ritardo del mese", brief: "Il bus è passato in anticipo e arrivi alle 8:20. È il terzo ritardo del mese: al quarto scatta la nota e la telefonata a casa.",
+        choices: [
+          { label: "Chiedi scusa e prometti di non ripeterlo", eff: { preside: 1 }, result: "La vicepreside annuisce: per stavolta passa." },
+          { label: "Fai notare che è colpa dei trasporti", chance: 0.5, eff: { studenti: 2, rep: 0.5 }, result: "La tua obiezione apre una discussione seria: diversi pendolari hanno lo stesso problema.", fail: { eff: { preside: -2 }, result: "«Le scuse le lasciamo a chi non ha voglia di alzarsi presto»." } },
+          { label: "Ne fai una battaglia per l'ingresso flessibile", eff: { studenti: 2, preside: -1, campagna: 1 }, result: "Raccogli i casi di tutti i pendolari: diventa un punto del programma." }
+        ] }; } },
+    { id: "furto_spogliatoio", cat: "Comunità", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Furti negli spogliatoi", brief: "Durante l'ora di educazione fisica spariscono telefoni e portafogli dagli spogliatoi. La scuola parla di installare telecamere, gli studenti protestano per la privacy.",
+        choices: [
+          { label: "Proponi armadietti con lucchetto", eff: { studenti: 3, genitori: 2, preside: 1 }, result: "Soluzione semplice e poco costosa: viene approvata." },
+          { label: "Appoggi le telecamere", eff: { genitori: 3, preside: 2, studenti: -3 }, result: "I genitori approvano, molti studenti ti accusano di non difendere la privacy." },
+          { label: "Ti opponi alle telecamere", eff: { studenti: 3, preside: -2, genitori: -2 }, result: "Gli studenti apprezzano, ma i furti continuano." }
+        ] }; } },
+    { id: "compagno_straniero", cat: "Comunità", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Un nuovo compagno che non parla italiano", brief: "In classe arriva un ragazzo appena trasferito, non parla quasi italiano. Alcuni lo prendono in giro, i docenti non sanno come aiutarlo.",
+        choices: [
+          { label: "Proponi un tutoraggio tra pari", eff: { studenti: 2, preside: 2, genitori: 2, rep: 1 }, result: "Il progetto parte: lui fa progressi in fretta, e la scuola lo presenta come un modello." },
+          { label: "Lo aiuti tu, senza pubblicità", eff: { rete: 1.5, study: { all: -0.05 } }, result: "Diventate amici. Ti insegna qualche parola della sua lingua." },
+          { label: "Non è un tuo compito", eff: { studenti: -1 }, result: "Dopo un mese si ritira. Qualcuno ti chiede perché non hai fatto niente." }
+        ] }; } },
+    { id: "prova_invalsi", cat: "Studio", when: function (x) { return x.cal.lezioni && (x.cal.month === 2 || x.cal.month === 3) && (x.year === 2 || x.year === 5); }, build: function (x) {
+      return { title: "Prove INVALSI", brief: "Arrivano le prove INVALSI. Un collettivo propone di boicottarle consegnando i fogli in bianco: «servono solo a fare classifiche».",
+        choices: [
+          { label: "Aderisci al boicottaggio", eff: { studenti: 3, preside: -4, fiducia: careerLean() < 0 ? 3 : -2 }, result: "Mezza classe consegna in bianco. Il preside convoca i rappresentanti." },
+          { label: "Fai le prove seriamente", eff: { preside: 2, genitori: 1, study: { all: 0.05 } }, result: "Risultati sopra la media: la scuola ne è contenta." },
+          { label: "Proponi un'assemblea per discuterne prima", eff: { studenti: 2, preside: 1, rep: 1 }, result: "Il dibattito è vivace: ognuno decide con più consapevolezza." }
+        ] }; } },
+    { id: "progetto_teatro", cat: "Cultura", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Lo spettacolo di fine anno", brief: "Il laboratorio teatrale cerca un protagonista per lo spettacolo di fine anno. Le prove sono tre pomeriggi a settimana.",
+        choices: [
+          { label: "Ti candidi come protagonista", chance: careerTraitHas("magnetico") ? 0.7 : 0.5, eff: { studenti: 3, rete: 2, study: { all: -0.12 } }, result: "Lo spettacolo è un successo: per tutti ora sei «quello/a del teatro».", fail: { eff: { study: { all: -0.08 } }, result: "Ti danno una parte minore: tre battute in tutto." } },
+          { label: "Ti occupi dell'organizzazione", eff: { rete: 2, studenti: 1 }, result: "Dietro le quinte si conoscono tutti: utile per la lista." },
+          { label: "Non hai tempo", eff: { study: { all: 0.05 } }, result: "Lo guardi dalla platea." }
+        ] }; } },
+    { id: "chat_genitori", cat: "Famiglie", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "La chat dei genitori impazzisce", brief: "Nella chat dei genitori della classe gira un messaggio allarmato su " + pickText(["una presunta epidemia di pidocchi", "un docente che «fa politica in classe»", "i compiti troppo pesanti", "la gita annullata"]) + ". Tua madre ti chiede se è vero.",
+        choices: [
+          { label: "Spieghi come stanno davvero le cose", eff: { genitori: 3 }, result: "Tua madre gira la tua versione nella chat: la tempesta si calma." },
+          { label: "Lasci perdere: sono cose da adulti", eff: { genitori: -1 }, result: "La chat va avanti per giorni, sempre più agitata." },
+          { label: "Proponi un incontro genitori-studenti", eff: { genitori: 3, studenti: 1, preside: 1 }, result: "L'incontro chiarisce tutto. I genitori ti vedono come un interlocutore serio." }
+        ] }; } },
+    { id: "sport_torneo", cat: "Sport", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Il torneo interscolastico", brief: "La tua scuola arriva in finale nel torneo cittadino di " + pickText(["calcio a cinque", "pallavolo", "basket", "atletica"]) + ". La partita è un sabato mattina, lo stesso giorno della riunione della lista.",
+        choices: [
+          { label: "Vai a tifare con tutta la scuola", eff: { studenti: 2, rete: 1.5, fiducia: -1 }, result: "Gli spalti sono pieni: il clima di scuola è bellissimo." },
+          { label: "Organizzi il pullman dei tifosi", chance: 0.6, eff: { studenti: 4, rete: 2 }, result: "Cinquanta studenti in trasferta: tutti sanno chi l'ha organizzato.", fail: { eff: { preside: -2 }, result: "Il pullman arriva in ritardo e il preside ti chiede chi aveva dato il permesso." } },
+          { label: "Tieni la riunione della lista", eff: { fiducia: 3 }, result: "Riunione produttiva. Peccato per la finale." }
+        ] }; } },
+    { id: "cellulare_sequestrato", cat: "Disciplina", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Il telefono sequestrato", brief: x.t + " ti sequestra il telefono durante la lezione perché ti era arrivata una notifica. Dentro c'è la chat della lista con la strategia per le prossime settimane.",
+        choices: [
+          { label: "Ti scusi e aspetti la fine della giornata", eff: { preside: 1 }, result: "Ti viene restituito alle 13:30. Nessun danno." },
+          { label: "Protesti: è un abuso", eff: { studenti: 1, preside: -3, study: (function () { var o = {}; o[x.sub] = -0.2; return o; })() }, result: "La discussione finisce con una nota e un voto in meno in condotta." },
+          { label: "Proponi un regolamento condiviso sui telefoni", eff: { studenti: 2, preside: 2, rep: 1 }, result: "Il consiglio d'istituto accoglie l'idea: telefoni in custodia solo durante le verifiche." }
+        ] }; } },
+    { id: "intervallo_coda", cat: "Vita scolastica", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Dieci minuti di intervallo", brief: "Con dieci minuti di intervallo e una sola macchinetta per piano, metà degli studenti non riesce nemmeno a prendere una bottiglietta d'acqua.",
+        choices: [
+          { label: "Chiedi un intervallo più lungo", chance: clamp(0.3 + x.c.metrics.preside / 200, 0.2, 0.7), eff: { studenti: 4 }, result: "Si passa a quindici minuti: piccola vittoria, grande popolarità.", fail: { eff: { studenti: 1 }, result: "«L'orario è già stretto così»: niente da fare." } },
+          { label: "Proponi due intervalli più brevi", eff: { studenti: 2, preside: 1 }, result: "Il compromesso passa al consiglio d'istituto." },
+          { label: "Organizzi un servizio di vendita di merende della lista", eff: { campagna: 2, studenti: 2, preside: -1 }, result: "Le merende vanno a ruba, e il logo della lista è su ogni sacchetto." }
+        ] }; } },
+    { id: "eco_scuola", cat: "Ambiente", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "La scuola plastic free", brief: "Un gruppo di studenti propone di eliminare le bottigliette di plastica e installare erogatori d'acqua. Costa, ma il Comune ha un bando aperto.",
+        choices: [
+          { label: "Scrivi tu la domanda per il bando", chance: 0.5, eff: { studenti: 3, rep: 2, usr: 2 }, result: "Il bando è vinto: arrivano tre erogatori. Il tuo nome è sulla targa.", fail: { eff: { rep: 0.5 }, result: "La domanda arriva in ritardo di un giorno. Peccato." } },
+          { label: "Sostieni l'iniziativa con la lista", eff: { studenti: 2, fiducia: 2 }, result: "La lista si intesta una battaglia popolare." },
+          { label: "Non è una priorità", eff: { studenti: -1 }, result: "Il gruppo va avanti senza di te." }
+        ] }; } },
+    { id: "rivale_proposta", cat: "Liste", when: function (x) { return x.hasList && x.rival; }, build: function (x) {
+      return { title: "Un'alleanza con «" + x.rival.name + "»?", brief: x.rival.leader + " ti propone un'alleanza in consiglio d'istituto su un punto preciso: " + pickText(["la settimana dello studente", "il bar della scuola", "le assemblee mensili", "i fondi per i laboratori"]) + ". Le vostre liste però si sono sempre combattute.",
+        choices: [
+          { label: "Accetti l'alleanza su quel punto", chance: 0.65, eff: { studenti: 3, rep: 1.5, fiducia: -3 }, result: "Insieme ottenete il risultato. Alcuni della tua lista non hanno gradito.", fail: { eff: { fiducia: -4 }, result: "All'ultimo l'altra lista si sfila: ti hanno usato." } },
+          { label: "Rifiuti", eff: { fiducia: 3 }, result: "La lista ti ringrazia per la coerenza." },
+          { label: "Accetti, ma alle tue condizioni", chance: 0.4, eff: { studenti: 2, rep: 2, fiducia: 1 }, result: "Ottieni quasi tutto quello che chiedevi.", fail: { eff: { rep: -0.5 }, result: "La trattativa salta." } }
+        ] }; } },
+    { id: "docente_assente", cat: "Didattica", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Senza docente di " + x.sub + " da un mese", brief: "La cattedra di " + x.sub + " è vuota da settimane: supplenti che cambiano ogni giorno e programma fermo. A giugno però il voto arriverà comunque.",
+        choices: [
+          { label: "Scrivi all'Ufficio Scolastico Regionale", chance: 0.45, eff: { usr: 3, studenti: 3, rep: 1.5 }, result: "Una settimana dopo arriva un supplente fisso fino a giugno.", fail: { eff: { usr: 1 }, result: "Risposta di rito: «Le graduatorie sono esaurite»." } },
+          { label: "Organizzi un gruppo di studio della classe", eff: { study: (function () { var o = {}; o[x.sub] = 0.25; return o; })(), studenti: 2 }, result: "Vi aiutate a vicenda: il programma va avanti lo stesso." },
+          { label: "Ne approfitti per studiare altro", eff: { study: (function () { var o = {}; o[x.sub] = -0.3; return o; })() }, result: "Comodo, finché a giugno non arriva la verifica di recupero." }
+        ] }; } },
+    { id: "giornata_memoria", cat: "Cultura", when: function (x) { return x.cal.lezioni && (x.cal.month === 0 || x.cal.month === 3 || x.cal.month === 10); }, build: function (x) {
+      return { title: pickText(["Giornata della Memoria", "25 aprile in assemblea", "Giornata contro la violenza sulle donne"]), brief: "La scuola organizza una mattinata di approfondimento e chiede ai rappresentanti degli studenti un intervento.",
+        choices: [
+          { label: "Prepari un intervento sentito e documentato", eff: { studenti: 2, preside: 3, genitori: 2, rep: 1.5 }, result: "Il tuo intervento commuove l'aula magna. Qualche docente ti stringe la mano." },
+          { label: "Inviti un testimone o un esperto esterno", chance: 0.6, eff: { studenti: 3, preside: 2, rete: 2 }, result: "L'ospite tiene l'aula con il fiato sospeso: una mattinata da ricordare.", fail: { eff: { preside: -1 }, result: "L'ospite dà buca all'ultimo minuto." } },
+          { label: "Fai un intervento politico e polemico", eff: { studenti: 1, preside: -3, fiducia: 3 }, result: "Una parte dell'aula applaude, un'altra si alza e se ne va." }
+        ] }; } },
+    { id: "colletta", cat: "Comunità", when: function (x) { return x.cal.lezioni; }, build: function (x) {
+      return { title: "Una colletta per " + x.mate2, brief: "La famiglia di " + x.mate2 + " ha perso la casa in un incendio. In classe qualcuno propone una raccolta fondi.",
+        choices: [
+          { label: "La organizzi tu con tutta la scuola", eff: { studenti: 4, genitori: 3, rep: 2 }, result: "Raccogliete più di duemila euro: un gesto che la città nota." },
+          { label: "Partecipi con la tua classe", eff: { studenti: 1, rete: 1 }, result: "Una raccolta piccola ma sentita." },
+          { label: "Proponi di coinvolgere il Comune", chance: 0.4, eff: { rete: 3, rep: 1.5, genitori: 2 }, result: "Il Comune trova un alloggio temporaneo. Il sindaco ti ringrazia per la segnalazione.", fail: { eff: { rete: 1 }, result: "Il Comune risponde dopo settimane." } }
+        ] }; } },
+    { id: "foto_imbarazzante", cat: "Social", when: function (x) { return x.c.reputazione >= 8; }, build: function (x) {
+      return { title: "Una foto della festa", brief: "Circola una tua foto a una festa del sabato, con un bicchiere in mano e una faccia poco presentabile. Gli avversari la usano per dire che non sei «un esempio».",
+        choices: [
+          { label: "Ci ridi sopra", chance: 0.6, eff: { studenti: 2 }, result: "L'autoironia funziona: la foto diventa un meme simpatico.", fail: { eff: { genitori: -3, preside: -2 }, result: "La foto arriva anche ai genitori. Non ridono." } },
+          { label: "Chiedi di rimuoverla", eff: { studenti: -1 }, result: "Più chiedi di toglierla, più gira." },
+          { label: "Rispondi che la vita privata è privata", eff: { rep: 0.5, genitori: -1 }, result: "Una posizione netta. Non tutti sono d'accordo." }
+        ] }; } },
+    { id: "occupazione_bagni", cat: "Edilizia", when: function (x) { return x.cal.lezioni && x.s.problems.indexOf("bagni") !== -1 && x.s.solved.indexOf("bagni") === -1; }, build: function (x) {
+      return { title: "Bagni chiusi per guasto", brief: "Due bagni su tre del secondo piano sono chiusi da una settimana. Le code all'intervallo sono infinite e qualcuno ha iniziato a usare quelli dei docenti.",
+        choices: [
+          { label: "Fai un sopralluogo con le foto e lo mandi al Comune", chance: clamp(0.25 + x.c.rete / 120, 0.2, 0.7), eff: { studenti: 5, rep: 2, solve: "bagni" }, result: "Le foto finiscono sul sito del giornale locale: il Comune manda gli operai in tre giorni.", fail: { eff: { studenti: 2 }, result: "Il Comune promette, ma i tempi sono lunghi." } },
+          { label: "Chiedi l'apertura dei bagni dei docenti", eff: { studenti: 3, preside: -2 }, result: "Soluzione tampone accettata a denti stretti." },
+          { label: "Aspetti che si risolva da solo", eff: { studenti: -2 }, result: "Non si risolve da solo." }
+        ] }; } },
+    { id: "riscaldamento_rotto", cat: "Edilizia", when: function (x) { return x.cal.lezioni && (x.cal.month >= 10 || x.cal.month <= 1); }, build: function (x) {
+      return { title: "In classe col cappotto", brief: "Il riscaldamento è rotto da tre giorni: in aula ci sono 13 gradi. Alcuni genitori minacciano di tenere i figli a casa.",
+        choices: [
+          { label: "Proponi lo sciopero bianco: lezione in cappotto e foto sui social", eff: { studenti: 4, preside: -2, rep: 1.5 }, result: "Le foto della classe in cappotto fanno il giro della città: la caldaia viene riparata in 48 ore." },
+          { label: "Chiedi lezioni a distanza finché non riparano", chance: 0.4, eff: { studenti: 3, genitori: 2 }, result: "Tre giorni di didattica a distanza: tutti al caldo.", fail: { eff: { studenti: 1 }, result: "«Non è previsto»: si resta al freddo." } },
+          { label: "Porti stufette e coperte con la lista", eff: { studenti: 2, campagna: 1, preside: -1 }, result: "Un gesto pratico che tutti ricordano. Il preside un po' meno (norme di sicurezza)." }
+        ] }; } },
+    { id: "orientamento", cat: "Orientamento", when: function (x) { return x.cal.lezioni && x.year >= 4; }, build: function (x) {
+      return { title: "Giornate di orientamento", brief: "Arrivano le giornate di orientamento universitario. Tra gli ospiti c'è un professore di Scienze Politiche e un ex studente oggi consigliere regionale.",
+        choices: [
+          { label: "Fai domande all'ex studente diventato consigliere", eff: { rete: 3, rep: 0.5 }, result: "Ti lascia il suo numero: «Se ti serve una mano, chiamami»." },
+          { label: "Ti informi seriamente su più facoltà", eff: { study: { all: 0.05 } }, result: "Esci con le idee più chiare sul dopo." },
+          { label: "Organizzi tu le giornate con il comitato", eff: { studenti: 2, preside: 2, rete: 2 }, result: "Un'organizzazione perfetta: la preside ti ringrazia in pubblico." }
+        ] }; } },
+    { id: "scambio_erasmus_scuola", cat: "Europa", when: function (x) { return x.cal.lezioni && x.year >= 3; }, build: function (x) {
+      return { title: "Uno scambio con una scuola europea", brief: "La scuola partecipa a uno scambio con un liceo di " + pickText(["Lione", "Monaco", "Valencia", "Cracovia", "Porto"]) + ": due settimane all'estero, ma nel pieno della campagna o delle verifiche.",
+        choices: [
+          { label: "Parti", eff: { rete: 2, study: { all: 0.05 }, fiducia: -3, studenti: -1 }, result: "Un'esperienza bellissima. Al ritorno la lista ti aggiorna su tutto quello che ti sei perso." },
+          { label: "Resti per la scuola e la lista", eff: { fiducia: 3 }, result: "Qualche rimpianto, ma la lista è contenta." }
+        ] }; } },
+    { id: "lettera_giornale", cat: "Media", when: function (x) { return x.c.reputazione >= 10; }, build: function (x) {
+      return { title: "Una lettera al giornale locale", brief: "Il quotidiano di " + x.s.city + " pubblica la lettera di un lettore anziano: «I ragazzi di oggi non si interessano di niente». Il direttore ti offre lo spazio per una risposta.",
+        choices: [
+          { label: "Rispondi con i fatti di quello che fate a scuola", eff: { rep: 3, rete: 1.5, genitori: 2 }, result: "La tua risposta viene ripresa anche da altre testate: ti chiamano per un'intervista." },
+          { label: "Rispondi con ironia", chance: 0.5, eff: { rep: 2.5, studenti: 2 }, result: "Divertente e pungente: piace a tutti.", fail: { eff: { rep: -1, genitori: -1 }, result: "L'ironia viene presa per arroganza." } },
+          { label: "Lasci perdere", eff: {}, result: "La lettera resta senza risposta." }
+        ] }; } }
   ];
+
   // --- Dossier speciali: proteste, sfiducia, maturità ---
   function careerProtestDossier(c) {
     var x = careerDossierContext(c);
@@ -27559,12 +27750,16 @@
     if (c.pending.length >= 2) n = Math.min(n, 1);
     var x = careerDossierContext(c);
     for (var i = 0; i < n; i++) {
-      var pool = CAREER_SCHOOL_DOSSIERS.filter(function (d) {
-        var last = c.usedDossiers[d.id];
-        if (last !== undefined && state.turn - last < 40) return false;
+      var eligible = CAREER_SCHOOL_DOSSIERS.filter(function (d) {
         if (c.pending.some(function (p) { return p.id === d.id; })) return false;
         try { return d.when(x); } catch (e) { return false; }
       });
+      var pool = eligible.filter(function (d) { var last = c.usedDossiers[d.id]; return last === undefined || state.turn - last >= 24; });
+      // Segnalato da un giocatore: dopo qualche mese di scuola i dossier sparivano del tutto, perché
+      // tutti quelli possibili erano già usciti di recente. Se il mazzo "fresco" è vuoto si ripesca il
+      // dossier uscito da più tempo (con nomi, materie e problemi nuovi): una settimana di lezione non
+      // resta mai senza dossier.
+      if (!pool.length && eligible.length) pool = [eligible.slice().sort(function (a, b) { return (c.usedDossiers[a.id] || 0) - (c.usedDossiers[b.id] || 0); })[0]];
       if (!pool.length) break;
       var tpl = pool[Math.floor(Math.random() * pool.length)];
       var built = tpl.build(x);
@@ -27664,6 +27859,7 @@
     { id: "lista", label: "Lista ed elezioni", icon: "🗳️", nav: "Lista" },
     { id: "azioni", label: "Azioni della settimana", icon: "⚡", nav: "Azioni" },
     { id: "social", label: "Social e media", icon: "📱", nav: "Social" },
+    { id: "paese", label: "L'Italia oggi", icon: "🇮🇹", nav: "Paese" },
     { id: "diario", label: "Diario politico", icon: "📔", nav: "Diario" }
   ];
   function careerGauge(label, value, warnBelow) {
@@ -27841,6 +28037,7 @@
     else if (c.ui === "lista") html += renderCareerListTab(c);
     else if (c.ui === "azioni") html += renderCareerActionsTab(c);
     else if (c.ui === "social") html += renderCareerSocialTab(c);
+    else if (c.ui === "paese") html += renderCareerCountryTab();
     else {
       var diaryItems = c.diario.slice(0, 60).map(function (e) {
         return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
@@ -28168,6 +28365,7 @@
       addCareerDiaryEntry("Notizie: " + e.title.toLowerCase(), e.result);
     });
     if (state.log.length > 80) state.log.length = 80;
+    careerPresidentElection();
     if (state.careerNextPolitiche && state.turn >= state.careerNextPolitiche) {
       state.careerNextPolitiche = state.turn + 260;
       var cd = careerCoalitionPoll("centrodestra") + rand(-3, 3), cl = careerCoalitionPoll("campolargo") + rand(-3, 3);
@@ -28178,6 +28376,18 @@
       return true;
     }
     return false;
+  }
+  // Anche in carriera il Capo dello Stato si rinnova: eletto dal Parlamento (o dai cittadini, se è in
+  // vigore il presidenzialismo) con un profilo vicino a chi governa in quel momento.
+  function careerPresidentElection() {
+    if (state.turn < (state.nextPresidentElectionTurn || 260)) return;
+    var popular = typeof isPresidentialSystem === "function" && isPresidentialSystem();
+    state.nextPresidentElectionTurn = state.turn + (popular ? 260 : 364);
+    var govLean = LEFT_RIGHT_POSITION[currentGoverningFamilyId()] || 0;
+    var leaning = Math.random() < 0.25 ? "tecnico" : govLean >= 0.8 ? "destra" : govLean <= -0.8 ? "sinistra" : "centro";
+    var arch = PRESIDENT_ARCHETYPES.filter(function (a) { return a.leaning === leaning; })[0];
+    state.president = { name: generateStaffName(), leaning: leaning, background: arch.roles[Math.floor(Math.random() * arch.roles.length)], electedTurn: state.turn, popular: popular, termCount: 1 };
+    addCareerDiaryEntry("Nuovo Presidente della Repubblica", state.president.name + " (" + presidentLeaningLabel(leaning) + ") è eletto/a Presidente della Repubblica" + (popular ? " dai cittadini." : " dal Parlamento in seduta comune."));
   }
   // Il partito del giocatore può sciogliersi o confluire in un altro: la tessera decade.
   function careerCheckPartyAlive(c) {
@@ -28754,6 +28964,7 @@
       } else careerResolveElection(c, "politiche");
     }
     careerNationalPolitics(c);
+    careerCountryDrift();
     if (polBefore !== state.careerNextPolitiche && c.office && c.office.id === "ministro") {
       if (!careerPartyInGov(c) || Math.random() < 0.5) { addCareerDiaryEntry("Nuovo governo", "Il nuovo esecutivo non ti conferma al ministero."); c.office = null; }
       else { c.office.termEnd = state.careerNextPolitiche; addCareerDiaryEntry("Riconferma", "Resti Ministro/a " + c.office.ministry + " anche nel nuovo governo."); }
@@ -29005,10 +29216,18 @@
       var pool = CAREER_ADULT_DOSSIERS.filter(function (d) {
         if (!d.r.some(function (r) { return roles.indexOf(r) !== -1; })) return false;
         var last = c.adultUsed[d.id];
-        if (last !== undefined && state.turn - last < 45) return false;
+        if (last !== undefined && state.turn - last < 30) return false;
         if (c.pending.some(function (p) { return p.id === d.id; })) return false;
         try { return !d.when || d.when(c); } catch (e) { return false; }
       });
+      if (!pool.length) {
+        var eligibleAdult = CAREER_ADULT_DOSSIERS.filter(function (d) {
+          if (!d.r.some(function (r) { return roles.indexOf(r) !== -1; })) return false;
+          if (c.pending.some(function (p) { return p.id === d.id; })) return false;
+          try { return !d.when || d.when(c); } catch (e) { return false; }
+        });
+        if (eligibleAdult.length) pool = [eligibleAdult.sort(function (a, b) { return (c.adultUsed[a.id] || 0) - (c.adultUsed[b.id] || 0); })[0]];
+      }
       if (!pool.length) break;
       // i dossier del ruolo che ricopri pesano più di quelli generici
       var tpl = pickWeighted(pool, function (d) { return d.r.indexOf("any") !== -1 ? 1 : d.r.indexOf("tesserato") !== -1 ? 1.5 : 3; });
@@ -29092,6 +29311,7 @@
     { id: "carriera", label: "Carriera", icon: "🎓", nav: "Carriera" },
     { id: "azioni", label: "Azioni", icon: "⚡", nav: "Azioni" },
     { id: "social", label: "Social", icon: "📱", nav: "Social" },
+    { id: "paese", label: "L'Italia oggi", icon: "🇮🇹", nav: "Paese" },
     { id: "diario", label: "Diario", icon: "📔", nav: "Diario" }
   ];
   function careerAdultRoleLine(c) {
@@ -29263,6 +29483,7 @@
     else if (c.ui === "carriera") html += renderCareerAdultCareer(c);
     else if (c.ui === "azioni") html += renderCareerAdultActions(c);
     else if (c.ui === "social") html += renderDichiarazioniPage();
+    else if (c.ui === "paese") html += renderCareerCountryTab();
     else html += '<section aria-label="Diario politico"><h3>Diario politico</h3><div class="log-entries">' + c.diario.slice(0, 60).map(function (e) {
       return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
     }).join("") + "</div></section>";
