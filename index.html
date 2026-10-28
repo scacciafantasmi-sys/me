@@ -6561,9 +6561,16 @@
       return clamp(4 - d, 0.4, 4);
     });
   }
+  // Segnalato da un giocatore: "se scelgo un partito, ad esempio Azione, e apro delle sedi territoriali,
+  // tra le opzioni di alleanza c'è pure la sede territoriale di Azione stessa". Il pool pescava da tutto
+  // PARTIES, quindi anche dal partito di cui il giocatore ha preso il comando (che esce dal roster degli
+  // avversari, vedi takeoverPartyId) e dai partiti già sciolti. Ora solo partiti davvero in campo, mai
+  // il proprio.
   function pickCompatibleParty(playerFamilyId) {
-    var pool = PARTIES.filter(function (pt) { return pt.familyId && !ideologicallyIncompatible(playerFamilyId, pt.familyId); });
-    if (!pool.length) pool = PARTIES;
+    var ownId = state.player && state.player.takeoverPartyId;
+    var inPlay = activeParties().filter(function (pt) { return pt.id !== ownId; });
+    var pool = inPlay.filter(function (pt) { return pt.familyId && !ideologicallyIncompatible(playerFamilyId, pt.familyId); });
+    if (!pool.length) pool = inPlay;
     return pickWeighted(pool, function (pt) {
       var d = Math.abs((LEFT_RIGHT_POSITION[playerFamilyId] || 0) - (LEFT_RIGHT_POSITION[pt.familyId] || 0));
       return clamp(4 - d, 0.4, 4);
@@ -29382,6 +29389,13 @@
     var honeymoon = state.turn - govFormedTurn(ge) < GOV_HONEYMOON_TURNS ? 0.15 : 1;
     for (var i = 0; i < ge.extraAllyIds.length; i++) {
       var allyId = ge.extraAllyIds[i];
+      // Segnalato da un giocatore ("quando un partito abbandona la coalizione di governo compare la
+      // dicitura 'player' ha abbandonato, e tra i ministri nessun partito se n'è andato"): accettando un
+      // invito al governo (resolveGovInviteAccept) il giocatore entra anche in extraAllyIds, quindi questo
+      // tiro di dado poteva far "uscire" il giocatore stesso, con il suo id interno come nome e i suoi
+      // ministeri tolti, senza che nessun alleato CPU se ne andasse davvero. Il giocatore esce dalla
+      // maggioranza solo per scelta sua (vedi playerLeavesGovernmentMajority).
+      if (allyId === "player") continue;
       var forced = (ge.forcedAllyIds || []).indexOf(allyId) !== -1;
       var chance = clamp(((forced ? 0.03 : 0.006) + crisisFactor) * volatility * honeymoon * govAllyLoyaltyFactor(allyId), 0, 0.5);
       if (Math.random() < chance) {
