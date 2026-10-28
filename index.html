@@ -26856,7 +26856,16 @@
     var prevRole = c.role;
     c.role = null;
     if (playerList && c.campaign.candidate) {
-      var pos = c.list.isOwn || c.list.role === "capolista" ? 1 : (c.reputazione >= 25 ? 2 : 3);
+      // Segnalato da un giocatore: da militante finivi sempre secondo/terzo in lista, così la tua lista
+      // poteva vincere senza che tu entrassi mai. Ora conta chi prende più preferenze: campagna,
+      // reputazione e consenso tra gli studenti contro due compagni di lista.
+      var pos = 1;
+      if (!(c.list.isOwn || c.list.role === "capolista")) {
+        var myPrefs = c.campaign.score * 0.8 + c.reputazione * 0.6 + c.metrics.studenti * 0.25;
+        var mates = [rand(10, 30), rand(6, 24)];
+        pos = 1 + mates.filter(function (m) { return m > myPrefs; }).length;
+      }
+      c.lastListPos = pos;
       if (playerList.seats >= pos) {
         c.role = "rappresentante";
         if (ranking[0].id === playerList.id && pos === 1 && playerList.seats >= 2) c.role = "presidente";
@@ -26868,7 +26877,12 @@
     var outcome;
     if (!c.campaign.candidate) outcome = "Non ti sei candidato/a quest'anno: le guardi da fuori.";
     else if (c.role === "presidente") { outcome = "Vinci! La tua lista è la prima e tu diventi Presidente del Comitato Studentesco."; careerApplyEffects(c, { rep: rand(5, 8), rete: rand(4, 7), studenti: 6 }); }
-    else if (c.role === "rappresentante") { outcome = "Sei eletto/a rappresentante d'istituto: un seggio nel Consiglio d'Istituto."; careerApplyEffects(c, { rep: rand(3, 5), rete: rand(3, 5), studenti: 3 }); }
+    else if (c.role === "rappresentante") { outcome = (playerList && ranking[0].id === playerList.id ? "La tua lista è la più votata e " : "") + (playerList && ranking[0].id === playerList.id ? "tu sei" : "Sei") + " eletto/a rappresentante d'istituto: un seggio nel Consiglio d'Istituto."; careerApplyEffects(c, { rep: rand(3, 5), rete: rand(3, 5), studenti: 3 }); }
+    else if (playerList && ranking[0].id === playerList.id) {
+      outcome = "La tua lista vince le elezioni! Tu però non entri: con le preferenze arrivi " + (c.lastListPos || 3) + "° in lista e i seggi conquistati sono " + playerList.seats + ".";
+      c.listWonNotElected = true;
+      careerApplyEffects(c, { rep: rand(0.5, 1.5), fiducia: 3, studenti: 1 });
+    }
     else { outcome = "Non vieni eletto/a. Brucia, ma il prossimo anno si riparte."; careerApplyEffects(c, { rep: -rand(0.5, 2), studenti: -2, fiducia: -6 }); }
     if (prevRole && !c.role) outcome += " Perdi la carica che avevi.";
     // la forza delle liste si assesta sul risultato, così le elezioni dell'anno dopo partono dalla realtà
@@ -26889,6 +26903,10 @@
     var resultChoices = !wasCandidate ? [
       { label: "Prendi atto e guardi al prossimo anno", eff: { rep: 0.3 }, result: "Ti segni tutto: l'anno prossimo potresti esserci tu sulla scheda." },
       { label: "Ti congratuli pubblicamente con i nuovi eletti", eff: { studenti: 1.5, rete: 1 }, result: "Un gesto che viene notato: qualcuno dei nuovi eletti ti propone di collaborare." }
+    ] : c.listWonNotElected ? [
+      { label: "Festeggi la vittoria della lista", eff: { fiducia: 4, studenti: 1 }, result: "Hai lavorato per tutti: la lista lo sa e te lo riconosce." },
+      { label: "Ti metti a disposizione degli eletti", eff: { fiducia: 3, rete: 1.5, rep: 0.5 }, result: "Diventi il braccio destro dei rappresentanti: il prossimo anno toccherà a te." },
+      { label: "Chiedi di essere capolista l'anno prossimo", chance: clamp(0.3 + c.reputazione / 80, 0.2, 0.8), eff: { roleCapolista: true, fiducia: 1 }, result: "La lista accetta: l'anno prossimo guiderai tu la lista.", fail: { eff: { fiducia: -3 }, result: "Ti dicono di aspettare il tuo turno." } }
     ] : c.role ? [
       { label: "Festeggi con la lista", eff: { fiducia: 5, studenti: 1 }, result: "Pizza, musica e abbracci: la lista è più unita che mai." },
       { label: "Ringrazi tutti, anche chi non ti ha votato", eff: { studenti: 3, preside: 1, rep: 0.5 }, result: "«Da oggi rappresento tutta la scuola»: il post fa il giro delle classi." },
@@ -26901,6 +26919,7 @@
     c.pending.unshift({ id: "risultati_elezioni_scuola", cat: "Elezioni studentesche", title: "I risultati delle elezioni d'istituto",
       brief: outcome + "<br><br>" + resultRows + (c.classRep ? "<br><br>In classe ti eleggono anche rappresentante di classe." : ""),
       choices: resultChoices });
+    c.listWonNotElected = false;
     c.campaign = { score: 0, posts: 0, lastTheme: null, candidate: false };
     return outcome;
   }
@@ -28461,7 +28480,7 @@
     if (cal.campagna) {
       html += '<p class="ci-hint">Campagna elettorale in corso: si vota ' + (cal.elezioni ? "<strong>questa settimana</strong>" : "nella settimana del 20-26 ottobre") + ". Punteggio della tua campagna: <strong>" + Math.round(c.campaign.score) + "</strong>. 4 seggi in palio (metodo D'Hondt)" + (s.year === 1 ? ". Da studente di prima è durissima farsi eleggere." : ".") + "</p>";
       if (!c.list) html += '<p class="ci-hint">Per candidarti devi stare in una lista (o fondarne una).</p>';
-      else if (!c.campaign.candidate) html += '<div class="choices"><button type="button" class="choice-btn" id="career-candidate-btn"><span class="clabel">Candidati con «' + c.list.name + '»</span><span class="chint">' + (c.list.isOwn || c.list.role === "capolista" ? "Da capolista: se la lista prende un seggio, è tuo." : "Da militante parti in seconda o terza posizione: servono almeno 2-3 seggi.") + "</span></button></div>";
+      else if (!c.campaign.candidate) html += '<div class="choices"><button type="button" class="choice-btn" id="career-candidate-btn"><span class="clabel">Candidati con «' + c.list.name + '»</span><span class="chint">' + (c.list.isOwn || c.list.role === "capolista" ? "Da capolista: se la lista prende un seggio, è tuo." : "Da militante la tua posizione in lista dipende dalle preferenze: più campagna fai, più sali.") + "</span></button></div>";
       else html += '<p class="ci-hint">Sei candidato/a. Usa post, proposte e azioni per far crescere la campagna.</p>';
     } else {
       html += '<p class="ci-hint">La campagna si apre a metà settembre e si vota a fine ottobre.' + (c.history && c.history.length ? " Ultimo risultato: " + (function (h) { return h.role === "presidente" ? "presidente" : h.role ? "eletto/a" : "non eletto/a"; })(c.history[c.history.length - 1]) + "." : "") + "</p>";
