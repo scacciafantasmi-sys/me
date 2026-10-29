@@ -5370,6 +5370,7 @@
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
     triggerDynamicCoalitionJoin();
+    triggerDynamicCoalitionDefection();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -16187,6 +16188,47 @@
     state.worldNews.unshift({ cat: "Strategia Elettorale", text: text });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
   }
+  // Richiesto da un giocatore: dalle coalizioni nate in partita nessun partito usciva mai da solo, o
+  // restavano intere o si scioglievano in blocco. Ora, come nei blocchi storici (vedi
+  // triggerFixedCoalitionDefection), un membro può rompere e correre da solo: più spesso il più lontano
+  // dalle idee degli altri, o chi nei sondaggi supera da solo la soglia di sbarramento e pensa di fare
+  // meglio per conto proprio; più facile se la fiducia nella coalizione è bassa. Solo per coalizioni di
+  // almeno 3 partiti (con 2 l'uscita equivale allo scioglimento, già gestito dalla fiducia) e mai per
+  // quella del giocatore, i cui alleati seguono le loro regole (vedi triggerCoalitionAllyReaction).
+  function triggerDynamicCoalitionDefection() {
+    var p = state.player;
+    (state.dynamicCoalitions || []).slice().forEach(function (c) {
+      if (p && p.allianceId === c.id) return;
+      var live = liveCoalitionMemberIds(c).filter(function (id) { return !!partyById(id); });
+      if (live.length < 3) return;
+      if (state.turn - (c.lastDefectionTurn || -999) < 26) return;
+      var trust = state.coalitionTrust && state.coalitionTrust[c.id] !== undefined ? state.coalitionTrust[c.id] : 50;
+      var chance = 0.0018 * (trust < 45 ? 1 + (45 - trust) / 6 : 1) * politicalVolatilityMultiplier();
+      if (Math.random() > chance) return;
+      var positions = live.map(function (id) { var pt = partyById(id); return LEFT_RIGHT_POSITION[pt.familyId]; }).filter(function (v) { return v !== undefined; });
+      var avgPos = positions.length ? positions.reduce(function (t, v) { return t + v; }, 0) / positions.length : 0;
+      var threshold = state.electoralThresholdParty || 3;
+      var candidates = live.map(function (id) {
+        var pt = partyById(id);
+        var dist = LEFT_RIGHT_POSITION[pt.familyId] !== undefined ? Math.abs(LEFT_RIGHT_POSITION[pt.familyId] - avgPos) : 0.5;
+        var solo = (state.parties[id] || 0) >= threshold * 1.5;
+        return { pt: pt, dist: dist, solo: solo, w: 0.3 + dist * 1.5 + (solo ? 1 : 0) };
+      });
+      var leaver = pickWeighted(candidates, function (x) { return x.w; });
+      if (!leaver) return;
+      c.members = c.members.filter(function (id) { return id !== leaver.pt.id; });
+      c.lastDefectionTurn = state.turn;
+      var text = leaver.dist >= 0.6
+        ? leaver.pt.name + " rompe con " + c.label + ": troppe distanze sulla linea politica con gli altri partiti dell'alleanza. Correrà da solo."
+        : leaver.solo
+          ? leaver.pt.name + " lascia " + c.label + ": forte dei sondaggi, il partito è convinto di superare lo sbarramento da solo e correrà per conto proprio."
+          : leaver.pt.name + " lascia " + c.label + " dopo settimane di liti su candidature e posti in lista: correrà da solo.";
+      state.log.unshift({ week: state.turn, title: "Un partito lascia una coalizione", choiceLabel: leaver.pt.name, result: text, headlines: [], type: "cronaca", cat: "Strategia Elettorale" });
+      if (!state.worldNews) state.worldNews = [];
+      state.worldNews.unshift({ cat: "Strategia Elettorale", text: text });
+      if (state.worldNews.length > 6) state.worldNews.length = 6;
+    });
+  }
   function triggerFixedCoalitionExpansion() {
     var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
     (state.dynamicCoalitions || []).forEach(function (c) { takenIds = takenIds.concat(c.members); });
@@ -18780,6 +18822,7 @@
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
     triggerDynamicCoalitionJoin();
+    triggerDynamicCoalitionDefection();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -39773,6 +39816,7 @@
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
     triggerDynamicCoalitionJoin();
+    triggerDynamicCoalitionDefection();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
