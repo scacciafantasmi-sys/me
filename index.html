@@ -5369,6 +5369,7 @@
     triggerSpontaneousPartyFormation();
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
+    triggerDynamicCoalitionJoin();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -16155,6 +16156,37 @@
   // volte davvero, es. Noi Moderati nel centrodestra). Evento raro di proposito — un'eccezione che
   // capita ogni tanto, non una regola — e solo per un partito la cui famiglia ideologica è allineata al
   // blocco (le stesse mappe usate per la probabilità di accettazione di un invito del giocatore).
+  // Richiesto da un giocatore: un partito libero (per esempio rimasto solo dopo lo scioglimento della
+  // sua coalizione) deve poter entrare anche nelle coalizioni nate in partita, non solo fondarne una
+  // nuova o aderire ai due blocchi storici. Entra in una coalizione CPU compatibile con le sue idee
+  // (stesso limite di distanza ideologica degli inviti), con una preferenza per la propria famiglia; più
+  // facile a ridosso delle elezioni, quando superare lo sbarramento da soli è più difficile. La
+  // coalizione del giocatore resta esclusa: lì decidono i suoi inviti.
+  function triggerDynamicCoalitionJoin() {
+    var dyn = (state.dynamicCoalitions || []).filter(function (c) { return !(state.player && state.player.allianceId === c.id); });
+    if (!dyn.length) return;
+    var weeksToElection = (state.nextElectionTurn || 0) - state.turn;
+    var proximity = (weeksToElection >= 0 && weeksToElection <= 80) ? (1 + 2 * (1 - weeksToElection / 80)) : 1;
+    if (Math.random() > 0.03 * proximity * politicalVolatilityMultiplier()) return;
+    var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
+    (state.dynamicCoalitions || []).forEach(function (c) { takenIds = takenIds.concat(c.members); });
+    var options = [];
+    activeParties().forEach(function (pt) {
+      if (!pt.familyId || takenIds.indexOf(pt.id) !== -1 || (state.parties[pt.id] || 0) < 0.5) return;
+      dyn.forEach(function (c) {
+        if (wouldExceedCoalitionSpread(coalitionFamilyIds(c.id), pt.familyId)) return;
+        options.push({ party: pt, coal: c, w: c.familyId === pt.familyId ? 3 : 1 });
+      });
+    });
+    if (!options.length) return;
+    var pick = pickWeighted(options, function (o) { return o.w; });
+    pick.coal.members.push(pick.party.id);
+    var text = pick.party.name + " entra in " + pick.coal.label + ": correrà con la coalizione alle prossime elezioni politiche.";
+    state.log.unshift({ week: state.turn, title: "Un partito entra in una coalizione", choiceLabel: pick.party.name, result: text, headlines: [], type: "cronaca", cat: "Strategia Elettorale" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Strategia Elettorale", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
   function triggerFixedCoalitionExpansion() {
     var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
     (state.dynamicCoalitions || []).forEach(function (c) { takenIds = takenIds.concat(c.members); });
@@ -18747,6 +18779,7 @@
     triggerSpontaneousPartyFormation();
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
+    triggerDynamicCoalitionJoin();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -39739,6 +39772,7 @@
     triggerSpontaneousPartyFormation();
     triggerDynamicCoalitionFormation();
     triggerFixedCoalitionExpansion();
+    triggerDynamicCoalitionJoin();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
