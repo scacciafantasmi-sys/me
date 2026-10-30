@@ -875,7 +875,10 @@
     background: linear-gradient(100deg, transparent, rgba(255,255,255,0.14), transparent); transform: skewX(-18deg); opacity: 0; }
   html.fx .choice-btn:hover::after { opacity: 1; animation: fxSweep 0.7s ease forwards; }
   @keyframes fxSweep { from { left: -40%; } to { left: 120%; } }
-  html.fx .page-nav-btn.active .page-nav-icon { animation: fxPulse 2.4s ease-in-out infinite; }
+  html.fx .page-nav-btn.active .page-nav-icon { position: relative; }
+  html.fx .page-nav-btn.active .page-nav-icon::after { content: ""; position: absolute; inset: -1px; border-radius: 50%; pointer-events: none;
+    border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); animation: fxPulseRing 2.4s ease-in-out infinite; will-change: transform, opacity; }
+  @keyframes fxPulseRing { 0%, 100% { transform: scale(1); opacity: 0; } 10% { opacity: 1; } 50% { transform: scale(1.27); opacity: 0; } }
   html.fx .toast.show { animation: fxPop 0.42s cubic-bezier(0.2, 1.2, 0.4, 1) both; }
   html.fx .stat-tile .value.fx-counting { color: var(--accent); }
   @media (prefers-reduced-motion: reduce) { html.fx #fx-stars, html.fx #fx-confetti { display: none; } }
@@ -1010,6 +1013,21 @@
   html.fx #app.fx-enter .option-grid > .option-card:nth-child(2) { animation-delay: 0.05s; } html.fx #app.fx-enter .option-grid > .option-card:nth-child(3) { animation-delay: 0.1s; }
   html.fx #app.fx-enter .option-grid > .option-card:nth-child(n+4) { animation-delay: 0.15s; }
   html.fx #app.fx-enter .log-entry { animation: fxRise 0.4s both; }
+
+  /* Alleggerimento: isolamento del disegno e livelli separati per ciò che si muove a lungo. */
+  .fx-scene-card { contain: layout paint; }
+  .fx-rays, .fx-ribbon-ico, html.fx #fx-tricolore::after { will-change: transform; }
+  #fx-stars, #fx-confetti { contain: strict; }
+
+  .fx-th-space { background: radial-gradient(circle at 50% 100%, rgba(255,140,40,0.35), rgba(10,14,40,0.9) 60%); }
+  .fx-em-space { animation: fxLaunch 2.2s 0.3s cubic-bezier(0.5, 0, 0.75, 0) both; }
+  .fx-em-space::after { content: ""; position: absolute; left: 50%; top: 85%; width: 14px; height: 60px; margin-left: -7px; border-radius: 50%;
+    background: linear-gradient(#ffd34d, rgba(255,90,40,0.6), transparent); filter: blur(2px); animation: fxFlame 0.15s ease-in-out infinite alternate; }
+  @keyframes fxLaunch { 0% { transform: translateY(30px); } 15% { transform: translateY(26px) rotate(-1deg); } 100% { transform: translateY(-160px); } }
+  @keyframes fxFlame { from { transform: scaleY(0.8); opacity: 0.8; } to { transform: scaleY(1.2); opacity: 1; } }
+  /* il numero della settimana in alto gira quando passa la settimana */
+  html.fx .masthead-meta.fx-flip .week { display: inline-block; animation: fxFlipWeek 0.6s cubic-bezier(0.2, 1.2, 0.4, 1) both; }
+  @keyframes fxFlipWeek { from { opacity: 0; transform: rotateX(90deg) translateY(-6px); } to { opacity: 1; transform: none; } }
 </style>
 
 <div class="wrap">
@@ -5543,6 +5561,7 @@
     triggerDynamicCoalitionJoin();
     triggerDynamicCoalitionDefection();
     indepWeeklyTick();
+    trackPremierTerm();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -20960,6 +20979,7 @@
     triggerDynamicCoalitionJoin();
     triggerDynamicCoalitionDefection();
     indepWeeklyTick();
+    trackPremierTerm();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -21657,13 +21677,14 @@
     var p = state.player;
     var seats = (state.parliamentSeats && state.parliamentSeats[chamber]) || projectSeats(chamber === "camera" ? 400 : 200);
     var govIds = (state.govEntity && state.govEntity.memberIds) || [];
-    var yes = chamber === "camera" ? (p.seatsCamera || 0) : (p.seatsSenato || 0);
     var R = constRng((state.turn + 1) * 31 + salt);
+    // franchi tiratori: sulla Costituzione anche una parte dei tuoi parlamentari può votare contro
+    var yes = Math.round((chamber === "camera" ? (p.seatsCamera || 0) : (p.seatsSenato || 0)) * (1 - R() * 0.18));
     Object.keys(seats).forEach(function (id) {
       if (id === "player") return;
       var party = partyById(id);
       var pos = party && LEFT_RIGHT_POSITION[party.familyId] !== undefined ? LEFT_RIGHT_POSITION[party.familyId] : 0;
-      var score = 0.75 - Math.abs(pos - reform.lean) * 0.28 + (accordo ? 0.25 : 0) +
+      var score = 0.62 - Math.abs(pos - reform.lean) * 0.32 + (accordo ? 0.12 : 0) +
         (p.parliamentRole === "governo" && govIds.indexOf(id) !== -1 ? 0.15 : 0);
       if (reform.id === "autonomia" && party) score += party.familyId === "regionalista" ? 0.4 : party.familyId === "meridionalista" ? -0.6 : 0;
       if (score + (R() - 0.5) * 0.3 > 0.5) yes += seats[id];
@@ -21671,9 +21692,28 @@
     return yes;
   }
   function constRng(seed) { return function () { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }; }
+  // Richiesto dal creatore del gioco: le riforme costituzionali si sbloccano solo quando il tuo partito
+  // guida il governo per il secondo mandato (anche non consecutivo): si contano le legislature in cui
+  // il giocatore è stato Presidente del Consiglio (o Capo dello Stato con poteri di governo).
+  function playerLeadsGovernment() {
+    return !!(state.cabinet && state.cabinet.premierId === "player") || (typeof playerIsExecutivePresident === "function" && playerIsExecutivePresident());
+  }
+  function trackPremierTerm() {
+    var p = state.player;
+    if (!p || !playerLeadsGovernment()) return;
+    if (!p.premierLegislatures) p.premierLegislatures = [];
+    var leg = state.legislature || 1;
+    if (p.premierLegislatures.indexOf(leg) === -1) p.premierLegislatures.push(leg);
+  }
+  function premierTermsCount() {
+    trackPremierTerm();
+    return (state.player && state.player.premierLegislatures || []).length;
+  }
+  function constReformUnlocked() { return playerLeadsGovernment() && premierTermsCount() >= 2; }
   function canProposeConstReform(reform) {
     var p = state.player;
     if (!p || !p.inParliament || state.regime || state.pendingConstReform) return false;
+    if (!constReformUnlocked()) return false;
     if (constitutionHas(reform.id)) return false;
     if (reform.id === "presidenzialismo" && isPresidentialSystem()) return false;
     if (reform.id === "premierato" && isPresidentialSystem()) return false;
@@ -21789,11 +21829,11 @@
     state.pendingConstReform = null;
     var support = r.votes.length ? r.votes.reduce(function (a, b) { return a + b; }, 0) / r.votes.length : 0.55;
     var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 50;
-    var prob = 0.42 + (support - 0.55) * 0.8;
+    var prob = 0.34 + (support - 0.55) * 0.8;
     if (choice.constRef === "campagna") { p.fondi -= 1500; prob += clamp(institutionalPowerMultiplier(p) * 0.02, 0, 0.12); }
     if (choice.constRef === "merito") prob += 0.03;
     if (choice.constRef === "plebiscito") prob += (cg - 50) / 120;
-    prob = clamp(prob, 0.12, 0.85);
+    prob = clamp(prob, 0.1, 0.72);
     var passed = Math.random() < prob;
     var siPct = passed ? rand(50.5, 62) : rand(38, 49.5);
     var text;
@@ -21851,6 +21891,7 @@
     var p = state.player;
     if (!p || state.regime) return "";
     var html = '<section aria-label="Riforme Costituzionali"><details class="log"><summary>Riforme Costituzionali (art. 138)<span>▾</span></summary>' +
+      '<p class="ci-hint"><strong>Si possono proporre solo dal secondo mandato in cui il tuo partito guida il governo come Presidente del Consiglio</strong> (anche non di fila). Mandati finora: ' + premierTermsCount() + '. Sono riforme difficili: servono numeri larghi in entrambe le Camere e spesso un referendum.</p>' +
       '<p class="ci-hint">Una legge costituzionale segue un iter tutto suo: due letture per ciascuna Camera, la seconda dopo almeno tre mesi e con la maggioranza assoluta. Con i due terzi passa subito, altrimenti decide un referendum confermativo senza quorum. Le riforme più profonde richiedono più forza nei sondaggi. La forma repubblicana non si può cambiare (art. 139).</p>';
     var r = state.pendingConstReform;
     if (r) {
@@ -21866,7 +21907,10 @@
       var inForce = constitutionHas(rf.id) || (rf.id === "presidenzialismo" && isPresidentialSystem());
       var ok = canProposeConstReform(rf);
       var retry = state.constReformRetry && state.constReformRetry[rf.id] && state.turn < state.constReformRetry[rf.id];
+      var terms = premierTermsCount();
       var why = inForce ? "In vigore" : (rf.id === "premierato" && isPresidentialSystem()) ? "Incompatibile con il presidenzialismo in vigore" : !p.inParliament ? "Serve essere in Parlamento" : r ? "C'è già una riforma in corso"
+        : !playerLeadsGovernment() ? "Serve guidare il governo (mandati da Presidente del Consiglio finora: " + terms + ")"
+        : terms < 2 ? "Si sblocca dal secondo mandato da Presidente del Consiglio, anche non consecutivo"
         : p.sondaggi < rf.minSondaggi ? "Servono almeno il " + rf.minSondaggi + "% nei sondaggi" : retry ? "Riproponibile tra " + (state.constReformRetry[rf.id] - state.turn) + " settimane"
         : p.fondi < CONST_REFORM_COST ? "Fondi insufficienti (" + fmtEuro(CONST_REFORM_COST) + ")" : "Avvia l'iter · " + fmtEuro(CONST_REFORM_COST);
       html += '<button type="button" class="option-card' + (inForce ? " selected" : "") + '" data-const-reform="' + rf.id + '"' + (ok ? "" : " disabled") + '>' +
@@ -39416,6 +39460,11 @@
     var key = fxScreenKey();
     var entered = key !== fxLastScreen;
     fxLastScreen = key;
+    if (fxAfterRender.turn !== undefined && fxAfterRender.turn !== state.turn) {
+      var meta = document.getElementById("masthead-meta");
+      if (meta) { meta.classList.remove("fx-flip"); void meta.offsetWidth; meta.classList.add("fx-flip"); setTimeout(function () { meta.classList.remove("fx-flip"); }, 700); }
+    }
+    fxAfterRender.turn = state.turn;
     if (entered) {
       app.classList.remove("fx-enter");
       void app.offsetWidth;
@@ -39508,12 +39557,16 @@
   // il confronto avveniva con la schermata precedente, e tutto lo storico della partita sembrava appena
   // successo: decine di scene in fila. Se la partita è stata sostituita o il tempo salta di più di una
   // settimana, si riparte da zero senza animare il passato.
-  var fxRefs = { state: null, player: null, career: null, turn: null };
+  var fxRefs = { state: null, player: null, career: null, turn: null, warmTurn: null };
   function fxDetectEvents() {
     var replaced = fxRefs.state !== state || fxRefs.player !== state.player || fxRefs.career !== state.career ||
       fxRefs.turn === null || Math.abs(state.turn - fxRefs.turn) > 1;
-    fxRefs = { state: state, player: state.player, career: state.career, turn: state.turn };
-    if (replaced) {
+    var warmTurn = replaced ? state.turn : fxRefs.warmTurn;
+    fxRefs = { state: state, player: state.player, career: state.career, turn: state.turn, warmTurn: warmTurn };
+    // Periodo di assestamento: dopo un caricamento (o una partita nuova) il gioco sistema da solo i
+    // salvataggi vecchi e ricalcola alcuni valori nelle prime schermate. Finché non si gioca la prima
+    // settimana le istantanee si aggiornano senza generare scene.
+    if (replaced || state.turn === warmTurn) {
       fxSnap = fxTakeSnapshot();
       fxSnapMore = fxTakeSnapshotMore();
       return;
@@ -39702,7 +39755,10 @@
       campaign: (function () { try { return p && !state.regime ? !!inNationalCampaignWindow() : null; } catch (e) { return null; } })(),
       iscritti: p ? p.iscritti : null, fondi: p ? p.fondi : null,
       youth: c && c.youth ? careerYouthRank(c) : null, schoolYear: c && c.school && c.stage === "scuola" ? c.school.year : null,
-      maturita: c ? !!c.maturita : null, nsTerms: state.newState ? state.newState.termsWon || 0 : null
+      maturita: c ? !!c.maturita : null, nsTerms: state.newState ? state.newState.termsWon || 0 : null,
+      constKeys: Object.keys(state.constitution || {}).filter(function (k) { return state.constitution[k]; }).join(","),
+      constPending: state.pendingConstReform ? state.pendingConstReform.id : null,
+      rating: state.ratingIdx !== undefined ? state.ratingIdx : null, spread: state.spreadBps !== undefined ? state.spreadBps : null
     };
   }
   var fxSnapMore = null;
@@ -39724,7 +39780,8 @@
     if (now.minister === true && was.minister === false && state.playerMinistry) ev.push({ type: "big", theme: "gold", emoji: "🗄️", eyebrow: "Giuramento al Quirinale", title: "Diventi Ministro", sub: "Ministero " + fxEsc(state.playerMinistry.ministry || "") + "." });
     if (now.trial === true && was.trial === false) ev.push({ type: "big", theme: "news", emoji: "🗞️", eyebrow: "Prima pagina", title: "Si apre un'inchiesta sul partito", sub: "La procura indaga: i giornali non parlano d'altro." });
     if (now.leader === false && was.leader === true) ev.push({ type: "big", theme: "dark", emoji: "🪑", eyebrow: "Il partito", title: "Non sei più il leader", sub: "La segreteria passa ad altre mani." });
-    if (now.poll !== null && was.poll !== null) {
+    var pollJump = now.poll !== null && was.poll !== null && Math.abs(now.poll - was.poll) > 4;
+    if (now.poll !== null && was.poll !== null && !pollJump) {
       FX_POLL_MILESTONES.forEach(function (m) { if (was.poll < m && now.poll >= m) ev.push({ type: "big", theme: "good", emoji: "📈", eyebrow: "Sondaggi", title: "Superi il " + m + "%", sub: "Il partito cresce: un traguardo che pochi raggiungono." }); });
     }
     if (now.cOffice && now.cOffice !== was.cOffice && state.career) ev.push({ type: "big", theme: "gold", emoji: "🎖️", eyebrow: "Carriera", title: "Nuovo incarico", sub: fxEsc(careerOfficeLabel(state.career) || "") });
@@ -39734,16 +39791,29 @@
     if (now.cRank !== null && was.cRank !== null && now.cRank > was.cRank) ev.push({ type: "big", theme: "gold", emoji: "⭐", eyebrow: "Il partito", title: "Promozione nel partito", sub: "Sali di grado: ora conti di più nelle decisioni." });
     if (now.year && was.year && now.year !== was.year) ev.push({ type: "big", theme: "fireworks", emoji: "🎆", eyebrow: "Capodanno", title: "Buon " + now.year + "!", sub: "Un anno nuovo comincia: vediamo cosa porterà alla politica italiana." });
     if (now.campaign && was.campaign === false) ev.push({ type: "big", theme: "news", emoji: "📣", eyebrow: "Elezioni politiche", title: "Inizia la campagna elettorale", sub: "Manifesti, comizi e dibattiti in TV: ogni settimana conta il doppio." });
-    if (now.poll !== null && was.poll !== null) {
+    if (now.poll !== null && was.poll !== null && !pollJump) {
       FX_POLL_MILESTONES.forEach(function (m) { if (was.poll >= m && now.poll < m && m >= 5) ev.push({ type: "big", theme: "dark", emoji: "📉", eyebrow: "Sondaggi", title: "Scendi sotto il " + m + "%", sub: "Il partito perde terreno: serve una reazione." }); });
     }
-    if (now.iscritti !== null && was.iscritti !== null) {
+    if (now.iscritti !== null && was.iscritti !== null && now.iscritti - was.iscritti < was.iscritti * 0.5 + 500) {
       [1000, 5000, 10000, 50000, 100000, 500000].forEach(function (m) { if (was.iscritti < m && now.iscritti >= m) ev.push({ type: "big", theme: "good", emoji: "🪪", eyebrow: "Tesseramento", title: m.toLocaleString("it-IT").replace(/,/g, ".") + " iscritti", sub: "Il partito cresce sul territorio, tessera dopo tessera." }); });
     }
     if (now.fondi !== null && was.fondi !== null && was.fondi >= 0 && now.fondi < 0) ev.push({ type: "big", theme: "war", emoji: "💸", eyebrow: "Tesoreria", title: "Casse in rosso", sub: "Il partito spende più di quanto incassa: servono fondi, e in fretta." });
     if (now.youth !== null && was.youth !== null && now.youth > was.youth) ev.push({ type: "big", theme: "gold", emoji: "🧑‍🤝‍🧑", eyebrow: "Giovani del partito", title: CAREER_YOUTH_RANKS[now.youth].label, sub: "Al circolo cominciano a chiederti consiglio." });
     if (now.schoolYear && was.schoolYear && now.schoolYear > was.schoolYear) ev.push({ type: "big", theme: "good", emoji: "🎒", eyebrow: "Primo giorno di scuola", title: "Inizia la " + now.schoolYear + "ª", sub: "Nuovi professori, nuove liste, stessa voglia di farti sentire." });
     if (now.maturita && was.maturita === false) ev.push({ type: "big", theme: "news", emoji: "📝", eyebrow: "Esame di Stato", title: "Notte prima degli esami", sub: "Domani la prima prova: tocca a te." });
+    if (now.constKeys !== was.constKeys && now.constKeys.length > was.constKeys.length) {
+      var added = now.constKeys.split(",").filter(function (k) { return k && was.constKeys.split(",").indexOf(k) === -1; })[0];
+      var rf = typeof constReformById === "function" ? constReformById(added) : null;
+      ev.push({ type: "big", theme: "gold", emoji: "📜", eyebrow: "Riforma costituzionale", title: "La Costituzione cambia", sub: rf ? fxEsc(rf.label) + "." : "" });
+    } else if (was.constPending && !now.constPending) {
+      var rf2 = typeof constReformById === "function" ? constReformById(was.constPending) : null;
+      ev.push({ type: "big", theme: "dark", emoji: "📜", eyebrow: "Riforma costituzionale", title: "La riforma non passa", sub: rf2 ? fxEsc(rf2.label) + ": l'iter si ferma qui." : "" });
+    }
+    if (now.rating !== null && was.rating !== null && now.rating !== was.rating) {
+      var up = now.rating > was.rating;
+      ev.push({ type: "big", theme: up ? "good" : "dark", emoji: up ? "📈" : "📉", eyebrow: "Agenzie di rating", title: up ? "Il rating dell'Italia sale" : "L'Italia viene declassata", sub: up ? "I mercati premiano i conti pubblici." : "Il debito italiano diventa più caro da finanziare." });
+    }
+    if (now.spread !== null && was.spread !== null && was.spread < 400 && now.spread >= 400) ev.push({ type: "big", theme: "war", emoji: "🔥", eyebrow: "Mercati", title: "Lo spread supera quota 400", sub: "I titoli di Stato vanno sotto pressione: torna l'incubo del 2011." });
     if (now.nsTerms !== null && was.nsTerms !== null && now.nsTerms > was.nsTerms) ev.push({ type: "big", theme: "gold", emoji: "🗳️", eyebrow: fxEsc(state.newState.name), title: "Rieletto/a!", sub: "Gli elettori confermano il tuo governo." });
     return ev;
   }
@@ -39751,6 +39821,11 @@
     var t = l.title || "";
     if (/^Elezioni Europee/.test(t)) return { type: "big", theme: "eu", eyebrow: "Parlamento europeo", title: "Elezioni europee", sub: fxEsc(l.result || "").slice(0, 180) };
     if (/^Elezioni Regionali|^Elezioni Comunali|^Elezioni Provinciali/.test(t)) return { type: "big", theme: "news", emoji: "🗳️", eyebrow: "Elezioni locali", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 180) };
+    if (/torna alla Lira|Ritorno alla Lira/i.test(t)) return { type: "big", theme: "gold", emoji: "🪙", eyebrow: "Moneta", title: "L'Italia torna alla Lira", sub: "Addio all'euro: le banconote nuove arrivano nelle banche." };
+    if (/^Programma Spaziale/.test(t)) return { type: "big", theme: "space", emoji: "🚀", eyebrow: "Programma spaziale", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 160) };
+    if (/ergastolo l'ex dittatore/.test(t)) return { type: "big", theme: "news", emoji: "⚖️", eyebrow: "Giustizia", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 160) };
+    if (/Mozione di sfiducia contro|Il Consiglio Regionale vota una mozione di sfiducia/.test(t)) return { type: "big", theme: "dark", emoji: "✋", eyebrow: "Aula", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 160) };
+    if (/^Primarie per la segreteria/.test(t)) return { type: "big", theme: "news", emoji: "🗳️", eyebrow: "Primarie", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 160) };
     if (/^Scioglimento di un partito/.test(t)) return { type: "big", theme: "dark", emoji: "🥀", eyebrow: "Politica", title: "Un partito si scioglie", sub: fxEsc(l.result || "").slice(0, 180) };
     if (/^Cambio ai vertici/.test(t)) return { type: "big", theme: "news", emoji: "🔄", eyebrow: "Politica", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 180) };
     if (/^Scissione: nasce|Nasce un nuovo soggetto politico|Nasce un nuovo movimento/.test(t)) return { type: "big", theme: "news", emoji: "🆕", eyebrow: "Politica", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 180) };
@@ -39801,6 +39876,7 @@
     try { localStorage.setItem("politisit_fx", on ? "1" : "0"); } catch (e) {}
     document.documentElement.classList.toggle("fx", FX_ON);
     if (FX_ON && !fxStarsStarted) { fxStarsStarted = true; fxStars(); }
+    if (FX_ON) fxStarsResume();
     if (!FX_ON) { fxQueue = []; document.querySelectorAll(".fx-scene").forEach(function (x) { x.parentNode.removeChild(x); }); fxPlaying = false; }
     fxSnap = null; fxSnapMore = null; fxLastScreen = null;
     fxUpdateToggle();
@@ -39821,25 +39897,43 @@
       stars = [];
       for (var i = 0; i < 70; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, r: 0.6 + Math.random() * 1.6, s: 4 + Math.random() * 10, a: 0.12 + Math.random() * 0.3 });
     }
-    size();
-    window.addEventListener("resize", size);
-    var last = performance.now();
-    (function frame(now) {
-      var dt = Math.min(0.05, (now - last) / 1000); last = now;
-      if (!document.hidden) {
-        g.clearRect(0, 0, W, H);
-        var grd = g.createRadialGradient(W / 2, -H * 0.1, 10, W / 2, H * 0.2, Math.max(W, H));
-        grd.addColorStop(0, "rgba(120,100,255,0.16)"); grd.addColorStop(0.6, "rgba(10,12,22,0)");
-        g.fillStyle = grd; g.fillRect(0, 0, W, H);
-        stars.forEach(function (st) {
-          st.y += st.s * dt; if (st.y > H + 4) { st.y = -4; st.x = Math.random() * W; }
-          g.globalAlpha = st.a; g.fillStyle = "#ffffff"; g.beginPath(); g.arc(st.x, st.y, st.r, 0, 6.3); g.fill();
-        });
-        g.globalAlpha = 1;
-      }
+    // Alleggerimento senza cambiare l'aspetto: l'alone viene disegnato una volta sola su un canvas di
+    // appoggio (prima si ricreava il gradiente a ogni fotogramma), le stelle lente si ridisegnano a 30
+    // fotogrammi al secondo invece di 60, e il ciclo si ferma del tutto quando la pagina non è visibile,
+    // quando le animazioni sono spente o quando una scena a schermo intero copre lo sfondo.
+    var glow = document.createElement("canvas");
+    function paintGlow() {
+      glow.width = W; glow.height = H;
+      var gg = glow.getContext("2d");
+      var grd = gg.createRadialGradient(W / 2, -H * 0.1, 10, W / 2, H * 0.2, Math.max(W, H));
+      grd.addColorStop(0, "rgba(120,100,255,0.16)"); grd.addColorStop(0.6, "rgba(10,12,22,0)");
+      gg.fillStyle = grd; gg.fillRect(0, 0, W, H);
+    }
+    size(); paintGlow();
+    window.addEventListener("resize", function () { size(); paintGlow(); });
+    var last = performance.now(), lastDraw = 0, running = false;
+    function frame(now) {
+      if (document.hidden || !FX_ON) { running = false; return; }
       requestAnimationFrame(frame);
-    })(last);
+      if (fxPlaying || now - lastDraw < 33) return;
+      var dt = Math.min(0.05, (now - last) / 1000); last = now; lastDraw = now;
+      g.clearRect(0, 0, W, H);
+      g.drawImage(glow, 0, 0);
+      g.fillStyle = "#ffffff";
+      stars.forEach(function (st) {
+        st.y += st.s * dt; if (st.y > H + 4) { st.y = -4; st.x = Math.random() * W; }
+        g.globalAlpha = st.a; g.beginPath(); g.arc(st.x, st.y, st.r, 0, 6.3); g.fill();
+      });
+      g.globalAlpha = 1;
+    }
+    fxStarsResume = function () {
+      if (running || document.hidden || !FX_ON) return;
+      running = true; last = performance.now(); requestAnimationFrame(frame);
+    };
+    document.addEventListener("visibilitychange", function () { fxStarsResume(); });
+    fxStarsResume();
   }
+  var fxStarsResume = function () {};
   if (FX_ON && typeof document !== "undefined") {
     document.documentElement.classList.add("fx");
     fxStarsStarted = true;
@@ -43526,6 +43620,7 @@
     triggerDynamicCoalitionJoin();
     triggerDynamicCoalitionDefection();
     indepWeeklyTick();
+    trackPremierTerm();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
