@@ -5371,6 +5371,7 @@
     triggerFixedCoalitionExpansion();
     triggerDynamicCoalitionJoin();
     triggerDynamicCoalitionDefection();
+    indepWeeklyTick();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -19890,6 +19891,7 @@
     triggerFixedCoalitionExpansion();
     triggerDynamicCoalitionJoin();
     triggerDynamicCoalitionDefection();
+    indepWeeklyTick();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
@@ -27025,7 +27027,11 @@
   }
 
   function renderMasthead() {
-    if (state.mode === "president" && state.presidentTerm) {
+    if (state.phase === "nuovostato" && state.newState) {
+      mastheadTitle.textContent = state.newState.name;
+      mastheadTagline.textContent = "Stato indipendente · capitale " + state.newState.capital;
+      mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
+    } else if (state.mode === "president" && state.presidentTerm) {
       mastheadTitle.textContent = state.presidentTerm.playerName;
       mastheadTagline.textContent = "Presidente della Repubblica — in carica dal " + weekLabel(state.presidentTerm.electedTurn);
       mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
@@ -27169,6 +27175,15 @@
           return '<button type="button" class="option-card' + (d.family === f.id ? " selected" : "") + '" data-family="' + f.id + '">' +
             '<span class="olabel">' + f.label + '</span><span class="odesc">' + f.desc + '</span></button>';
         }).join("") + "</div></div>";
+      if (d.family === "regionalista") {
+        var homeRegs = d.homeRegions || [];
+        html += '<div class="field"><label class="field-label">Le regioni del tuo progetto (da 1 a ' + INDEP_MAX_REGIONS + ')</label>' +
+          '<p class="field-hint">Qui il partito mette radici e lavora per l\'autonomia, fino all\'indipendenza. Con il ' + INDEP_REFERENDUM_THRESHOLD + '% nei sondaggi potrai indire un referendum: le regioni dove vince il Sì formeranno un nuovo Stato. Scelte: ' + homeRegs.length + "/" + INDEP_MAX_REGIONS + '.</p><div class="option-grid">' +
+          INDEP_REGIONS.map(function (r) {
+            var sel = homeRegs.indexOf(r.id) !== -1;
+            return '<button type="button" class="option-card' + (sel ? " selected" : "") + '" data-home-region="' + r.id.replace(/"/g, "&quot;") + '"' + (!sel && homeRegs.length >= INDEP_MAX_REGIONS ? " disabled" : "") + '><span class="olabel">' + r.id + '</span><span class="odesc">' + fmt1(r.pop) + " milioni di abitanti · sostegno all'indipendenza oggi circa " + r.base + "%</span></button>";
+          }).join("") + "</div></div>";
+      }
     }
     if (mode === "new") {
       html += '<div class="field"><label class="field-label">Raccolta firme</label><div class="option-grid">' +
@@ -27319,6 +27334,16 @@
         renderSetup();
       });
     });
+    app.querySelectorAll("[data-home-region]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var r = btn.getAttribute("data-home-region");
+        var list = state.setupDraft.homeRegions = (state.setupDraft.homeRegions || []).slice();
+        var at = list.indexOf(r);
+        if (at !== -1) list.splice(at, 1);
+        else if (list.length < INDEP_MAX_REGIONS) list.push(r);
+        renderSetup();
+      });
+    });
     app.querySelectorAll("[data-skip-formation]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.setupDraft.skipFormation = btn.getAttribute("data-skip-formation") === "1";
@@ -27417,6 +27442,7 @@
       if (!d.family) { showSaveStatus("Scegli un'area politica per il tuo partito.", true); return; }
       if (!d.leadership) { showSaveStatus("Scegli uno stile di leadership per il tuo partito.", true); return; }
       if (!d.leaderTraits || d.leaderTraits.length !== 2) { showSaveStatus("Scegli esattamente 2 tratti personali per il leader.", true); return; }
+      if (!isTakeover && d.family === "regionalista" && !(d.homeRegions && d.homeRegions.length)) { showSaveStatus("Scegli almeno una regione per il tuo progetto autonomista.", true); return; }
       state.player = Object.assign({
         name: name, motto: (d.motto || "").trim(), color: d.color, family: d.family, leadership: d.leadership,
         ideologyText: (d.ideologyText || "").trim(), leaderCharacter: (d.leaderCharacter || "").trim(),
@@ -27442,6 +27468,7 @@
       }
       state.player.logoDataUrl = d.logoDataUrl || null;
       state.player.short = (d.short || "").trim() || null;
+      if (!isTakeover && d.family === "regionalista" && d.homeRegions) state.player.homeRegions = d.homeRegions.slice(0, INDEP_MAX_REGIONS);
       state.player.foundedTurn = state.turn;
       // Prima l'età di partenza era sempre scelta a caso (32-58 per chi fonda da zero, 40-66 per chi
       // prende il comando), mai una vera scelta del giocatore: ora è il valore impostato nel campo "Età
@@ -37184,6 +37211,647 @@
     document.body.className = computeGameTheme();
   }
 
+  // ---------- Indipendenza regionalista e nuovo Stato ----------
+  // Richiesto da un giocatore: chi fonda un partito Regionalista e Autonomista sceglie fino a 5 regioni
+  // di riferimento. Lì cresce (o cala) il sostegno all'indipendenza; quando il partito arriva al 20% nei
+  // sondaggi nazionali può indire un referendum, che si vota regione per regione. Le regioni dove vince
+  // il Sì diventano uno Stato nuovo, con nome e bandiera scelti dal giocatore, e la partita prosegue in
+  // una modalità dedicata (state.phase === "nuovostato") con indicatori, scelte fondative e dossier propri.
+  var INDEP_MAX_REGIONS = 5;
+  var INDEP_REFERENDUM_THRESHOLD = 20;
+  var INDEP_REGIONS = [
+    { id: "Lombardia", pop: 10.0, pil: 44, base: 20 }, { id: "Lazio", pop: 5.7, pil: 38, base: 8 },
+    { id: "Campania", pop: 5.6, pil: 21, base: 12 }, { id: "Sicilia", pop: 4.8, pil: 20, base: 24 },
+    { id: "Veneto", pop: 4.85, pil: 37, base: 28 }, { id: "Emilia-Romagna", pop: 4.45, pil: 40, base: 12 },
+    { id: "Piemonte", pop: 4.25, pil: 34, base: 13 }, { id: "Puglia", pop: 3.9, pil: 21, base: 11 },
+    { id: "Toscana", pop: 3.66, pil: 35, base: 12 }, { id: "Calabria", pop: 1.84, pil: 19, base: 11 },
+    { id: "Sardegna", pop: 1.57, pil: 24, base: 28 }, { id: "Liguria", pop: 1.5, pil: 35, base: 11 },
+    { id: "Marche", pop: 1.48, pil: 31, base: 10 }, { id: "Abruzzo", pop: 1.27, pil: 28, base: 9 },
+    { id: "Friuli-Venezia Giulia", pop: 1.19, pil: 36, base: 20 }, { id: "Trentino-Alto Adige", pop: 1.08, pil: 45, base: 34 },
+    { id: "Umbria", pop: 0.86, pil: 29, base: 9 }, { id: "Basilicata", pop: 0.53, pil: 25, base: 9 },
+    { id: "Molise", pop: 0.29, pil: 23, base: 8 }, { id: "Valle d'Aosta", pop: 0.12, pil: 43, base: 26 }
+  ];
+  function indepRegion(id) { return INDEP_REGIONS.filter(function (r) { return r.id === id; })[0]; }
+  function indepEligible() {
+    var p = state.player;
+    return !!(p && p.family === "regionalista" && p.homeRegions && p.homeRegions.length && !state.regime);
+  }
+  function ensureIndep() {
+    var p = state.player;
+    if (!state.indep) state.indep = { support: {}, push: {}, actionTurn: -99, cooldownUntil: 0, referendum: null, history: [] };
+    (p.homeRegions || []).forEach(function (r) {
+      if (state.indep.support[r] === undefined) state.indep.support[r] = (indepRegion(r) || { base: 10 }).base + rand(-2, 2);
+      if (state.indep.push[r] === undefined) state.indep.push[r] = 0;
+    });
+    return state.indep;
+  }
+  // Ogni settimana il sostegno si muove verso un bersaglio che dipende dall'identità storica della
+  // regione, dalla forza del partito e dal lavoro fatto sul territorio (push, che si consuma lentamente).
+  function indepWeeklyTick() {
+    if (!indepEligible()) return;
+    var ind = ensureIndep();
+    var p = state.player;
+    p.homeRegions.forEach(function (r) {
+      var reg = indepRegion(r) || { base: 10 };
+      var target = clamp(reg.base + p.sondaggi * 1.1 + ind.push[r] + (p.reputazione - 50) * 0.08, 3, 80);
+      ind.support[r] = clamp(ind.support[r] + (target - ind.support[r]) * 0.03 + rand(-0.4, 0.4), 1, 90);
+      ind.push[r] = ind.push[r] * 0.995;
+    });
+    var ref = ind.referendum;
+    if (ref && ref.stage === "trattativa" && state.turn >= ref.answerTurn) {
+      if (Math.random() < ref.acceptChance) {
+        ref.stage = "campagna"; ref.agreed = true; ref.voteTurn = state.turn + 16;
+        state.log.unshift({ week: state.turn, title: "Roma accetta il referendum", choiceLabel: "Referendum concordato", result: "Dopo settimane di trattativa il governo accetta un referendum concordato sull'indipendenza delle tue regioni. Si vota tra 16 settimane.", headlines: [], type: "istituzioni", cat: "Indipendenza" });
+      } else {
+        ind.referendum = null;
+        state.log.unshift({ week: state.turn, title: "Roma dice no al referendum", choiceLabel: "Trattativa fallita", result: "Il governo respinge la richiesta di un referendum concordato: \"L'unità nazionale non è in discussione\". Puoi riprovare o andare avanti da solo.", headlines: [], type: "istituzioni", cat: "Indipendenza" });
+        p.homeRegions.forEach(function (r) { ind.support[r] = clamp(ind.support[r] + rand(1, 3), 1, 90); });
+      }
+    }
+    if (ref && ref.stage === "campagna" && state.turn >= ref.voteTurn) indepRunReferendum();
+  }
+  function indepCanReferendum() {
+    var p = state.player, ind = ensureIndep();
+    if (ind.referendum) return { ok: false, why: "C'è già un referendum in corso." };
+    if (state.turn < ind.cooldownUntil) return { ok: false, why: "Dopo un referendum perso servono anni prima di riprovarci (ancora " + (ind.cooldownUntil - state.turn) + " settimane)." };
+    if (p.sondaggi < INDEP_REFERENDUM_THRESHOLD) return { ok: false, why: "Serve almeno il " + INDEP_REFERENDUM_THRESHOLD + "% nei sondaggi nazionali (oggi " + fmt1(p.sondaggi) + "%)." };
+    return { ok: true };
+  }
+  function indepStartReferendum(kind) {
+    var p = state.player, ind = ensureIndep();
+    if (!indepCanReferendum().ok) return;
+    if (kind === "concordato") {
+      var chance = clamp(0.12 + (p.sondaggi - 20) * 0.02 + (p.reputazione - 50) / 250, 0.05, 0.6);
+      ind.referendum = { stage: "trattativa", answerTurn: state.turn + 6, acceptChance: chance, campaign: 0, agreed: false };
+      addDiaryEntry("Chiediamo a Roma di lasciarci votare", "Ho chiesto al governo un referendum concordato sull'indipendenza. Ci vorranno settimane per avere una risposta.");
+      showSaveStatus("Trattativa aperta con Roma: risposta tra 6 settimane.", false);
+    } else {
+      ind.referendum = { stage: "campagna", voteTurn: state.turn + 8, campaign: 0, agreed: false };
+      p.reputazione = clamp(p.reputazione - rand(3, 6), 0, 100);
+      state.log.unshift({ week: state.turn, title: "Referendum unilaterale sull'indipendenza", choiceLabel: p.name, result: p.name + " indice un referendum sull'indipendenza senza l'accordo di Roma. Il governo lo dichiara illegittimo e annuncia ricorso alla Corte costituzionale. Si vota tra 8 settimane.", headlines: [], type: "istituzioni", cat: "Indipendenza" });
+      addDiaryEntry("Votiamo, con o senza Roma", "Abbiamo indetto il referendum senza aspettare il permesso di nessuno. Da qui non si torna indietro.");
+      showSaveStatus("Referendum indetto: si vota tra 8 settimane.", false);
+    }
+  }
+  function indepAction(kind) {
+    var p = state.player, ind = ensureIndep();
+    var ref = ind.referendum;
+    if (kind === "campagna_identita") {
+      if (state.turn - ind.actionTurn < 4) return;
+      if (p.fondi < 1500) { showSaveStatus("Servono almeno 1.500 € per la campagna.", true); return; }
+      p.fondi -= 1500; ind.actionTurn = state.turn;
+      p.homeRegions.forEach(function (r) { ind.push[r] += rand(1.5, 3); });
+      p.visibilita = clamp(p.visibilita + 3, 0, 100);
+      addDiaryEntry("Campagna identitaria", "Feste, bandiere, incontri nei paesi: nelle nostre regioni si parla sempre più spesso di indipendenza.");
+      showSaveStatus("Campagna identitaria lanciata nelle tue regioni.", false);
+    } else if (kind === "autonomia") {
+      if (state.turn - ind.actionTurn < 4) return;
+      ind.actionTurn = state.turn;
+      p.homeRegions.forEach(function (r) { ind.push[r] += rand(0.5, 1.2); });
+      p.reputazione = clamp(p.reputazione + 1.5, 0, 100);
+      addDiaryEntry("Più autonomia, subito", "Abbiamo presentato una proposta per dare alle nostre regioni più poteri su tasse, scuola e sanità. Una strada graduale, ma che prepara il terreno.");
+      showSaveStatus("Proposta di autonomia presentata.", false);
+    } else if (kind === "comizio_si" && ref && ref.stage === "campagna") {
+      if (ref.lastRallyTurn === state.turn) return;
+      if (p.fondi < 1000) { showSaveStatus("Servono almeno 1.000 € per il comizio.", true); return; }
+      p.fondi -= 1000; ref.lastRallyTurn = state.turn;
+      ref.campaign += rand(0.8, 1.8);
+      showSaveStatus("Comizio per il Sì: la campagna cresce.", false);
+    }
+    save(); render();
+  }
+  // Il voto: in ogni regione il Sì parte dal sostegno costruito negli anni, più la campagna, con
+  // un'incertezza vera. Nel referendum unilaterale chi è contrario in parte boicotta le urne: il Sì sale,
+  // l'affluenza crolla, e il nuovo Stato nasce con molta meno legittimità internazionale.
+  function indepRunReferendum() {
+    var p = state.player, ind = state.indep, ref = ind.referendum;
+    var results = p.homeRegions.map(function (r) {
+      var reg = indepRegion(r) || { pop: 1 };
+      var yes = clamp(ind.support[r] + ref.campaign * 1.5 + rand(-5, 5) + (ref.agreed ? 0 : 8), 3, 97);
+      var turnout = ref.agreed ? clamp(rand(64, 82), 40, 90) : clamp(rand(38, 52), 25, 70);
+      var sections = Math.round(reg.pop * 1000 * rand(0.55, 0.65));
+      return { region: r, yes: Math.round(yes * 10) / 10, turnout: Math.round(turnout * 10) / 10, sections: sections, won: yes > 50 };
+    });
+    var winners = results.filter(function (x) { return x.won; }).map(function (x) { return x.region; });
+    ind.referendum = null;
+    ind.history.push({ turn: state.turn, results: results, agreed: ref.agreed });
+    ind.pendingResult = { results: results, winners: winners, agreed: ref.agreed };
+    if (!winners.length) {
+      ind.cooldownUntil = state.turn + 156;
+      p.reputazione = clamp(p.reputazione - rand(6, 10), 0, 100);
+      p.sondaggi = clamp(p.sondaggi - rand(1.5, 3), 0, 60);
+      p.homeRegions.forEach(function (r) { ind.support[r] = clamp(ind.support[r] - rand(6, 10), 1, 90); ind.push[r] = 0; });
+      addDiaryEntry("Il Sì non passa", "Abbiamo perso il referendum in tutte le regioni. Fa male. Ci vorranno anni prima di poterci riprovare.");
+    }
+    state.log.unshift({ week: state.turn, title: "Referendum sull'indipendenza", choiceLabel: winners.length ? "Vince il Sì in " + winners.join(", ") : "Vince il No",
+      result: results.map(function (x) { return x.region + ": Sì " + fmt1(x.yes) + "% (affluenza " + fmt1(x.turnout) + "%)"; }).join(" · "), headlines: [], type: "istituzioni", cat: "Indipendenza" });
+  }
+  function renderIndependencePanel() {
+    if (!indepEligible()) return "";
+    var p = state.player, ind = ensureIndep();
+    var ref = ind.referendum;
+    var can = indepCanReferendum();
+    var actionWait = 4 - (state.turn - ind.actionTurn);
+    var html = '<section aria-label="Indipendenza"><details class="log" open><summary>Indipendenza delle tue regioni<span>▾</span></summary>' +
+      '<p class="ci-hint">Le regioni del tuo progetto: quanto sostegno c\'è oggi all\'indipendenza. Cresce con la forza del partito e il lavoro sul territorio. Con il ' + INDEP_REFERENDUM_THRESHOLD + '% nei sondaggi nazionali puoi indire un referendum: dove vince il Sì, quella regione entra nel nuovo Stato.</p>' +
+      '<div class="stat-grid">' + p.homeRegions.map(function (r) {
+        var v = ind.support[r];
+        return '<div class="stat-tile"><div class="label">' + r + '</div><div class="row"><span class="value">' + Math.round(v) + '%</span><span class="ci-hint">per il Sì</span></div><div class="gauge"><span style="width:' + clamp(v, 0, 100) + '%;background:' + (v >= 50 ? "var(--good)" : v >= 35 ? "var(--warning)" : "var(--critical)") + '"></span></div></div>';
+      }).join("") + "</div>";
+    if (ref && ref.stage === "trattativa") {
+      html += '<p class="ci-hint"><strong>Trattativa con Roma in corso</strong>: la risposta arriva tra ' + Math.max(0, ref.answerTurn - state.turn) + " settimane.</p>";
+    } else if (ref && ref.stage === "campagna") {
+      html += '<p class="ci-hint"><strong>Campagna referendaria' + (ref.agreed ? " (referendum concordato con Roma)" : " (referendum unilaterale)") + "</strong>: si vota tra " + Math.max(0, ref.voteTurn - state.turn) + " settimane. Spinta della campagna: " + fmt1(ref.campaign) + ".</p>" +
+        '<div class="choices"><button type="button" class="choice-btn" data-indep="comizio_si"' + (ref.lastRallyTurn === state.turn ? " disabled" : "") + '><span class="clabel">Comizio per il Sì (1.000 €)</span><span class="chint">Uno a settimana: ogni comizio porta voti in tutte le tue regioni.</span></button></div>';
+    } else {
+      html += '<div class="choices">' +
+        '<button type="button" class="choice-btn" data-indep="campagna_identita"' + (actionWait > 0 ? " disabled" : "") + '><span class="clabel">Campagna identitaria (1.500 €)</span><span class="chint">Fa crescere il sostegno in tutte le tue regioni.' + (actionWait > 0 ? " Disponibile tra " + actionWait + " settimane." : "") + "</span></button>" +
+        '<button type="button" class="choice-btn" data-indep="autonomia"' + (actionWait > 0 ? " disabled" : "") + '><span class="clabel">Chiedi più autonomia a Roma</span><span class="chint">Strada graduale: cresce poco il sostegno, ma anche la tua credibilità.</span></button>' +
+        "</div>";
+      if (can.ok) {
+        html += '<p class="ci-hint"><strong>Il partito è abbastanza forte per chiedere il referendum.</strong></p><div class="choices">' +
+          '<button type="button" class="choice-btn" data-indep="ref_concordato"><span class="clabel">Chiedi a Roma un referendum concordato</span><span class="chint">Risposta in 6 settimane, Roma probabilmente dirà no. Se accetta, il nuovo Stato nasce riconosciuto e in buoni rapporti con l\'Italia.</span></button>' +
+          '<button type="button" class="choice-btn" data-indep="ref_unilaterale"><span class="clabel">Indici un referendum unilaterale</span><span class="chint">Si vota tra 8 settimane. Chi è contrario boicotta: il Sì è più facile, ma il nuovo Stato nascerebbe isolato e in rotta con l\'Italia.</span></button></div>';
+      } else {
+        html += '<p class="ci-hint">Referendum: ' + can.why + "</p>";
+      }
+    }
+    html += "</details></section>";
+    return html;
+  }
+  function renderIndepResult() {
+    var ind = state.indep, pr = ind.pendingResult;
+    var won = pr.winners.length > 0;
+    var html = '<div class="election-card"><p class="eyebrow">Referendum sull\'indipendenza</p><h2>' + (won ? "Vince il Sì" : "Vince il No") + "</h2>";
+    html += '<p class="lead">' + (pr.agreed ? "Referendum concordato con il governo italiano." : "Referendum unilaterale, dichiarato illegittimo da Roma: molti contrari non sono andati a votare.") + "</p>";
+    html += '<ul class="enacted-policy-list">' + pr.results.map(function (x) {
+      return "<li><strong>" + x.region + "</strong>: Sì <strong>" + fmt1(x.yes) + "%</strong>, No " + fmt1(100 - x.yes) + "% · affluenza " + fmt1(x.turnout) + "% · " + nsThousands(x.sections) + " seggi scrutinati su " + nsThousands(x.sections) + (x.won ? " · <strong>indipendenza</strong>" : " · resta in Italia") + "</li>";
+    }).join("") + "</ul>";
+    if (won) {
+      html += "<p>" + (pr.winners.length === pr.results.length ? "In tutte le tue regioni" : "In " + nsListAnd(pr.winners)) + " ha vinto il Sì. Ora tocca a te dare un nome e una bandiera al nuovo Stato.</p>" +
+        '<button class="primary-btn" id="indep-proclaim-btn" type="button">Proclama l\'indipendenza</button>';
+    } else {
+      html += "<p>Il progetto non è morto, ma servirà tempo: potrai riprovarci tra tre anni.</p>" +
+        '<button class="primary-btn" id="indep-continue-btn" type="button">Continua</button>';
+    }
+    html += "</div>";
+    app.innerHTML = html;
+    var cont = document.getElementById("indep-continue-btn");
+    if (cont) cont.addEventListener("click", function () { ind.pendingResult = null; save(); render(); });
+    var proc = document.getElementById("indep-proclaim-btn");
+    if (proc) proc.addEventListener("click", function () {
+      ind.founding = { regions: pr.winners.slice(), agreed: pr.agreed, name: "", flag: null, colors: ["#1f6f43", "#f4f1e8", "#c0392b"], capital: null };
+      ind.pendingResult = null; save(); render();
+    });
+  }
+  function nsThousands(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+  function nsListAnd(list) { return list.length < 2 ? list.join("") : list.slice(0, -1).join(", ") + " e " + list[list.length - 1]; }
+  function readAndResizeFlag(file, callback) {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { showSaveStatus("Il file scelto non è un'immagine.", true); return; }
+    if (file.size > LOGO_MAX_FILE_BYTES) { showSaveStatus("Immagine troppo grande (limite 8 MB).", true); return; }
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var w = 300, h = 200;
+        var canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext("2d");
+        var scale = Math.max(w / img.width, h / img.height);
+        var sw = w / scale, sh = h / scale;
+        ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, w, h);
+        callback(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.onerror = function () { showSaveStatus("Impossibile leggere questa immagine.", true); };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+  function nsFlagHtml(ns, w) {
+    w = w || 90;
+    var h = Math.round(w * 2 / 3);
+    var style = "width:" + w + "px;height:" + h + "px;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.35);flex:0 0 auto;";
+    if (ns.flag) return '<img src="' + ns.flag + '" alt="Bandiera" style="' + style + 'object-fit:cover">';
+    var c = ns.colors || ["#1f6f43", "#f4f1e8", "#c0392b"];
+    return '<span aria-label="Bandiera" style="' + style + 'display:inline-flex;overflow:hidden">' + c.map(function (col) { return '<span style="flex:1;background:' + col + '"></span>'; }).join("") + "</span>";
+  }
+  var NS_FLAG_PALETTE = ["#1f6f43", "#f4f1e8", "#c0392b", "#1d4e89", "#f2c230", "#111111", "#7a1f3d", "#3a8fd9", "#e67e22", "#5b2c83"];
+  function renderIndepFounding() {
+    var f = state.indep.founding;
+    var cities = ITALY_LOCATIONS.filter(function (l) { return f.regions.indexOf(l.region) !== -1; });
+    if (!f.capital && cities.length) f.capital = cities[0].name;
+    var html = '<div class="setup-card"><p class="eyebrow">Nasce un nuovo Stato</p><h2>Proclamazione dell\'indipendenza</h2>' +
+      '<p class="lead">Regioni del nuovo Stato: <strong>' + f.regions.join(", ") + "</strong>. Scegli il nome, la capitale e la bandiera.</p></div>";
+    html += '<div class="field"><label class="field-label" for="ns-name-input">Nome dello Stato</label><input type="text" id="ns-name-input" maxlength="40" placeholder="Es. Repubblica Federale del Nord" value="' + (f.name || "").replace(/"/g, "&quot;") + '"></div>';
+    html += '<div class="field"><label class="field-label" for="ns-capital-select">Capitale</label><select id="ns-capital-select" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;">' +
+      cities.map(function (l) { return '<option value="' + l.name.replace(/"/g, "&quot;") + '"' + (l.name === f.capital ? " selected" : "") + ">" + l.name + " (" + l.region + ")</option>"; }).join("") + "</select></div>";
+    html += '<div class="field"><label class="field-label">Bandiera</label><div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">' + nsFlagHtml(f, 120) +
+      '<div class="logo-upload-actions"><button type="button" class="save-bar-btn" data-trigger-file-input="ns-flag-input">Carica la tua bandiera</button><input type="file" id="ns-flag-input" accept="image/*" style="display:none">' +
+      (f.flag ? '<button type="button" class="save-bar-btn" id="ns-flag-remove">Usa i colori</button>' : "") + "</div></div>";
+    if (!f.flag) {
+      html += '<p class="field-hint">Oppure componi un tricolore: tocca una fascia per cambiarne il colore.</p><div style="display:flex;gap:.5rem;flex-wrap:wrap">' +
+        f.colors.map(function (col, i) { return '<button type="button" class="save-bar-btn" data-ns-band="' + i + '"><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:' + col + ';vertical-align:middle;margin-right:.35rem"></span>Fascia ' + (i + 1) + "</button>"; }).join("") + "</div>";
+    }
+    html += "</div>";
+    html += '<button class="primary-btn" id="ns-found-btn" type="button">Proclama lo Stato</button>';
+    app.innerHTML = html;
+    bindFileInputTriggers();
+    var nameIn = document.getElementById("ns-name-input");
+    nameIn.addEventListener("input", function () { f.name = nameIn.value; });
+    var capSel = document.getElementById("ns-capital-select");
+    if (capSel) capSel.addEventListener("change", function () { f.capital = capSel.value; });
+    var flagIn = document.getElementById("ns-flag-input");
+    flagIn.addEventListener("change", function () { readAndResizeFlag(flagIn.files && flagIn.files[0], function (url) { f.flag = url; save(); render(); }); });
+    var rm = document.getElementById("ns-flag-remove");
+    if (rm) rm.addEventListener("click", function () { f.flag = null; render(); });
+    app.querySelectorAll("[data-ns-band]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var i = parseInt(b.getAttribute("data-ns-band"), 10);
+        var cur = NS_FLAG_PALETTE.indexOf(f.colors[i]);
+        f.colors[i] = NS_FLAG_PALETTE[(cur + 1) % NS_FLAG_PALETTE.length];
+        render();
+      });
+    });
+    document.getElementById("ns-found-btn").addEventListener("click", function () {
+      if (!(f.name || "").trim()) { showSaveStatus("Dai un nome al nuovo Stato.", true); return; }
+      nsFoundState();
+    });
+  }
+  function nsFoundState() {
+    var f = state.indep.founding, p = state.player;
+    var pop = 0, pilTot = 0;
+    f.regions.forEach(function (r) { var reg = indepRegion(r) || { pop: 1, pil: 30 }; pop += reg.pop; pilTot += reg.pop * reg.pil; });
+    var agreed = f.agreed;
+    state.newState = {
+      name: f.name.trim(), capital: f.capital, regions: f.regions.slice(), flag: f.flag, colors: f.colors.slice(),
+      leader: p.leaderName || p.name, party: p.name, foundedTurn: state.turn, agreed: agreed,
+      pop: Math.round(pop * 100) / 100, pil: Math.round(pilTot), cassa: Math.round(pilTot * 0.03 * 10) / 10, debito: 0,
+      m: { stabilita: agreed ? 62 : 42, economia: agreed ? 55 : 40, consenso: agreed ? 66 : 58, riconoscimento: agreed ? 55 : 10, rapportiItalia: agreed ? 62 : 12, sicurezza: agreed ? 60 : 45, servizi: 52 },
+      founding: {}, recognized: agreed ? ["Italia"] : [], pending: [], used: {}, diary: [], ui: "stato",
+      nextElection: state.turn + 156, lowStab: 0, lowCons: 0, over: null
+    };
+    var ns = state.newState;
+    ns.diary.unshift({ week: state.turn, title: "Nasce " + ns.name, text: "Oggi a " + ns.capital + " è stata proclamata l'indipendenza. " + nsListAnd(ns.regions) + (ns.regions.length > 1 ? " formano" : " forma") + " da oggi " + ns.name + ", " + fmt1(ns.pop) + " milioni di abitanti." + (agreed ? " L'Italia riconosce il risultato del referendum." : " Roma non riconosce il voto: la strada sarà in salita.") });
+    state.indep.founding = null;
+    state.indep.done = true;
+    state.phase = "nuovostato";
+    nsGenerateDossiers(ns);
+    save();
+    render();
+  }
+
+  // --- Modalità Nuovo Stato ---
+  var NS_METRICS = [
+    { id: "stabilita", label: "Stabilità istituzionale" }, { id: "economia", label: "Economia" }, { id: "consenso", label: "Consenso del governo" },
+    { id: "riconoscimento", label: "Riconoscimento internazionale" }, { id: "rapportiItalia", label: "Rapporti con l'Italia" },
+    { id: "sicurezza", label: "Sicurezza e ordine" }, { id: "servizi", label: "Servizi pubblici" }
+  ];
+  var NS_EU_MEMBERS = ["Slovenia", "Austria", "Croazia", "Malta", "Ungheria", "Slovacchia", "Repubblica Ceca", "Polonia", "Grecia", "Portogallo", "Irlanda", "Belgio", "Paesi Bassi", "Danimarca", "Svezia", "Finlandia", "Francia", "Germania", "Spagna"];
+  var NS_RECOGNIZERS = ["Italia", "Slovenia", "Austria", "Svizzera", "San Marino", "Croazia", "Malta", "Ungheria", "Serbia", "Albania", "Montenegro", "Slovacchia", "Repubblica Ceca", "Polonia", "Grecia", "Portogallo", "Irlanda", "Belgio", "Paesi Bassi", "Danimarca", "Svezia", "Norvegia", "Finlandia", "Francia", "Germania", "Spagna", "Regno Unito", "Stati Uniti", "Canada", "Giappone", "Brasile", "Argentina", "India", "Turchia"];
+  // Scelte fondative: ognuna si prende una volta sola, e cambia davvero il profilo del nuovo Stato.
+  var NS_FOUNDING = [
+    { id: "moneta", title: "La moneta", text: "Con quale moneta pagherà il nuovo Stato?", opts: [
+      ["Adotti l'euro senza accordi", { eco: 4, ric: -3, ita: -4 }, "Gli scambi restano facili, ma la BCE non vi riconosce e non avete una banca centrale vera."],
+      ["Crei una moneta nazionale", { eco: -8, stab: -4, cons: 3, ric: 2 }, "La nuova moneta è un simbolo forte, ma i primi mesi sono di svalutazione e corse agli sportelli."],
+      ["Chiedi un accordo monetario con la BCE", { eco: 2, ric: 6, ita: 3 }, "Bruxelles apre un tavolo: ci vorrà tempo, ma la strada è quella giusta.", 0.45, { ric: -2, eco: -2 }, "La BCE rifiuta: senza il via libera dell'Italia non si tratta."]
+    ] },
+    { id: "costituzione", title: "La costituzione", text: "Che forma avrà il nuovo Stato?", opts: [
+      ["Repubblica parlamentare", { stab: 4, ric: 4 }, "Un modello familiare a tutti gli europei: rassicura le cancellerie."],
+      ["Repubblica presidenziale", { stab: 2, cons: 3, ric: -1 }, "Un presidente forte per i primi anni difficili: rapido, ma qualcuno teme gli abusi."],
+      ["Federazione delle regioni", { stab: -2, cons: 5, ric: 2 }, "Ogni regione mantiene molti poteri: coerente con la vostra storia, più lento da governare."]
+    ] },
+    { id: "debito", title: "Il debito italiano", text: "Roma chiede che il nuovo Stato si accolli la sua quota del debito pubblico italiano.", opts: [
+      ["Accetti la tua quota", { ita: 14, ric: 8, eco: -4, cassa: -6 }, "Un gesto che apre molte porte: l'Italia e i mercati vi prendono sul serio.", null, null, null, { debito: 60 }],
+      ["Ne accetti metà", { ita: 4, ric: 3, eco: -2 }, "Un compromesso che non accontenta nessuno del tutto, ma evita la rottura.", null, null, null, { debito: 30 }],
+      ["Rifiuti ogni debito", { ita: -15, ric: -8, eco: 3, cons: 4 }, "I conti partono puliti, ma l'Italia minaccia sanzioni e i mercati diffidano."]
+    ] },
+    { id: "difesa", title: "La difesa", text: "Il nuovo Stato non ha forze armate. Cosa fai?", opts: [
+      ["Crei un esercito nazionale", { sic: 8, cassa: -4, ric: -2 }, "Un esercito piccolo ma vostro: costa caro e preoccupa i vicini."],
+      ["Solo polizia e protezione civile", { sic: 3, cons: 3, eco: 2 }, "Uno Stato neutrale e disarmato, come qualche piccolo paese europeo."],
+      ["Chiedi di entrare nella NATO", { sic: 6, ric: 6 }, "La NATO apre un dialogo: per entrare servirà il voto di tutti, Italia compresa.", 0.4, { ric: -2 }, "La NATO risponde che non è il momento."]
+    ] },
+    { id: "europa", title: "L'Unione Europea", text: "Fuori dall'Italia, il nuovo Stato è anche fuori dall'Unione Europea.", opts: [
+      ["Chiedi subito l'adesione all'UE", { ric: 6, eco: 2 }, "La domanda è depositata: il percorso sarà lungo e l'Italia ha diritto di veto."],
+      ["Chiedi un accordo commerciale come la Svizzera", { eco: 5, ric: 3 }, "Un modello flessibile: commercio sì, vincoli politici no."],
+      ["Resti fuori da tutto", { cons: 3, eco: -6, ric: -4 }, "Piena sovranità, ma dogane e dazi pesano sulle imprese."]
+    ] },
+    { id: "italiani", title: "Chi è cittadino", text: "Nel nuovo Stato vivono molti cittadini italiani nati altrove.", opts: [
+      ["Cittadinanza a tutti i residenti", { stab: 5, ita: 6, ric: 4 }, "Nessuno resta escluso: una scelta che pacifica il paese."],
+      ["Cittadinanza solo a chi è nato qui", { stab: -6, cons: 4, ric: -5, ita: -6 }, "Una scelta identitaria che crea migliaia di stranieri in casa propria."],
+      ["Doppia cittadinanza per tutti", { stab: 3, ita: 10, ric: 3 }, "Roma apprezza: le famiglie non vengono divise da un confine."]
+    ] }
+  ];
+  // Dossier settimanali: [id, categoria, titolo, testo, scelte]; scelta = [etichetta, effetti, esito,
+  // probabilità?, effetti se va male?, esito se va male?]. {stato}, {capitale}, {leader} si riempiono
+  // con i dati della partita. when: condizione facoltativa sul nuovo Stato.
+  var NS_DOSSIERS = [
+    { id: "ns_dogana", cat: "Confini", t: "Code di camion alla nuova frontiera", b: "Al confine con l'Italia i camion aspettano dieci ore: mancano doganieri, regole e accordi.", ch: [
+      ["Apri un valico rapido provvisorio", { eco: 3, sic: -3 }, "Le merci tornano a passare, ma i controlli sono quasi inesistenti."],
+      ["Assumi doganieri in fretta", { eco: 1, sic: 2, cassa: -1.5 }, "Le code calano piano piano: un costo, ma necessario."],
+      ["Chiedi a Roma un accordo doganale", { eco: 4, ita: 3 }, "Roma accetta di parlarne: un primo passo concreto.", 0.5, { ita: -2, eco: -2 }, "Roma prende tempo: le code restano."]
+    ] },
+    { id: "ns_pensioni", cat: "Welfare", t: "Chi paga le pensioni?", b: "L'INPS smette di pagare le pensioni nel nuovo Stato. Milioni di anziani sono in ansia.", ch: [
+      ["Garantisci le pensioni con fondi propri", { cons: 6, cassa: -5, serv: 2 }, "Gli anziani tirano un sospiro di sollievo: la cassa un po' meno."],
+      ["Tratti con l'Italia una gestione comune transitoria", { ita: 4, cons: 3 }, "Un accordo provvisorio evita il disastro.", 0.55, { cons: -6, ita: -2 }, "La trattativa fallisce: per due mesi le pensioni arrivano in ritardo."],
+      ["Tagli le pensioni più alte del 10%", { cassa: 2, cons: -5 }, "Un sacrificio chiesto a chi ha di più: proteste nei quartieri bene."]
+    ] },
+    { id: "ns_borse", cat: "Economia", t: "Le banche spostano le sedi", b: "Due grandi banche annunciano di spostare la sede legale in Italia per paura dell'incertezza.", ch: [
+      ["Offri vantaggi fiscali per farle restare", { eco: 3, cassa: -2 }, "Una banca resta: l'altra se ne va comunque."],
+      ["Fondi una banca pubblica nazionale", { eco: -1, cons: 4, cassa: -3, stab: 2 }, "La banca pubblica dà fiducia ai risparmiatori."],
+      ["Lasci andare: il mercato si assesterà", { eco: -5, stab: -2 }, "La fuga delle banche spaventa i risparmiatori."]
+    ] },
+    { id: "ns_riconoscimento", cat: "Esteri", t: "Un grande paese valuta il riconoscimento", b: "Un ministro degli Esteri europeo dice che il suo paese 'valuterà con attenzione' il riconoscimento di {stato}.", ch: [
+      ["Mandi il tuo ministro degli Esteri in visita", { ric: 6, cassa: -0.5 }, "La visita è cordiale: il riconoscimento si avvicina.", 0.6, { ric: -1 }, "La visita viene rinviata all'ultimo momento."],
+      ["Prometti di rispettare tutti i trattati europei", { ric: 4, cons: -1 }, "Una promessa che rassicura, ma che qualcuno in patria non gradisce."],
+      ["Aspetti senza fare pressioni", { ric: 1 }, "La prudenza non guasta, ma non accelera nulla."]
+    ] },
+    { id: "ns_proteste_unioniste", cat: "Ordine pubblico", t: "Manifestazione unionista a {capitale}", b: "Decine di migliaia di persone sfilano a {capitale} con il tricolore italiano: chiedono di tornare in Italia.", ch: [
+      ["Garantisci il diritto di manifestare", { stab: 2, ric: 3, cons: -2 }, "La manifestazione si svolge in pace: il mondo nota la vostra maturità democratica."],
+      ["Vieti il corteo per motivi di ordine pubblico", { stab: -4, ric: -6, cons: 2 }, "Il divieto scatena scontri e titoli negativi in tutta Europa."],
+      ["Inviti i promotori a un tavolo di dialogo", { stab: 4, cons: 1, ita: 2 }, "Il dialogo abbassa la tensione."]
+    ] },
+    { id: "ns_ospedali", cat: "Sanità", t: "Medici che tornano in Italia", b: "Centinaia di medici chiedono il trasferimento negli ospedali italiani: temono stipendi più bassi.", ch: [
+      ["Aumenti gli stipendi dei medici", { serv: 5, cassa: -3 }, "La fuga si ferma: la sanità regge."],
+      ["Chiedi all'Italia un accordo sul personale sanitario", { serv: 3, ita: 3 }, "Un accordo permette di condividere specialisti.", 0.5, { serv: -3 }, "Roma rifiuta: i reparti si svuotano."],
+      ["Assumi medici dall'estero", { serv: 3, cassa: -1.5, cons: -2 }, "I nuovi medici arrivano, ma serve tempo per formarli."]
+    ] },
+    { id: "ns_tasse", cat: "Economia", t: "La prima legge di bilancio", b: "Il nuovo Stato deve decidere le sue prime tasse. Le promesse della campagna erano generose.", ch: [
+      ["Tagli le tasse come promesso", { cons: 6, eco: 3, cassa: -5 }, "Le famiglie festeggiano, i conti molto meno."],
+      ["Mantieni le aliquote italiane", { stab: 3, cassa: 2, cons: -3 }, "Prudente: nessun salto nel buio, ma qualcuno parla di promesse tradite."],
+      ["Alzi le tasse per costruire lo Stato", { cassa: 5, cons: -7, serv: 3 }, "Le casse respirano, il consenso crolla."]
+    ] },
+    { id: "ns_italia_acqua", cat: "Rapporti con l'Italia", t: "Lite con l'Italia su acqua ed energia", b: "Le centrali e i bacini idrici sono condivisi con l'Italia. Roma minaccia di chiudere i rubinetti.", ch: [
+      ["Trovi un accordo sulle risorse condivise", { ita: 6, eco: 2 }, "L'accordo evita un inverno al freddo."],
+      ["Minacci di bloccare a tua volta l'energia verso l'Italia", { ita: -10, cons: 4, stab: -2 }, "La prova di forza piace in patria, ma l'escalation preoccupa tutti."],
+      ["Chiedi la mediazione dell'Unione Europea", { ric: 3, ita: 2 }, "Bruxelles accetta di mediare.", 0.6, { ric: -1 }, "Bruxelles si dichiara non competente."]
+    ] },
+    { id: "ns_imprese", cat: "Economia", t: "Una multinazionale vuole aprire qui", b: "Una multinazionale offre di aprire una grande fabbrica in cambio di dieci anni senza tasse.", ch: [
+      ["Accetti l'accordo", { eco: 6, cassa: -1, cons: -1 }, "Migliaia di posti di lavoro: qualcuno parla di svendita."],
+      ["Tratti per un accordo più equo", { eco: 3, cassa: 1 }, "Un accordo più equilibrato: l'azienda accetta, con qualche mugugno.", 0.6, { eco: -1 }, "L'azienda sceglie un altro paese."],
+      ["Rifiuti: niente privilegi", { cons: 2, eco: -2 }, "Coerente, ma i sindacati avrebbero voluto quei posti."]
+    ] },
+    { id: "ns_corte", cat: "Istituzioni", t: "La Corte suprema contesta una tua legge", b: "La nuova Corte suprema di {stato} boccia una legge del governo.", ch: [
+      ["Rispetti la decisione", { stab: 5, ric: 3, cons: -2 }, "Uno Stato di diritto si vede anche da questo."],
+      ["Cambi la composizione della Corte", { stab: -6, ric: -8, cons: 2 }, "La mossa viene definita un attacco alla democrazia in tutta Europa."],
+      ["Riscrivi la legge secondo le indicazioni", { stab: 3, cons: 1 }, "Una soluzione di buon senso."]
+    ] },
+    { id: "ns_studenti", cat: "Scuola", t: "Gli studenti universitari non sanno dove laurearsi", b: "I titoli di studio rilasciati da {stato} non sono ancora riconosciuti in Italia e in Europa.", ch: [
+      ["Chiedi il riconoscimento reciproco dei titoli", { serv: 3, ita: 3, ric: 2 }, "Un accordo tecnico risolve gran parte del problema.", 0.6, { serv: -3, cons: -2 }, "L'accordo si blocca: gli studenti protestano."],
+      ["Apri un'università internazionale a {capitale}", { serv: 4, cassa: -2, ric: 2 }, "La nuova università attira studenti stranieri."],
+      ["Lasci che gli studenti si arrangino", { serv: -4, cons: -4 }, "Molti giovani se ne vanno."]
+    ] },
+    { id: "ns_polizia", cat: "Sicurezza", t: "La criminalità approfitta della transizione", b: "Con le istituzioni ancora deboli, il contrabbando e la criminalità organizzata crescono.", ch: [
+      ["Potenzi la polizia nazionale", { sic: 6, cassa: -2 }, "Le prime operazioni danno risultati."],
+      ["Chiedi la collaborazione delle forze di polizia italiane", { sic: 5, ita: 3 }, "La collaborazione funziona, anche se umilia qualche nazionalista.", 0.6, { sic: -2 }, "Roma rifiuta la collaborazione."],
+      ["Sottovaluti il problema", { sic: -6, stab: -2 }, "I clan si radicano."]
+    ] },
+    { id: "ns_elezioni_locali", cat: "Politica interna", t: "Il tuo partito si divide", b: "Ottenuta l'indipendenza, il partito di {leader} si spacca tra chi vuole uno Stato di destra e chi di sinistra.", ch: [
+      ["Mantieni l'unità con un governo di unità nazionale", { stab: 4, cons: -1 }, "Il governo largo tiene insieme il paese nei primi anni."],
+      ["Lasci che le due anime si separino", { stab: -3, cons: 2, ric: 1 }, "Nasce un vero sistema politico: più democrazia, meno stabilità."],
+      ["Imponi la tua linea", { stab: -2, cons: 3 }, "La tua leadership esce più forte, il partito più piccolo."]
+    ] },
+    { id: "ns_turismo", cat: "Economia", t: "Boom di turisti curiosi", b: "Tutti vogliono visitare il paese più giovane d'Europa: il turismo esplode.", ch: [
+      ["Lanci una campagna turistica internazionale", { eco: 4, ric: 2, cassa: -1 }, "La campagna funziona: {stato} diventa una meta di moda."],
+      ["Introduci una tassa di soggiorno", { cassa: 2, eco: 1 }, "Le entrate aiutano le casse."],
+      ["Lasci fare al mercato", { eco: 2 }, "I turisti arrivano comunque."]
+    ] },
+    { id: "ns_sport", cat: "Cultura", t: "La nazionale di calcio", b: "Bisogna creare una federazione calcistica e chiedere l'ingresso nella UEFA e nella FIFA.", ch: [
+      ["Chiedi subito l'ingresso nelle federazioni", { ric: 3, cons: 4 }, "La prima partita della nazionale è un evento: lo stadio è pieno.", 0.6, { cons: -1 }, "La UEFA rinvia la decisione."],
+      ["Organizzi un'amichevole con un paese vicino", { cons: 3, ric: 2, cassa: -0.5 }, "L'amichevole è una festa nazionale."],
+      ["Non è una priorità", { cons: -2 }, "I tifosi non gradiscono."]
+    ] },
+    { id: "ns_inno", cat: "Cultura", t: "Serve un inno nazionale", b: "Il parlamento di {stato} discute quale sarà l'inno nazionale.", ch: [
+      ["Un canto popolare tradizionale", { cons: 4, stab: 1 }, "Il canto tradizionale commuove gli anziani."],
+      ["Un concorso aperto a tutti i musicisti", { cons: 3, ric: 1, cassa: -0.3 }, "Il concorso coinvolge tutto il paese."],
+      ["Rimandi la decisione", { cons: -1 }, "Per ora alle cerimonie suona una banda senza parole."]
+    ] },
+    { id: "ns_italia_minaccia", cat: "Rapporti con l'Italia", t: "Roma minaccia sanzioni", b: "Il governo italiano minaccia sanzioni commerciali se {stato} non rivede alcune decisioni.", when: function (ns) { return ns.m.rapportiItalia < 35; }, ch: [
+      ["Cerchi un compromesso", { ita: 8, cons: -3 }, "Il compromesso evita le sanzioni."],
+      ["Resisti: siete uno Stato sovrano", { ita: -6, eco: -4, cons: 4 }, "Le sanzioni arrivano: l'economia soffre, l'orgoglio cresce."],
+      ["Chiedi l'aiuto di un paese amico", { ric: 3, ita: -3 }, "Un paese vicino si offre come mediatore.", 0.5, { ric: -2 }, "Nessuno vuole inimicarsi l'Italia."]
+    ] },
+    { id: "ns_italia_amicizia", cat: "Rapporti con l'Italia", t: "Un trattato di amicizia con l'Italia", b: "I rapporti sono migliorati: Roma propone un trattato di amicizia e cooperazione.", when: function (ns) { return ns.m.rapportiItalia >= 55; }, ch: [
+      ["Firmi il trattato", { ita: 10, eco: 4, ric: 5, cons: -2 }, "Il trattato è storico: qualcuno parla di ritorno sotto Roma, i più festeggiano."],
+      ["Chiedi di aggiungere un accordo commerciale", { ita: 6, eco: 6 }, "Un trattato più ricco, dopo una trattativa lunga.", 0.6, { ita: -2 }, "Roma ritira la proposta."],
+      ["Rinvii: è troppo presto", { ita: -4 }, "L'occasione sfuma."]
+    ] },
+    { id: "ns_fuga_cervelli", cat: "Lavoro", t: "I giovani vanno all'estero", b: "L'incertezza spinge molti giovani laureati a trasferirsi altrove.", ch: [
+      ["Tasse ridotte per gli under 35", { eco: 2, cons: 3, cassa: -2 }, "Molti giovani restano."],
+      ["Programma di rientro per chi è partito", { eco: 2, ric: 1, cassa: -1 }, "Qualcuno torna, attratto dalla novità."],
+      ["Non intervieni", { eco: -3, serv: -2 }, "Il paese invecchia."]
+    ] },
+    { id: "ns_crisi_cassa", cat: "Economia", t: "Le casse dello Stato sono quasi vuote", b: "Il ministero delle Finanze avverte: tra poche settimane non ci saranno soldi per gli stipendi pubblici.", when: function (ns) { return ns.cassa < 3; }, ch: [
+      ["Chiedi un prestito al Fondo Monetario", { cassa: 8, cons: -5, ric: 2 }, "Il prestito arriva, con condizioni dure.", 0.65, { stab: -4 }, "Il Fondo rifiuta: non siete ancora uno Stato riconosciuto da abbastanza paesi."],
+      ["Emetti titoli di Stato", { cassa: 6, eco: -2 }, "I titoli si vendono, ma a tassi altissimi."],
+      ["Tagli la spesa pubblica", { cassa: 4, serv: -6, cons: -6 }, "I conti si salvano, i servizi no."]
+    ] },
+    { id: "ns_referendum_ritorno", cat: "Politica interna", t: "Si raccolgono firme per tornare in Italia", b: "Un comitato raccoglie firme per un referendum sul ritorno in Italia.", when: function (ns) { return ns.m.consenso < 40; }, ch: [
+      ["Accetti la sfida democratica", { stab: 3, ric: 4, cons: -2 }, "La scelta democratica viene apprezzata all'estero."],
+      ["Vieti la raccolta firme", { stab: -6, ric: -8, cons: 1 }, "Il divieto è un regalo ai tuoi avversari."],
+      ["Rilanci con un piano per il paese", { cons: 4, cassa: -2 }, "Il piano convince una parte dei delusi."]
+    ] },
+    { id: "ns_lingua", cat: "Cultura", t: "Quale lingua ufficiale?", b: "Il parlamento discute se affiancare all'italiano la lingua locale come lingua ufficiale.", ch: [
+      ["Due lingue ufficiali", { cons: 4, stab: 1 }, "Il bilinguismo diventa un simbolo del nuovo Stato."],
+      ["Solo l'italiano", { stab: 2, ita: 3, cons: -2 }, "Una scelta pratica che delude i più identitari."],
+      ["Solo la lingua locale", { cons: 3, stab: -5, ita: -5 }, "Una scelta identitaria che spacca il paese."]
+    ] },
+    { id: "ns_ambasciate", cat: "Esteri", t: "Aprire le prime ambasciate", b: "Il nuovo Stato non ha ambasciate. Servono soldi e diplomatici.", ch: [
+      ["Apri ambasciate nelle grandi capitali", { ric: 6, cassa: -2 }, "Le prime ambasciate fanno sentire la vostra voce."],
+      ["Apri solo a Bruxelles e Roma", { ric: 3, ita: 2, cassa: -0.8 }, "Una scelta mirata e sostenibile."],
+      ["Rimandi", { ric: -2 }, "Senza diplomatici, il riconoscimento rallenta."]
+    ] },
+    { id: "ns_maltempo", cat: "Protezione civile", t: "Un'alluvione colpisce il nuovo Stato", b: "Piogge torrenziali provocano frane e allagamenti. La protezione civile è ancora in costruzione.", ch: [
+      ["Chiedi aiuto alla protezione civile italiana", { serv: 3, ita: 5, cons: -1 }, "I soccorsi italiani arrivano in poche ore.", 0.7, { serv: -3, cons: -3 }, "L'aiuto arriva in ritardo per motivi burocratici."],
+      ["Mobiliti volontari ed esercito", { cons: 4, sic: 2, cassa: -1.5 }, "La risposta è rapida: il paese si stringe attorno al governo."],
+      ["Chiedi aiuti internazionali", { ric: 3, cassa: 1 }, "Diversi paesi mandano aiuti: un riconoscimento di fatto."]
+    ] }
+  ];
+  function nsFill(t, ns) { return String(t).replace(/\{stato\}/g, ns.name).replace(/\{capitale\}/g, ns.capital || "la capitale").replace(/\{leader\}/g, ns.leader); }
+  function nsApply(ns, eff) {
+    if (!eff) return;
+    var map = { stab: "stabilita", eco: "economia", cons: "consenso", ric: "riconoscimento", ita: "rapportiItalia", sic: "sicurezza", serv: "servizi" };
+    Object.keys(map).forEach(function (k) { if (eff[k]) ns.m[map[k]] = clamp(ns.m[map[k]] + eff[k], 0, 100); });
+    if (eff.cassa) ns.cassa = Math.round((ns.cassa + eff.cassa) * 10) / 10;
+  }
+  function nsSummary(eff) {
+    var labels = { stab: "stabilità", eco: "economia", cons: "consenso", ric: "riconoscimento", ita: "rapporti con l'Italia", sic: "sicurezza", serv: "servizi", cassa: "cassa (mld)" };
+    return Object.keys(labels).filter(function (k) { return eff && eff[k]; }).map(function (k) { return labels[k] + " " + (eff[k] > 0 ? "+" : "") + eff[k]; }).join(", ");
+  }
+  function nsGenerateDossiers(ns) {
+    if (ns.pending.length) return;
+    var pool = NS_DOSSIERS.filter(function (d) { return (!d.when || d.when(ns)) && state.turn - (ns.used[d.id] || -999) >= 40; });
+    if (!pool.length) pool = NS_DOSSIERS.filter(function (d) { return !d.when || d.when(ns); });
+    var n = Math.random() < 0.35 ? 2 : 1;
+    shuffleN(pool, Math.min(n, pool.length)).forEach(function (d) {
+      ns.used[d.id] = state.turn;
+      ns.pending.push({ id: d.id, cat: d.cat, title: nsFill(d.t, ns), brief: nsFill(d.b, ns), choices: d.ch.map(function (c) {
+        return { label: nsFill(c[0], ns), eff: c[1], result: nsFill(c[2], ns), chance: c[3] || null, failEff: c[4] || null, failResult: c[5] ? nsFill(c[5], ns) : null };
+      }) });
+    });
+  }
+  function nsResolveDossier(i, j) {
+    var ns = state.newState, d = ns.pending[i];
+    if (!d) return;
+    var c = d.choices[j];
+    var ok = !c.chance || Math.random() < c.chance;
+    var eff = ok ? c.eff : c.failEff;
+    var text = ok ? c.result : c.failResult;
+    nsApply(ns, eff);
+    ns.pending.splice(i, 1);
+    var sum = nsSummary(eff);
+    ns.diary.unshift({ week: state.turn, title: d.title, text: text + (sum ? " (" + sum + ")" : "") });
+    showSaveStatus(text, !ok);
+    save(); render();
+  }
+  function nsResolveFounding(id, j) {
+    var ns = state.newState;
+    var f = NS_FOUNDING.filter(function (x) { return x.id === id; })[0];
+    if (!f || ns.founding[id]) return;
+    var o = f.opts[j];
+    var ok = !o[3] || Math.random() < o[3];
+    var eff = ok ? o[1] : o[4];
+    nsApply(ns, eff);
+    if (ok && o[6] && o[6].debito) ns.debito = o[6].debito;
+    ns.founding[id] = o[0] + (ok ? "" : " (fallito)");
+    var text = ok ? o[2] : o[5];
+    ns.diary.unshift({ week: state.turn, title: f.title + ": " + o[0], text: text });
+    showSaveStatus(text, !ok);
+    save(); render();
+  }
+  // Settimana del nuovo Stato: gli indicatori si inseguono (il consenso segue economia e servizi, la
+  // stabilità segue consenso e sicurezza), le casse seguono l'economia, i paesi riconoscono lo Stato
+  // in base al riconoscimento internazionale e ai rapporti con l'Italia. Ogni 5 anni si vota.
+  function nsAdvanceWeek() {
+    var ns = state.newState;
+    if (ns.pending.length) { showSaveStatus("Prima rispondi ai dossier della settimana.", true); return; }
+    state.turn++;
+    var m = ns.m;
+    var age = state.turn - ns.foundedTurn;
+    m.economia = clamp(m.economia + (50 + (m.rapportiItalia - 50) * 0.15 + (m.riconoscimento - 50) * 0.1 - m.economia) * 0.03 + rand(-0.8, 0.8) - (ns.debito > 0 ? ns.debito / 3000 : 0), 0, 100);
+    var wellbeing = (m.economia + m.servizi + m.sicurezza) / 3;
+    m.consenso = clamp(m.consenso + (wellbeing + (age < 52 ? 8 : 0) - m.consenso) * 0.03 + rand(-0.8, 0.8), 0, 100);
+    m.stabilita = clamp(m.stabilita + ((m.consenso + m.sicurezza) / 2 - (50 - m.rapportiItalia) * 0.1 - m.stabilita) * 0.03 + rand(-0.6, 0.6), 0, 100);
+    m.servizi = clamp(m.servizi + (ns.cassa > 0 ? 0.05 : -0.4) + rand(-0.4, 0.4), 0, 100);
+    m.rapportiItalia = clamp(m.rapportiItalia + (40 - m.rapportiItalia) * 0.01 + rand(-0.5, 0.5), 0, 100);
+    m.riconoscimento = clamp(m.riconoscimento + (m.rapportiItalia > 50 ? 0.06 : -0.03) + (35 - m.riconoscimento) * 0.004 + rand(-0.3, 0.3), 0, 100);
+    ns.cassa = Math.round((ns.cassa + (m.economia - 48) * 0.012 - (m.servizi - 50) * 0.006 - ns.debito * 0.0006) * 100) / 100;
+    if (ns.cassa < -5) { m.economia = clamp(m.economia - 0.8, 0, 100); m.consenso = clamp(m.consenso - 0.5, 0, 100); }
+    // riconoscimenti internazionali, uno alla volta
+    // Come per i casi reali (Kosovo, Catalogna), senza il via libera dell'Italia i paesi dell'Unione
+    // Europea non riconoscono il nuovo Stato, salvo un consenso internazionale ormai schiacciante.
+    var italyOk = ns.recognized.indexOf("Italia") !== -1;
+    var notYet = NS_RECOGNIZERS.filter(function (c) {
+      if (ns.recognized.indexOf(c) !== -1 || c === "Italia") return false;
+      return italyOk || m.riconoscimento >= 75 || NS_EU_MEMBERS.indexOf(c) === -1;
+    });
+    if (!italyOk && m.rapportiItalia >= 60 && m.riconoscimento >= 40) notYet.unshift("Italia");
+    if (notYet.length) {
+      var next = notYet[0];
+      var chance = next === "Italia" ? 0.025 : m.riconoscimento / 2200 * (italyOk ? 2 : 1);
+      if (Math.random() < chance) {
+        ns.recognized.push(next);
+        m.riconoscimento = clamp(m.riconoscimento + 1, 0, 100);
+        ns.diary.unshift({ week: state.turn, title: next + " riconosce " + ns.name, text: "Arriva un nuovo riconoscimento ufficiale: " + next + " stabilisce relazioni diplomatiche con " + ns.name + ". Paesi che vi riconoscono: " + ns.recognized.length + "." });
+      }
+    }
+    // elezioni
+    if (state.turn >= ns.nextElection) {
+      ns.nextElection = state.turn + 260;
+      ns.termsWon = ns.termsWon || 0;
+      var score = m.consenso + rand(-8, 8) - ns.termsWon * 3;
+      if (score >= 45) {
+        ns.termsWon++;
+        m.consenso = clamp(m.consenso + 3, 0, 100);
+        ns.diary.unshift({ week: state.turn, title: "Elezioni: " + ns.party + " vince ancora", text: "Gli elettori di " + ns.name + " confermano il governo con il " + fmt1(clamp(score, 30, 70)) + "% dei voti." });
+      } else {
+        ns.over = { reason: "elezioni", text: "Alle elezioni " + ns.party + " si ferma al " + fmt1(clamp(score, 15, 44)) + "%: il governo passa all'opposizione. " + ns.name + " continua la sua strada senza di te." };
+      }
+    }
+    ns.lowStab = m.stabilita < 10 ? ns.lowStab + 1 : 0;
+    ns.lowCons = m.consenso < 12 ? ns.lowCons + 1 : 0;
+    if (!ns.over && ns.lowStab >= 4) ns.over = { reason: "crisi", text: "Lo Stato è ingovernabile: dopo settimane di caos, un governo di salvezza nazionale prende il potere e apre trattative per tornare in Italia." };
+    if (!ns.over && ns.lowCons >= 6) ns.over = { reason: "proteste", text: "Le proteste di piazza travolgono il governo: ti dimetti, e il parlamento elegge un nuovo capo del governo." };
+    if (!ns.over) nsGenerateDossiers(ns);
+    save(); render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function renderNuovoStato() {
+    var ns = state.newState;
+    if (ns.over) { renderNuovoStatoEpilogue(); return; }
+    var m = ns.m;
+    var tabs = [{ id: "stato", icon: "🏳️", nav: "Stato" }, { id: "fondazione", icon: "📜", nav: "Fondazione" }, { id: "mondo", icon: "🌍", nav: "Mondo" }, { id: "diario", icon: "📓", nav: "Diario" }];
+    var html = '<nav aria-label="Sezioni del nuovo Stato" class="page-nav-bar">' + tabs.map(function (t) {
+      return '<button type="button" class="page-nav-btn' + (t.id === ns.ui ? " active" : "") + '" data-ns-nav="' + t.id + '"><span class="page-nav-icon">' + t.icon + '</span><span class="page-nav-label">' + t.nav + "</span></button>";
+    }).join("") + "</nav>";
+    html += '<div class="setup-card" style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">' + nsFlagHtml(ns, 96) + '<div><p class="eyebrow">' + weekLabel(state.turn) + " · anno " + (Math.floor((state.turn - ns.foundedTurn) / 52) + 1) + " dell'indipendenza</p><h2 style=\"margin:.2rem 0\">" + ns.name + '</h2><p class="lead" style="margin:0">Capitale ' + ns.capital + " · " + fmt1(ns.pop) + " milioni di abitanti · governo di " + ns.leader + "</p></div></div>";
+    // dossier
+    if (ns.pending.length) {
+      html += ns.pending.map(function (d, i) {
+        return '<div class="dossier"><span class="chip neutral cat">' + d.cat + "</span><h2>" + d.title + '</h2><p class="brief">' + d.brief + '</p><div class="choices">' + d.choices.map(function (c, j) {
+          return '<button type="button" class="choice-btn" data-ns-dossier="' + i + '" data-ns-choice="' + j + '"><span class="clabel">' + c.label + '</span>' + (c.chance ? '<span class="chint">Riuscita incerta</span>' : "") + "</button>";
+        }).join("") + "</div></div>";
+      }).join("");
+    } else {
+      html += '<div class="choices"><button type="button" class="primary-btn" id="ns-next-btn">Passa alla settimana successiva</button></div>';
+    }
+    if (ns.ui === "stato") {
+      html += '<section aria-label="Indicatori"><h3>Lo Stato oggi</h3><div class="stat-grid">' + NS_METRICS.map(function (x) { return careerGauge(x.label, m[x.id], 25); }).join("") + "</div>" +
+        '<p class="ci-hint">Cassa dello Stato: <strong>' + fmt1(ns.cassa) + " miliardi</strong>" + (ns.debito ? " · debito ereditato: " + ns.debito + " miliardi" : "") + " · PIL stimato: " + ns.pil + " miliardi · Regioni: " + ns.regions.join(", ") + " · Prossime elezioni tra " + Math.max(0, ns.nextElection - state.turn) + " settimane.</p>" +
+        '<p class="ci-hint">Se la stabilità resta sotto il 10% per un mese, o il consenso sotto il 12% per sei settimane, il governo cade. Alle elezioni serve almeno il 45%.</p></section>';
+    } else if (ns.ui === "fondazione") {
+      html += '<section aria-label="Scelte fondative"><h3>Le scelte fondative</h3><p class="ci-hint">Decisioni che si prendono una volta sola e definiscono il nuovo Stato.</p>' + NS_FOUNDING.map(function (f) {
+        if (ns.founding[f.id]) return '<div class="stat-tile"><div class="label">' + f.title + '</div><div class="row"><span class="value" style="font-size:1rem">' + ns.founding[f.id] + "</span></div></div>";
+        return '<div class="dossier"><span class="chip neutral cat">Fondazione</span><h2>' + f.title + '</h2><p class="brief">' + f.text + '</p><div class="choices">' + f.opts.map(function (o, j) {
+          return '<button type="button" class="choice-btn" data-ns-found="' + f.id + '" data-ns-opt="' + j + '"><span class="clabel">' + o[0] + '</span>' + (o[3] ? '<span class="chint">Riuscita incerta</span>' : "") + "</button>";
+        }).join("") + "</div></div>";
+      }).join("") + "</section>";
+    } else if (ns.ui === "mondo") {
+      html += '<section aria-label="Riconoscimenti"><h3>Chi riconosce ' + ns.name + "</h3>" +
+        '<p class="ci-hint">' + (ns.recognized.length ? ns.recognized.length + " paesi: " + ns.recognized.join(", ") + "." : "Ancora nessun paese vi riconosce ufficialmente.") + "</p>" +
+        '<div class="stat-grid">' + careerGauge("Riconoscimento internazionale", m.riconoscimento, 25) + careerGauge("Rapporti con l'Italia", m.rapportiItalia, 25) + "</div>" +
+        '<p class="ci-hint">Il riconoscimento dell\'Italia arriva solo con rapporti buoni (almeno 60%) e raddoppia la velocità con cui vi riconoscono gli altri.</p></section>';
+    } else {
+      html += '<section aria-label="Diario"><h3>Diario di ' + ns.name + "</h3>" + ns.diary.slice(0, 60).map(function (e) {
+        return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.text + "</div>";
+      }).join("") + "</section>";
+    }
+    app.innerHTML = html;
+    app.querySelectorAll("[data-ns-nav]").forEach(function (b) { b.addEventListener("click", function () { ns.ui = b.getAttribute("data-ns-nav"); save(); render(); }); });
+    app.querySelectorAll("[data-ns-dossier]").forEach(function (b) { b.addEventListener("click", function () { nsResolveDossier(parseInt(b.getAttribute("data-ns-dossier"), 10), parseInt(b.getAttribute("data-ns-choice"), 10)); }); });
+    app.querySelectorAll("[data-ns-found]").forEach(function (b) { b.addEventListener("click", function () { nsResolveFounding(b.getAttribute("data-ns-found"), parseInt(b.getAttribute("data-ns-opt"), 10)); }); });
+    var nx = document.getElementById("ns-next-btn");
+    if (nx) nx.addEventListener("click", nsAdvanceWeek);
+  }
+  function renderNuovoStatoEpilogue() {
+    var ns = state.newState;
+    var years = Math.max(0, Math.floor((state.turn - ns.foundedTurn) / 52));
+    var html = '<div class="election-card"><p class="eyebrow">Fine del tuo governo</p><div style="margin:.6rem 0">' + nsFlagHtml(ns, 120) + "</div><h2>" + ns.name + "</h2>" +
+      "<p>" + ns.over.text + "</p>" +
+      "<p>Hai guidato " + ns.name + " per " + years + " ann" + (years === 1 ? "o" : "i") + ". Paesi che vi riconoscono: " + ns.recognized.length + ". Consenso finale " + Math.round(ns.m.consenso) + "%, stabilità " + Math.round(ns.m.stabilita) + "%.</p>" +
+      '<button class="primary-btn" id="ns-newgame-btn" type="button">Inizia una nuova partita</button></div>';
+    app.innerHTML = html;
+    document.getElementById("ns-newgame-btn").addEventListener("click", function () {
+      if (!window.confirm("Iniziare una nuova partita? Questa andrà persa.")) return;
+      localStorage.removeItem(currentStorageKey());
+      window.location.reload();
+    });
+  }
+  // I pulsanti del pannello Indipendenza vivono dentro la pagina Partito: un solo ascoltatore delegato,
+  // così funzionano a ogni render senza toccare il collegamento degli altri pannelli.
+  if (typeof document !== "undefined") {
+    document.addEventListener("click", function (e) {
+      var b = e.target && e.target.closest ? e.target.closest("[data-indep]") : null;
+      if (!b || b.disabled || !indepEligible()) return;
+      var k = b.getAttribute("data-indep");
+      if (k === "ref_concordato" || k === "ref_unilaterale") {
+        if (!window.confirm(k === "ref_unilaterale" ? "Indire un referendum unilaterale? Roma lo considererà illegittimo." : "Chiedere a Roma un referendum concordato?")) return;
+        indepStartReferendum(k === "ref_concordato" ? "concordato" : "unilaterale");
+        save(); render();
+      } else indepAction(k);
+    });
+  }
+
   // ---------- Pagine di gioco ----------
   // La pagina era diventata troppo lunga con tutti i pannelli in sequenza: solo il dossier della
   // settimana, le statistiche chiave e i sondaggi restano sempre visibili in cima (sono l'unica cosa
@@ -37195,7 +37863,7 @@
   // usa uno screen reader).
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", icon: "🏛️", nav: "Partito", render: function () {
-        return renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderEuCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
+        return renderIndependencePanel() + renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderEuCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", icon: "🗺️", nav: "Territorio", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
@@ -37430,6 +38098,9 @@
 
     if (state.phase === "setup") { renderSetup(); return; }
     if (state.phase === "career") { renderCareerDashboard(); return; }
+    if (state.phase === "nuovostato" && state.newState) { renderNuovoStato(); return; }
+    if (state.player && state.indep && state.indep.founding) { renderIndepFounding(); return; }
+    if (state.player && state.indep && state.indep.pendingResult) { renderIndepResult(); return; }
     if (state.phase === "president_epilogue") { renderPresidentEpilogue(); return; }
 
     if (state.phase === "election_result") {
@@ -41007,6 +41678,7 @@
     triggerFixedCoalitionExpansion();
     triggerDynamicCoalitionJoin();
     triggerDynamicCoalitionDefection();
+    indepWeeklyTick();
     triggerFixedCoalitionDefection();
     if (checkFiVannacciDefectionTrigger()) triggerFiVannacciDefection();
     triggerPartyIdeologicalDrift();
