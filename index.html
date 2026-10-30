@@ -987,6 +987,27 @@
   .fx-th-euexit ~ .fx-euring .fx-eustar { animation: fxDot 0.4s cubic-bezier(0.2, 1.6, 0.4, 1) both, fxStarFall 1.3s ease-in both; }
   .fx-th-euexit ~ .fx-euring .fx-eustar:nth-child(odd) { animation-delay: 0.1s, 1.2s; } .fx-th-euexit ~ .fx-euring .fx-eustar:nth-child(even) { animation-delay: 0.1s, 1.6s; }
   @keyframes fxStarFall { to { transform: translate(-50%, 160px) rotate(160deg); opacity: 0; } }
+
+  .fx-th-fireworks { background: radial-gradient(circle at 50% 20%, rgba(40,30,110,0.9), rgba(5,6,20,0.9) 70%); }
+  .fx-firework { position: absolute; width: 0; height: 0; pointer-events: none; animation: fxFwShow 1.6s ease-out infinite; opacity: 0; }
+  .fx-firework i { position: absolute; width: 4px; height: 4px; border-radius: 50%; transform: rotate(var(--a)) translateY(0); box-shadow: 0 0 6px currentColor; animation: fxSpark 1.6s ease-out infinite; animation-delay: inherit; }
+  @keyframes fxFwShow { 0% { opacity: 0; } 5% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes fxSpark { from { transform: rotate(var(--a)) translateY(0); opacity: 1; } to { transform: rotate(var(--a)) translateY(-70px); opacity: 0; } }
+  html.fx #app.fx-enter .hemicycle circle { animation: fxDot 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both; transform-box: fill-box; transform-origin: center; }
+  html.fx #app.fx-enter svg polyline { stroke-dasharray: 2000; animation: fxDraw 1.6s ease-out both; }
+  @keyframes fxDraw { from { stroke-dashoffset: 2000; } to { stroke-dashoffset: 0; } }
+  html.fx #app.fx-enter .result-panel, html.fx #app.fx-enter .outcome { animation: fxPopIn 0.6s cubic-bezier(0.2, 1.3, 0.4, 1) both; }
+  @keyframes fxPopIn { from { opacity: 0; transform: scale(0.92); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+  html.fx .primary-btn, html.fx .advance-btn { position: relative; overflow: hidden; }
+  html.fx .primary-btn:active::after, html.fx .advance-btn:active::after { content: ""; position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px;
+    border-radius: 50%; background: rgba(255,255,255,0.45); animation: fxRipple 0.5s ease-out forwards; pointer-events: none; }
+  @keyframes fxRipple { to { transform: scale(18); opacity: 0; } }
+  html.fx .option-card { transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease; }
+  html.fx .option-card:not(:disabled):hover { transform: translateY(-2px); box-shadow: var(--glow-accent); }
+  html.fx #app.fx-enter .option-grid > .option-card { animation: fxRise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+  html.fx #app.fx-enter .option-grid > .option-card:nth-child(2) { animation-delay: 0.05s; } html.fx #app.fx-enter .option-grid > .option-card:nth-child(3) { animation-delay: 0.1s; }
+  html.fx #app.fx-enter .option-grid > .option-card:nth-child(n+4) { animation-delay: 0.15s; }
+  html.fx #app.fx-enter .log-entry { animation: fxRise 0.4s both; }
 </style>
 
 <div class="wrap">
@@ -30100,6 +30121,185 @@
     }
     return html;
   }
+  // --- Giovanili di partito: cosa fa uno studente tesserato ---
+  // Richiesto da un giocatore: da studente con la tessera si devono già poter fare cose nel partito, e
+  // diverse a seconda dell'ideologia. Ogni attività costa un'azione della settimana e ha un tempo di
+  // recupero; fa crescere i punti nella giovanile (e quindi il ruolo) e la fiducia del partito, che
+  // resta anche da adulto. Alcune sono rischiose: possono costare caro a scuola o in famiglia.
+  // Formato: [id, etichetta, descrizione, effetti, esito, settimane di recupero, punti, probabilità?, effetti se va male?, esito se va male?]
+  var CAREER_YOUTH_COMMON = [
+    ["gv_riunione", "Vai alla riunione dei giovani del circolo", "Ascolti, prendi la parola, conosci chi conta.", { rete: 2, rep: 0.5 }, "Alla riunione dei giovani ti fai notare con un intervento chiaro: il responsabile ti chiede il numero.", 1, 1],
+    ["gv_festa", "Dai una mano alla festa del partito", "Stand, cucina, palco: la gavetta di tutti.", { rete: 3, studenti: -0.5, study: { _focus: -0.05 } }, "Tre sere tra griglie e palco: stanco/a, ma ora ti conoscono tutti al circolo.", 3, 2],
+    ["gv_scuola_formazione", "Partecipi alla scuola di formazione politica", "Un weekend di lezioni su storia, economia e comunicazione.", { rep: 1, rete: 2, genitori: 1 }, "Torni dal weekend con tre quaderni pieni e qualche amico nuovo da altre città.", 6, 3]
+  ];
+  var CAREER_YOUTH_BY_FAMILY = {
+    sovranista: [
+      ["gv_sov_tricolore", "Organizzi il 4 novembre davanti al monumento ai caduti", "Una cerimonia sobria con i giovani del partito.", { rep: 1.5, genitori: 1.5, rete: 1 }, "La cerimonia è composta e partecipata: anche qualche professore si ferma ad applaudire.", 8, 2],
+      ["gv_sov_sicurezza", "Raccolta firme per più sicurezza davanti alle scuole", "Banchetto il sabato mattina in centro.", { rep: 1, rete: 2, studenti: -1 }, "Centinaia di firme, soprattutto di genitori. Qualche compagno ti guarda storto.", 4, 2],
+      ["gv_sov_volantino", "Volantinaggio contro l'immigrazione irregolare", "Davanti a scuola, col materiale nazionale.", { rete: 2, rep: 1 }, "Il volantinaggio fa discutere tutta la scuola.", 3, 2, 0.6, { studenti: -4, preside: -4 }, "Scoppia una lite all'ingresso: il preside ti convoca e i compagni si dividono."],
+      ["gv_sov_tradizioni", "Serata sulle tradizioni del territorio", "Musica, cibo e storia locale con i giovani del circolo.", { rete: 2, genitori: 1, studenti: 1 }, "Una serata riuscita: viene anche gente che non vi aveva mai votato.", 5, 2]
+    ],
+    liberale: [
+      ["gv_lib_startup", "Organizzi un incontro con giovani imprenditori", "Tre fondatori di startup raccontano come hanno iniziato.", { rep: 1.5, rete: 2 }, "La sala è piena di studenti curiosi: qualcuno ti chiede di rifarlo.", 5, 2],
+      ["gv_lib_merito", "Petizione per borse di studio al merito", "Firme per premiare chi studia di più.", { rep: 1, genitori: 2, studenti: -0.5 }, "Le famiglie apprezzano, qualche compagno parla di 'scuola per secchioni'.", 4, 2],
+      ["gv_lib_debate", "Torneo di dibattito tra scuole", "Il partito lo sponsorizza, tu lo organizzi.", { rep: 2, rete: 2, study: { Italiano: 0.15 } }, "Il torneo è un successo e tu migliori anche in italiano.", 6, 3],
+      ["gv_lib_europa", "Simulazione del Parlamento europeo", "Una giornata da eurodeputati per gli studenti.", { rep: 1, rete: 2, preside: 1 }, "Il preside ti ringrazia: è l'attività più seria dell'anno.", 6, 2]
+    ],
+    progressista: [
+      ["gv_pro_clima", "Sciopero per il clima con i giovani del partito", "Un venerdì in piazza.", { studenti: 3, rete: 2, preside: -2 }, "La piazza è piena: la tua foto con lo striscione gira ovunque.", 4, 2, 0.75, { preside: -5, genitori: -3 }, "Il corteo finisce con qualche tensione: assenza ingiustificata e genitori furiosi."],
+      ["gv_pro_pulizia", "Giornata di pulizia di un parco", "Guanti, sacchi e una ventina di volontari.", { studenti: 2, genitori: 2, rep: 1 }, "Il parco torna pulito e il giornale locale vi dedica un articolo.", 4, 2],
+      ["gv_pro_diritti", "Incontro sui diritti civili in biblioteca", "Con un'associazione del territorio.", { rep: 1, rete: 2, studenti: 1 }, "Un dibattito vivace e rispettoso.", 5, 2],
+      ["gv_pro_bici", "Raccolta firme per piste ciclabili verso la scuola", "Mappa dei percorsi pericolosi inclusa.", { studenti: 2, rep: 1, rete: 1 }, "Il Comune promette di valutare il progetto.", 5, 2]
+    ],
+    movimentista: [
+      ["gv_mov_meetup", "Organizzi un meetup cittadino", "Assemblea aperta, decisioni votate online.", { rete: 3, studenti: 1 }, "Il meetup è caotico ma pieno di energia.", 3, 2],
+      ["gv_mov_trasparenza", "Pubblichi le spese del consiglio d'istituto", "Trasparenza totale sui soldi della scuola.", { studenti: 3, rep: 1 }, "Gli studenti apprezzano, la segreteria molto meno.", 6, 2, 0.7, { preside: -6, studenti: 1 }, "La pubblicazione irrita la presidenza: ti accusano di aver diffuso documenti interni."],
+      ["gv_mov_live", "Diretta social dalla seduta del consiglio comunale", "Per mostrare come lavorano davvero i politici.", { rete: 3, rep: 1 }, "La diretta ha migliaia di visualizzazioni.", 4, 2],
+      ["gv_mov_referendum", "Proponi un referendum tra gli studenti", "Su un tema che divide la scuola.", { studenti: 3, rete: 1, preside: -1 }, "Il referendum interno mobilita tutta la scuola.", 8, 3]
+    ],
+    sinistra: [
+      ["gv_sin_picchetto", "Porti solidarietà a un presidio di lavoratori", "Con i giovani del partito, davanti ai cancelli.", { rep: 1.5, rete: 2 }, "Gli operai vi offrono il caffè e vi raccontano la loro storia.", 4, 2],
+      ["gv_sin_doposcuola", "Doposcuola popolare per i ragazzi del quartiere", "Ripetizioni gratuite il sabato.", { studenti: 2, genitori: 2, rep: 1, study: { Matematica: 0.1 } }, "Insegnare agli altri ti aiuta anche a studiare.", 3, 2],
+      ["gv_sin_libri", "Mercatino dei libri usati", "Contro il caro libri scolastici.", { studenti: 3, genitori: 2 }, "Centinaia di famiglie risparmiano: il mercatino diventa un appuntamento fisso.", 8, 3],
+      ["gv_sin_25aprile", "Organizzi il 25 aprile con l'ANPI", "Corteo e letture in piazza.", { rep: 1, rete: 2, studenti: 1 }, "Una giornata intensa e partecipata.", 26, 2]
+    ],
+    cattolico: [
+      ["gv_cat_oratorio", "Animi il centro estivo dell'oratorio", "Giochi e compiti con i più piccoli.", { genitori: 3, rete: 2, rep: 1 }, "Le famiglie del quartiere ti conoscono e si fidano di te.", 6, 2],
+      ["gv_cat_volontariato", "Turno alla mensa dei poveri", "Con i giovani del partito e la Caritas.", { rep: 1.5, genitori: 2 }, "Un'esperienza che ti cambia lo sguardo.", 3, 2],
+      ["gv_cat_famiglia", "Incontro sul sostegno alle giovani famiglie", "Con esperti e amministratori locali.", { rep: 1, rete: 2 }, "Un incontro serio e ben organizzato.", 5, 2],
+      ["gv_cat_pellegrinaggio", "Pellegrinaggio dei giovani", "Un weekend di cammino e riflessione.", { rete: 2, genitori: 2, studenti: -0.5 }, "Torni con amicizie nuove in tutta la regione.", 12, 3]
+    ],
+    regionalista: [
+      ["gv_reg_lingua", "Corso di lingua e cultura locale", "Il sabato pomeriggio al circolo.", { rete: 2, genitori: 1, rep: 1 }, "Il corso è pieno: anche molti ragazzi non tesserati.", 4, 2],
+      ["gv_reg_festa", "Festa popolare del territorio", "Musica tradizionale, prodotti tipici, bandiere.", { rete: 3, studenti: 1 }, "La festa riempie la piazza del paese.", 8, 2],
+      ["gv_reg_autonomia", "Raccolta firme per l'autonomia della regione", "Banchetti in tre paesi della provincia.", { rep: 1.5, rete: 2 }, "Le firme arrivano numerose, soprattutto dagli anziani.", 5, 2],
+      ["gv_reg_gemellaggio", "Gemellaggio con giovani autonomisti europei", "Un viaggio in un'altra regione autonoma d'Europa.", { rete: 3, rep: 1, genitori: -1 }, "Scopri come funziona l'autonomia altrove.", 12, 3]
+    ],
+    comunista: [
+      ["gv_com_collettivo", "Fondi un collettivo studentesco", "Assemblee, autoformazione, iniziative.", { studenti: 3, rete: 2, preside: -2 }, "Il collettivo cresce ogni settimana.", 6, 3],
+      ["gv_com_occupazione", "Partecipi all'occupazione della scuola", "Tre giorni di autogestione contro i tagli.", { studenti: 5, rete: 2 }, "L'occupazione è ordinata e partecipata.", 26, 3, 0.55, { preside: -10, genitori: -6, studenti: 2 }, "L'occupazione finisce con danni e denunce: rischi il sette in condotta."],
+      ["gv_com_lettura", "Gruppo di lettura sui classici del pensiero socialista", "Un libro al mese.", { rep: 1, study: { "Storia e Filosofia": 0.15 }, rete: 1 }, "Discussioni accese e qualche voto in più in storia.", 4, 2],
+      ["gv_com_solidarieta", "Raccolta di beni per una famiglia sfrattata", "Con i giovani del partito e il comitato di quartiere.", { rep: 1.5, genitori: 1, rete: 2 }, "La solidarietà concreta vale più di cento comizi.", 5, 2]
+    ],
+    nazionalpopolare: [
+      ["gv_naz_gazebo", "Gazebo in piazza il sabato", "Bandiere, volantini e tesseramento.", { rete: 3, rep: 1 }, "Il gazebo attira molta gente e qualche contestazione.", 2, 2],
+      ["gv_naz_comizio", "Prendi la parola a un comizio del leader", "Due minuti sul palco prima del segretario.", { rep: 2, rete: 2, studenti: -1 }, "Il tuo intervento viene applaudito: ti chiedono di riparlare.", 8, 3],
+      ["gv_naz_prodotti", "Campagna 'compra italiano' davanti ai supermercati", "Volantini sui prodotti nazionali.", { rete: 2, genitori: 1 }, "Molti si fermano a parlare.", 4, 2],
+      ["gv_naz_ronde", "Passeggiata per la sicurezza nel quartiere", "Con i giovani del partito, la sera.", { rete: 2, rep: 1 }, "Il quartiere apprezza la presenza.", 4, 2, 0.65, { genitori: -5, preside: -2, rep: -1 }, "La serata finisce con un alterco e la polizia vi identifica tutti: a casa non la prendono bene."]
+    ],
+    europeista: [
+      ["gv_eur_erasmus", "Sportello informativo sull'Erasmus", "Aiuti gli studenti a orientarsi tra i programmi europei.", { studenti: 2, rep: 1 }, "Decine di studenti scoprono opportunità che non conoscevano.", 4, 2],
+      ["gv_eur_festa", "Festa dell'Europa il 9 maggio", "Bandiere, musica e cibo da tutta Europa.", { rete: 2, studenti: 2 }, "Una festa colorata e partecipata.", 26, 2],
+      ["gv_eur_lingue", "Scambio linguistico con studenti stranieri", "Conversazioni in inglese ogni settimana.", { rete: 2, study: { Inglese: 0.2 } }, "Il tuo inglese migliora e ti fai amici in tutta Europa.", 3, 2],
+      ["gv_eur_simulazione", "Simulazione del Consiglio europeo", "Ogni studente rappresenta un paese.", { rep: 2, rete: 1, preside: 1 }, "Un'esperienza seria e appassionante.", 8, 3]
+    ],
+    libertario: [
+      ["gv_lbt_crypto", "Workshop su economia e libertà", "Inviti un economista libertario.", { rep: 1, rete: 2 }, "Il workshop è piccolo ma molto vivace.", 5, 2],
+      ["gv_lbt_burocrazia", "Raccolta delle regole assurde della scuola", "Un elenco da presentare in consiglio d'istituto.", { studenti: 3, preside: -2 }, "Gli studenti adorano l'elenco, il preside molto meno.", 6, 2],
+      ["gv_lbt_privacy", "Campagna sulla privacy online", "Come proteggersi sui social.", { studenti: 2, rep: 1 }, "Molti compagni cambiano le impostazioni dei loro profili.", 4, 2],
+      ["gv_lbt_dibattito", "Dibattito pubblico sulla libertà di espressione", "Con ospiti di idee opposte.", { rep: 2, rete: 1 }, "Un dibattito civile e seguitissimo.", 6, 3]
+    ],
+    tecnoprogressista: [
+      ["gv_tec_hackathon", "Organizzi un hackathon per la scuola", "Un weekend per inventare app utili agli studenti.", { rep: 2, rete: 2, study: { Matematica: 0.15 } }, "Nasce un'app per gli orari dei bus che usa mezza scuola.", 8, 3],
+      ["gv_tec_coding", "Corso di programmazione per i più piccoli", "Nelle scuole medie del quartiere.", { genitori: 2, rep: 1 }, "Le famiglie sono entusiaste.", 5, 2],
+      ["gv_tec_dati", "Mappa dei problemi della scuola con i dati", "Un sondaggio online e grafici chiari.", { studenti: 2, preside: 1, rep: 1 }, "La mappa convince anche la presidenza a intervenire.", 6, 2],
+      ["gv_tec_ia", "Incontro su intelligenza artificiale e lavoro", "Con un ricercatore universitario.", { rep: 1, rete: 2 }, "Un incontro che fa riflettere tutti.", 5, 2]
+    ],
+    meridionalista: [
+      ["gv_mer_rientro", "Incontro con i giovani tornati al Sud", "Storie di chi è rientrato per lavorare qui.", { rep: 1, rete: 2 }, "Storie che danno speranza a tanti compagni.", 5, 2],
+      ["gv_mer_treni", "Denuncia sui treni dei pendolari", "Fotografi ritardi e treni sovraffollati per un mese.", { studenti: 2, rep: 1.5 }, "Il dossier finisce sui giornali regionali.", 6, 2],
+      ["gv_mer_legalita", "Giornata della legalità con un'associazione antimafia", "Testimonianze e memoria.", { rep: 2, genitori: 2, preside: 1 }, "Una giornata intensa che la scuola non dimenticherà.", 12, 3],
+      ["gv_mer_prodotti", "Mercato dei produttori locali", "Con i giovani agricoltori della zona.", { rete: 2, genitori: 1 }, "Il mercato è un successo.", 6, 2]
+    ],
+    fascista: [
+      ["gv_fas_sport", "Squadra sportiva del movimento giovanile", "Allenamenti e gare.", { rete: 2, studenti: -1 }, "La squadra cresce, ma a scuola c'è chi vi guarda con sospetto.", 3, 2],
+      ["gv_fas_commemorazione", "Commemorazione organizzata dal movimento", "Una cerimonia con simboli del passato.", { rete: 2, rep: -1 }, "La cerimonia compatta il gruppo.", 8, 2, 0.5, { preside: -8, genitori: -6, studenti: -5, rep: -2 }, "Le foto finiscono sui giornali: la scuola apre un provvedimento disciplinare."],
+      ["gv_fas_volantino", "Volantinaggio del movimento davanti a scuola", "Materiale duro sui temi dell'identità.", { rete: 2 }, "Il volantinaggio fa molto rumore.", 3, 2, 0.6, { studenti: -5, preside: -5 }, "Scontro con un collettivo all'ingresso: sospensione di tre giorni."],
+      ["gv_fas_lettura", "Circolo di lettura del movimento", "Testi della tradizione del movimento.", { rete: 1, rep: 0.5 }, "Il circolo è piccolo ma molto fedele.", 4, 1]
+    ],
+    monarchico: [
+      ["gv_mon_storia", "Conferenza sulla storia del Risorgimento", "Con un docente universitario.", { rep: 1.5, preside: 1, study: { "Storia e Filosofia": 0.1 } }, "Una conferenza seria e apprezzata.", 6, 2],
+      ["gv_mon_visita", "Visita a una reggia con i giovani del movimento", "Una gita culturale.", { rete: 2, genitori: 1 }, "Una giornata piacevole e istruttiva.", 8, 2],
+      ["gv_mon_ballo", "Ballo di beneficenza in stile ottocentesco", "Abiti d'epoca e raccolta fondi.", { rete: 3, studenti: 1, genitori: 1 }, "Il ballo diventa l'evento dell'anno in città.", 12, 3],
+      ["gv_mon_araldica", "Mostra di bandiere e stemmi storici", "Nella sala del comune.", { rep: 1, rete: 1 }, "Una mostra curiosa che attira molti visitatori.", 6, 2]
+    ],
+    gratuitista: [
+      ["gv_gra_bus", "Petizione per il bus gratis per gli studenti", "Firme in tutte le scuole della città.", { studenti: 3, rep: 1 }, "Migliaia di firme: il Comune deve rispondere.", 5, 2],
+      ["gv_gra_libri", "Biblioteca popolare gratuita", "Libri donati e prestito libero.", { studenti: 2, genitori: 2, rep: 1 }, "La biblioteca diventa un punto di ritrovo.", 6, 3],
+      ["gv_gra_sanita", "Sportello sui diritti sanitari", "Aiuti le famiglie a non pagare ticket non dovuti.", { genitori: 3, rep: 1 }, "Molte famiglie risparmiano grazie a voi.", 5, 2],
+      ["gv_gra_concerto", "Concerto gratuito in piazza", "Band locali e raccolta firme.", { studenti: 3, rete: 2 }, "La piazza è piena.", 8, 2]
+    ],
+    comunismolusso: [
+      ["gv_lux_robot", "Laboratorio di robotica aperto a tutti", "Stampanti 3D e robot gratuiti.", { studenti: 2, rep: 1, study: { Matematica: 0.1 } }, "Il laboratorio attira decine di ragazzi.", 5, 2],
+      ["gv_lux_futuro", "Festival del futuro", "Talk su automazione, energia e abbondanza.", { rep: 2, rete: 2 }, "Un festival originale che fa parlare tutta la città.", 12, 3],
+      ["gv_lux_orti", "Orto idroponico sul tetto della scuola", "Verdura fresca gratis per la mensa.", { studenti: 2, preside: 2, genitori: 1 }, "L'orto funziona e la preside ne va fiera.", 8, 3],
+      ["gv_lux_meme", "Campagna di meme sull'automazione", "Ironia e futuro sui social.", { studenti: 2, rete: 2 }, "I meme diventano virali tra gli studenti.", 3, 2]
+    ]
+  };
+  var CAREER_YOUTH_RANKS = [
+    { min: 0, label: "Iscritto/a ai giovani del partito" }, { min: 8, label: "Attivista dei giovani" },
+    { min: 24, label: "Responsabile giovani del circolo" }, { min: 50, label: "Coordinatore/trice giovanile cittadino" },
+    { min: 90, label: "Delegato/a al congresso nazionale dei giovani" }
+  ];
+  function careerYouthFamily(c) {
+    var pt = partyById(c.partyId);
+    return pt && pt.familyId ? pt.familyId : c.family;
+  }
+  function careerYouthRank(c) {
+    var pts = (c.youth && c.youth.points) || 0, r = 0;
+    CAREER_YOUTH_RANKS.forEach(function (x, i) { if (pts >= x.min) r = i; });
+    return r;
+  }
+  function careerYouthList(c) {
+    return CAREER_YOUTH_COMMON.concat(CAREER_YOUTH_BY_FAMILY[careerYouthFamily(c)] || []);
+  }
+  function careerYouthAction(c, id) {
+    var a = careerYouthList(c).filter(function (x) { return x[0] === id; })[0];
+    if (!a || !c.partyId) return;
+    if ((c.actionCooldowns[id] || 0) > state.turn) return;
+    if (!careerSpendAction(c)) return;
+    c.youth = c.youth || { points: 0, done: 0 };
+    var before = careerYouthRank(c);
+    var ok = a[7] === undefined || Math.random() < a[7];
+    var eff = ok ? a[3] : a[8];
+    var effCopy = {};
+    Object.keys(eff).forEach(function (k) { if (k !== "study") effCopy[k] = eff[k]; });
+    if (eff.study) {
+      var st = {};
+      Object.keys(eff.study).forEach(function (k) { if (k !== "_focus" && c.grades && c.grades[k] !== undefined) st[k] = eff.study[k]; });
+      if (Object.keys(st).length) effCopy.study = st;
+    }
+    careerApplyEffects(c, effCopy);
+    c.actionCooldowns[id] = state.turn + a[5];
+    c.youth.points += ok ? a[6] : 1;
+    c.youth.done++;
+    c.partyTrust = clamp((c.partyTrust === undefined ? 50 : c.partyTrust) + (ok ? 0.8 : -1.5), 0, 100);
+    var text = ok ? a[4] : a[9];
+    addCareerDiaryEntry(a[1], text);
+    var after = careerYouthRank(c);
+    if (after > before) {
+      careerApplyEffects(c, { rep: 1.5, rete: 3 });
+      c.partyTrust = clamp(c.partyTrust + 3, 0, 100);
+      addCareerDiaryEntry("Nuovo ruolo nei giovani del partito", "Diventi " + CAREER_YOUTH_RANKS[after].label.toLowerCase() + ". Al circolo cominciano a chiederti consiglio.");
+      showSaveStatus("Promozione: " + CAREER_YOUTH_RANKS[after].label + ".", false);
+    } else showSaveStatus(text, !ok);
+  }
+  function renderCareerYouthSection(c) {
+    var party = activeParties().filter(function (p) { return p.id === c.partyId; })[0];
+    var fam = familyById(careerYouthFamily(c));
+    c.youth = c.youth || { points: 0, done: 0 };
+    var r = careerYouthRank(c), next = CAREER_YOUTH_RANKS[r + 1];
+    var html = '<section aria-label="Giovani del partito"><h3>Nei giovani di ' + (party ? party.name : c.partyName) + "</h3>" +
+      '<p class="ci-hint">Sei tesserato/a dalla settimana ' + c.partyJoinedTurn + ". Ruolo: <strong>" + CAREER_YOUTH_RANKS[r].label + "</strong>" +
+      (next ? " · punti " + c.youth.points + "/" + next.min + " per diventare " + next.label.toLowerCase() : " · il ruolo più alto per uno studente") +
+      " · fiducia del partito " + Math.round(c.partyTrust === undefined ? 50 : c.partyTrust) + "%. Le attività cambiano con l'area politica del partito" + (fam ? " (" + fam.label + ")" : "") + ": quello che fai qui ti segue anche da adulto.</p><div class=\"option-grid\">" +
+      careerYouthList(c).map(function (a) {
+        var cd = (c.actionCooldowns[a[0]] || 0) - state.turn;
+        var dis = cd > 0 || c.actionsLeft <= 0;
+        return '<button type="button" class="option-card" data-career-youth="' + a[0] + '"' + (dis ? " disabled" : "") + '><span class="olabel">' + a[1] + '</span><span class="odesc">' + a[2] + (a[7] !== undefined ? " Rischiosa." : "") + (cd > 0 ? " Disponibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + "</span></button>";
+      }).join("") + "</div></section>";
+    return html;
+  }
   function renderCareerActionsTab(c) {
     careerRefreshActions(c);
     var html = '<section aria-label="Azioni"><h3>Azioni della settimana</h3><p class="ci-hint">Ti restano <strong>' + c.actionsLeft + "</strong> azioni su " + careerActionsPerWeek(c) + " questa settimana (dipende da quanto tempo dedichi alla politica).</p>";
@@ -30120,7 +30320,9 @@
       html += '<button type="button" class="option-card" data-career-action="' + a.id + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + " " + status + "</span></button>";
     });
     html += "</div></section>";
-    if (c.partyId) {
+    if (c.partyId && c.stage === "scuola") {
+      html += renderCareerYouthSection(c);
+    } else if (c.partyId) {
       var party = activeParties().filter(function (p) { return p.id === c.partyId; })[0];
       html += '<section aria-label="Tesseramento"><p class="ci-hint">Sei tesserato/a a <strong>' + (party ? party.name : c.partyName) + "</strong> dalla settimana " + c.partyJoinedTurn + ".</p></section>";
     } else if (careerAge(c) >= 16 || c.stage !== "scuola") {
@@ -30299,6 +30501,13 @@
         var text = action.results[Math.floor(Math.random() * action.results.length)];
         addCareerDiaryEntry(action.label, text);
         showSaveStatus(text, false);
+        rerender();
+      });
+    });
+    app.querySelectorAll("[data-career-youth]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        careerYouthAction(c, btn.getAttribute("data-career-youth"));
         rerender();
       });
     });
@@ -38210,6 +38419,10 @@
         if (k < 1) requestAnimationFrame(step); else { val.textContent = m[1] + suffix; val.classList.remove("fx-counting"); }
       })(t0);
     });
+    if (entered && !FX_REDUCED) {
+      var dots = app.querySelectorAll(".hemicycle circle");
+      if (dots.length && dots.length <= 800) dots.forEach(function (d, i) { d.style.animationDelay = (i * (1.2 / dots.length)).toFixed(3) + "s"; });
+    }
     fxMaybeCelebrate();
     fxDecorateDossiers();
     fxDetectEvents();
@@ -38411,7 +38624,7 @@
         if (k < 1) requestAnimationFrame(step);
       })(performance.now());
     });
-    if (/governo|fondato|indipendenza|presidente/.test(e.type) || (e.type === "big" && /good|gold/.test(e.theme)) || (e.type === "regime" && e.regime === "monarchico") || (e.type === "scuola" && state.career && state.career.role) || (e.type === "referendum" && e.passed)) setTimeout(fxConfetti, 500);
+    if (/governo|fondato|indipendenza|presidente/.test(e.type) || (e.type === "big" && /good|gold|fireworks/.test(e.theme)) || (e.type === "regime" && e.regime === "monarchico") || (e.type === "scuola" && state.career && state.career.role) || (e.type === "referendum" && e.passed)) setTimeout(fxConfetti, 500);
     var done = false;
     function close() {
       if (done) return; done = true;
@@ -38446,7 +38659,12 @@
       minister: p ? !!state.playerMinistry : null, trial: p ? !!p.pendingTrial : null, leader: p ? p.playerIsLeader !== false : null,
       poll: p ? p.sondaggi : null,
       cOffice: c && c.office ? c.office.id + "|" + (c.office.place || "") : null, cDiploma: c ? !!c.diploma : null,
-      cLaurea: c && c.uni ? !!c.uni.laureato : null, cParty: c ? c.partyId : null, cRank: c ? c.partyRank || 0 : null
+      cLaurea: c && c.uni ? !!c.uni.laureato : null, cParty: c ? c.partyId : null, cRank: c ? c.partyRank || 0 : null,
+      year: (/(\d{4})$/.exec(weekLabel(state.turn)) || [])[1] || null,
+      campaign: (function () { try { return p && !state.regime ? !!inNationalCampaignWindow() : null; } catch (e) { return null; } })(),
+      iscritti: p ? p.iscritti : null, fondi: p ? p.fondi : null,
+      youth: c && c.youth ? careerYouthRank(c) : null, schoolYear: c && c.school && c.stage === "scuola" ? c.school.year : null,
+      maturita: c ? !!c.maturita : null, nsTerms: state.newState ? state.newState.termsWon || 0 : null
     };
   }
   var fxSnapMore = null;
@@ -38476,7 +38694,19 @@
     if (now.cLaurea && was.cLaurea === false) ev.push({ type: "big", theme: "good", emoji: "🎓", eyebrow: "Università", title: "Laurea!", sub: "Corona d'alloro e festa con la famiglia." });
     if (now.cParty && now.cParty !== was.cParty && state.career) ev.push({ type: "big", theme: "gold", emoji: "🪪", eyebrow: "Tesseramento", title: "Prendi la tessera", sub: fxEsc(state.career.partyName || "") });
     if (now.cRank !== null && was.cRank !== null && now.cRank > was.cRank) ev.push({ type: "big", theme: "gold", emoji: "⭐", eyebrow: "Il partito", title: "Promozione nel partito", sub: "Sali di grado: ora conti di più nelle decisioni." });
-    // eventi dal registro della partita
+    if (now.year && was.year && now.year !== was.year) ev.push({ type: "big", theme: "fireworks", emoji: "🎆", eyebrow: "Capodanno", title: "Buon " + now.year + "!", sub: "Un anno nuovo comincia: vediamo cosa porterà alla politica italiana." });
+    if (now.campaign && was.campaign === false) ev.push({ type: "big", theme: "news", emoji: "📣", eyebrow: "Elezioni politiche", title: "Inizia la campagna elettorale", sub: "Manifesti, comizi e dibattiti in TV: ogni settimana conta il doppio." });
+    if (now.poll !== null && was.poll !== null) {
+      FX_POLL_MILESTONES.forEach(function (m) { if (was.poll >= m && now.poll < m && m >= 5) ev.push({ type: "big", theme: "dark", emoji: "📉", eyebrow: "Sondaggi", title: "Scendi sotto il " + m + "%", sub: "Il partito perde terreno: serve una reazione." }); });
+    }
+    if (now.iscritti !== null && was.iscritti !== null) {
+      [1000, 5000, 10000, 50000, 100000, 500000].forEach(function (m) { if (was.iscritti < m && now.iscritti >= m) ev.push({ type: "big", theme: "good", emoji: "🪪", eyebrow: "Tesseramento", title: m.toLocaleString("it-IT").replace(/,/g, ".") + " iscritti", sub: "Il partito cresce sul territorio, tessera dopo tessera." }); });
+    }
+    if (now.fondi !== null && was.fondi !== null && was.fondi >= 0 && now.fondi < 0) ev.push({ type: "big", theme: "war", emoji: "💸", eyebrow: "Tesoreria", title: "Casse in rosso", sub: "Il partito spende più di quanto incassa: servono fondi, e in fretta." });
+    if (now.youth !== null && was.youth !== null && now.youth > was.youth) ev.push({ type: "big", theme: "gold", emoji: "🧑‍🤝‍🧑", eyebrow: "Giovani del partito", title: CAREER_YOUTH_RANKS[now.youth].label, sub: "Al circolo cominciano a chiederti consiglio." });
+    if (now.schoolYear && was.schoolYear && now.schoolYear > was.schoolYear) ev.push({ type: "big", theme: "good", emoji: "🎒", eyebrow: "Primo giorno di scuola", title: "Inizia la " + now.schoolYear + "ª", sub: "Nuovi professori, nuove liste, stessa voglia di farti sentire." });
+    if (now.maturita && was.maturita === false) ev.push({ type: "big", theme: "news", emoji: "📝", eyebrow: "Esame di Stato", title: "Notte prima degli esami", sub: "Domani la prima prova: tocca a te." });
+    if (now.nsTerms !== null && was.nsTerms !== null && now.nsTerms > was.nsTerms) ev.push({ type: "big", theme: "gold", emoji: "🗳️", eyebrow: fxEsc(state.newState.name), title: "Rieletto/a!", sub: "Gli elettori confermano il tuo governo." });
     return ev;
   }
   function fxLogScene(l) {
@@ -38511,9 +38741,18 @@
       stars = '<div class="fx-euring">' + stars + "</div>";
     }
     return '<div class="fx-bg fx-th-' + e.theme + '"></div>' + (e.theme === "gold" || e.theme === "royal" || e.theme === "good" ? '<div class="fx-rays"></div>' : "") +
-      (e.theme === "war" ? '<div class="fx-flash"></div>' : "") +
+      (e.theme === "war" ? '<div class="fx-flash"></div>' : "") + (e.theme === "fireworks" ? fxFireworksHtml() : "") +
       '<p class="fx-eyebrow">' + e.eyebrow + "</p>" + (stars || '<div class="fx-emblem fx-em-' + e.theme + '">' + (e.emoji || "") + "</div>") +
       "<h2>" + e.title + "</h2>" + (e.sub ? '<p class="fx-sub">' + e.sub + "</p>" : "");
+  }
+  function fxFireworksHtml() {
+    var cols = ["#ffd34d", "#ff5a6a", "#5ee6d6", "#9b8bff", "#4fe0a8", "#ffffff"], out = "";
+    for (var f = 0; f < 5; f++) {
+      var x = 12 + Math.random() * 76, y = 12 + Math.random() * 40, col = cols[f % cols.length], sparks = "";
+      for (var k = 0; k < 14; k++) sparks += '<i style="--a:' + (k * 360 / 14) + 'deg;background:' + col + '"></i>';
+      out += '<span class="fx-firework" style="left:' + x.toFixed(0) + '%;top:' + y.toFixed(0) + '%;animation-delay:' + (0.2 + f * 0.45).toFixed(2) + 's">' + sparks + "</span>";
+    }
+    return out;
   }
   // Interruttore delle animazioni: nel menu iniziale e nella barra in alto durante la partita.
   var fxStarsStarted = false;
