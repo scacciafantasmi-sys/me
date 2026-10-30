@@ -28968,6 +28968,18 @@
         '<span style="flex:0 0 3.2rem;text-align:right;font-family:var(--font-mono);font-size:0.8rem">' + fmt1(v) + "%</span>" +
         (function () { var d = careerPollDelta(pt.id, 4); if (d === null) return '<span style="flex:0 0 3rem"></span>'; return '<span style="flex:0 0 3rem;text-align:right;font-family:var(--font-mono);font-size:0.75rem;color:' + (d > 0.05 ? "var(--good)" : d < -0.05 ? "var(--critical)" : "var(--text-dim)") + '">' + (d > 0.05 ? "▲" : d < -0.05 ? "▼" : "=") + fmt1(Math.abs(d)) + "</span>"; })() + "</div>";
     }).join("") + "</section>";
+    // Segnalato da un giocatore: in carriera non si vedeva quasi nulla di come si muovono partiti e
+    // alleanze. Qui le coalizioni di oggi e la cronaca politica delle ultime settimane.
+    var blocs = careerElectionBlocs().filter(function (bl) { return bl.members.length >= 2; });
+    html += '<section aria-label="Coalizioni"><h3>Coalizioni e alleanze</h3>' + (blocs.length ? '<ul class="enacted-policy-list">' + blocs.map(function (bl) {
+      return "<li><strong>" + careerBlocLabel(bl.id) + "</strong> — " + fmt1(careerCoalitionPoll(bl.id)) + "% nei sondaggi<br>" + bl.members.map(function (id) { var pt = partyById(id); return pt ? pt.name : id; }).join(", ") + "</li>";
+    }).join("") + "</ul>" : '<p class="ci-hint">Nessuna coalizione in piedi: ogni partito corre da solo.</p>') + "</section>";
+    var news = (state.log || []).slice(0, 12);
+    if (news.length) {
+      html += '<section aria-label="Cronaca politica"><h3>Cronaca politica</h3>' + news.map(function (e) {
+        return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + (e.title === "Cronaca politica" && e.choiceLabel ? e.choiceLabel : e.title) + "</strong><br>" + (e.result || "") + "</div>";
+      }).join("") + "</section>";
+    }
     html += renderPresidentCard();
     html += renderCountryProfile().replace('<details class="log">', '<details class="log" open>');
     return html;
@@ -31616,11 +31628,40 @@
     if (!partyId) return null;
     if (COALITIONS.centrodestra.members.indexOf(partyId) !== -1) return "centrodestra";
     if (COALITIONS.campolargo.members.indexOf(partyId) !== -1) return "campolargo";
-    return null;
+    var dyn = (state.dynamicCoalitions || []).filter(function (x) { return x.members.indexOf(partyId) !== -1; })[0];
+    return dyn ? dyn.id : null;
+  }
+  function careerCoalitionMembers(coalId) {
+    var coal = coalitionById(coalId);
+    if (!coal) return partyById(coalId) ? [coalId] : [];
+    var active = activeParties().map(function (p) { return p.id; });
+    return liveCoalitionMemberIds(coal).filter(function (id) { return active.indexOf(id) !== -1; });
   }
   function careerCoalitionPoll(coalId) {
     if (!coalId) return 0;
-    return COALITIONS[coalId].members.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0);
+    return careerCoalitionMembers(coalId).reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0);
+  }
+  function careerBlocLabel(id) {
+    var coal = coalitionById(id);
+    if (coal) return coal.label;
+    var pt = partyById(id);
+    return pt ? pt.name : id;
+  }
+  // Chi si presenta alle politiche in carriera: i blocchi storici (se hanno ancora almeno due partiti),
+  // le coalizioni nate in partita e ogni partito che corre da solo.
+  function careerElectionBlocs() {
+    var blocs = [], covered = {};
+    ["centrodestra", "campolargo"].concat((state.dynamicCoalitions || []).map(function (x) { return x.id; })).forEach(function (id) {
+      var m = careerCoalitionMembers(id);
+      if (m.length < 2) return;
+      m.forEach(function (x) { covered[x] = true; });
+      blocs.push({ id: id, members: m, v: careerCoalitionPoll(id) + rand(-3, 3) });
+    });
+    activeParties().forEach(function (pt) {
+      if (covered[pt.id]) return;
+      blocs.push({ id: pt.id, members: [pt.id], v: (state.parties[pt.id] || 0) + rand(-1, 1) });
+    });
+    return blocs.sort(function (a, b) { return b.v - a.v; });
   }
   function careerPartyInGov(c) {
     return !!(c.partyId && state.govEntity && (state.govEntity.memberIds || []).indexOf(c.partyId) !== -1);
@@ -31685,6 +31726,18 @@
     try { triggerPartyLifecycleFollowup(); } catch (e) {}
     try { triggerSpontaneousPartyFormation(); } catch (e) {}
     try { triggerLeaderSuccession(); } catch (e) {}
+    // Segnalato da un giocatore: in carriera le coalizioni non nascevano, non cambiavano e non si
+    // scioglievano mai. Ora girano le stesse dinamiche della modalità partito, con le politiche della
+    // carriera come scadenza di riferimento.
+    var savedNext = state.nextElectionTurn;
+    state.nextElectionTurn = state.careerNextPolitiche || savedNext;
+    try { triggerDynamicCoalitionFormation(); } catch (e) {}
+    try { triggerFixedCoalitionExpansion(); } catch (e) {}
+    try { triggerFixedCoalitionDefection(); } catch (e) {}
+    try { triggerDynamicCoalitionJoin(); } catch (e) {}
+    try { triggerDynamicCoalitionDefection(); } catch (e) {}
+    try { updateCpuOnlyCoalitionTrust(); } catch (e) {}
+    state.nextElectionTurn = savedNext;
     var fresh = state.log.slice(0, Math.max(0, state.log.length - logBefore));
     fresh.forEach(function (e) {
       if (e.title === "Cronaca politica") return;
@@ -31696,14 +31749,15 @@
     careerGovCrisisTick(c);
     if (state.careerNextPolitiche && state.turn >= state.careerNextPolitiche) {
       state.careerNextPolitiche = state.turn + 260;
-      var cd = careerCoalitionPoll("centrodestra") + rand(-3, 3), cl = careerCoalitionPoll("campolargo") + rand(-3, 3);
-      var winner = cd >= cl ? "centrodestra" : "campolargo";
-      state.govEntity = { id: winner, memberIds: COALITIONS[winner].members.filter(function (id) { return activeParties().some(function (p) { return p.id === id; }); }), formedTurn: state.turn };
+      var blocs = careerElectionBlocs();
+      var win = blocs[0], second = blocs[1] || { id: "", v: 0 };
+      var winner = win.id, cd = win.v, cl = second.v;
+      state.govEntity = { id: winner, memberIds: win.members.slice(), formedTurn: state.turn };
       var lead = partyById(leadingGovPartyId());
       if (lead) { state.govEntity.premierName = lead.leader; state.govEntity.premierPartyId = lead.id; }
       state.consensoGoverno = rand(52, 62);
-      addCareerDiaryEntry("Elezioni politiche", "Vince " + COALITIONS[winner].label + " (" + fmt1(Math.max(cd, cl)) + "% contro " + fmt1(Math.min(cd, cl)) + "%). Il nuovo governo è guidato da " + (lead ? lead.leader + " (" + lead.name + ")" : "la coalizione vincente") + ".");
-      careerPolitichePush(c, winner, cd, cl, lead);
+      addCareerDiaryEntry("Elezioni politiche", "Vince " + careerBlocLabel(winner) + " (" + fmt1(cd) + "% contro " + fmt1(cl) + "% di " + careerBlocLabel(second.id) + "). Il nuovo governo è guidato da " + (lead ? lead.leader + " (" + lead.name + ")" : "la coalizione vincente") + ".");
+      careerPolitichePush(c, winner, cd, cl, lead, second.id);
       return true;
     }
     return false;
@@ -31814,8 +31868,7 @@
   }
   // Segnalato da un giocatore: da studente le politiche finivano solo nel diario e non si capiva quale
   // governo fosse salito. Ora l'esito arriva come dossier, con coalizioni, partiti e nuovo esecutivo.
-  function careerPolitichePush(c, winner, cd, cl, lead) {
-    var loser = winner === "centrodestra" ? "campolargo" : "centrodestra";
+  function careerPolitichePush(c, winner, cd, cl, lead, loser) {
     var members = state.govEntity.memberIds.map(function (id) { var p = partyById(id); return p ? p.name : null; }).filter(Boolean);
     var parties = activeParties().slice().sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); }).slice(0, 7);
     var rows = parties.map(function (p, i) {
@@ -31826,9 +31879,9 @@
     var mine = c.partyId && state.govEntity.memberIds.indexOf(c.partyId) !== -1;
     var lean = LEFT_RIGHT_POSITION[currentGoverningFamilyId()] || 0;
     var close = Math.abs(lean - careerLean()) <= 1;
-    var brief = "<strong>Vince " + COALITIONS[winner].label + "</strong> con il " + fmt1(Math.max(cd, cl)) + "% contro il " + fmt1(Math.min(cd, cl)) + "% di " + COALITIONS[loser].label + ".<br><br>" +
+    var brief = "<strong>Vince " + careerBlocLabel(winner) + "</strong> con il " + fmt1(cd) + "% contro il " + fmt1(cl) + "% di " + careerBlocLabel(loser) + ".<br><br>" +
       "<strong>Nuovo governo:</strong> " + (lead ? "Presidente del Consiglio " + careerPremierText() : "guidato dalla coalizione vincente") + ".<br>" +
-      "<strong>Maggioranza:</strong> " + (members.length ? members.join(", ") : COALITIONS[winner].label) + ".<br><br>" +
+      "<strong>Maggioranza:</strong> " + (members.length ? members.join(", ") : careerBlocLabel(winner)) + ".<br><br>" +
       "<strong>I partiti:</strong><br>" + rows + "<br><br>" +
       (mine ? "Il tuo partito è al governo." : c.partyId ? "Il tuo partito va all'opposizione." : close ? "È un governo vicino alle tue idee." : "È un governo lontano dalle tue idee.") +
       (school ? " Dalle sue scelte dipendono i fondi per la tua scuola." : "");
@@ -32889,7 +32942,7 @@
   }
   function renderCareerAdultElections(c) {
     var gp = partyById(leadingGovPartyId());
-    var html = '<section aria-label="Governo"><p class="ci-hint">Governo in carica: ' + (state.govEntity && COALITIONS[state.govEntity.id] ? COALITIONS[state.govEntity.id].label : "coalizione") + (gp ? ", guidato da " + gp.leader + " (" + gp.name + ")" : "") + ". Prossime politiche tra " + Math.max(0, state.careerNextPolitiche - state.turn) + " settimane.</p></section>";
+    var html = '<section aria-label="Governo"><p class="ci-hint">Governo in carica: ' + (state.govEntity ? careerBlocLabel(state.govEntity.id) : "coalizione") + (gp ? ", guidato da " + gp.leader + " (" + gp.name + ")" : "") + ". Prossime politiche tra " + Math.max(0, state.careerNextPolitiche - state.turn) + " settimane.</p></section>";
     CAREER_ELECTION_TYPES.forEach(function (t) {
       var weeks = Math.max(0, t.next(c) - state.turn);
       var open = weeks <= 26;
@@ -36609,7 +36662,7 @@
     var p = state.player;
     var coal = coalitionById(id);
     var label = coal ? coal.label : id;
-    var wasPlayerAlliance = p.allianceId === id;
+    var wasPlayerAlliance = !!p && p.allianceId === id;
     if (wasPlayerAlliance) {
       p.allianceId = null;
       p.reputazione = clamp(p.reputazione - rand(2, 5), 0, 100);
@@ -36680,7 +36733,7 @@
     if (!state.coalitionTrust) state.coalitionTrust = {};
     var p = state.player;
     state.dynamicCoalitions.slice().forEach(function (c) {
-      if (p.allianceId === c.id) return;
+      if (p && p.allianceId === c.id) return;
       if (state.coalitionTrust[c.id] === undefined) state.coalitionTrust[c.id] = initialCoalitionTrust(c.id);
       var avgRel = avgCoalitionRelation(c.id) - coalitionSizePenalty(coalitionMemberCount(c, c.id));
       var trust = clamp(state.coalitionTrust[c.id] + (avgRel - state.coalitionTrust[c.id]) * 0.08 + (Math.random() - 0.5) * 1.8, 0, 100);
@@ -39685,6 +39738,8 @@
     var t = l.title || "";
     if (/^Elezioni Europee/.test(t)) return { type: "big", theme: "eu", eyebrow: "Parlamento europeo", title: "Elezioni europee", sub: fxEsc(l.result || "").slice(0, 180) };
     if (/^Elezioni Regionali|^Elezioni Comunali|^Elezioni Provinciali/.test(t)) return { type: "big", theme: "news", emoji: "🗳️", eyebrow: "Elezioni locali", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 180) };
+    if (/^Scioglimento di un partito/.test(t)) return { type: "big", theme: "dark", emoji: "🥀", eyebrow: "Politica", title: "Un partito si scioglie", sub: fxEsc(l.result || "").slice(0, 180) };
+    if (/^Cambio ai vertici/.test(t)) return { type: "big", theme: "news", emoji: "🔄", eyebrow: "Politica", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 180) };
     if (/^Scissione: nasce|Nasce un nuovo soggetto politico|Nasce un nuovo movimento/.test(t)) return { type: "big", theme: "news", emoji: "🆕", eyebrow: "Politica", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 180) };
     if (/Camere sciolte|scioglie le Camere/.test(t + (l.result || ""))) return { type: "big", theme: "dark", emoji: "📜", eyebrow: "Quirinale", title: "Il Presidente scioglie le Camere", sub: "Si torna a votare." };
     if (/^Guerra in /.test(t)) return { type: "big", theme: "war", emoji: "⚔️", eyebrow: "Esteri", title: fxEsc(t), sub: fxEsc(l.result || "").slice(0, 180) };
