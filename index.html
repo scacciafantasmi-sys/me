@@ -29053,7 +29053,7 @@
     var maxPoll = Math.max.apply(null, parties.map(function (pt) { return state.parties[pt.id] || 0; }).concat([1]));
     html += '<section aria-label="Sondaggi"><h3>Sondaggi</h3><p class="ci-hint">A destra la variazione nell\'ultimo mese.</p>' + parties.map(function (pt) {
       var v = state.parties[pt.id] || 0;
-      return '<div style="display:flex;align-items:center;gap:0.5rem;margin:0.25rem 0"><span style="flex:0 0 38%;font-size:0.82rem">' + pt.name + '</span>' +
+      return '<div style="display:flex;align-items:center;gap:0.5rem;margin:0.25rem 0"><span style="flex:0 0 38%;font-size:0.82rem;line-height:1.2">' + pt.name + (partyIsNew(pt) ? ' <span class="chip good" style="font-size:0.6rem">Nuovo</span>' : "") + '<br><span style="font-size:0.66rem;color:var(--text-dim)">' + partyIdeologyLabel(pt) + "</span></span>" +
         '<span style="flex:1;height:10px;border-radius:5px;background:rgba(255,255,255,0.08);overflow:hidden"><span style="display:block;height:100%;width:' + Math.round(v / maxPoll * 100) + '%;background:' + (pt.color || "var(--accent)") + '"></span></span>' +
         '<span style="flex:0 0 3.2rem;text-align:right;font-family:var(--font-mono);font-size:0.8rem">' + fmt1(v) + "%</span>" +
         (function () { var d = careerPollDelta(pt.id, 4); if (d === null) return '<span style="flex:0 0 3rem"></span>'; return '<span style="flex:0 0 3rem;text-align:right;font-family:var(--font-mono);font-size:0.75rem;color:' + (d > 0.05 ? "var(--good)" : d < -0.05 ? "var(--critical)" : "var(--text-dim)") + '">' + (d > 0.05 ? "▲" : d < -0.05 ? "▼" : "=") + fmt1(Math.abs(d)) + "</span>"; })() + "</div>";
@@ -31315,6 +31315,41 @@
     { min: 24, label: "Responsabile giovani del circolo" }, { min: 50, label: "Coordinatore/trice giovanile cittadino" },
     { min: 90, label: "Delegato/a al congresso nazionale dei giovani" }
   ];
+  // Richiesto da un giocatore: in carriera devono vedersi le ideologie dei partiti, anche di quelli nati
+  // durante la partita (che a volte hanno solo familyId), e questi ultimi vanno riconoscibili.
+  function partyIdeologyLabel(pt) {
+    var fam = pt && familyById(pt.familyId);
+    return fam ? fam.label : (pt && pt.famiglia) || "Area politica non definita";
+  }
+  function partyIsNew(pt) { return (state.dynamicParties || []).some(function (d) { return d.id === pt.id; }); }
+  function partyBornWeek(pt) { var m = /_(\d+)$/.exec(pt.id || ""); return m ? parseInt(m[1], 10) : null; }
+  function careerJoinCard(c, pt, attr) {
+    var dist = Math.abs((LEFT_RIGHT_POSITION[pt.familyId] || 0) - careerLean());
+    var closeness = dist <= 0.6 ? "molto vicino alle tue idee" : dist <= 1.2 ? "vicino alle tue idee" : dist <= 2.2 ? "lontano dalle tue idee" : "agli antipodi delle tue idee";
+    var born = partyBornWeek(pt);
+    var wait = c.leftPartyTurn !== undefined && c.stage === "scuola" ? 8 - (state.turn - c.leftPartyTurn) : 0;
+    return '<button type="button" class="option-card" ' + attr + '="' + pt.id + '"' + (wait > 0 ? " disabled" : "") + '><span class="olabel">' + pt.name + (partyIsNew(pt) ? ' <span class="chip good">Nuovo</span>' : "") + '</span><span class="odesc">' +
+      partyIdeologyLabel(pt) + " · " + fmt1(state.parties[pt.id] || 0) + "% · " + closeness + (partyIsNew(pt) && born ? " · nato nella settimana " + born : "") +
+      (wait > 0 ? " · Hai appena restituito una tessera: potrai riprenderne una tra " + wait + " settiman" + (wait === 1 ? "a" : "e") + "." : "") + "</span></button>";
+  }
+  function careerSortedParties() {
+    var lean = careerLean();
+    return activeParties().slice().sort(function (a, b) {
+      return Math.abs((LEFT_RIGHT_POSITION[a.familyId] || 0) - lean) - Math.abs((LEFT_RIGHT_POSITION[b.familyId] || 0) - lean) || (state.parties[b.id] || 0) - (state.parties[a.id] || 0);
+    });
+  }
+  // Da studente si può restituire la tessera: si perdono il ruolo nei giovani e la fiducia accumulata,
+  // e per qualche settimana non se ne può prendere un'altra.
+  function careerStudentLeaveParty(c) {
+    if (!c.partyId) return;
+    var name = c.partyName;
+    var rank = c.youth ? CAREER_YOUTH_RANKS[careerYouthRank(c)].label.toLowerCase() : null;
+    careerApplyEffects(c, { rep: -1, rete: -2, studenti: 0.5 });
+    c.partyId = null; c.partyName = null; c.partyColor = null; c.partyJoinedTurn = null;
+    c.youth = null; c.partyTrust = undefined; c.leftPartyTurn = state.turn;
+    addCareerDiaryEntry("Restituisci la tessera", "Lasci " + name + (rank ? " e il tuo ruolo di " + rank : "") + ". Al circolo qualcuno ci resta male; a scuola c'è chi apprezza che tu non sia più «uomo/donna di partito».");
+    showSaveStatus("Hai lasciato " + name + ".", false);
+  }
   function careerYouthFamily(c) {
     var pt = partyById(c.partyId);
     return pt && pt.familyId ? pt.familyId : c.family;
@@ -31366,12 +31401,13 @@
     var html = '<section aria-label="Giovani del partito"><h3>Nei giovani di ' + (party ? party.name : c.partyName) + "</h3>" +
       '<p class="ci-hint">Sei tesserato/a dalla settimana ' + c.partyJoinedTurn + ". Ruolo: <strong>" + CAREER_YOUTH_RANKS[r].label + "</strong>" +
       (next ? " · punti " + c.youth.points + "/" + next.min + " per diventare " + next.label.toLowerCase() : " · il ruolo più alto per uno studente") +
-      " · fiducia del partito " + Math.round(c.partyTrust === undefined ? 50 : c.partyTrust) + "%. Le attività cambiano con l'area politica del partito" + (fam ? " (" + fam.label + ")" : "") + ": quello che fai qui ti segue anche da adulto.</p><div class=\"option-grid\">" +
+      " · fiducia del partito " + Math.round(c.partyTrust === undefined ? 50 : c.partyTrust) + "%. Ideologia del partito: <strong>" + (party ? partyIdeologyLabel(party) : (fam ? fam.label : "")) + "</strong>. Le attività cambiano con l'area politica: quello che fai qui ti segue anche da adulto.</p><div class=\"option-grid\">" +
       careerYouthList(c).map(function (a) {
         var cd = (c.actionCooldowns[a[0]] || 0) - state.turn;
         var dis = cd > 0 || c.actionsLeft <= 0;
         return '<button type="button" class="option-card" data-career-youth="' + a[0] + '"' + (dis ? " disabled" : "") + '><span class="olabel">' + a[1] + '</span><span class="odesc">' + a[2] + (a[7] !== undefined ? " Rischiosa." : "") + (cd > 0 ? " Disponibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + "</span></button>";
-      }).join("") + "</div></section>";
+      }).join("") + "</div>" +
+      '<div class="choices" style="margin-top:0.7rem"><button type="button" class="choice-btn" id="career-student-leave-btn"><span class="clabel">Restituisci la tessera</span><span class="chint">Lasci il partito: perdi il ruolo nei giovani e la fiducia accumulata, e per 8 settimane non potrai tesserarti altrove.</span></button></div></section>';
     return html;
   }
   function renderCareerActionsTab(c) {
@@ -31401,9 +31437,7 @@
       html += '<section aria-label="Tesseramento"><p class="ci-hint">Sei tesserato/a a <strong>' + (party ? party.name : c.partyName) + "</strong> dalla settimana " + c.partyJoinedTurn + ".</p></section>";
     } else if (careerAge(c) >= 16 || c.stage !== "scuola") {
       html += '<section aria-label="Tesseramento"><h3>Tesseramento a un partito</h3><p class="ci-hint">Dai 16 anni puoi prendere la tessera di un partito. A scuola però qualcuno ti vedrà come «uomo/donna di partito».</p><div class="option-grid">' +
-        activeParties().map(function (pt) {
-          return '<button type="button" class="option-card" data-career-join="' + pt.id + '"><span class="olabel">' + pt.name + '</span><span class="odesc">' + pt.famiglia + " — " + fmt1(state.parties[pt.id] || 0) + "% nei sondaggi</span></button>";
-        }).join("") + "</div></section>";
+        careerSortedParties().map(function (pt) { return careerJoinCard(c, pt, "data-career-join"); }).join("") + "</div></section>";
     }
     return html;
   }
@@ -31598,8 +31632,15 @@
       showSaveStatus("Post pubblicato: " + out.verdict + ".", false);
       rerender();
     });
+    var studentLeaveBtn = document.getElementById("career-student-leave-btn");
+    if (studentLeaveBtn) studentLeaveBtn.addEventListener("click", function () {
+      if (!window.confirm("Restituire la tessera di " + c.partyName + "?")) return;
+      careerStudentLeaveParty(c);
+      rerender();
+    });
     app.querySelectorAll("[data-career-join]").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        if (btn.disabled) return;
         var id = btn.getAttribute("data-career-join");
         var party = activeParties().filter(function (p) { return p.id === id; })[0];
         if (!party) return;
@@ -33009,7 +33050,7 @@
       html += '<section aria-label="Tesseramento"><h3>Tesserati a un partito</h3><p class="ci-hint">Un partito vicino alle tue idee ti accoglie con più fiducia. Uno lontano si può scegliere, ma partirai guardato/a con sospetto.</p><div class="option-grid">' +
         activeParties().map(function (pt) {
           var dist = Math.abs((LEFT_RIGHT_POSITION[pt.familyId] || 0) - lean);
-          return '<button type="button" class="option-card" data-career-adult-join="' + pt.id + '"><span class="olabel">' + pt.name + '</span><span class="odesc">' + pt.famiglia + " · " + fmt1(state.parties[pt.id] || 0) + "% · " + (dist <= 0.6 ? "molto vicino a te" : dist <= 1.5 ? "affine" : "lontano dalle tue idee") + "</span></button>";
+          return '<button type="button" class="option-card" data-career-adult-join="' + pt.id + '"><span class="olabel">' + pt.name + '</span><span class="odesc">' + partyIdeologyLabel(pt) + (partyIsNew(pt) ? " · nuovo partito" : "") + " · " + fmt1(state.parties[pt.id] || 0) + "% · " + (dist <= 0.6 ? "molto vicino a te" : dist <= 1.5 ? "affine" : "lontano dalle tue idee") + "</span></button>";
         }).join("") + "</div></section>";
     } else {
       var p = careerParty(c);
