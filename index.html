@@ -33644,7 +33644,7 @@
       }).join("") + "</div>";
     }
     html += "</section>";
-    if (careerUniActive(c)) html += renderCareerUniPolitics(c);
+    if (careerUniActive(c)) { html += renderCareerUniPolitics(c); if (careerUniWinner(c)) html += renderCareerUniWinnerSection(c); }
     html += '<section aria-label="Percorso professionale"><h3>Percorso professionale</h3>';
     if (c.track) {
       var t = careerTrack(c);
@@ -33780,6 +33780,7 @@
     var seats = careerDhondt(shares, CAREER_UNI_SEATS);
     u.lists.forEach(function (l, i) { l.seats = seats[i]; l.lastShare = Math.round(shares[i] / total * 1000) / 10; });
     var ranking = u.lists.slice().sort(function (a, b) { return b.lastShare - a.lastShare; });
+    u.winnerId = ranking[0].id;
     var prevRole = u.role;
     u.role = null;
     var outcome;
@@ -33788,7 +33789,7 @@
       if (mine.seats >= pos) u.role = ranking[0].id === mine.id && pos === 1 ? "senato" : "consiglio";
       outcome = u.role === "senato" ? "La tua lista è la più votata dell'ateneo e tu entri in Senato accademico."
         : u.role === "consiglio" ? "Sei eletto/a nel Consiglio degli studenti."
-        : ranking[0].id === mine.id ? "La tua lista vince, ma con le preferenze non entri: arrivi " + pos + "° e i seggi sono " + mine.seats + "."
+        : ranking[0].id === mine.id ? "La tua lista vince, ma con le preferenze non entri: arrivi " + pos + "° e i seggi sono " + mine.seats + ". Puoi comunque lavorare per la lista attraverso i suoi eletti."
         : "Non vieni eletto/a.";
       careerAdultApply(c, u.role === "senato" ? { rep: 4, rete: 5 } : u.role === "consiglio" ? { rep: 2, rete: 3 } : { rep: -0.5 });
     } else outcome = "Non eri candidato/a: le elezioni universitarie le segui da fuori.";
@@ -33806,6 +33807,55 @@
         { label: "Analizzi gli errori con la lista", eff: { rete: 0.5 }, result: "Si riparte con le idee più chiare." },
         { label: "Fai i complimenti ai vincitori", eff: { rep: 0.5 }, result: "Un gesto che viene notato." }
       ] });
+  }
+  // Richiesto da un giocatore: se la tua lista ha vinto le elezioni universitarie puoi lavorare per lei
+  // anche senza essere stato/a eletto/a: iniziative che passano attraverso i suoi rappresentanti.
+  function careerUniWinner(c) {
+    var u = c.uniPol;
+    if (!u || !u.my) return false;
+    var w = u.winnerId;
+    if (!w) {
+      var best = u.lists.filter(function (l) { return l.lastShare !== undefined; }).sort(function (a, b) { return b.lastShare - a.lastShare; })[0];
+      w = best ? best.id : null;
+    }
+    return w === u.my.id;
+  }
+  var CAREER_UNI_WINNER_ACTIONS = [
+    { id: "uniw_mozione", label: "Scrivi una mozione per i vostri eletti", desc: "La porti in Consiglio degli studenti attraverso i rappresentanti della lista.", cd: 4, chance: 0.6,
+      ok: { rep: 1, rete: 1, camp: 3 }, okText: "La mozione passa: più ore di apertura della biblioteca, e il tuo nome gira in facoltà.", ko: { rep: -0.5 }, koText: "La mozione viene rinviata: troppi emendamenti." },
+    { id: "uniw_sportello", label: "Apri lo sportello della lista per le borse di studio", desc: "Aiuti gli studenti a non perdere borse e alloggi.", cd: 6,
+      ok: { rete: 3, camp: 4 }, okText: "Lo sportello aiuta decine di studenti: la lista si fa una reputazione solida." },
+    { id: "uniw_evento", label: "Organizzi un evento con i fondi per le attività studentesche", desc: "Un concerto, un dibattito o una rassegna di cinema in ateneo.", cd: 8, chance: 0.7,
+      ok: { rete: 2, rep: 1, camp: 5 }, okText: "L'evento è pieno: la lista vincente mantiene le promesse.", ko: { rep: -1 }, koText: "La burocrazia dell'ateneo blocca i fondi all'ultimo." },
+    { id: "uniw_rettore", label: "Accompagni gli eletti dal rettore", desc: "Un incontro sulle tasse e sulle aule studio.", cd: 10, chance: 0.5,
+      ok: { rep: 2, intel: 0.5, camp: 4 }, okText: "Il rettore accetta di congelare l'aumento delle tasse: una vittoria che si ricorda.", ko: { rep: 0.5 }, koText: "Il rettore ascolta, ma non promette nulla." },
+    { id: "uniw_sondaggio", label: "Raccogli le proposte degli studenti", desc: "Un questionario in tutte le facoltà per il programma della lista.", cd: 5,
+      ok: { rete: 2, intel: 0.5, camp: 2 }, okText: "Migliaia di risposte: il programma della lista nasce dagli studenti." }
+  ];
+  function careerUniWinnerAction(c, id) {
+    var u = c.uniPol, a = CAREER_UNI_WINNER_ACTIONS.filter(function (x) { return x.id === id; })[0];
+    if (!a || !careerUniWinner(c) || (c.actionCooldowns[id] || 0) > state.turn) return;
+    if (!careerSpendAction(c)) return;
+    c.actionCooldowns[id] = state.turn + a.cd;
+    var ok = a.chance === undefined || Math.random() < a.chance;
+    var eff = Object.assign({}, ok ? a.ok : a.ko);
+    var camp = eff.camp || 0; delete eff.camp;
+    careerAdultApply(c, eff);
+    u.campaign += camp;
+    u.my.fiducia = clamp(u.my.fiducia + (ok ? 2 : -1), 0, 100);
+    var text = ok ? a.okText : a.koText;
+    addCareerDiaryEntry(a.label, text);
+    showSaveStatus(text, !ok);
+  }
+  function renderCareerUniWinnerSection(c) {
+    var html = '<section aria-label="La tua lista governa"><h3>La tua lista ha vinto le elezioni</h3><p class="ci-hint">' +
+      (c.uniPol.role ? "Siedi tu stesso/a negli organi dell'ateneo, e in più puoi lavorare per la lista." : "Non sei stato/a eletto/a, ma la tua lista è la più votata dell'ateneo: puoi lavorare attraverso i suoi rappresentanti.") +
+      " Ogni iniziativa costa un'azione e fa crescere la lista in vista delle prossime elezioni.</p><div class=\"option-grid\">" +
+      CAREER_UNI_WINNER_ACTIONS.map(function (a) {
+        var cd = (c.actionCooldowns[a.id] || 0) - state.turn, dis = cd > 0 || c.actionsLeft <= 0;
+        return '<button type="button" class="option-card" data-uni-winner="' + a.id + '"' + (dis ? " disabled" : "") + '><span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + (a.chance !== undefined ? " Riuscita incerta." : "") + (cd > 0 ? " Disponibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + "</span></button>";
+      }).join("") + "</div></section>";
+    return html;
   }
   function renderCareerUniPolitics(c) {
     var u = careerUniPolInit(c), mine = careerUniMyList(c), lean = careerLean();
@@ -33870,6 +33920,7 @@
     on("[data-career-nav]", function (btn) { c.ui = btn.getAttribute("data-career-nav"); c.navJump = true; rerender(); });
     on("[data-uni-join]", function (btn) { careerUniJoin(c, btn.getAttribute("data-uni-join")); rerender(); });
     on("[data-uni-action]", function (btn) { careerUniAction(c, btn.getAttribute("data-uni-action")); rerender(); });
+    on("[data-uni-winner]", function (btn) { careerUniWinnerAction(c, btn.getAttribute("data-uni-winner")); rerender(); });
     byId("uni-found-btn", function () { careerUniFound(c, (document.getElementById("uni-list-name").value || "").trim()); rerender(); });
     byId("uni-candidate-btn", function () { if (c.uniPol) { c.uniPol.candidate = true; addCareerDiaryEntry("Candidatura all'università", "Ti candidi alle elezioni universitarie."); } rerender(); });
     byId("uni-leave-btn", function () { if (!window.confirm("Uscire dalla lista universitaria?")) return; careerUniLeave(c); rerender(); });
