@@ -33902,6 +33902,56 @@
     addCareerDiaryEntry(a.label, text);
     showSaveStatus(text, !ok);
   }
+  // Proposta scritta di pugno della lista vincente: la CPU la legge come farebbe il Consiglio degli
+  // studenti o il rettore. Contano i temi veri dell'ateneo, la concretezza (cifre, scadenze), le
+  // promesse impossibili e il tono; chi siede negli organi pesa di più.
+  var CAREER_UNI_TOPICS = [
+    { id: "tasse", label: "tasse universitarie", keys: ["tasse", "contribut", "rette", "isee"] },
+    { id: "borse", label: "borse di studio", keys: ["borsa", "borse", "diritto allo studio", "idonei"] },
+    { id: "alloggi", label: "alloggi per i fuori sede", keys: ["alloggi", "studentat", "affitt", "fuori sede", "residenz"] },
+    { id: "aule", label: "aule e spazi studio", keys: ["aule", "aula", "spazi", "biblioteca", "sale studio", "posti a sedere"] },
+    { id: "orari", label: "orari e servizi", keys: ["orari", "apertura", "notte", "weekend", "segreteria"] },
+    { id: "mensa", label: "mensa", keys: ["mensa", "pasti", "cibo", "bar"] },
+    { id: "esami", label: "esami e appelli", keys: ["appell", "esami", "sessione", "esame", "date"] },
+    { id: "trasporti", label: "trasporti", keys: ["bus", "trasport", "navetta", "metro", "abbonament"] },
+    { id: "digitale", label: "servizi digitali", keys: ["wifi", "wi-fi", "online", "piattaforma", "registrazion", "digitale"] },
+    { id: "benessere", label: "benessere psicologico", keys: ["psicolog", "ansia", "benessere", "sportello"] }
+  ];
+  function careerUniFreeProposal(c, text) {
+    var u = c.uniPol;
+    if (!u || !careerUniWinner(c)) return;
+    if (!text || text.length < 12) { showSaveStatus("Scrivi la proposta per intero.", true); return; }
+    if (state.turn - (u.freeTurn || -99) < 3) { showSaveStatus("Avete presentato una proposta da poco: aspetta qualche settimana.", true); return; }
+    if (!careerSpendAction(c)) return;
+    u.freeTurn = state.turn;
+    var t = " " + text.toLowerCase() + " ";
+    var topics = CAREER_UNI_TOPICS.filter(function (x) { return x.keys.some(function (k) { return t.indexOf(k) !== -1; }); });
+    var concrete = /\d/.test(text) || /(proponiamo|propongo|chiediamo|aprire|istituire|stanziare|ridurre|estendere|attivare|garantire|entro)/.test(t);
+    var demagogic = CAREER_DEMAGOGIC_ADULT.some(function (k) { return t.indexOf(k) !== -1; }) || /(tutto gratis|niente esami|abolire gli esami|laurea garantita)/.test(t);
+    var tone = detectStatementTone(text);
+    var target = u.role === "senato" ? "Senato accademico" : "Consiglio degli studenti";
+    var chance = 0.25 + (topics.length ? 0.18 : -0.1) + (concrete ? 0.12 : 0) - (demagogic ? 0.45 : 0) + (tone === "aggressivo" ? -0.12 : tone === "istituzionale" ? 0.06 : 0) +
+      (u.role ? 0.1 : 0) + (u.my.fiducia - 50) / 300 + (c.reputazione - 30) / 300;
+    chance = clamp(chance, 0.04, 0.85);
+    var ok = Math.random() < chance;
+    var reply;
+    if (ok) {
+      careerAdultApply(c, { rep: 1.5 + (topics.length ? 0.5 : 0), rete: 1 });
+      u.campaign += 4; u.my.fiducia = clamp(u.my.fiducia + 3, 0, 100);
+      reply = topics.length ? "Approvata: il " + target + " vota la proposta su " + topics[0].label + ". Si parte dal prossimo semestre." : "Approvata, anche se qualcuno chiede di chiarire i dettagli.";
+    } else {
+      if (demagogic) { reply = "Respinta: «Promesse impossibili, non è così che si cambia l'ateneo»."; careerAdultApply(c, { rep: -1 }); }
+      else if (tone === "aggressivo") { reply = "Respinta: i toni hanno irrigidito tutti, anche chi era d'accordo."; careerAdultApply(c, { rep: -0.5 }); }
+      else if (!topics.length && !concrete) { reply = "Respinta: troppo generica, nessuno ha capito cosa chiedete."; }
+      else reply = "Respinta di poco: mancano i fondi o i numeri in aula. Si può riprovare.";
+      u.my.fiducia = clamp(u.my.fiducia - 1, 0, 100);
+    }
+    u.freeLog = u.freeLog || [];
+    u.freeLog.unshift({ turn: state.turn, text: text, ok: ok, reply: reply });
+    if (u.freeLog.length > 5) u.freeLog.length = 5;
+    addCareerDiaryEntry(ok ? "Proposta approvata in ateneo" : "Proposta respinta in ateneo", "«" + text.slice(0, 90) + (text.length > 90 ? "…" : "") + "» — " + reply);
+    showSaveStatus(reply, !ok);
+  }
   function renderCareerUniWinnerSection(c) {
     var html = '<section aria-label="La tua lista governa"><h3>La tua lista ha vinto le elezioni</h3><p class="ci-hint">' +
       (c.uniPol.role ? "Siedi tu stesso/a negli organi dell'ateneo, e in più puoi lavorare per la lista." : "Non sei stato/a eletto/a, ma la tua lista è la più votata dell'ateneo: puoi lavorare attraverso i suoi rappresentanti.") +
@@ -33909,7 +33959,13 @@
       CAREER_UNI_WINNER_ACTIONS.map(function (a) {
         var cd = (c.actionCooldowns[a.id] || 0) - state.turn, dis = cd > 0 || c.actionsLeft <= 0;
         return '<button type="button" class="option-card" data-uni-winner="' + a.id + '"' + (dis ? " disabled" : "") + '><span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + (a.chance !== undefined ? " Riuscita incerta." : "") + (cd > 0 ? " Disponibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + "</span></button>";
-      }).join("") + "</div></section>";
+      }).join("") + "</div>";
+    var u = c.uniPol, wait = 3 - (state.turn - (u.freeTurn || -99));
+    html += '<div class="field"><label class="field-label" for="uni-free-input">Proposta scritta di pugno</label><textarea id="uni-free-input" class="autogrow-textarea" rows="2" maxlength="300" placeholder="Es. Chiediamo di aprire la biblioteca centrale fino alle 23 da novembre, con due borsisti per turno"></textarea></div>' +
+      '<div class="choices"><button type="button" class="choice-btn" id="uni-free-btn"' + (wait > 0 || c.actionsLeft <= 0 ? " disabled" : "") + '><span class="clabel">Porta la proposta ' + (u.role === "senato" ? "in Senato accademico" : "in Consiglio degli studenti") + '</span><span class="chint">' +
+      (wait > 0 ? "Potrai presentarne un'altra tra " + wait + " settiman" + (wait === 1 ? "a" : "e") + "." : "Contano i temi veri dell'ateneo, cifre e scadenze; promesse impossibili e toni duri la affossano.") + "</span></button></div>";
+    if (u.freeLog && u.freeLog.length) html += '<ul class="enacted-policy-list">' + u.freeLog.map(function (e) { return "<li>" + (e.ok ? "✔ " : "✘ ") + e.text.replace(/</g, "&lt;") + '<br><span class="ci-hint">' + e.reply + "</span></li>"; }).join("") + "</ul>";
+    html += "</section>";
     return html;
   }
   function renderCareerUniPolitics(c) {
@@ -33976,6 +34032,7 @@
     on("[data-uni-join]", function (btn) { careerUniJoin(c, btn.getAttribute("data-uni-join")); rerender(); });
     on("[data-uni-action]", function (btn) { careerUniAction(c, btn.getAttribute("data-uni-action")); rerender(); });
     on("[data-uni-winner]", function (btn) { careerUniWinnerAction(c, btn.getAttribute("data-uni-winner")); rerender(); });
+    byId("uni-free-btn", function () { careerUniFreeProposal(c, (document.getElementById("uni-free-input").value || "").trim()); rerender(); });
     byId("uni-found-btn", function () { careerUniFound(c, (document.getElementById("uni-list-name").value || "").trim()); rerender(); });
     byId("uni-candidate-btn", function () { if (c.uniPol) { c.uniPol.candidate = true; addCareerDiaryEntry("Candidatura all'università", "Ti candidi alle elezioni universitarie."); } rerender(); });
     byId("uni-leave-btn", function () { if (!window.confirm("Uscire dalla lista universitaria?")) return; careerUniLeave(c); rerender(); });
