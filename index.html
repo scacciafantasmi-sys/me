@@ -31597,8 +31597,10 @@
     if (!c.partyId) return;
     var name = c.partyName;
     var rank = c.youth ? CAREER_YOUTH_RANKS[careerYouthRank(c)].label.toLowerCase() : null;
+    if (rank) rank += " (il ruolo ti seguirà se entri in un altro partito)";
     careerApplyEffects(c, { rep: -1, rete: -2, studenti: 0.5 });
     c.partyId = null; c.partyName = null; c.partyColor = null; c.partyJoinedTurn = null;
+    c.lastYouthPoints = Math.max(c.lastYouthPoints || 0, (c.youth && c.youth.points) || 0);
     c.youth = null; c.partyTrust = undefined; c.leftPartyTurn = state.turn;
     addCareerDiaryEntry("Restituisci la tessera", "Lasci " + name + (rank ? " e il tuo ruolo di " + rank : "") + ". Al circolo qualcuno ci resta male; a scuola c'è chi apprezza che tu non sia più «uomo/donna di partito».");
     showSaveStatus("Hai lasciato " + name + ".", false);
@@ -31900,6 +31902,7 @@
         c.partyName = party.name;
         c.partyColor = party.color;
         c.partyJoinedTurn = state.turn;
+        if (c.lastYouthPoints) { c.youth = { points: c.lastYouthPoints, done: 0 }; c.lastYouthPoints = 0; }
         careerGain(c, rand(1, 3), rand(3, 6));
         if (c.stage === "scuola") careerApplyEffects(c, { studenti: -2, fiducia: c.list && !c.list.isOwn ? -3 : 0 });
         addCareerDiaryEntry("Tesseramento", "Ti tesseri a " + party.name + ": da oggi non sei più solo/a, hai una casa politica alle spalle.");
@@ -32296,6 +32299,7 @@
     if (!c.partyId) return;
     if ((state.dissolvedPartyIds || []).indexOf(c.partyId) === -1) return;
     var name = c.partyName;
+    c.lastPartyRank = Math.max(c.lastPartyRank || 0, c.partyRank || 0);
     c.partyId = null; c.partyName = null; c.partyColor = null; c.partyRank = 0; c.partyTrust = 50;
     c.candidacy = null; c.partyLawyer = false;
     addCareerDiaryEntry("Il tuo partito non esiste più", name + " si è sciolto o è confluito in un altro soggetto: la tua tessera decade, e con lei il ruolo che avevi conquistato. Puoi tesserarti altrove o restare indipendente.");
@@ -32496,15 +32500,21 @@
     var dist = Math.abs((LEFT_RIGHT_POSITION[party.familyId] || 0) - careerLean());
     var wasIn = c.partyName;
     c.partyId = party.id; c.partyName = party.name; c.partyColor = party.color; c.partyJoinedTurn = state.turn;
-    c.partyRank = 0; c.partyRankTurn = state.turn; c.partyTrust = clamp(48 - dist * 6 + c.reputazione / 10, 20, 70);
+    // Richiesto da un giocatore: chi ha già fatto strada in un altro partito riparte dal ruolo che aveva
+    // (es. da segretario/a cittadino/a resta segretario/a cittadino/a). Fa eccezione il vertice
+    // nazionale: chi era vicesegretario/a nazionale riparte da membro della direzione nazionale.
+    var carried = Math.min(c.lastPartyRank || 0, CAREER_PARTY_LADDER.length - 1);
+    if (carried >= CAREER_PARTY_LADDER.length - 1) carried = CAREER_PARTY_LADDER.length - 2;
+    c.partyRank = carried; c.lastPartyRank = 0; c.partyRankTurn = state.turn; c.partyTrust = clamp(48 - dist * 6 + c.reputazione / 10, 20, 70);
     careerAdultApply(c, { rete: 3, rep: 1 });
     if (wasIn && c.office) careerAdultApply(c, { cons: -8, rep: -3 });
-    addCareerDiaryEntry("Tesseramento", "Prendi la tessera di " + party.name + (wasIn ? ", dopo aver lasciato " + wasIn + ": in molti parlano di cambio di casacca." : ".") + (dist > 1.5 ? " È un partito lontano dalle tue idee: dovrai conquistarti la fiducia di tutti." : ""));
+    addCareerDiaryEntry("Tesseramento", "Prendi la tessera di " + party.name + (wasIn ? ", dopo aver lasciato " + wasIn + ": in molti parlano di cambio di casacca." : ".") + (carried ? " Entri con l'esperienza che hai: riparti da " + CAREER_PARTY_LADDER[carried].label.toLowerCase() + "." : "") + (dist > 1.5 ? " È un partito lontano dalle tue idee: dovrai conquistarti la fiducia di tutti." : ""));
   }
   function careerLeaveParty(c) {
     if (!c.partyId) return;
     addCareerDiaryEntry("Lasci il partito", "Restituisci la tessera di " + c.partyName + (c.partyRank ? ", da " + CAREER_PARTY_LADDER[c.partyRank].label.toLowerCase() : "") + ". " + (c.office ? "Resti in carica, ma ora come indipendente." : ""));
     careerAdultApply(c, { rep: -1.5, cons: c.office ? -3 : 0 });
+    c.lastPartyRank = Math.max(c.lastPartyRank || 0, c.partyRank || 0);
     c.partyId = null; c.partyName = null; c.partyColor = null; c.partyRank = 0; c.partyTrust = 50; c.leftPartyTurn = state.turn;
     c.candidacy = null; c.partyLawyer = false;
   }
