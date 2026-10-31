@@ -32689,14 +32689,14 @@
     var wasIncumbent = c.office && c.office.id === o;
     var p;
     if (o === "consigliere_comunale" || o === "consigliere_regionale") {
-      p = 0.12 + c.rete / 160 + c.reputazione / 220 + c.consenso / 350 + poll / 70 + (c.partyRank || 0) * 0.02 + cand.campagna / 120 + (wasIncumbent ? 0.08 : 0) - (o === "consigliere_regionale" ? 0.08 : 0);
+      p = 0.12 + c.rete / 160 + c.reputazione / 220 + c.consenso / 350 + poll / 70 + (c.partyRank || 0) * 0.02 + Math.min(cand.campagna, 50) / 120 + (wasIncumbent ? 0.08 : 0) - (o === "consigliere_regionale" ? 0.08 : 0);
     } else if (o === "deputato") {
-      p = 0.12 + poll / 45 + (c.partyRank || 0) * 0.03 + c.reputazione / 160 + c.partyTrust / 320 + cand.campagna / 150 + (cand.listHead ? 0.1 : 0);
+      p = 0.12 + poll / 45 + (c.partyRank || 0) * 0.03 + c.reputazione / 160 + c.partyTrust / 320 + Math.min(cand.campagna, 50) / 150 + (cand.listHead ? 0.1 : 0);
     } else {
       var coal = careerCoalitionOf(c.partyId);
       var mine = c.partyId ? (coal ? careerCoalitionPoll(coal) : poll * 1.3) : 10 + c.reputazione * 0.3;
       var other = coal === "centrodestra" ? careerCoalitionPoll("campolargo") : careerCoalitionPoll("centrodestra");
-      p = 0.5 + (mine - other) / 50 + (c.reputazione - 35) / 120 + (c.consenso - 40) / 200 + homeBonus + cand.campagna / 120 + (wasIncumbent ? (c.consenso - 45) / 100 : 0);
+      p = 0.5 + (mine - other) / 50 + (c.reputazione - 35) / 120 + (c.consenso - 40) / 200 + homeBonus + Math.min(cand.campagna, 50) / 120 + (wasIncumbent ? (c.consenso - 45) / 100 : 0);
     }
     p = clamp(p + rand(-0.08, 0.08), 0.04, 0.9);
     var won = Math.random() < p;
@@ -33623,6 +33623,41 @@
       '<div class="choices"><button type="button" class="choice-btn" id="career-newparty-btn"><span class="clabel">Fonda il partito</span></button></div></section>';
     return html;
   }
+  // Segnalato da un giocatore: da candidato/a la campagna si faceva solo con un'azione generica nella
+  // scheda Azioni, difficile da trovare. Ora le azioni di campagna stanno sotto la candidatura, nella
+  // scheda Elezioni, e sono diverse tra loro (alcune rischiose). Più si è già fatto, meno rende.
+  var CAREER_CAMPAIGN_ACTIONS = [
+    { id: "camp_porta", label: "Porta a porta nel quartiere", desc: "Citofoni, pianerottoli e tante chiacchiere.", cd: 1, gain: [4, 7], eff: { cons: 0.5 } },
+    { id: "camp_mercato", label: "Gazebo al mercato", desc: "Volantini e strette di mano il sabato mattina.", cd: 1, gain: [3, 6], eff: { rete: 0.5 } },
+    { id: "camp_social", label: "Campagna sui social", desc: "Video brevi sui problemi della zona.", cd: 1, gain: [2, 6], eff: { rep: 0.3 } },
+    { id: "camp_associazioni", label: "Incontro con associazioni e comitati", desc: "Sport, volontariato, commercianti.", cd: 3, gain: [5, 9], eff: { rete: 1.5 } },
+    { id: "camp_cena", label: "Cena elettorale con i sostenitori", desc: "Raccogli volontari e qualche fondo.", cd: 4, gain: [5, 8], eff: { rete: 1, trust: 1 } },
+    { id: "camp_confronto", label: "Confronto pubblico con gli avversari", desc: "Può far svoltare la campagna, nel bene o nel male.", cd: 6, gain: [8, 14], chance: 0.55, fail: -4, eff: { rep: 1 } },
+    { id: "camp_leader", label: "Chiedi un comizio del leader del partito", desc: "Solo con la tessera: dipende dalla fiducia del partito.", cd: 10, gain: [10, 16], chance: 0.5, fail: 0, eff: { trust: 1 }, needParty: true }
+  ];
+  function careerCampaignStrengthLabel(v) { return v < 10 ? "debole" : v < 25 ? "discreta" : v < 45 ? "buona" : "fortissima"; }
+  function careerCampaignAction(c, id) {
+    var a = CAREER_CAMPAIGN_ACTIONS.filter(function (x) { return x.id === id; })[0];
+    if (!a || !c.candidacy || (c.actionCooldowns[id] || 0) > state.turn) return;
+    if (a.needParty && !c.partyId) return;
+    if (!careerSpendAction(c)) return;
+    c.actionCooldowns[id] = state.turn + a.cd;
+    var chance = a.chance === undefined ? 1 : (a.needParty ? clamp(0.2 + (c.partyTrust || 50) / 150, 0.15, 0.85) : a.chance);
+    var ok = Math.random() < chance;
+    var raw = ok ? rand(a.gain[0], a.gain[1]) : (a.fail || 0);
+    var gain = raw > 0 ? raw * clamp((70 - c.candidacy.campagna) / 50, 0.2, 1.2) : raw;
+    c.candidacy.campagna = Math.max(0, c.candidacy.campagna + gain);
+    if (ok) careerAdultApply(c, a.eff);
+    var text = ok ? a.label + ": la campagna cresce (forza " + Math.round(c.candidacy.campagna) + ")." : a.label + ": non va come speravi" + (raw < 0 ? ", e la campagna perde slancio." : ".");
+    addCareerDiaryEntry("Campagna elettorale", text);
+    showSaveStatus(text, !ok);
+  }
+  function renderCareerCampaignActions(c) {
+    return '<div class="option-grid">' + CAREER_CAMPAIGN_ACTIONS.filter(function (a) { return !a.needParty || c.partyId; }).map(function (a) {
+      var cd = (c.actionCooldowns[a.id] || 0) - state.turn, dis = cd > 0 || c.actionsLeft <= 0;
+      return '<button type="button" class="option-card" data-career-campaign="' + a.id + '"' + (dis ? " disabled" : "") + '><span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + (a.chance !== undefined ? " Riuscita incerta." : "") + (cd > 0 ? " Di nuovo tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + "</span></button>";
+    }).join("") + "</div>";
+  }
   function renderCareerAdultElections(c) {
     var gp = partyById(leadingGovPartyId());
     var html = '<section aria-label="Governo"><p class="ci-hint">Governo in carica: ' + (state.govEntity ? careerBlocLabel(state.govEntity.id) : "coalizione") + (gp ? ", guidato da " + gp.leader + " (" + gp.name + ")" : "") + ". Prossime politiche tra " + Math.max(0, state.careerNextPolitiche - state.turn) + " settimane.</p></section>";
@@ -33632,6 +33667,8 @@
       html += '<section aria-label="' + t.label + '"><h3>' + t.label + (t.id === "regionali" ? " in " + careerRegion(c) : t.id === "comunali" ? " (" + careerRegion(c) + ")" : "") + '</h3><p class="ci-hint">Si vota tra ' + weeks + " settimane." + (open ? " Candidature aperte." : " Le candidature si aprono sei mesi prima del voto.") + "</p>";
       if (c.candidacy && c.candidacy.type === t.id) {
         html += '<p class="ci-hint"><strong>Sei candidato/a come ' + CAREER_OFFICES[c.candidacy.office].label.toLowerCase() + (c.candidacy.place ? " (" + c.candidacy.place + ")" : "") + ".</strong> Forza della campagna: " + Math.round(c.candidacy.campagna) + '.</p><div class="choices"><button type="button" class="choice-btn" data-career-withdraw="1"><span class="clabel">Ritira la candidatura</span></button></div>';
+        careerRefreshActions(c);
+        html += '<p class="ci-hint">Campagna ' + careerCampaignStrengthLabel(c.candidacy.campagna) + ". Ti restano " + c.actionsLeft + " azioni questa settimana: ogni iniziativa ne usa una.</p>" + renderCareerCampaignActions(c);
       } else if (open) {
         html += '<div class="choices">';
         t.offices.forEach(function (o) {
@@ -33949,6 +33986,7 @@
       c.actionsLeft = clamp(c.actionsLeft + careerActionsPerWeek(c) - before, 0, 6);
       rerender();
     });
+    on("[data-career-campaign]", function (btn) { careerCampaignAction(c, btn.getAttribute("data-career-campaign")); rerender(); });
     byId("career-act-btn", function () { careerProposeAct(c, (document.getElementById("career-act-input").value || "").trim()); rerender(); });
     on("[data-career-adult-join]", function (btn) { var p = activeParties().filter(function (x) { return x.id === btn.getAttribute("data-career-adult-join"); })[0]; if (p) careerJoinParty(c, p); rerender(); });
     byId("career-leave-party-btn", function () { careerLeaveParty(c); rerender(); });
