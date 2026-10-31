@@ -28361,6 +28361,7 @@
   }
   function renderSetup() {
     var d = state.setupDraft;
+    if (state.careerFounding) d.mode = "new";
     var mode = d.mode || "new";
     if (mode === "career") { renderCareerSetup(); return; }
     var takeoverParty = d.takeoverId ? PARTIES.filter(function (pt) { return pt.id === d.takeoverId; })[0] : null;
@@ -28371,7 +28372,9 @@
     // (vedi il click handler di #found-btn), non solo quello mostrato nel campo.
     if (!d.leaderAgeTouched) d.leaderAge = mode === "takeover" ? 52 : 42;
     var leaderAgeValue = d.leaderAge;
-    var html = renderSetupModePicker(mode) +
+    var html = (state.careerFounding
+      ? '<section aria-label="Dalla carriera"><p class="ci-hint">Stai fondando il partito di <strong>' + state.careerFounding.name + '</strong>: la carriera finisce qui e il gioco prosegue nella modalità partito, con la rete e la reputazione che ti sei costruito/a.</p><div class="choices"><button type="button" class="choice-btn" id="career-founding-cancel"><span class="clabel">Torna alla carriera</span></button></div></section>'
+      : renderSetupModePicker(mode)) +
       '<div class="setup-card"><p class="eyebrow">Fondazione</p>' +
       '<h2>' + (mode === "takeover" ? "Prendi il comando di un partito" : "Fonda il tuo partito") + '</h2>' +
       '<p class="lead">Siamo a ottobre 2026. Il quadro politico italiano è quello reale di oggi: un centrodestra di governo appena sotto la soglia di maggioranza nei sondaggi, un\'opposizione frammentata, e uno spazio ancora aperto. ' +
@@ -28638,7 +28641,9 @@
         renderSetup();
       });
     }
-    document.getElementById("found-btn").addEventListener("click", foundPartyFromDraft);
+    document.getElementById("found-btn").addEventListener("click", function () { if (state.careerFounding) careerFinishFounding(); else foundPartyFromDraft(); });
+    var foundingCancel = document.getElementById("career-founding-cancel");
+    if (foundingCancel) foundingCancel.addEventListener("click", careerCancelFounding);
   }
   // Fondazione / presa di comando dal modulo iniziale. Funzione con nome (non più un listener anonimo)
   // perché la Carriera da politico la riusa come ponte verso la modalità partito (vedi
@@ -29139,7 +29144,7 @@
       // se la tua area politica è quella del governo, i tagli te li rinfacciano anche a scuola
       var govLean = LEFT_RIGHT_POSITION[famNews] || 0;
       if (news.delta < 0 && Math.abs(govLean - careerLean()) <= 1) c.metrics.studenti = clamp(c.metrics.studenti - 2, 0, 100);
-      if (news.delta > 0 && Math.abs(govLean - careerLean()) <= 1) c.reputazione = clamp(c.reputazione + 0.5, 0, 100);
+      if (news.delta > 0 && Math.abs(govLean - careerLean()) <= 1) careerGain(c, 0.5, 0);
       addCareerDiaryEntry("Notizie dal governo", text);
     }
   }
@@ -29280,6 +29285,21 @@
     var verdict = eff.studenti >= 2.5 ? "gira molto nei gruppi delle classi" : eff.studenti >= 1 ? "raccoglie qualche like e un paio di commenti" : eff.studenti >= 0 ? "passa quasi inosservato" : "attira più critiche che consensi";
     return { analysis: a, reach: reach, verdict: verdict, eff: eff };
   }
+  // Segnalato da un giocatore: reputazione e rete salivano troppo in fretta (un attivista diligente
+  // arrivava a 100 su 100 già nel primo anno di scuola). Ora ogni guadagno passa da qui: più si è in
+  // alto più costa salire, e da studente (notorietà locale, rete di compagni e circolo) si cresce molto
+  // più piano che da adulto. Le perdite restano piene.
+  function careerGain(c, rep, rete) {
+    var student = c.stage === "scuola" || c.stage === "diplomato";
+    if (rep) {
+      var r = rep > 0 ? rep * (student ? 0.09 : 0.3) * clamp((100 - c.reputazione) / 70, 0.03, 1.2) : rep;
+      c.reputazione = clamp(c.reputazione + r, 0, 100);
+    }
+    if (rete) {
+      var n = rete > 0 ? rete * (student ? 0.06 : 0.25) * clamp((100 - c.rete) / 70, 0.03, 1.2) * (careerTraitHas("magnetico") ? 1.15 : 1) : rete;
+      c.rete = clamp(c.rete + n, 0, 100);
+    }
+  }
   function careerApplyEffects(c, eff, mult) {
     mult = mult || 1;
     var vol = careerTraitHas("impulsivo") ? 1.2 : careerTraitHas("umile") ? 0.85 : 1;
@@ -29290,8 +29310,7 @@
       var scale = eff[k] < 0 ? vol : clamp((105 - cur) / 65, 0.15, 1.2);
       c.metrics[k] = clamp(cur + eff[k] * mult * scale, 0, 100);
     });
-    if (eff.rep) c.reputazione = clamp(c.reputazione + eff.rep * mult, 0, 100);
-    if (eff.rete) c.rete = clamp(c.rete + eff.rete * mult * (careerTraitHas("magnetico") ? 1.15 : 1), 0, 100);
+    if (eff.rep || eff.rete) careerGain(c, (eff.rep || 0) * mult, (eff.rete || 0) * mult);
     if (eff.fiducia && c.list) c.list.fiducia = clamp(c.list.fiducia + eff.fiducia * mult, 0, 100);
     if (eff.campagna) c.campaign.score += eff.campagna * mult;
     if (eff.budget && c.school) c.school.budget = clamp(c.school.budget + eff.budget, 5, 98);
@@ -31606,8 +31625,7 @@
         var action = CAREER_ACTIONS.filter(function (a) { return a.id === id; })[0];
         if (!action || !careerSpendAction(c)) { rerender(); return; }
         var eff = action.effects();
-        c.reputazione = clamp(c.reputazione + (eff.reputazione || 0), 0, 100);
-        c.rete = clamp(c.rete + (eff.rete || 0), 0, 100);
+        careerGain(c, eff.reputazione || 0, eff.rete || 0);
         if (c.stage === "scuola" && careerCalendar(state.turn).campagna && c.campaign.candidate) c.campaign.score += rand(0.5, 1.5);
         c.actionCooldowns[id] = state.turn + action.cooldown;
         var text = action.results[Math.floor(Math.random() * action.results.length)];
@@ -31652,8 +31670,7 @@
         c.partyName = party.name;
         c.partyColor = party.color;
         c.partyJoinedTurn = state.turn;
-        c.reputazione = clamp(c.reputazione + rand(1, 3), 0, 100);
-        c.rete = clamp(c.rete + rand(3, 6), 0, 100);
+        careerGain(c, rand(1, 3), rand(3, 6));
         if (c.stage === "scuola") careerApplyEffects(c, { studenti: -2, fiducia: c.list && !c.list.isOwn ? -3 : 0 });
         addCareerDiaryEntry("Tesseramento", "Ti tesseri a " + party.name + ": da oggi non sei più solo/a, hai una casa politica alle spalle.");
         showSaveStatus("Ti sei tesserato/a a " + party.name + ".", false);
@@ -32058,8 +32075,8 @@
     var vol = careerTraitHas("impulsivo") ? 1.2 : careerTraitHas("umile") ? 0.85 : 1;
     // La reputazione NAZIONALE e la rete crescono lentamente e con rendimenti decrescenti: farsi un nome
     // in tutto il paese richiede anni e cariche vere, non qualche comizio.
-    if (eff.rep) c.reputazione = clamp(c.reputazione + (eff.rep > 0 ? eff.rep * 0.4 * clamp((105 - c.reputazione) / 65, 0.1, 1.2) : eff.rep * vol) * mult, 0, 100);
-    if (eff.rete) c.rete = clamp(c.rete + (eff.rete > 0 ? eff.rete * 0.55 * clamp((105 - c.rete) / 65, 0.1, 1.2) * (careerTraitHas("magnetico") ? 1.15 : 1) : eff.rete) * mult, 0, 100);
+    if (eff.rep) careerGain(c, eff.rep > 0 ? eff.rep * mult : eff.rep * vol * mult, 0);
+    if (eff.rete) careerGain(c, 0, eff.rete * mult);
     if (eff.cons) c.consenso = clamp(c.consenso + eff.cons * mult * (eff.cons > 0 ? clamp((105 - c.consenso) / 65, 0.15, 1.2) : vol), 0, 100);
     if (eff.trust && c.partyId) c.partyTrust = clamp(c.partyTrust + eff.trust * mult * (eff.trust > 0 ? clamp((105 - c.partyTrust) / 60, 0.12, 1.2) : 1), 0, 100);
     if (eff.intel) c.intelletto = clamp(c.intelletto + eff.intel * mult, 0, 100);
@@ -32293,9 +32310,46 @@
   }
   // Ponte verso la modalità partito: si riusa la stessa fondazione/presa di comando della schermata
   // iniziale, con età, nome e tratti del personaggio; il calendario prosegue da dove era rimasto.
+  // Segnalato da un giocatore: fondando un partito dalla carriera non si sceglievano ideologia, stile e
+  // tutto il resto. Ora "Fonda il partito" apre la vera schermata di fondazione, già compilata con i
+  // dati del personaggio; la carriera resta intatta finché non si conferma (o si torna indietro).
+  function careerOpenFoundingForm(c, name) {
+    var d = state.setupDraft;
+    d.mode = "new"; d.takeoverId = null; d.name = name; d.short = d.short || "";
+    d.family = c.family;
+    d.leadership = careerTraitHas("magnetico") ? "carismatico" : careerTraitHas("combattivo") ? "polemista_aggressivo" : careerTraitHas("pragmatico") ? "tecnocratico" : careerTraitHas("umile") ? "mediatore_silenzioso" : "collegiale";
+    d.leaderTraits = c.leaderTraits.slice();
+    d.leaderName = c.name; d.leaderAge = careerAge(c); d.leaderAgeTouched = true;
+    d.color = d.color || SWATCHES[Math.floor(Math.random() * SWATCHES.length)];
+    d.skipFormation = false;
+    state.careerFounding = { name: c.name };
+    state.phase = "setup";
+    save();
+    render();
+    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo({ top: 0 });
+  }
+  function careerCancelFounding() {
+    state.careerFounding = null;
+    state.phase = "career";
+    save();
+    render();
+  }
+  function careerFinishFounding() {
+    var d = state.setupDraft, c = state.career;
+    if (!c) { state.careerFounding = null; foundPartyFromDraft(); return; }
+    if (!(d.name || "").trim()) { showSaveStatus("Dai un nome al partito.", true); return; }
+    if (!d.family) { showSaveStatus("Scegli un'area politica per il tuo partito.", true); return; }
+    if (!d.leadership) { showSaveStatus("Scegli uno stile di leadership per il tuo partito.", true); return; }
+    if (!d.leaderTraits || d.leaderTraits.length !== 2) { showSaveStatus("Scegli esattamente 2 tratti personali per il leader.", true); return; }
+    if (d.family === "regionalista" && !(d.homeRegions && d.homeRegions.length)) { showSaveStatus("Scegli almeno una regione per il tuo progetto autonomista.", true); return; }
+    state.careerFounding = null;
+    addCareerDiaryEntry("Nasce un partito", "Fondi «" + d.name.trim() + "».");
+    careerBridgeToPartyMode(c, { newName: d.name.trim(), fromForm: true });
+  }
   function careerBridgeToPartyMode(c, opts) {
     var d = state.setupDraft;
     var party = opts.partyId ? activeParties().filter(function (p) { return p.id === opts.partyId; })[0] : null;
+    if (!opts.fromForm) {
     d.mode = party ? "takeover" : "new";
     d.takeoverId = party ? party.id : null;
     d.name = party ? party.name : opts.newName;
@@ -32309,6 +32363,7 @@
     d.color = party ? party.color : (opts.color || SWATCHES[Math.floor(Math.random() * SWATCHES.length)]);
     d.skipFormation = false;
     d.motto = ""; d.ideologyText = ""; d.leaderCharacter = "";
+    }
     state.calendarOffset = (state.calendarOffset || 0) + state.turn - 1;
     state.careerArchive = { name: c.name, age: careerAge(c), diario: c.diario.slice(0, 30), diploma: c.diploma, uni: c.uni, rep: c.reputazione };
     var careerSnapshot = { rep: c.reputazione, rete: c.rete, trust: c.partyTrust };
@@ -33210,9 +33265,7 @@
       var name = (document.getElementById("career-newparty-name").value || "").trim();
       if (name.length < 3) { showSaveStatus("Dai un nome al partito.", true); return; }
       if (careerExclusiveTrack(c)) { showSaveStatus("Prima lascia il servizio.", true); return; }
-      addCareerDiaryEntry("Nasce un partito", "Fondi «" + name + "».");
-      save();
-      careerBridgeToPartyMode(c, { newName: name });
+      careerOpenFoundingForm(c, name);
     });
     on("[data-career-candidate]", function (btn) {
       var o = btn.getAttribute("data-career-candidate");
