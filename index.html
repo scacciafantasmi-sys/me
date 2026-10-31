@@ -32633,6 +32633,7 @@
 
   // --- Avanzamento settimanale della vita adulta ---
   function careerAdultTick(c) {
+    try { careerUniPolTick(c); } catch (e) {}
     var studyShare = (100 - c.focus) / 100;
     if (c.uni && !c.uni.laureato) {
       var f = careerFacultyById(c.uni.faculty);
@@ -33169,6 +33170,7 @@
       }).join("") + "</div>";
     }
     html += "</section>";
+    if (careerUniActive(c)) html += renderCareerUniPolitics(c);
     html += '<section aria-label="Percorso professionale"><h3>Percorso professionale</h3>';
     if (c.track) {
       var t = careerTrack(c);
@@ -33214,6 +33216,149 @@
       }).join("") + "</div></section>";
     return html;
   }
+  // --- Rappresentanza studentesca all'università ---
+  // Segnalato da un giocatore: all'università non c'erano liste né organizzazioni studentesche, e non
+  // se ne potevano fondare. Ora, come alle superiori, ogni ateneo ha le sue liste (con una collocazione
+  // politica), ci si può iscrivere a una compatibile o fondarne una, fare campagna e candidarsi alle
+  // elezioni universitarie (ogni due anni): si eleggono i rappresentanti nel Consiglio degli studenti e,
+  // per chi guida la lista più votata, il seggio in Senato accademico.
+  var CAREER_UNI_LIST_ARCHETYPES = [
+    { name: "Collettivo Universitario Autonomo", lean: -2.6 }, { name: "Link - Studenti Indipendenti", lean: -1.8 },
+    { name: "UDU - Unione degli Universitari", lean: -1.4 }, { name: "Sinistra Universitaria", lean: -1.1 },
+    { name: "Studenti per l'Università Pubblica", lean: -0.7 }, { name: "Lista Civica degli Studenti", lean: 0 },
+    { name: "Obiettivo Studenti", lean: 0.3 }, { name: "Studenti Liberi e Riformisti", lean: 0.8 },
+    { name: "Universitari Cattolici", lean: 1.0 }, { name: "Studenti per le Libertà", lean: 1.3 },
+    { name: "Azione Universitaria", lean: 2.1 }, { name: "Blocco Universitario", lean: 2.7 }
+  ];
+  var CAREER_UNI_SEATS = 10;
+  function careerUniActive(c) { return !!(c.uni && !c.uni.laureato); }
+  function careerUniPolInit(c) {
+    if (c.uniPol && c.uniPol.uniKey === c.uni.enrolledTurn) return c.uniPol;
+    var lean = careerLean();
+    var pool = CAREER_UNI_LIST_ARCHETYPES.slice().sort(function () { return Math.random() - 0.5; });
+    var lists = pool.slice(0, 5);
+    if (!lists.some(function (l) { return Math.abs(l.lean - lean) <= 1.2; })) {
+      var near = CAREER_UNI_LIST_ARCHETYPES.filter(function (l) { return Math.abs(l.lean - lean) <= 1.2; })[0];
+      if (near) lists[4] = near;
+    }
+    c.uniPol = {
+      uniKey: c.uni.enrolledTurn,
+      lists: lists.map(function (a, i) { return { id: "u" + i, name: a.name, lean: a.lean, forza: Math.round(10 + Math.random() * 30), seats: 0, leader: generateStaffName() }; }),
+      my: null, campaign: 0, candidate: false, role: null, nextVote: state.turn + 20 + Math.floor(Math.random() * 30), history: []
+    };
+    return c.uniPol;
+  }
+  function careerUniMyList(c) { var u = c.uniPol; return u && u.my ? u.lists.filter(function (l) { return l.id === u.my.id; })[0] : null; }
+  function careerUniJoin(c, id) {
+    var u = careerUniPolInit(c), l = u.lists.filter(function (x) { return x.id === id; })[0];
+    if (!l || u.my) return;
+    if (Math.abs(l.lean - careerLean()) > 1.2) { showSaveStatus("Quella lista è troppo lontana dalle tue idee.", true); return; }
+    u.my = { id: l.id, isOwn: false, role: "militante", fiducia: 55 };
+    careerAdultApply(c, { rete: 2 });
+    addCareerDiaryEntry("Entri in una lista universitaria", "Ti unisci a «" + l.name + "», guidata da " + l.leader + ".");
+  }
+  function careerUniFound(c, name) {
+    var u = careerUniPolInit(c);
+    if (u.my || !name || name.length < 3) { if (!u.my) showSaveStatus("Dai un nome alla lista.", true); return; }
+    var lean = careerLean();
+    u.lists.forEach(function (x) { if (Math.abs(x.lean - lean) <= 1) x.forza = Math.max(5, x.forza - Math.round(rand(2, 5))); });
+    u.lists.push({ id: "u_player", name: name, lean: lean, forza: Math.round(clamp(5 + c.rete * 0.2 + c.reputazione * 0.15, 5, 30)), seats: 0, leader: c.name, isPlayer: true });
+    u.my = { id: "u_player", isOwn: true, role: "fondatore", fiducia: 70 };
+    addCareerDiaryEntry("Fondi una lista universitaria", "Nasce «" + name + "»: pochi amici, un volantino e tanta voglia di cambiare l'ateneo.");
+  }
+  function careerUniLeave(c) {
+    var u = c.uniPol;
+    if (!u || !u.my) return;
+    var l = careerUniMyList(c);
+    if (u.my.isOwn) u.lists = u.lists.filter(function (x) { return x.id !== "u_player"; });
+    u.my = null; u.candidate = false; u.role = null; u.campaign = 0;
+    addCareerDiaryEntry("Lasci la lista universitaria", "Esci da «" + (l ? l.name : "la tua lista") + "».");
+  }
+  var CAREER_UNI_ACTIONS = [
+    { id: "uni_assemblea", label: "Assemblea in facoltà", desc: "Una discussione aperta su tasse, aule e servizi.", cd: 2, camp: [2, 4], eff: { rete: 1 } },
+    { id: "uni_mensa", label: "Volantinaggio alla mensa", desc: "Il modo più semplice per farsi conoscere.", cd: 1, camp: [1, 2], eff: {} },
+    { id: "uni_matricole", label: "Sportello per le matricole", desc: "Aiuti i nuovi iscritti tra piani di studio e burocrazia.", cd: 3, camp: [2, 3], eff: { rep: 0.5 } },
+    { id: "uni_affitti", label: "Iniziativa sul caro affitti", desc: "Una mappa degli affitti e una protesta davanti al rettorato.", cd: 6, camp: [3, 5], eff: { rete: 2, rep: 0.5 } }
+  ];
+  function careerUniAction(c, id) {
+    var u = c.uniPol, a = CAREER_UNI_ACTIONS.filter(function (x) { return x.id === id; })[0];
+    if (!u || !u.my || !a || (c.actionCooldowns[id] || 0) > state.turn) return;
+    if (!careerSpendAction(c)) return;
+    c.actionCooldowns[id] = state.turn + a.cd;
+    u.campaign += rand(a.camp[0], a.camp[1]);
+    careerAdultApply(c, a.eff);
+    u.my.fiducia = clamp(u.my.fiducia + 1, 0, 100);
+    showSaveStatus(a.label + ": la lista si fa notare.", false);
+  }
+  function careerUniPolTick(c) {
+    if (!careerUniActive(c)) { if (c.uniPol && c.uniPol.role) { c.uniPol.role = null; } return; }
+    var u = careerUniPolInit(c);
+    u.campaign = Math.max(0, u.campaign * 0.985);
+    if (state.turn < u.nextVote) return;
+    u.nextVote = state.turn + 104;
+    var lean = careerLean(), mine = careerUniMyList(c);
+    var shares = u.lists.map(function (l) {
+      var v = l.forza + rand(-5, 5);
+      if (mine && l.id === mine.id && u.candidate) v += 22 * (1 - Math.exp(-u.campaign / 25)) + c.reputazione * 0.05;
+      return Math.max(1, v);
+    });
+    var total = shares.reduce(function (a, b) { return a + b; }, 0);
+    var seats = careerDhondt(shares, CAREER_UNI_SEATS);
+    u.lists.forEach(function (l, i) { l.seats = seats[i]; l.lastShare = Math.round(shares[i] / total * 1000) / 10; });
+    var ranking = u.lists.slice().sort(function (a, b) { return b.lastShare - a.lastShare; });
+    var prevRole = u.role;
+    u.role = null;
+    var outcome;
+    if (mine && u.candidate) {
+      var pos = (u.my.isOwn || u.my.role === "capolista") ? 1 : 1 + [rand(8, 26), rand(5, 20)].filter(function (m) { return m > u.campaign; }).length;
+      if (mine.seats >= pos) u.role = ranking[0].id === mine.id && pos === 1 ? "senato" : "consiglio";
+      outcome = u.role === "senato" ? "La tua lista è la più votata dell'ateneo e tu entri in Senato accademico."
+        : u.role === "consiglio" ? "Sei eletto/a nel Consiglio degli studenti."
+        : ranking[0].id === mine.id ? "La tua lista vince, ma con le preferenze non entri: arrivi " + pos + "° e i seggi sono " + mine.seats + "."
+        : "Non vieni eletto/a.";
+      careerAdultApply(c, u.role === "senato" ? { rep: 4, rete: 5 } : u.role === "consiglio" ? { rep: 2, rete: 3 } : { rep: -0.5 });
+    } else outcome = "Non eri candidato/a: le elezioni universitarie le segui da fuori.";
+    if (prevRole && !u.role) outcome += " Perdi il seggio che avevi.";
+    u.history.push({ turn: state.turn, role: u.role, share: mine ? mine.lastShare : null });
+    u.lists.forEach(function (l) { l.forza = Math.round(l.forza * 0.5 + l.lastShare * 0.4); });
+    u.candidate = false; u.campaign = 0;
+    var rows = ranking.map(function (l, i) { return (i + 1) + ". <strong>" + l.name + "</strong>" + (mine && l.id === mine.id ? " (la tua lista)" : "") + " — " + fmt1(l.lastShare) + "%, " + l.seats + " segg" + (l.seats === 1 ? "io" : "i"); }).join("<br>");
+    addCareerDiaryEntry("Elezioni universitarie", outcome);
+    c.pending.unshift({ id: "uni_elezioni_" + state.turn, cat: "Università", title: "Le elezioni universitarie", brief: outcome + "<br><br>" + rows,
+      choices: u.role ? [
+        { label: "Festeggi con la lista", eff: { rete: 1 }, result: "Una festa in facoltà che finisce all'alba." },
+        { label: "Ti metti subito al lavoro sulle tasse universitarie", eff: { rep: 1 }, result: "Al primo Consiglio porti una proposta concreta." }
+      ] : [
+        { label: "Analizzi gli errori con la lista", eff: { rete: 0.5 }, result: "Si riparte con le idee più chiare." },
+        { label: "Fai i complimenti ai vincitori", eff: { rep: 0.5 }, result: "Un gesto che viene notato." }
+      ] });
+  }
+  function renderCareerUniPolitics(c) {
+    var u = careerUniPolInit(c), mine = careerUniMyList(c), lean = careerLean();
+    var weeks = Math.max(0, u.nextVote - state.turn);
+    var html = '<section aria-label="Liste universitarie"><h3>Liste e rappresentanza studentesca</h3><p class="ci-hint">Prossime elezioni universitarie tra <strong>' + weeks + " settimane</strong>: " + CAREER_UNI_SEATS + " seggi nel Consiglio degli studenti; chi guida la lista più votata entra in Senato accademico." + (u.role ? " Oggi siedi " + (u.role === "senato" ? "in <strong>Senato accademico</strong>" : "nel <strong>Consiglio degli studenti</strong>") + "." : "") + "</p>";
+    html += '<div class="option-grid">' + u.lists.map(function (l) {
+      var dist = Math.abs(l.lean - lean), isMine = mine && mine.id === l.id;
+      var can = !u.my && !l.isPlayer && dist <= 1.2;
+      var orient = l.lean <= -2 ? "sinistra radicale" : l.lean <= -0.8 ? "sinistra" : l.lean < 0.8 ? "centro / civica" : l.lean < 2 ? "destra moderata" : "destra";
+      return '<button type="button" class="option-card' + (isMine ? " selected" : "") + '"' + (can ? ' data-uni-join="' + l.id + '"' : " disabled") + '><span class="olabel">' + l.name + (isMine ? " (la tua)" : "") + '</span><span class="odesc">' + orient + " · guida: " + l.leader +
+        (l.lastShare !== undefined ? " · ultime elezioni " + fmt1(l.lastShare) + "%, " + l.seats + " seggi" : " · forza stimata " + Math.round(l.forza)) + (can ? " · Puoi entrarci" : (!u.my && dist > 1.2 && !l.isPlayer ? " · Troppo lontana dalle tue idee" : "")) + "</span></button>";
+    }).join("") + "</div>";
+    if (!u.my) {
+      html += '<div class="field"><label class="field-label" for="uni-list-name">Fonda una lista universitaria</label><input type="text" id="uni-list-name" maxlength="40" placeholder="Es. Ateneo Aperto"></div>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="uni-found-btn"><span class="clabel">Fonda la lista</span><span class="chint">Parte debole e toglie voti alle liste vicine alle tue idee, ma la guidi tu.</span></button></div>';
+    } else {
+      html += '<p class="ci-hint">«' + mine.name + "» · ruolo: <strong>" + (u.my.isOwn ? "fondatore/fondatrice e capolista" : u.my.role) + "</strong> · campagna " + Math.round(u.campaign) + (u.candidate ? " · sei candidato/a" : "") + ".</p>";
+      html += '<div class="option-grid">' + CAREER_UNI_ACTIONS.map(function (a) {
+        var cd = (c.actionCooldowns[a.id] || 0) - state.turn, dis = cd > 0 || c.actionsLeft <= 0;
+        return '<button type="button" class="option-card" data-uni-action="' + a.id + '"' + (dis ? " disabled" : "") + '><span class="olabel">' + a.label + '</span><span class="odesc">' + a.desc + (cd > 0 ? " Disponibile tra " + cd + " settiman" + (cd === 1 ? "a" : "e") + "." : "") + "</span></button>";
+      }).join("") + "</div><div class=\"choices\">" +
+        (!u.candidate ? '<button type="button" class="choice-btn" id="uni-candidate-btn"' + (weeks > 16 ? " disabled" : "") + '><span class="clabel">Candidati alle elezioni universitarie</span><span class="chint">' + (weeks > 16 ? "Le candidature si aprono 16 settimane prima del voto." : (u.my.isOwn || u.my.role === "capolista" ? "Da capolista, se la lista prende un seggio è tuo." : "Da militante conta quanta campagna hai fatto.")) + "</span></button>" : "") +
+        '<button type="button" class="choice-btn" id="uni-leave-btn"><span class="clabel">' + (u.my.isOwn ? "Sciogli la lista" : "Lascia la lista") + "</span></button></div>";
+    }
+    html += "</section>";
+    return html;
+  }
   function renderCareerAdultDashboard() {
     var c = state.career;
     careerRefreshActions(c);
@@ -33249,6 +33394,11 @@
     var on = function (sel, fn) { app.querySelectorAll(sel).forEach(function (btn) { btn.addEventListener("click", function () { if (btn.disabled) return; fn(btn); }); }); };
     var byId = function (id, fn) { var el = document.getElementById(id); if (el) el.addEventListener("click", function () { if (el.disabled) return; fn(el); }); };
     on("[data-career-nav]", function (btn) { c.ui = btn.getAttribute("data-career-nav"); c.navJump = true; rerender(); });
+    on("[data-uni-join]", function (btn) { careerUniJoin(c, btn.getAttribute("data-uni-join")); rerender(); });
+    on("[data-uni-action]", function (btn) { careerUniAction(c, btn.getAttribute("data-uni-action")); rerender(); });
+    byId("uni-found-btn", function () { careerUniFound(c, (document.getElementById("uni-list-name").value || "").trim()); rerender(); });
+    byId("uni-candidate-btn", function () { if (c.uniPol) { c.uniPol.candidate = true; addCareerDiaryEntry("Candidatura all'università", "Ti candidi alle elezioni universitarie."); } rerender(); });
+    byId("uni-leave-btn", function () { if (!window.confirm("Uscire dalla lista universitaria?")) return; careerUniLeave(c); rerender(); });
     on("[data-career-dossier]", function (btn) { careerResolveDossier(parseInt(btn.getAttribute("data-career-dossier"), 10), parseInt(btn.getAttribute("data-career-choice"), 10)); });
     on("[data-career-focus]", function (btn) {
       var before = careerActionsPerWeek(c);
