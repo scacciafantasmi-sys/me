@@ -1046,6 +1046,13 @@
   /* Alleggerimento generale: le sezioni lontane dallo schermo non vengono disposte né disegnate finché
      non ci si avvicina scorrendo (i browser che non lo supportano lo ignorano). */
   #app > section, #app > div > section { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+
+  .fx-route { position: relative; height: 70px; margin: 0.8rem 0 0.4rem; }
+  .fx-route-a, .fx-route-b { position: absolute; top: 18px; font-size: 1.8rem; }
+  .fx-route-a { left: 4%; } .fx-route-b { right: 4%; }
+  .fx-route-line { position: absolute; left: 18%; right: 18%; top: 34px; height: 0; border-top: 2px dashed rgba(255,255,255,0.45); transform-origin: left; animation: fxGrow 1.4s 0.2s ease-out both; }
+  .fx-plane { position: absolute; top: 10px; left: 12%; font-size: 2rem; animation: fxFly 2.2s 0.3s cubic-bezier(0.45, 0, 0.3, 1) both; }
+  @keyframes fxFly { 0% { left: 12%; transform: translateY(14px) rotate(-10deg); } 50% { transform: translateY(-12px) rotate(0deg); } 100% { left: 76%; transform: translateY(6px) rotate(8deg); } }
 </style>
 
 <div class="wrap">
@@ -29381,6 +29388,7 @@
     { value: 90, label: "Solo politica", desc: "4 azioni a settimana, i voti crollano." }
   ];
   function careerActionsPerWeek(c) {
+    if (typeof careerInErasmus === "function" && careerInErasmus(c)) return 1;
     var base = c.focus >= 85 ? 4 : c.focus >= 60 ? 3 : c.focus >= 30 ? 2 : 1;
     return base;
   }
@@ -32617,6 +32625,7 @@
   ];
   function careerHeld(c, id) { return (c.officesHeld || []).indexOf(id) !== -1 || (c.office && c.office.id === id); }
   function careerCandidacyBlock(c, officeId) {
+    if (careerInErasmus(c)) return "Sei in Erasmus a " + c.erasmus.city + " fino alla settimana " + c.erasmus.until + ".";
     if (careerExclusiveTrack(c)) return "In servizio non puoi candidarti.";
     if (c.track && c.track.id === "carcere") return "Da dirigente penitenziario non puoi candidarti: prima lascia l'incarico.";
     if (c.processo && c.processo.interdetto) return "Sei interdetto/a dai pubblici uffici.";
@@ -32672,7 +32681,7 @@
     if (o === "consigliere_comunale" || o === "consigliere_regionale") {
       p = 0.12 + c.rete / 160 + c.reputazione / 220 + c.consenso / 350 + poll / 70 + (c.partyRank || 0) * 0.02 + cand.campagna / 120 + (wasIncumbent ? 0.08 : 0) - (o === "consigliere_regionale" ? 0.08 : 0);
     } else if (o === "deputato") {
-      p = 0.12 + poll / 45 + (c.partyRank || 0) * 0.03 + c.reputazione / 160 + c.partyTrust / 320 + cand.campagna / 150;
+      p = 0.12 + poll / 45 + (c.partyRank || 0) * 0.03 + c.reputazione / 160 + c.partyTrust / 320 + cand.campagna / 150 + (cand.listHead ? 0.1 : 0);
     } else {
       var coal = careerCoalitionOf(c.partyId);
       var mine = c.partyId ? (coal ? careerCoalitionPoll(coal) : poll * 1.3) : 10 + c.reputazione * 0.3;
@@ -32750,7 +32759,36 @@
   }
 
   // --- Offerte, indagini, sfiducia: i dossier speciali della vita adulta ---
+  // Richiesto da un giocatore: da segretario/a regionale in su il partito ti considera un nome da
+  // Parlamento. Qualche mese prima delle politiche arriva la proposta di candidatura alla Camera, senza
+  // doverla chiedere (e senza il rischio che la segreteria dica di no); da capolista le possibilità di
+  // essere eletto/a crescono ancora.
+  var CAREER_DEPUTY_RANK = 7;
+  function careerDeputyOfferDossier(c) {
+    if (!c.partyId || (c.partyRank || 0) < CAREER_DEPUTY_RANK) return null;
+    var weeks = (state.careerNextPolitiche || 0) - state.turn;
+    if (weeks < 6 || weeks > 14) return null;
+    if (c.candidacy && c.candidacy.type === "politiche") return null;
+    if (c.office && c.office.id === "deputato") return null;
+    if (c.deputyOfferFor === state.careerNextPolitiche) return null;
+    if (careerCandidacyBlock(c, "deputato")) return null;
+    if (c.pending.some(function (d) { return d.id === "offerta_deputato"; })) return null;
+    c.deputyOfferFor = state.careerNextPolitiche;
+    var rank = CAREER_PARTY_LADDER[c.partyRank].label.toLowerCase();
+    return { id: "offerta_deputato", cat: "Elezioni politiche", adult: true, title: "Il partito ti candida alla Camera",
+      brief: "Tra " + weeks + " settimane si vota per le politiche. Da " + rank + " la segreteria nazionale di " + c.partyName + " ti offre un posto nelle liste per la Camera dei deputati, nella circoscrizione " + careerRegion(c) + ".",
+      choices: [
+        { label: "Accetti da capolista nella circoscrizione", act: "deputato_lista", listHead: true, eff: { trust: 2 }, result: "Sei capolista: se il partito tiene, entri in Parlamento." },
+        { label: "Accetti un posto in lista, senza esporti troppo", act: "deputato_lista", eff: { trust: 1 }, result: "Sei in lista: servirà una buona campagna." },
+        { label: "Rinunci: resti a guidare il partito sul territorio", eff: { trust: 3, rep: 0.5 }, result: "La segreteria apprezza: il territorio ha bisogno di te." }
+      ] };
+  }
   function careerSpecialDossiers(c) {
+    var deputyOffer = careerDeputyOfferDossier(c);
+    if (deputyOffer) return [deputyOffer].concat(careerSpecialDossiersBase(c));
+    return careerSpecialDossiersBase(c);
+  }
+  function careerSpecialDossiersBase(c) {
     var out = [];
     // indagini: le «ombre» accumulate con scelte opache prima o poi chiedono il conto
     if (!c.processo && c.ombre > 25 && Math.random() < (c.ombre - 25) / 700) {
@@ -32859,6 +32897,7 @@
   // --- Avanzamento settimanale della vita adulta ---
   function careerAdultTick(c) {
     try { careerUniPolTick(c); } catch (e) {}
+    try { careerErasmusTick(c); } catch (e) {}
     var studyShare = (100 - c.focus) / 100;
     if (c.uni && !c.uni.laureato) {
       var f = careerFacultyById(c.uni.faculty);
@@ -33225,8 +33264,9 @@
   CAREER_ADULT_DOSSIERS.push(
     { id: "a_uni_tasse", r: ["uni"], cat: "Università", t: "Aumentano le tasse universitarie", b: "L'ateneo annuncia un aumento delle tasse del quindici per cento. Gli studenti sono furiosi.",
       ch: [["Organizzi un'assemblea di protesta", { rete: 3, rep: 1, prep: -3 }, "L'aula è piena: la protesta arriva sui giornali."], ["Raccogli dati sulle tasse degli altri atenei", { intel: 1, rep: 1 }, "Il tuo dossier mostra che il vostro ateneo è tra i più cari d'Italia."], ["Pensi agli esami", { prep: 3 }, "Studi, mentre gli altri protestano."]] },
-    { id: "a_uni_erasmus", r: ["uni"], cat: "Università", t: "Una borsa Erasmus", b: "Ti offrono sei mesi di Erasmus a Lisbona. Partire significa lasciare per un po' la politica locale.",
-      ch: [["Parti", { intel: 2, rete: 2, rep: -1 }, "Sei mesi che ti aprono la testa: torni con un inglese perfetto e amici in tutta Europa."], ["Rinunci per restare attivo/a qui", { rete: 1, trust: 1 }, "Resti, ma un po' di rimpianto ti rimane."], ["Chiedi di partire il semestre dopo", { intel: 1 }, "L'ufficio accetta: un buon compromesso.", 0.5, { rep: -0.5 }, "Il posto va a qualcun altro."]] },
+    { id: "a_uni_erasmus", r: ["uni"], cat: "Università", t: "Una borsa Erasmus", b: "Ti offrono sei mesi di Erasmus in un'università europea. Partire significa lasciare per sei mesi la politica di {city}: potrai fare poco qui, ma studierai molto di più.",
+      when: function (c) { return !careerInErasmus(c); },
+      ch: [["Parti per sei mesi", { act: "erasmus", rep: -0.5 }, "Si parte."], ["Rinunci per restare attivo/a qui", { rete: 1, trust: 1 }, "Resti, ma un po' di rimpianto ti rimane."], ["Chiedi di rimandare al prossimo anno", { intel: 0.5 }, "L'ufficio prende nota: forse l'anno prossimo.", 0.5, { rep: -0.5 }, "Il posto va a qualcun altro."]] },
     { id: "a_uni_aula_occupata", r: ["uni"], cat: "Università", t: "Un'aula occupata dai collettivi", b: "Un collettivo occupa un'aula per farne uno spazio sociale. Il rettore minaccia lo sgombero.",
       ch: [["Ti schieri con l'occupazione", { rete: 2, rep: -1 }, "Diventi una figura nota tra gli studenti più attivi."], ["Proponi una mediazione col rettore", { rep: 2, intel: 1 }, "La mediazione porta a uno spazio studentesco ufficiale.", 0.55, { rep: -0.5 }, "Il rettore rifiuta: lo sgombero arriva comunque."], ["Resti fuori dalla vicenda", { prep: 2 }, "Ti concentri sullo studio."]] },
     { id: "a_uni_professore", r: ["uni"], cat: "Università", t: "Un professore ti propone una tesi in politica comparata", b: "Il tuo professore preferito ti offre una tesi su sistemi elettorali comparati, con un periodo di ricerca a Bruxelles.",
@@ -33252,12 +33292,78 @@
     { id: "a_eletto_assenteismo", r: ["eletto"], cat: "Istituzioni", t: "Le tue assenze finiscono sul giornale", b: "Un giornale pubblica la classifica delle presenze: sei tra i più assenti.",
       ch: [["Spieghi che eri impegnato/a in commissione", { rep: 0.5 }, "La spiegazione regge, in parte."], ["Prometti presenza totale e pubblichi i dati ogni mese", { rep: 2, cons: 1 }, "La trasparenza ti fa recuperare."], ["Attacchi il giornale", { rep: -2 }, "La polemica ti fa sembrare peggio."]] }
   );
+  // --- Erasmus: sei mesi all'estero ---
+  // Richiesto da un giocatore: accettando l'Erasmus si parte davvero per sei mesi (26 settimane). In
+  // quel periodo arrivano solo dossier dedicati alla vita all'estero, si possono fare poche cose di
+  // politica (una sola azione a settimana, niente candidature) ma lo studio rende molto di più.
+  var CAREER_ERASMUS_CITIES = ["Lisbona", "Madrid", "Barcellona", "Berlino", "Parigi", "Amsterdam", "Praga", "Dublino", "Vienna", "Copenaghen", "Cracovia", "Bruxelles"];
+  var CAREER_ERASMUS_WEEKS = 26;
+  function careerInErasmus(c) { return !!(c.erasmus && state.turn < c.erasmus.until); }
+  function careerStartErasmus(c) {
+    var city = CAREER_ERASMUS_CITIES[Math.floor(Math.random() * CAREER_ERASMUS_CITIES.length)];
+    c.erasmus = { city: city, start: state.turn, until: state.turn + CAREER_ERASMUS_WEEKS, exams: 0 };
+    if (c.candidacy) { addCareerDiaryEntry("Candidatura ritirata", "Partendo per l'Erasmus ritiri la candidatura."); c.candidacy = null; }
+    if (c.uniPol) c.uniPol.candidate = false;
+    addCareerDiaryEntry("Si parte per l'Erasmus", "Valigia, biglietto di sola andata e un alloggio trovato all'ultimo: per sei mesi studierai a " + city + ".");
+    fxPush({ type: "erasmus", city: city });
+    return "Si parte: sei mesi di Erasmus a " + city + ".";
+  }
+  function careerErasmusTick(c) {
+    if (!c.erasmus) return;
+    if (state.turn < c.erasmus.until) {
+      careerAdultApply(c, { prep: 2.2, intel: 0.12 });
+      if (c.uniPol && c.uniPol.my) c.uniPol.my.fiducia = clamp(c.uniPol.my.fiducia - 0.4, 0, 100);
+      if (c.partyId) c.partyTrust = clamp((c.partyTrust || 50) - 0.15, 0, 100);
+      return;
+    }
+    var city = c.erasmus.city;
+    c.erasmusDone = (c.erasmusDone || 0) + 1;
+    c.erasmus = null;
+    careerAdultApply(c, { intel: 2, rete: 1 });
+    addCareerDiaryEntry("Ritorno dall'Erasmus", "Dopo sei mesi a " + city + " torni a " + c.city + ": parli un'altra lingua, hai amici in mezza Europa e vedi la politica di casa con occhi nuovi.");
+    fxPush({ type: "big", theme: "good", emoji: "🧳", eyebrow: "Ritorno a casa", title: "Bentornato/a da " + city, sub: "Sei mesi che ti hanno cambiato: più preparazione, una rete europea, nuove idee." });
+  }
+  // [id, titolo, testo, scelte]; effetti adulti (rep, rete, intel, prep, trust, cons, ombre).
+  var CAREER_ERASMUS_DOSSIERS = [
+    ["er_alloggio", "Una stanza introvabile", "A {erasmus} gli affitti sono altissimi e l'alloggio promesso non esiste più.", [["Dividi un monolocale con tre studenti", { rete: 2, prep: -1 }, "Poco spazio, tanta compagnia: impari a convivere."], ["Paghi una stanza cara in centro", { prep: 1 }, "Comodo, ma il conto in banca piange."], ["Chiedi aiuto all'ufficio Erasmus", { intel: 0.5 }, "Ti trovano un posto in uno studentato.", 0.6, { prep: -2 }, "Nessun posto: settimane in ostello."]]],
+    ["er_lingua", "La lingua non la capisci", "Le lezioni sono veloci e la lingua del posto ti mette in difficoltà.", [["Ti iscrivi a un corso intensivo", { intel: 1, prep: 1 }, "In un mese segui le lezioni senza problemi."], ["Ti affidi ai compagni italiani", { rete: 1, prep: -1 }, "Comodo, ma impari poco."], ["Ti butti nelle conversazioni con i locali", { intel: 1.5, rete: 1 }, "Figuracce all'inizio, poi parli come uno del posto."]]],
+    ["er_esame_straniero", "Il primo esame all'estero", "Il primo esame è orale, in un'altra lingua, davanti a un professore severissimo.", [["Studi notte e giorno", { prep: 3, intel: 1 }, "Prendi il massimo dei voti: il professore si complimenta."], ["Chiedi di farlo in inglese", { prep: 1 }, "Il professore accetta: voto discreto."], ["Lo rimandi", { prep: -1 }, "Più tempo, ma più ansia."]]],
+    ["er_festa", "Festa internazionale", "Gli studenti Erasmus organizzano una festa con trenta nazionalità.", [["Ci vai e porti la cucina italiana", { rete: 3 }, "La tua carbonara diventa leggendaria."], ["Resti a studiare", { prep: 2 }, "Gli altri festeggiano, tu recuperi."], ["La organizzi tu", { rete: 4, prep: -1 }, "Una festa che tutti ricorderanno."]]],
+    ["er_politica_locale", "Un comizio nella piazza di {erasmus}", "C'è una campagna elettorale: un candidato locale tiene un comizio sotto casa tua.", [["Vai ad ascoltare e prendi appunti", { intel: 1.5 }, "Scopri un modo diverso di fare campagna."], ["Intervisti il candidato per un blog", { intel: 1, rep: 0.5 }, "L'intervista piace anche ai tuoi follower italiani."], ["Ignori: sei qui per studiare", { prep: 1 }, "Torni ai libri."]]],
+    ["er_parlamento_europeo", "Una visita al Parlamento europeo", "L'università organizza una visita alle istituzioni europee.", [["Ti unisci e fai domande agli eurodeputati", { intel: 1.5, rete: 1 }, "Un eurodeputato ti lascia il biglietto da visita."], ["Ne approfitti per contattare il gruppo europeo del tuo partito", { rete: 2, trust: 1 }, "Ti presenti: a casa lo vengono a sapere."], ["Salti per un esame", { prep: 1 }, "Peccato."]]],
+    ["er_nostalgia", "Nostalgia di casa", "Dopo due mesi ti manca tutto: la famiglia, gli amici, perfino le riunioni del circolo.", [["Videochiamata con tutti la domenica", { rete: 1 }, "Ti senti meno solo/a."], ["Ti butti nella vita del posto", { rete: 2, intel: 0.5 }, "La nostalgia passa."], ["Pensi di tornare prima", { prep: -1 }, "Ci ripensi, ma l'umore è basso."]]],
+    ["er_lavoro_bar", "Lavoretto in un bar", "Per arrotondare ti offrono di lavorare la sera in un bar del centro.", [["Accetti", { rete: 2, prep: -1 }, "Impari la lingua dei clienti e ti mantieni da solo/a."], ["Rifiuti per studiare", { prep: 1.5 }, "Più tempo per i libri."], ["Proponi un turno solo nel weekend", { rete: 1 }, "Un buon equilibrio."]]],
+    ["er_associazione_studenti", "L'associazione studentesca locale", "Gli studenti del posto ti invitano nella loro associazione politica.", [["Partecipi alle loro assemblee", { intel: 1, rete: 2 }, "Scopri come si organizzano i giovani altrove."], ["Proponi un gemellaggio con la tua lista universitaria", { rete: 2, rep: 0.5 }, "Il gemellaggio viene firmato."], ["Declini", { prep: 1 }, "Resti concentrato/a sullo studio."]]],
+    ["er_corso_politica", "Un corso di politica comparata", "Puoi inserire nel piano un corso di politica comparata tenuto da un professore famoso.", [["Lo segui", { intel: 2, prep: 1 }, "Un corso che ti cambia il modo di vedere le istituzioni."], ["Preferisci un esame più facile", { prep: 1.5 }, "Più crediti, meno fatica."], ["Lo segui da uditore", { intel: 1 }, "Ascolti senza l'ansia del voto."]]],
+    ["er_giornale_italiano", "Un giornale italiano ti chiede un articolo", "Un quotidiano ti chiede un articolo su come i giovani di {erasmus} vedono la politica.", [["Scrivi un articolo appassionato", { rep: 1, intel: 0.5 }, "L'articolo viene molto letto."], ["Scrivi un pezzo critico sull'Italia", { rep: 0.5, trust: -1 }, "Fa discutere: qualcuno nel partito non gradisce."], ["Declini", { prep: 0.5 }, "Ti concentri sugli esami."]]],
+    ["er_viaggio", "Un weekend di viaggio", "Un gruppo di amici organizza un viaggio di tre giorni in un paese vicino.", [["Parti con loro", { rete: 2, prep: -1 }, "Tre giorni indimenticabili."], ["Resti a studiare", { prep: 2 }, "Ti perdi il viaggio, ma recuperi un esame."], ["Vai solo un giorno", { rete: 1 }, "Il giusto compromesso."]]],
+    ["er_crisi_soldi", "La borsa di studio arriva in ritardo", "L'erogazione della borsa Erasmus è in ritardo di due mesi.", [["Chiedi aiuto alla famiglia", { prep: 0.5 }, "I tuoi ti aiutano, con qualche predica."], ["Trovi un lavoretto", { rete: 1, prep: -1 }, "Lavori e studi: dura, ma ce la fai."], ["Protesti con l'ufficio dell'università", { rep: 0.5 }, "La protesta accelera i pagamenti.", 0.5, {}, "Nulla si muove."]]],
+    ["er_amore", "Un amore Erasmus", "Ti innamori di uno studente o una studentessa di un altro paese.", [["Vivi la storia fino in fondo", { rete: 1, prep: -1 }, "Mesi bellissimi: si vedrà cosa succede dopo."], ["Resti con i piedi per terra", { prep: 1 }, "Un'amicizia speciale, niente di più."], ["Pensi di trasferirti dopo la laurea", { intel: 0.5, rete: -1 }, "Un'idea che ti frulla in testa."]]],
+    ["er_sciopero", "Sciopero degli studenti locali", "Gli studenti dell'università scioperano contro l'aumento delle tasse.", [["Ti unisci allo sciopero", { rete: 2, intel: 1 }, "Scopri un movimento studentesco molto organizzato."], ["Osservi e prendi spunti", { intel: 1.5 }, "Torni a casa con molte idee."], ["Vai comunque a lezione", { prep: 1 }, "Le aule sono vuote."]]],
+    ["er_conferenza", "Una conferenza internazionale", "Ti chiedono di presentare una ricerca a una conferenza di studenti.", [["Presenti la tua ricerca", { intel: 2, rep: 1 }, "La tua presentazione piace molto."], ["Aiuti un compagno a presentarla", { rete: 1, intel: 1 }, "Un lavoro di squadra."], ["Rinunci", { prep: 0.5 }, "Un'occasione persa."]]],
+    ["er_compagni_italiani", "Gli altri italiani di {erasmus}", "La comunità italiana ti chiede di organizzare una serata per le elezioni in Italia.", [["Organizzi un dibattito tra italiani all'estero", { rep: 1, rete: 2 }, "Un dibattito vivace: scopri cosa pensano gli italiani fuori."], ["Fai solo una cena", { rete: 1 }, "Una serata piacevole."], ["Lasci perdere", { prep: 0.5 }, "Resti sui libri."]]],
+    ["er_burocrazia", "Burocrazia straniera", "Per registrarti come residente servono sei documenti e tre uffici diversi.", [["Fai tutto con pazienza", { intel: 0.5 }, "Dopo due settimane hai tutti i timbri."], ["Chiedi aiuto all'ambasciata", { rete: 1 }, "L'ambasciata ti aiuta."], ["Rinunci alla residenza", { prep: -0.5 }, "Qualche problema più avanti."]]],
+    ["er_tirocinio", "Un tirocinio in un'istituzione", "Un'agenzia europea cerca tirocinanti per due mesi.", [["Ti candidi", { intel: 2, rete: 2, prep: -1 }, "Ti prendono: un'esperienza preziosa.", 0.5, { prep: 0.5 }, "Non ti prendono, ma ci hai provato."], ["Resti concentrato/a sugli esami", { prep: 2 }, "Più crediti."], ["Ti candidi per l'anno prossimo", { intel: 0.5 }, "Un piano per il futuro."]]],
+    ["er_sport", "Il torneo di calcio Erasmus", "C'è un torneo tra le squadre delle nazioni Erasmus.", [["Giochi per l'Italia", { rete: 2 }, "Arrivate in semifinale: grande festa."], ["Fai il tifo", { rete: 1 }, "Ti diverti."], ["Studi", { prep: 1.5 }, "Un pomeriggio sui libri."]]],
+    ["er_social_italia", "Polemica a casa sui social", "A casa qualcuno ti accusa di essere «in vacanza» mentre il partito ha bisogno di te.", [["Racconti con un video cosa stai imparando", { rep: 1, trust: 1 }, "Il video convince quasi tutti."], ["Ignori", { prep: 0.5 }, "La polemica si spegne da sola."], ["Rispondi piccato/a", { rep: -1, trust: -1 }, "La risposta peggiora le cose."]]],
+    ["er_volontariato", "Volontariato con i rifugiati", "Un'associazione di {erasmus} cerca volontari per aiutare i rifugiati.", [["Fai volontariato ogni settimana", { rete: 2, intel: 1, prep: -1 }, "Un'esperienza che ti segna."], ["Dai una mano una volta", { rete: 1 }, "Un piccolo aiuto."], ["Non hai tempo", { prep: 1 }, "Ti concentri sullo studio."]]],
+    ["er_media_alto", "Una media altissima", "Il tuo coordinatore Erasmus ti propone di restare un semestre in più.", [["Resti solo il semestre previsto", { prep: 1 }, "Torni come previsto, con ottimi voti."], ["Chiedi una lettera di raccomandazione", { intel: 1, rete: 1 }, "La lettera ti aprirà porte in futuro."], ["Promettiti di tornare per la magistrale", { intel: 0.5 }, "Un'idea per il futuro."]]],
+    ["er_cucina", "Cena di nazioni", "Ogni studente porta un piatto del suo paese.", [["Prepari un piatto della tua regione", { rete: 2 }, "Il tuo piatto è il più apprezzato."], ["Porti una pizza surgelata", { rete: -1 }, "Gli altri italiani si vergognano di te."], ["Organizzi tu la cena", { rete: 3, prep: -1 }, "Una serata memorabile."]]],
+    ["er_esame_finale", "La sessione d'esami finale", "Arriva la sessione d'esami prima del ritorno: quattro esami in tre settimane.", [["Ti chiudi in biblioteca", { prep: 4, intel: 1 }, "Passi tutti gli esami con ottimi voti."], ["Ne dai solo due", { prep: 2 }, "Il resto lo recupererai in Italia."], ["Ti affidi alla fortuna", { prep: 1 }, "Ne passi tre.", 0.5, { prep: -1 }, "Ne passi solo uno."]]],
+    ["er_mostra", "Una mostra sulla storia europea", "Un museo di {erasmus} ospita una mostra sulla storia dell'integrazione europea.", [["Ci vai e scrivi le tue riflessioni", { intel: 1.5 }, "Un pomeriggio che ti apre la mente."], ["Ci porti gli amici", { rete: 1, intel: 0.5 }, "Una visita di gruppo."], ["Salti", { prep: 0.5 }, "Un'occasione persa."]]],
+    ["er_elezioni_casa", "Si vota in Italia mentre sei via", "In Italia si vota e tu sei all'estero.", [["Voti per corrispondenza e aiuti gli altri a farlo", { rep: 0.5, rete: 1 }, "Aiuti decine di studenti a votare."], ["Torni apposta per votare", { trust: 1, prep: -2 }, "Un viaggio costoso, ma il partito apprezza."], ["Non voti", { rep: -0.5 }, "Ti pesa un po'."]]],
+    ["er_ricercatore", "Un professore ti propone di fare ricerca", "Un professore ti offre di collaborare a una ricerca sulle politiche giovanili europee.", [["Accetti con entusiasmo", { intel: 2, prep: 1 }, "Il tuo nome finirà in una pubblicazione."], ["Accetti solo da remoto dopo il ritorno", { intel: 1 }, "Una collaborazione che continua."], ["Declini", { prep: 0.5 }, "Ti concentri sugli esami."]]],
+    ["er_furto", "Ti rubano il portafoglio", "In metropolitana ti rubano il portafoglio con documenti e carta.", [["Denunci e blocchi tutto", { intel: 0.5 }, "Un pomeriggio di burocrazia, ma risolvi."], ["Chiedi aiuto agli amici Erasmus", { rete: 1 }, "Gli amici ti prestano soldi."], ["Te la prendi con te stesso/a", { prep: -1 }, "Una settimana storta."]]],
+    ["er_ultima_sera", "L'ultima sera a {erasmus}", "Domani si torna: gli amici organizzano una festa d'addio.", [["Una festa fino all'alba", { rete: 2 }, "Promesse di rivedersi in tutta Europa."], ["Una cena tranquilla con i più cari", { rete: 1 }, "Una serata commovente."], ["Prepari la valigia e dormi", { prep: 0.5 }, "Parti riposato/a."]]]
+  ].map(function (x) { return { id: x[0], r: ["erasmus"], cat: "Erasmus", t: x[1], b: x[2], ch: x[3] }; });
+  CAREER_ERASMUS_DOSSIERS.forEach(function (d) { CAREER_ADULT_DOSSIERS.push(d); });
 
   function careerAdultContext(c) {
+    var ctxErasmus = c.erasmus ? c.erasmus.city : "l'estero";
     var rivals = activeParties().filter(function (p) { return p.id !== c.partyId; });
     var rival = rivals.length ? rivals[Math.floor(Math.random() * rivals.length)] : null;
     var cor = CAREER_MAG_CORRENTI[Math.floor(Math.random() * CAREER_MAG_CORRENTI.length)];
-    return {
+    return { erasmus: ctxErasmus,
       city: c.city, region: careerRegion(c), party: c.partyName || "il tuo partito", rival: rival ? rival.name : "un altro partito",
       mate: STAFF_FIRST_NAMES[Math.floor(Math.random() * STAFF_FIRST_NAMES.length)], mate2: generateStaffName(),
       place: c.office && c.office.place ? c.office.place : c.city, ministry: c.office && c.office.ministry ? c.office.ministry : "",
@@ -33304,7 +33410,7 @@
       }
     });
     if (c.pending.length >= 2) return;
-    var roles = careerAdultRoles(c);
+    var roles = careerInErasmus(c) ? ["erasmus"] : careerAdultRoles(c);
     var n = Math.random() < 0.35 ? 2 : 1;
     for (var i = 0; i < n; i++) {
       var pool = CAREER_ADULT_DOSSIERS.filter(function (d) {
@@ -33343,8 +33449,15 @@
     // risultato noto, e solo se si perde o ci si ritira.
     if (d.id === "congresso_partito") {
       c.partyCongressOpen = false;
-      if (outcome !== ch) { c.partyPromoCooldown = state.turn + 12; c.partyPromoCooldownWhy = "Hai perso l'ultimo congresso"; }
-      else if (!ch.act) { c.partyPromoCooldown = state.turn + 6; c.partyPromoCooldownWhy = "Ti sei ritirato/a dall'ultimo congresso"; }
+      var nextRank = CAREER_PARTY_LADDER[(c.partyRank || 0) + 1];
+      if (outcome !== ch) {
+        c.partyPromoCooldown = state.turn + 12; c.partyPromoCooldownWhy = "Hai perso l'ultimo congresso";
+        fxPush({ type: "big", theme: "dark", emoji: "🥀", eyebrow: "Congresso di " + (c.partyName || "partito"), title: "Hai perso il congresso", sub: fxEsc(outcome.result || "") });
+      } else if (!ch.act) {
+        c.partyPromoCooldown = state.turn + 6; c.partyPromoCooldownWhy = "Ti sei ritirato/a dall'ultimo congresso";
+      } else {
+        fxPush({ type: "big", theme: "gold", emoji: "🏛️", eyebrow: "Congresso di " + (c.partyName || "partito"), title: "Hai vinto il congresso", sub: (nextRank ? "Ora sei " + fxEsc(nextRank.label.toLowerCase()) + ". " : "") + fxEsc(ch.result || "") });
+      }
     }
     var eff = outcome.eff || {};
     careerAdultApply(c, eff);
@@ -33352,7 +33465,12 @@
     var resultText = outcome.result;
     var bridge = null;
     var act = outcome.act;
-    if (act === "esami") resultText = careerRunExams(c, ch.n);
+    if (act === "erasmus") resultText = careerStartErasmus(c);
+    else if (act === "deputato_lista") {
+      c.candidacy = { type: "politiche", office: "deputato", place: careerRegion(c), turn: state.turn, campagna: ch.listHead ? 10 : 0, listHead: !!ch.listHead };
+      addCareerDiaryEntry("Candidatura alla Camera", "Sei candidato/a alla Camera " + (ch.listHead ? "da capolista " : "") + "per " + c.partyName + " nella circoscrizione " + careerRegion(c) + ".");
+    }
+    else if (act === "esami") resultText = careerRunExams(c, ch.n);
     else if (act === "laurea") resultText = careerGraduate(c, ch) + " " + ch.result;
     else if (act === "ricandida" && c.office) {
       var type = CAREER_ELECTION_TYPES.filter(function (t) { return t.offices.indexOf(c.office.id) !== -1; })[0];
@@ -33419,6 +33537,7 @@
   ];
   function careerAdultRoleLine(c) {
     var bits = [];
+    if (careerInErasmus(c)) bits.push("✈️ In Erasmus a " + c.erasmus.city + " (ancora " + (c.erasmus.until - state.turn) + " settimane)");
     if (c.office) bits.push(careerOfficeLabel(c));
     if (c.track) bits.push(careerTrackRankLabel(c) + (c.track.id === "sindacato" ? " (" + (CAREER_UNIONS.filter(function (u) { return u.id === c.track.union; })[0] || {}).label + ")" : c.track.id === "militare" ? " (" + CAREER_MIL_BRANCHES[c.track.branch].label + ")" : ""));
     if (c.csm) bits.push("Membro del CSM");
@@ -40207,15 +40326,28 @@
   // successo: decine di scene in fila. Se la partita è stata sostituita o il tempo salta di più di una
   // settimana, si riparte da zero senza animare il passato.
   var fxRefs = { state: null, player: null, career: null, turn: null, warmTurn: null };
+  var fxUserActed = false, fxManualAt = 0;
+  if (typeof document !== "undefined") {
+    ["pointerdown", "keydown"].forEach(function (t) { document.addEventListener(t, function () { fxUserActed = true; }, true); });
+  }
+  // scene chiamate direttamente dal gioco (es. il risultato di un congresso)
+  function fxPush(e) {
+    if (!FX_ON || FX_REDUCED) return;
+    fxManualAt = Date.now();
+    if (fxQueue.length < 4) fxQueue.push(e);
+    setTimeout(fxPlayNext, 0);
+  }
   function fxDetectEvents() {
     var replaced = fxRefs.state !== state || fxRefs.player !== state.player || fxRefs.career !== state.career ||
       fxRefs.turn === null || Math.abs(state.turn - fxRefs.turn) > 1;
     var warmTurn = replaced ? state.turn : fxRefs.warmTurn;
+    if (replaced) fxUserActed = false;
     fxRefs = { state: state, player: state.player, career: state.career, turn: state.turn, warmTurn: warmTurn };
     // Periodo di assestamento: dopo un caricamento (o una partita nuova) il gioco sistema da solo i
-    // salvataggi vecchi e ricalcola alcuni valori nelle prime schermate. Finché non si gioca la prima
-    // settimana le istantanee si aggiornano senza generare scene.
-    if (replaced || state.turn === warmTurn) {
+    // salvataggi vecchi e ricalcola alcuni valori nelle prime schermate. Finché il giocatore non tocca
+    // nulla le istantanee si aggiornano senza generare scene; i traguardi automatici (sondaggi, rating,
+    // iscritti...) restano sospesi per tutta la prima settimana dopo il caricamento (vedi fxDetectMore).
+    if (replaced || !fxUserActed) {
       fxSnap = fxTakeSnapshot();
       fxSnapMore = fxTakeSnapshotMore();
       return;
@@ -40277,6 +40409,11 @@
   function fxSceneHtml(e) {
     var p = state.player;
     if (e.type === "big" || e.type === "regime") return fxBigHtml(e);
+    if (e.type === "erasmus") {
+      return '<div class="fx-bg fx-th-eu"></div><p class="fx-eyebrow">Erasmus · sei mesi all\'estero</p>' +
+        '<div class="fx-route"><span class="fx-route-a">🇮🇹</span><span class="fx-route-line"></span><span class="fx-plane">✈️</span><span class="fx-route-b">🎓</span></div>' +
+        '<h2>Destinazione ' + fxEsc(e.city) + "</h2><p class=\"fx-sub\">Sei mesi di studio, lingue nuove e amici da tutta Europa. La politica di casa può aspettare.</p>";
+    }
     if (e.type === "voto" || e.type === "fiducia") {
       var yes = e.type === "fiducia" ? 0.56 : (e.passed ? 0.53 + Math.random() * 0.12 : 0.32 + Math.random() * 0.14);
       var passed = e.type === "fiducia" ? true : e.passed;
@@ -40364,7 +40501,7 @@
         if (k < 1) requestAnimationFrame(step);
       })(performance.now());
     });
-    if (/governo|fondato|indipendenza|presidente/.test(e.type) || (e.type === "big" && /good|gold|fireworks/.test(e.theme)) || (e.type === "regime" && e.regime === "monarchico") || (e.type === "scuola" && state.career && state.career.role) || (e.type === "referendum" && e.passed)) setTimeout(fxConfetti, 500);
+    if (/governo|fondato|indipendenza|presidente|erasmus/.test(e.type) || (e.type === "big" && /good|gold|fireworks/.test(e.theme)) || (e.type === "regime" && e.regime === "monarchico") || (e.type === "scuola" && state.career && state.career.role) || (e.type === "referendum" && e.passed)) setTimeout(fxConfetti, 500);
     var done = false;
     function close() {
       if (done) return; done = true;
@@ -40429,7 +40566,8 @@
     if (now.minister === true && was.minister === false && state.playerMinistry) ev.push({ type: "big", theme: "gold", emoji: "🗄️", eyebrow: "Giuramento al Quirinale", title: "Diventi Ministro", sub: "Ministero " + fxEsc(state.playerMinistry.ministry || "") + "." });
     if (now.trial === true && was.trial === false) ev.push({ type: "big", theme: "news", emoji: "🗞️", eyebrow: "Prima pagina", title: "Si apre un'inchiesta sul partito", sub: "La procura indaga: i giornali non parlano d'altro." });
     if (now.leader === false && was.leader === true) ev.push({ type: "big", theme: "dark", emoji: "🪑", eyebrow: "Il partito", title: "Non sei più il leader", sub: "La segreteria passa ad altre mani." });
-    var pollJump = now.poll !== null && was.poll !== null && Math.abs(now.poll - was.poll) > 4;
+    var settling = fxRefs.warmTurn !== null && state.turn <= fxRefs.warmTurn + 1;
+    var pollJump = settling || (now.poll !== null && was.poll !== null && Math.abs(now.poll - was.poll) > 4);
     if (now.poll !== null && was.poll !== null && !pollJump) {
       FX_POLL_MILESTONES.forEach(function (m) { if (was.poll < m && now.poll >= m) ev.push({ type: "big", theme: "good", emoji: "📈", eyebrow: "Sondaggi", title: "Superi il " + m + "%", sub: "Il partito cresce: un traguardo che pochi raggiungono." }); });
     }
@@ -40437,13 +40575,13 @@
     if (now.cDiploma && was.cDiploma === false) ev.push({ type: "big", theme: "good", emoji: "🎓", eyebrow: "Esame di Stato", title: "Diplomato/a!", sub: state.career.diploma ? "Voto: " + state.career.diploma.voto + "/100" + (state.career.diploma.lode ? " e lode" : "") : "" });
     if (now.cLaurea && was.cLaurea === false) ev.push({ type: "big", theme: "good", emoji: "🎓", eyebrow: "Università", title: "Laurea!", sub: "Corona d'alloro e festa con la famiglia." });
     if (now.cParty && now.cParty !== was.cParty && state.career) ev.push({ type: "big", theme: "gold", emoji: "🪪", eyebrow: "Tesseramento", title: "Prendi la tessera", sub: fxEsc(state.career.partyName || "") });
-    if (now.cRank !== null && was.cRank !== null && now.cRank > was.cRank) ev.push({ type: "big", theme: "gold", emoji: "⭐", eyebrow: "Il partito", title: "Promozione nel partito", sub: "Sali di grado: ora conti di più nelle decisioni." });
+    if (now.cRank !== null && was.cRank !== null && now.cRank > was.cRank && Date.now() - fxManualAt > 4000) ev.push({ type: "big", theme: "gold", emoji: "⭐", eyebrow: "Il partito", title: "Promozione nel partito", sub: "Sali di grado: ora conti di più nelle decisioni." });
     if (now.year && was.year && now.year !== was.year) ev.push({ type: "big", theme: "fireworks", emoji: "🎆", eyebrow: "Capodanno", title: "Buon " + now.year + "!", sub: "Un anno nuovo comincia: vediamo cosa porterà alla politica italiana." });
     if (now.campaign && was.campaign === false) ev.push({ type: "big", theme: "news", emoji: "📣", eyebrow: "Elezioni politiche", title: "Inizia la campagna elettorale", sub: "Manifesti, comizi e dibattiti in TV: ogni settimana conta il doppio." });
     if (now.poll !== null && was.poll !== null && !pollJump) {
       FX_POLL_MILESTONES.forEach(function (m) { if (was.poll >= m && now.poll < m && m >= 5) ev.push({ type: "big", theme: "dark", emoji: "📉", eyebrow: "Sondaggi", title: "Scendi sotto il " + m + "%", sub: "Il partito perde terreno: serve una reazione." }); });
     }
-    if (now.iscritti !== null && was.iscritti !== null && now.iscritti - was.iscritti < was.iscritti * 0.5 + 500) {
+    if (!settling && now.iscritti !== null && was.iscritti !== null && now.iscritti - was.iscritti < was.iscritti * 0.5 + 500) {
       [1000, 5000, 10000, 50000, 100000, 500000].forEach(function (m) { if (was.iscritti < m && now.iscritti >= m) ev.push({ type: "big", theme: "good", emoji: "🪪", eyebrow: "Tesseramento", title: m.toLocaleString("it-IT").replace(/,/g, ".") + " iscritti", sub: "Il partito cresce sul territorio, tessera dopo tessera." }); });
     }
     if (now.fondi !== null && was.fondi !== null && was.fondi >= 0 && now.fondi < 0) ev.push({ type: "big", theme: "war", emoji: "💸", eyebrow: "Tesoreria", title: "Casse in rosso", sub: "Il partito spende più di quanto incassa: servono fondi, e in fretta." });
@@ -40458,11 +40596,11 @@
       var rf2 = typeof constReformById === "function" ? constReformById(was.constPending) : null;
       ev.push({ type: "big", theme: "dark", emoji: "📜", eyebrow: "Riforma costituzionale", title: "La riforma non passa", sub: rf2 ? fxEsc(rf2.label) + ": l'iter si ferma qui." : "" });
     }
-    if (now.rating !== null && was.rating !== null && now.rating !== was.rating) {
+    if (!settling && now.rating !== null && was.rating !== null && now.rating !== was.rating) {
       var up = now.rating > was.rating;
       ev.push({ type: "big", theme: up ? "good" : "dark", emoji: up ? "📈" : "📉", eyebrow: "Agenzie di rating", title: up ? "Il rating dell'Italia sale" : "L'Italia viene declassata", sub: up ? "I mercati premiano i conti pubblici." : "Il debito italiano diventa più caro da finanziare." });
     }
-    if (now.spread !== null && was.spread !== null && was.spread < 400 && now.spread >= 400) ev.push({ type: "big", theme: "war", emoji: "🔥", eyebrow: "Mercati", title: "Lo spread supera quota 400", sub: "I titoli di Stato vanno sotto pressione: torna l'incubo del 2011." });
+    if (!settling && now.spread !== null && was.spread !== null && was.spread < 400 && now.spread >= 400) ev.push({ type: "big", theme: "war", emoji: "🔥", eyebrow: "Mercati", title: "Lo spread supera quota 400", sub: "I titoli di Stato vanno sotto pressione: torna l'incubo del 2011." });
     if (now.nsTerms !== null && was.nsTerms !== null && now.nsTerms > was.nsTerms) ev.push({ type: "big", theme: "gold", emoji: "🗳️", eyebrow: fxEsc(state.newState.name), title: "Rieletto/a!", sub: "Gli elettori confermano il tuo governo." });
     return ev;
   }
