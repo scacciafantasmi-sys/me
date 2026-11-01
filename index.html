@@ -867,7 +867,7 @@
      (#app.fx-enter), non a ogni click. */
   #fx-stars, #fx-confetti, #fx-tricolore { display: none; }
   html.fx #fx-stars { display: block; position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-  html.fx #fx-confetti { display: block; position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2000; }
+  html.fx #fx-confetti.on { display: block; position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2000; }
   html.fx #fx-tricolore { display: block; position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 40; pointer-events: none;
     background: linear-gradient(90deg, #009246 0 33.3%, #f4f5fb 33.3% 66.6%, #ce2b37 66.6% 100%); }
   html.fx #fx-tricolore::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.9), transparent);
@@ -1071,7 +1071,7 @@
   .toast:not(.show) { visibility: hidden; transition: opacity 0.2s ease, transform 0.2s ease, visibility 0s linear 0.2s; }
   @media (hover: none), (max-width: 700px) { .hemicycle { will-change: transform; } }
   html.is-scrolling .fx-ribbon-ico, html.is-scrolling #fx-tricolore::after,
-  html.is-scrolling .page-nav-btn.active .page-nav-icon::after { animation-play-state: paused !important; }
+  html.is-scrolling .page-nav-btn.active .page-nav-icon::after { animation: none !important; }
 
   .fx-route { position: relative; height: 70px; margin: 0.8rem 0 0.4rem; }
   .fx-route-a, .fx-route-b { position: absolute; top: 18px; font-size: 1.8rem; }
@@ -40585,6 +40585,7 @@
     if (!FX_ON || FX_REDUCED) return;
     var cv = document.getElementById("fx-confetti");
     if (!cv) return;
+    cv.classList.add("on");
     var W = cv.width = window.innerWidth, H = cv.height = window.innerHeight, g = cv.getContext("2d");
     var cols = ["#009246", "#f4f5fb", "#ce2b37", "#9b8bff", "#5ee6d6", "#ffb84d"];
     var parts = [];
@@ -40598,7 +40599,7 @@
         q.x += q.vx + Math.sin(t * 3 + q.ph) * 0.6; q.y += q.vy; q.r += q.vr;
         g.save(); g.translate(q.x, q.y); g.rotate(q.r); g.globalAlpha = Math.max(0, 1 - Math.max(0, t - 2.4)); g.fillStyle = q.c; g.fillRect(-q.w / 2, -q.h / 2, q.w, q.h); g.restore();
       });
-      if (t < 3.4) requestAnimationFrame(frame); else g.clearRect(0, 0, W, H);
+      if (t < 3.4) requestAnimationFrame(frame); else { g.clearRect(0, 0, W, H); cv.classList.remove("on"); }
     })(t0);
   }
   // --- Scene animate per i grandi eventi (sempre solo con ?fx=1) ---
@@ -41002,6 +41003,25 @@
       gg.fillStyle = grd; gg.fillRect(0, 0, W, H);
     }
     size(); paintGlow();
+    // Segnalato da un giocatore (iPhone 13 mini): con le animazioni attive lo scroll laggava. Sui
+    // dispositivi touch lo sfondo stellato (alone e stelle) si disegna una volta sola e resta fermo:
+    // nessun ridisegno, nessun livello in movimento dietro la pagina mentre si scorre.
+    if (window.matchMedia && window.matchMedia("(hover: none)").matches) {
+      var paintStatic = function () {
+        g.clearRect(0, 0, W, H); g.drawImage(glow, 0, 0); g.fillStyle = "#ffffff";
+        stars.forEach(function (st) { g.globalAlpha = st.a; g.beginPath(); g.arc(st.x, st.y, st.r, 0, 6.3); g.fill(); });
+        g.globalAlpha = 1;
+      };
+      paintStatic();
+      // Dal primo tocco fino a poco dopo la fine dello scroll (inerzia compresa) le animazioni continue
+      // di decoro restano in pausa: nessun lavoro in più mentre si scorre. Ripartono da dove erano.
+      ["touchstart", "touchmove", "scroll"].forEach(function (t) { window.addEventListener(t, function () { fxMarkScrolling(450); }, { passive: true }); });
+      window.addEventListener("touchend", function () { fxMarkScrolling(450); }, { passive: true });
+      var rsT = null;
+      window.addEventListener("resize", function () { clearTimeout(rsT); rsT = setTimeout(function () { size(); paintGlow(); paintStatic(); }, 200); });
+      fxStarsResume = function () {};
+      return;
+    }
     window.addEventListener("resize", function () { size(); paintGlow(); });
     var last = performance.now(), lastDraw = 0, running = false, lastScroll = -1e9;
     // Durante lo scroll lo sfondo stellato si ferma: ridisegnarlo costringe il telefono a ricomporre
@@ -41031,10 +41051,10 @@
   }
   var fxStarsResume = function () {};
   var fxScrollTimer = null;
-  function fxMarkScrolling() {
+  function fxMarkScrolling(ms) {
     var root = document.documentElement;
     if (!fxScrollTimer) root.classList.add("is-scrolling"); else clearTimeout(fxScrollTimer);
-    fxScrollTimer = setTimeout(function () { fxScrollTimer = null; root.classList.remove("is-scrolling"); }, 250);
+    fxScrollTimer = setTimeout(function () { fxScrollTimer = null; root.classList.remove("is-scrolling"); }, ms || 250);
   }
   if (FX_ON && typeof document !== "undefined") {
     document.documentElement.classList.add("fx");
