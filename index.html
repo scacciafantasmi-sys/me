@@ -34217,18 +34217,29 @@
   // le primarie successive per andarsene. Ora puoi lasciare subito il partito e fondarne uno tuo, con
   // nome, sigla e area politica scelti da te (stesso meccanismo della scissione nelle primarie).
   function canLeaveAndFound(p) {
-    return !p.playerIsLeader && !p.permanentlyBanned && !(p.incarceratedUntilTurn && state.turn < p.incarceratedUntilTurn) &&
+    if (p.playerIsLeader) return state.mode !== "president" && !state.regionalPresidency;
+    return !p.permanentlyBanned && !(p.incarceratedUntilTurn && state.turn < p.incarceratedUntilTurn) &&
       (p.sidelineReason === "dimissioni" || p.sidelineReason === "primarie" || !p.sidelineReason) && state.mode !== "president";
   }
-  function renderLeaveAndFoundForm(p) {
+  function renderLeaveAndFoundForm(p, asLeader) {
     if (!canLeaveAndFound(p)) return "";
     var famOpts = FAMILIES.map(function (f) { return '<option value="' + f.id + '"' + (f.id === p.family ? " selected" : "") + ">" + f.label + (f.id === p.family ? " (come ora)" : "") + "</option>"; }).join("");
-    return '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Lascia il partito e fondane uno tuo</div>' +
+    var fields = '<div class="field"><label class="field-label" for="newparty-name">Nome del nuovo partito</label><input id="newparty-name" type="text" maxlength="40" placeholder="Es. Nuova Italia Civica"></div>' +
+      '<div class="field"><label class="field-label" for="newparty-short">Sigla (facoltativa)</label><input id="newparty-short" type="text" maxlength="8" placeholder="Es. NIC"></div>' +
+      '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family">' + famOpts + "</select></div>";
+    if (asLeader) {
+      return '<div class="field"><label class="field-label">Guida del partito</label>' +
+        '<p class="ci-hint">Puoi dimetterti normalmente: un dirigente interno prende il tuo posto e potrai riprovarci alle prossime primarie. Oppure puoi lasciare il partito e fondarne un altro: ' + p.name + ' resta a un dirigente interno con la maggior parte del seguito, tu porti con te i fedelissimi. Se cambi area politica ti seguono in meno.</p>' +
+        '<details class="log"><summary>Dati del nuovo partito (solo per fondarne un altro)<span>▾</span></summary>' + fields + "</details>" +
+        '<div style="display:flex;gap:.5rem;flex-wrap:wrap"><button type="button" class="staff-btn" id="resign-btn">Dai le dimissioni da leader</button>' +
+        '<button type="button" class="staff-btn" id="leave-found-btn">Lascia il partito e fondane un altro</button></div></div>';
+    }
+    return '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Lascia il partito e fondane un altro</div>' +
       '<p class="ci-hint" style="margin:.3rem 0 .5rem">' + p.name + ' resta a ' + (p.interimLeaderName || "chi lo guida ora") + ' con la maggior parte del seguito; tu porti con te i fedelissimi e torni leader. Se cambi area politica ti seguono in meno.</p>' +
       '<div class="field"><label class="field-label" for="newparty-name">Nome del nuovo partito</label><input id="newparty-name" type="text" maxlength="40" placeholder="Es. Nuova Italia Civica"></div>' +
       '<div class="field"><label class="field-label" for="newparty-short">Sigla (facoltativa)</label><input id="newparty-short" type="text" maxlength="8" placeholder="Es. NIC"></div>' +
       '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family">' + famOpts + "</select></div>" +
-      '<button type="button" class="staff-btn" id="leave-found-btn">Lascia ' + p.name + " e fonda il partito</button></div>";
+      '<button type="button" class="staff-btn" id="leave-found-btn">Lascia ' + p.name + " e fondane un altro</button></div>";
   }
   function renderPlayerStats() {
     var p = state.player;
@@ -35286,9 +35297,9 @@
         }).join(" · ") + " Fissi per tutta la partita.</p></div>"
       : "";
     var resignHtml = p.playerIsLeader
-      ? '<div class="field"><label class="field-label">Guida del partito</label>' +
+      ? (canLeaveAndFound(p) ? renderLeaveAndFoundForm(p, true) : '<div class="field"><label class="field-label">Guida del partito</label>' +
         '<p class="ci-hint">Puoi lasciare la guida del partito in qualsiasi momento: un dirigente interno prenderà il tuo posto, e potrai provare a riconquistarla a una prossima primaria, oppure lasciare che sia lui a portare avanti il progetto.</p>' +
-        '<button type="button" class="staff-btn" id="resign-btn">Dai le dimissioni da leader</button></div>'
+        '<button type="button" class="staff-btn" id="resign-btn">Dai le dimissioni da leader</button></div>')
       : "";
     var html = '<section aria-label="Profilo ideologico"><details class="log">' +
       '<summary>Ideologia e leader<span>▾</span></summary>' +
@@ -43000,7 +43011,10 @@
       var name = (document.getElementById("newparty-name").value || "").trim().replace(/\s+/g, " ");
       var short = (document.getElementById("newparty-short").value || "").trim().toUpperCase();
       var fam = document.getElementById("newparty-family").value;
-      if (name.length < 3) { showSaveStatus("Scrivi il nome del nuovo partito.", true); return; }
+      if (name.length < 3) {
+        var det = document.getElementById("newparty-name").closest("details"); if (det) det.open = true;
+        showSaveStatus("Scrivi il nome del nuovo partito.", true); return;
+      }
       var taken = activeParties().some(function (x) { var pt = partyById(x.id || x) || x; return pt && pt.name && pt.name.toLowerCase() === name.toLowerCase(); });
       if (taken || name.toLowerCase() === p.name.toLowerCase()) { showSaveStatus("Esiste già un partito con questo nome.", true); return; }
       if (!window.confirm("Lasci " + p.name + " e fondi «" + name + "»? Non potrai più tornare alla guida del partito di prima.")) return;
