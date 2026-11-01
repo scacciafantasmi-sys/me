@@ -21942,11 +21942,26 @@
       ]
     };
   }
+  // Una lettura rimasta a metà (salvataggio vecchio, iter già chiuso altrove, tappa non valida) non deve
+  // mai bloccare la partita: l'iter si chiude con un messaggio e si va avanti.
+  function constReformBroken(dossier, r) {
+    return !r || !constReformById(r.id) || !CONST_STAGES[r.stage];
+  }
+  function closeBrokenConstReform(dossier) {
+    var r = state.pendingConstReform;
+    var rf = r ? constReformById(r.id) : null;
+    state.pendingConstReform = null;
+    var text = "L'iter della riforma costituzionale" + (rf ? " (" + rf.label + ")" : "") + " si interrompe per un vizio di procedura: potrai riproporla più avanti.";
+    state.log.unshift({ week: state.turn, title: dossier && dossier.title ? dossier.title : "Riforma costituzionale", choiceLabel: "Iter interrotto", result: text, headlines: [], type: "istituzioni", cat: "Riforma Costituzionale" });
+    state.resultData = { resultText: text, headlines: [] };
+  }
   function resolveConstReadingChoice(dossier, choice) {
     var p = state.player;
     var r = state.pendingConstReform;
+    if (constReformBroken(dossier, r)) { closeBrokenConstReform(dossier); return; }
     var reform = constReformById(r.id);
     var st = CONST_STAGES[r.stage];
+    if (!r.votes) r.votes = [];
     var text;
     if (choice.constChoice === "ritira") {
       state.pendingConstReform = null;
@@ -22008,6 +22023,8 @@
   function resolveConstReferendumChoice(dossier, choice) {
     var p = state.player;
     var r = state.pendingConstReform;
+    if (!r || !constReformById(r.id)) { closeBrokenConstReform(dossier); return; }
+    if (!r.votes) r.votes = [];
     var reform = constReformById(r.id);
     state.pendingConstReform = null;
     var support = r.votes.length ? r.votes.reduce(function (a, b) { return a + b; }, 0) / r.votes.length : 0.55;
@@ -43180,8 +43197,19 @@
       btn.addEventListener("click", function () {
         var dossier = currentDossier();
         var idx = parseInt(btn.getAttribute("data-choice"), 10);
-        var choice = dossier.choices[idx];
-        resolveDossierChoice(dossier, choice);
+        var choice = dossier && dossier.choices ? dossier.choices[idx] : null;
+        // Segnalato da un giocatore (bloccato alla prima lettura al Senato di una riforma): se una scelta
+        // va in errore il click non faceva nulla e la partita restava ferma sullo stesso dossier. Ora il
+        // dossier si chiude comunque e si può andare avanti.
+        try {
+          if (!choice) throw new Error("scelta non trovata");
+          resolveDossierChoice(dossier, choice);
+        } catch (choiceErr) {
+          if (window.console && console.error) console.error("Errore nella scelta del dossier:", choiceErr);
+          if (dossier && (dossier.constReform || dossier.constReferendum)) closeBrokenConstReform(dossier);
+          else state.resultData = { resultText: "La decisione su \"" + (dossier && dossier.title || "questo dossier") + "\" non produce effetti: la questione si chiude qui e puoi andare avanti.", headlines: [] };
+        }
+        if (!state.resultData) state.resultData = { resultText: "", headlines: [] };
         state.phase = "result";
         save();
         render();
