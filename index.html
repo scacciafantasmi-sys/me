@@ -119,6 +119,21 @@
   .slots-panel, .save-bar, .toast, .notice-block, .page-nav-icon, .nucleo-pill.capital {
     backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
   }
+  /* Segnalato da un giocatore: da telefono lo scroll laggava. La sfocatura "vetro" su decine di pannelli
+     va ricalcolata a ogni fotogramma di scroll, ed è il costo più alto di tutta la pagina sui telefoni.
+     Sui dispositivi touch i pannelli restano uguali alla vista, ma con un fondo pieno invece della
+     sfocatura dal vivo. Le finestre sovrapposte (guida, salvataggi, avvisi) tengono la sfocatura: sono
+     una alla volta e servono a leggere il testo sopra la pagina. */
+  @media (hover: none), (max-width: 700px) {
+    .setup-card, .dossier, .qt-scene, .election-card, .log, .chamber, .clipping, .staff-card,
+    .save-bar, .notice-block, .page-nav-icon, .nucleo-pill.capital, .career-nav-sticky.is-fixed {
+      backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    .setup-card, .dossier, .election-card, .log, .chamber, .clipping, .staff-card, .notice-block {
+      background-color: color-mix(in srgb, var(--panel-solid) 93%, transparent);
+    }
+    .career-nav-sticky.is-fixed { background: color-mix(in srgb, var(--bg) 97%, transparent); }
+  }
 
   /* ---------- Tema visivo dinamico ----------
      Lo sfondo dell'intera pagina cambia colore in base alla situazione politica del momento: neutro
@@ -31317,7 +31332,9 @@
     var r = ph.getBoundingClientRect();
     if (r.top < 0) {
       if (!nav.classList.contains("is-fixed")) { ph.style.height = nav.offsetHeight + "px"; nav.classList.add("is-fixed"); }
-      nav.style.left = r.left + "px"; nav.style.width = r.width + "px";
+      var l = r.left + "px", w = r.width + "px";
+      if (nav.style.left !== l) nav.style.left = l;
+      if (nav.style.width !== w) nav.style.width = w;
     } else if (nav.classList.contains("is-fixed")) {
       nav.classList.remove("is-fixed"); nav.style.left = ""; nav.style.width = ""; ph.style.height = "0px";
     }
@@ -40934,11 +40951,15 @@
     }
     size(); paintGlow();
     window.addEventListener("resize", function () { size(); paintGlow(); });
-    var last = performance.now(), lastDraw = 0, running = false;
+    var last = performance.now(), lastDraw = 0, running = false, lastScroll = -1e9;
+    // Durante lo scroll lo sfondo stellato si ferma: ridisegnarlo costringe il telefono a ricomporre
+    // tutta la pagina a ogni fotogramma. Riparte da solo un attimo dopo che lo scroll si è fermato.
+    window.addEventListener("scroll", function () { lastScroll = performance.now(); }, { passive: true });
+    window.addEventListener("touchmove", function () { lastScroll = performance.now(); }, { passive: true });
     function frame(now) {
       if (document.hidden || !FX_ON) { running = false; return; }
       requestAnimationFrame(frame);
-      if (fxPlaying || now - lastDraw < 33) return;
+      if (fxPlaying || now - lastDraw < 33 || now - lastScroll < 300) { if (now - lastScroll < 300) last = now; return; }
       var dt = Math.min(0.05, (now - last) / 1000); last = now; lastDraw = now;
       g.clearRect(0, 0, W, H);
       g.drawImage(glow, 0, 0);
