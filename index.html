@@ -15745,21 +15745,48 @@
   // riconoscimento del tema sa individuare in un testo — vedi STATEMENT_THEME_KEYWORDS: mostrarli per
   // esteso aiuta a scrivere un'iniziativa che il gioco sa davvero collegare a un indicatore.
   var INIZIATIVA_LIBERA_TOPIC_HINTS = "scuola, sanità, casa, lavoro, sicurezza, giustizia, ambiente, immigrazione, energia, trasporti, difesa, economia, corruzione, welfare, ricerca e innovazione, commercio estero, relazioni diplomatiche";
+  // Segnalato da un giocatore: fuori dal Parlamento la proposta veniva comunque "depositata" e attuata.
+  // Una legge la presenta solo chi siede in Parlamento o al governo; da fuori la proposta diventa una
+  // campagna pubblica, che fa parlare del partito ma non cambia la Scheda Paese.
+  // "su la sanità" → "sulla sanità": preposizione articolata davanti ai nomi dei temi.
+  function suArt(t) {
+    return String(t).replace(/\bsu (il|lo|la|l'|i|gli|le) /g, function (m, a) { return { "il": "sul ", "lo": "sullo ", "la": "sulla ", "l'": "sull'", "i": "sui ", "gli": "sugli ", "le": "sulle " }[a]; }).replace(/\bsu l'/g, "sull'");
+  }
+  function iniziativaCanLegislate(p) {
+    return !!(p && (p.inParliament || p.parliamentRole === "governo" || state.playerMinistry || (state.cabinet && state.cabinet.premierId === "player")));
+  }
+  function buildIniziativaCampaignEffects(text, classification) {
+    var boost = (text || "").trim().length >= 80 ? 1.15 : 1;
+    var tone = classification.tone, eff = {}, backfire = false;
+    if (!classification.themeMetric) { eff.visibilita = rand(0.3, 1); eff.reputazione = rand(-0.3, 0.3); return { effects: eff, backfire: false }; }
+    if (tone === "aggressivo") {
+      backfire = Math.random() < 0.3;
+      if (backfire) { eff.reputazione = -rand(1.5, 3.5); eff.visibilita = rand(1, 2.5); }
+      else { eff.visibilita = rand(2.5, 4.5) * boost; eff.reputazione = rand(0.5, 1.5); eff.iscritti = Math.round(rand(3, 8)); }
+    } else if (tone === "istituzionale") {
+      eff.reputazione = rand(1, 2) * boost; eff.visibilita = rand(0.5, 1.5); eff.iscritti = Math.round(rand(1, 4));
+    } else {
+      eff.reputazione = rand(0.5, 1.5) * boost; eff.visibilita = rand(1, 2.5); eff.iscritti = Math.round(rand(2, 6));
+    }
+    return { effects: eff, backfire: backfire };
+  }
   function renderIniziativaLiberaPanel() {
     var p = state.player;
     if (!p) return "";
     var weeksLeft = Math.max(0, (p.iniziativaLiberaCooldownTurn || 0) - state.turn);
+    var canLegislate = iniziativaCanLegislate(p);
     var html = '<section aria-label="Iniziativa Libera"><details class="log"><summary>Iniziativa Libera — una proposta scritta di tua mano<span>▾</span></summary>' +
       '<p class="ci-hint">Scrivi tu, con parole tue, una proposta concreta su un tema preciso. Se il testo lascia riconoscere con chiarezza l\'argomento (' + INIZIATIVA_LIBERA_TOPIC_HINTS +
       ', e altri ancora) l\'iniziativa sposta davvero l\'indicatore corrispondente nella Scheda Paese — non solo reputazione e visibilità, un effetto reale e duraturo. ' +
       'Il tono con cui scrivi decide quanto bene viene recepita (una linea aggressiva rende di più ma rischia di ritorcersi contro, una istituzionale è la più sicura), e il tuo peso ' +
-      'istituzionale del momento — governo, opposizione, o fuori dal Parlamento — amplifica o riduce l\'effetto reale, esattamente come per una mozione o una legge.</p>';
+      'istituzionale del momento — governo o opposizione — amplifica o riduce l\'effetto reale, esattamente come per una mozione o una legge.</p>' +
+      (canLegislate ? "" : '<p class="ci-hint"><strong>Sei fuori dal Parlamento: non puoi depositare una legge.</strong> La tua proposta diventa una campagna pubblica del partito: ne parlano giornali e social, ma non cambia la Scheda Paese finché non avrai parlamentari che la portino in aula.</p>');
     if (weeksLeft > 0) {
       html += '<p class="ci-hint"><strong>Non ancora disponibile.</strong> Potrai presentarne un\'altra tra ' + weeksLeft + ' settiman' + (weeksLeft === 1 ? "a" : "e") + '.</p>';
     } else {
       html += '<div class="field"><label class="field-label" for="iniziativa-libera-input">La tua proposta</label>' +
         '<textarea id="iniziativa-libera-input" class="autogrow-textarea" rows="8" placeholder="Scrivi qui, con parole tue, una proposta concreta…"></textarea></div>' +
-        '<div class="choices"><button type="button" class="choice-btn" id="iniziativa-libera-submit-btn"><span class="clabel">Presenta l\'iniziativa</span></button></div>';
+        '<div class="choices"><button type="button" class="choice-btn" id="iniziativa-libera-submit-btn"><span class="clabel">' + (canLegislate ? "Presenta l\'iniziativa" : "Lancia la campagna pubblica") + "</span></button></div>";
     }
     html += "</details></section>";
     return html;
@@ -15775,6 +15802,19 @@
       var text = (input ? input.value : "").trim();
       if (!text) { showSaveStatus("Scrivi qualcosa prima di presentare l'iniziativa.", true); return; }
       var classification = classifyStatement(text);
+      if (!iniziativaCanLegislate(p)) {
+        var camp = buildIniziativaCampaignEffects(text, classification);
+        p.iniziativaLiberaCooldownTurn = state.turn + INIZIATIVA_LIBERA_COOLDOWN_TURNS;
+        var topic = classification.themeMetric ? classification.topicLabel.toLowerCase() : null;
+        var campText = "Fuori dal Parlamento non puoi depositare una legge: la proposta" + (topic ? " su " + topic : "") + " diventa una campagna pubblica del partito. " +
+          (!topic ? "Senza un tema preciso, però, se ne parla poco." : camp.backfire ? "I toni troppo duri fanno discutere più di te che della proposta." : "Se ne parla, e qualcuno si avvicina al partito, ma nel Paese non cambia nulla finché non avrai parlamentari che la portino in aula.");
+        var campOut = applyChoice({ title: "Campagna pubblica" + (topic ? " — " + classification.topicLabel : ""), cat: "Iniziativa Libera" }, { label: "Campagna pubblica", effects: camp.effects, result: suArt(campText) });
+        showSaveStatus(campOut.resultText, !!camp.backfire);
+        if (input) input.value = "";
+        save();
+        render();
+        return;
+      }
       var built = buildIniziativaLiberaEffects(text, classification);
       p.iniziativaLiberaCooldownTurn = state.turn + INIZIATIVA_LIBERA_COOLDOWN_TURNS;
       var dossier = { title: "Iniziativa Libera — " + classification.topicLabel, cat: "Iniziativa Libera", topicLabel: classification.topicLabel };
@@ -15783,6 +15823,7 @@
         : built.backfire
           ? "L'iniziativa su " + classification.topicLabel.toLowerCase() + " non viene recepita come sperato, e si ritorce in parte contro chi l'ha proposta."
           : "L'iniziativa su " + classification.topicLabel.toLowerCase() + " viene messa in pratica: " + METRIC_LABELS[built.nationalMetric] + " ne risente davvero, in modo duraturo.";
+      resultText = suArt(resultText);
       var choice = { label: "Iniziativa Libera", effects: built.effects, result: resultText };
       var outcome = applyChoice(dossier, choice);
       // Un'iniziativa che tocca davvero un fronte della Scheda Paese non è mai gratis per le casse
@@ -15803,7 +15844,7 @@
         }
       }
       if (built.nationalMetric && !built.backfire) {
-        recordEnactedPolicy(dossier.title, "Iniziativa Libera attuata su " + classification.topicLabel.toLowerCase() + ".", built.nationalMetric);
+        recordEnactedPolicy(dossier.title, suArt("Iniziativa Libera attuata su " + classification.topicLabel.toLowerCase() + "."), built.nationalMetric);
       }
       showSaveStatus(outcome.resultText, false);
       if (input) input.value = "";
