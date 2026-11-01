@@ -18051,12 +18051,16 @@
   // guidato dallo sfidante; il giocatore porta con sé una minoranza fedele e fonda subito un soggetto
   // politico nuovo, di cui torna a essere leader indiscusso — stesso schema di generateSplinterParty
   // usato per le scissioni di corrente, applicato però al giocatore stesso invece che a un rivale CPU.
-  function resolvePlayerFoundsNewParty(challenger) {
+  function resolvePlayerFoundsNewParty(challenger, opts) {
+    opts = opts || {};
     var p = state.player;
     var oldFam = familyById(p.family);
     var pseudoParent = { id: "player_party", name: p.name, color: p.color, famiglia: oldFam ? oldFam.label : "", familyId: p.family };
 
-    var stayShare = 0.65, leaveShare = 0.35;
+    // Se il nuovo partito cambia area politica, ti seguono in meno: chi resta fedele all'idea, resta.
+    var newFamilyId = opts.family && opts.family !== p.family ? opts.family : null;
+    var crossed = newFamilyId && ((CENTRODESTRA_ALIGNED_FAMILIES[p.family] && CAMPOLARGO_ALIGNED_FAMILIES[newFamilyId]) || (CAMPOLARGO_ALIGNED_FAMILIES[p.family] && CENTRODESTRA_ALIGNED_FAMILIES[newFamilyId]));
+    var stayShare = 0.65, leaveShare = newFamilyId ? (crossed ? 0.15 : 0.25) : 0.35;
     var oldPollShare = Math.max(0.5, (p.sondaggi || 1) * stayShare);
     var newPollShare = Math.max(0.5, (p.sondaggi || 1) * leaveShare);
 
@@ -18093,8 +18097,10 @@
 
     var freshParty = generateSplinterParty(pseudoParent, state.turn);
     var oldName = p.name;
-    p.name = freshParty.name;
-    p.short = null;
+    p.name = opts.name || freshParty.name;
+    p.short = opts.short || null;
+    if (newFamilyId) p.family = newFamilyId;
+    p.foundedAfterLeavingTurn = state.turn;
     p.logoDataUrl = null;
     p.color = shiftColor(p.color);
     p.sondaggi = newPollShare;
@@ -18117,14 +18123,16 @@
     p.currents = null;
     p.primariesCooldownTurn = state.turn + PRIMARIES_RETRY_COOLDOWN_TURNS;
 
-    var resultText = oldPartyCreated
+    var resultText = (oldPartyCreated
       ? "Rinunci alla contesa interna e lasci " + oldName + " nelle mani di " + challenger +
         ": porti con te chi ti è rimasto fedele e fondi subito " + p.name + ", di cui resti l'indiscusso leader. " +
         "Puoi rinominarlo e dargli un nuovo simbolo quando vuoi, dal pannello \"Ideologia e leader\"."
       : "Rinunci alla contesa interna: con troppi soggetti già sulla scena politica, " + oldName +
         " non sopravvive alla tua uscita e si dissolve, la sua base si disperde perlopiù nell'astensione. " +
         "Porti con te chi ti è rimasto fedele e fondi subito " + p.name + ", di cui resti l'indiscusso leader. " +
-        "Puoi rinominarlo e dargli un nuovo simbolo quando vuoi, dal pannello \"Ideologia e leader\".";
+        "Puoi rinominarlo e dargli un nuovo simbolo quando vuoi, dal pannello \"Ideologia e leader\".");
+    if (opts.direct) resultText = resultText.replace("Rinunci alla contesa interna e lasci ", "Lasci ").replace("Rinunci alla contesa interna: ", "") +
+      (newFamilyId ? " Il nuovo partito nasce in un'altra area politica (" + familyById(newFamilyId).label + "): ti seguono in pochi" + (crossed ? ", perché passi all'altro campo" : "") + "." : "");
     state.log.unshift({
       week: state.turn, title: "Scissione: nasce " + p.name, choiceLabel: "Primarie di Partito",
       result: resultText, headlines: [], type: "cronaca", cat: "Primarie di Partito"
@@ -34205,6 +34213,23 @@
     return html;
   }
 
+  // Richiesto da un giocatore: dopo le dimissioni o una primaria persa non si doveva per forza aspettare
+  // le primarie successive per andarsene. Ora puoi lasciare subito il partito e fondarne uno tuo, con
+  // nome, sigla e area politica scelti da te (stesso meccanismo della scissione nelle primarie).
+  function canLeaveAndFound(p) {
+    return !p.playerIsLeader && !p.permanentlyBanned && !(p.incarceratedUntilTurn && state.turn < p.incarceratedUntilTurn) &&
+      (p.sidelineReason === "dimissioni" || p.sidelineReason === "primarie" || !p.sidelineReason) && state.mode !== "president";
+  }
+  function renderLeaveAndFoundForm(p) {
+    if (!canLeaveAndFound(p)) return "";
+    var famOpts = FAMILIES.map(function (f) { return '<option value="' + f.id + '"' + (f.id === p.family ? " selected" : "") + ">" + f.label + (f.id === p.family ? " (come ora)" : "") + "</option>"; }).join("");
+    return '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Lascia il partito e fondane uno tuo</div>' +
+      '<p class="ci-hint" style="margin:.3rem 0 .5rem">' + p.name + ' resta a ' + (p.interimLeaderName || "chi lo guida ora") + ' con la maggior parte del seguito; tu porti con te i fedelissimi e torni leader. Se cambi area politica ti seguono in meno.</p>' +
+      '<div class="field"><label class="field-label" for="newparty-name">Nome del nuovo partito</label><input id="newparty-name" type="text" maxlength="40" placeholder="Es. Nuova Italia Civica"></div>' +
+      '<div class="field"><label class="field-label" for="newparty-short">Sigla (facoltativa)</label><input id="newparty-short" type="text" maxlength="8" placeholder="Es. NIC"></div>' +
+      '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family">' + famOpts + "</select></div>" +
+      '<button type="button" class="staff-btn" id="leave-found-btn">Lascia ' + p.name + " e fonda il partito</button></div>";
+  }
   function renderPlayerStats() {
     var p = state.player;
     var html = '<section aria-label="Il tuo partito"><p class="eyebrow">Il tuo partito</p><div class="stat-grid">';
@@ -34246,6 +34271,7 @@
           '<p class="ci-hint" style="margin:0.4rem 0 0">' + why + ': le decisioni settimanali le prende la CPU, tu resti sullo sfondo. Sei ancora in gioco: ti si ripresenteranno nuove primarie per riconquistare la guida.</p></div>';
       }
       html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Guida del partito</div><div class="row">' + sidelineHtml;
+      html += renderLeaveAndFoundForm(p);
     }
     if (p.currents && p.currents.length) {
       var CORRENTI_GAUGE_COLORS = ["var(--accent)", "var(--warning)", "var(--good)", "var(--critical)", "#9068c0"];
@@ -42967,6 +42993,22 @@
     bindRegionalPageNavDrawer();
     bindRegionalActionButtons();
     bindPresidentInteractions();
+    var leaveFoundBtn = document.getElementById("leave-found-btn");
+    if (leaveFoundBtn) leaveFoundBtn.addEventListener("click", function () {
+      var p = state.player;
+      if (!p || !canLeaveAndFound(p)) return;
+      var name = (document.getElementById("newparty-name").value || "").trim().replace(/\s+/g, " ");
+      var short = (document.getElementById("newparty-short").value || "").trim().toUpperCase();
+      var fam = document.getElementById("newparty-family").value;
+      if (name.length < 3) { showSaveStatus("Scrivi il nome del nuovo partito.", true); return; }
+      var taken = activeParties().some(function (x) { var pt = partyById(x.id || x) || x; return pt && pt.name && pt.name.toLowerCase() === name.toLowerCase(); });
+      if (taken || name.toLowerCase() === p.name.toLowerCase()) { showSaveStatus("Esiste già un partito con questo nome.", true); return; }
+      if (!window.confirm("Lasci " + p.name + " e fondi «" + name + "»? Non potrai più tornare alla guida del partito di prima.")) return;
+      resolvePlayerFoundsNewParty(p.interimLeaderName || primariesChallengerName(p), { name: name, short: short || null, family: fam, direct: true });
+      state.phase = "result";
+      save();
+      render();
+    });
     app.querySelectorAll("[data-minister-initiative]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var p = state.player;
