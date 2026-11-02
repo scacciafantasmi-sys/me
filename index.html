@@ -23862,6 +23862,17 @@
     var seatsById = {};
     qualified.forEach(function (e, i) { seatsById[e.id] = seatsArr[i]; });
     var playerSeats = seatsById.player || 0;
+    // Richiesto da un giocatore: alle europee si vedevano solo i seggi, senza percentuali né classifica.
+    // I voti validi sono i sondaggi di questa settimana, rapportati a 100 senza gli indecisi/astenuti.
+    var totalVotes = entities.reduce(function (sum, e) { return sum + (e.votes || 0); }, 0) || 1;
+    var standings = entities.map(function (e) {
+      var party = e.id === "player" ? null : partyById(e.id);
+      return { id: e.id, label: e.label, pct: Math.round((e.votes || 0) / totalVotes * 1000) / 10, seats: seatsById[e.id] || 0,
+        color: e.id === "player" ? p.color : (party && party.color) || "#888" };
+    }).sort(function (a, b) { return b.pct - a.pct; });
+    var playerRank = standings.findIndex(function (r) { return r.id === "player"; }) + 1;
+    var playerPct = standings[playerRank - 1] ? standings[playerRank - 1].pct : 0;
+    state.lastEuElection = { turn: state.turn, standings: standings, affluenza: Math.round(clamp(100 - (state.indecisi || 0) * 0.9, 40, 75)) };
     // Composizione REALE della delegazione italiana all'Europarlamento, fissa fino alla prossima
     // elezione europea: solo i seggi (per partito), non il gruppo — il gruppo di ciascun partito CPU
     // (non tracciato individualmente, solo per il giocatore via p.euGroup) e quello del giocatore vengono
@@ -23870,11 +23881,12 @@
     state.euParliamentSeats = { byParty: seatsById, turn: state.turn };
     p.seggiEuropei = playerSeats;
     if (!state.europeanElectionResults) state.europeanElectionResults = [];
-    state.europeanElectionResults.unshift({ turn: state.turn, seats: playerSeats });
-    var text = playerSeats > 0
-      ? p.name + " supera la soglia di sbarramento del " + EU_THRESHOLD + "% ed elegge " + playerSeats +
+    state.europeanElectionResults.unshift({ turn: state.turn, seats: playerSeats, pct: playerPct, rank: playerRank, first: standings[0] ? standings[0].label + " (" + fmt1(standings[0].pct) + "%)" : "" });
+    var text = (playerSeats > 0
+      ? p.name + " prende il " + fmt1(playerPct) + "% (" + playerRank + "° partito), supera la soglia di sbarramento del " + EU_THRESHOLD + "% ed elegge " + playerSeats +
         " " + (playerSeats === 1 ? "eurodeputato" : "eurodeputati") + " al Parlamento Europeo."
-      : p.name + " non raggiunge la soglia di sbarramento del " + EU_THRESHOLD + "% e resta fuori dal Parlamento Europeo.";
+      : p.name + " prende il " + fmt1(playerPct) + "% (" + playerRank + "° partito), non raggiunge la soglia di sbarramento del " + EU_THRESHOLD + "% e resta fuori dal Parlamento Europeo.") +
+      " Primo partito: " + standings[0].label + " con il " + fmt1(standings[0].pct) + "%.";
     if (playerSeats > 0) {
       p.reputazione = clamp(p.reputazione + Math.min(6, playerSeats * 1.2), 0, 100);
       p.visibilita = clamp(p.visibilita + Math.min(10, playerSeats * 1.5), 0, 100);
@@ -25753,11 +25765,14 @@
     if (state.turn < (p.collapseCooldownTurn || 0)) return false;
     var repProtection = clamp((p.reputazione - 50) / 100, -0.3, 0.5);
     var riskFactor = clamp(((p.judicialRisk || 8) - 20) / 150, 0, 0.3);
-    return Math.random() < clamp(0.006 - repProtection * 0.006 + riskFactor * 0.004, 0.001, 0.012);
+    // Sopra il 25% si è il bersaglio di tutti: la probabilità di uno scandalo cresce con la dimensione.
+    var exposure = 1 + clamp((p.sondaggi - 25) / 8, 0, 2);
+    return Math.random() < clamp((0.006 - repProtection * 0.006 + riskFactor * 0.004) * exposure, 0.001, 0.03);
   }
   function buildCollapseDossier() {
     var p = state.player;
     p.collapseCooldownTurn = state.turn + COLLAPSE_COOLDOWN_TURNS;
+    if (p.consensusTraction) p.consensusTraction *= 0.3;
     var flavor = COLLAPSE_FLAVORS[Math.floor(Math.random() * COLLAPSE_FLAVORS.length)];
     return {
       id: "collapse_moment", kind: "notizia", cat: "Cronaca",
@@ -25769,6 +25784,43 @@
         { label: "Minimizza e lascia correre", hint: "Una via di mezzo tra le due strade", collapseStrategy: "minimizza", effects: {}, result: "" }
       ]
     };
+  }
+  // ---------- Spinta del consenso (effetto traino oltre il 22%) ----------
+  // Richiesto dal creatore del gioco: superare il 25-26% era quasi impossibile anche giocando benissimo,
+  // perché il bersaglio organico (iscritti, sezioni, visibilità, reputazione) si satura: con reputazione
+  // e visibilità già al massimo non resta più nessuna leva. Deve essere POSSIBILE arrivare al 30, al 35,
+  // fino al 40% — ma SENZA rendere il gioco più facile in alcun modo. Per questo:
+  //  - sotto il 22% non cambia assolutamente nulla (la partita normale resta identica);
+  //  - la spinta si costruisce solo mantenendo TUTTE insieme, settimana dopo settimana, le condizioni
+  //    di un partito davvero al massimo (vedi consensusTractionConditions), e cresce lentissima: servono
+  //    circa quattro anni di gioco senza errori per averla piena;
+  //  - appena una condizione cede si sgonfia in fretta (circa dieci volte più veloce di come cresce),
+  //    e uno scandalo la taglia di colpo;
+  //  - non si consolida mai: il ratchet del sondaggio di base ignora la parte dovuta alla spinta, quindi
+  //    perdendola si torna esattamente dove le statistiche del partito giustificano;
+  //  - essere il partito da battere ha un prezzo: sopra il 25% gli scandali diventano più probabili e i
+  //    sondaggi più ballerini (vedi checkCollapseTrigger e recomputePeriodic).
+  var TRACTION_THRESHOLD = 22;
+  var TRACTION_MAX_BONUS = 16;
+  function consensusTractionConditions(p, activelyEngaged) {
+    var trust = p.leaderTrust === undefined || p.leaderTrust === null ? 65 : p.leaderTrust;
+    var hist = p.sondaggiHistory || [];
+    var trend = hist.length >= 5 ? (hist[hist.length - 1] - hist[hist.length - 5]) / 4 : 0;
+    return [
+      { ok: p.sondaggi >= TRACTION_THRESHOLD, label: "Almeno il " + TRACTION_THRESHOLD + "% nei sondaggi" },
+      { ok: p.reputazione >= 75, label: "Reputazione almeno 75" },
+      { ok: trust >= 60, label: "Fiducia interna nel leader almeno 60" },
+      { ok: !!activelyEngaged, label: "Partito attivo (un evento o un'uscita pubblica nelle ultime 25 settimane)" },
+      { ok: p.playerIsLeader !== false, label: "Sei tu alla guida del partito" },
+      { ok: !p.lingeringScandal, label: "Nessuno scandalo in corso" },
+      { ok: p.fondi >= 0, label: "Conti del partito in attivo" },
+      { ok: trend >= -0.08, label: "Sondaggi non in calo nell'ultimo mese" }
+    ];
+  }
+  // Più si è grandi, meno la spinta rende: piena fino al 26%, la metà al 35%, poco più di un quinto al 40%.
+  function consensusTractionBonus(p) {
+    var s = p.sondaggi || 0;
+    return (p.consensusTraction || 0) * TRACTION_MAX_BONUS * clamp((44 - s) / 18, 0.22, 1);
   }
   // Bersaglio "organico" dei sondaggi: quanto i numeri attuali del partito (iscritti, radicamento,
   // visibilità, reputazione, clima del paese) giustificherebbero da soli, indipendentemente da quale sia
@@ -25920,6 +25972,19 @@
     var isGovernoNow = p.parliamentRole === "governo";
     var countrySondaggiEffect = clamp(countryTrendDelta * 0.6 * (isGovernoNow ? 1 : -0.4), -2.6, 2.6);
     target = clamp(target + countrySondaggiEffect, 0, 40);
+    // Spinta del consenso (vedi consensusTractionConditions): cresce piano solo se TUTTE le condizioni
+    // reggono, si sgonfia in fretta appena una cede. Non vale per i partiti in via di fondazione.
+    var tractionConds = consensusTractionConditions(p, activelyEngaged);
+    var tractionAllOk = p.formationComplete !== false && tractionConds.every(function (c) { return c.ok; });
+    var tractionBefore = p.consensusTraction || 0;
+    if (tractionAllOk) {
+      var tractionRate = 0.0045 * (0.6 + 0.4 * clamp((p.reputazione - 75) / 25, 0, 1));
+      p.consensusTraction = clamp(tractionBefore + tractionRate, 0, 1);
+    } else {
+      p.consensusTraction = clamp(tractionBefore - 0.04, 0, 1);
+    }
+    var tractionBonus = consensusTractionBonus(p);
+    target = clamp(target + tractionBonus, 0, 40);
     // Crescita smorzata per i primi tempi di un partito fondato da zero (nessun sondaggio reale
     // ereditato, vedi baselineSondaggi): nella realtà un soggetto politico nuovo mette anni a farsi
     // conoscere, non poche decine di settimane. Si applica SOLO ai partiti fondati da zero (chi prende
@@ -25989,12 +26054,22 @@
     // (activelyEngaged, un evento di partito nelle ultime 25 settimane); senza impegno recente il
     // ratchet torna com'era in origine (praticamente fermo, 1.2%/settimana): il rumore casuale dei
     // dossier normali non diventa più "la nuova normalità" solo perché capita di salire per un po'.
-    if (p.baselineSondaggi !== null && p.baselineSondaggi !== undefined && p.sondaggi > p.baselineSondaggi) {
+    // La parte di consenso dovuta alla Spinta del consenso non si consolida mai nella base: perdendo la
+    // spinta si torna esattamente dove le statistiche del partito giustificano.
+    // p.tractionShare segue la spinta con la stessa lentezza con cui i sondaggi seguono il bersaglio: è la
+    // quota del sondaggio attuale che arriva dalla spinta, e resta fuori dal consolidamento anche mentre
+    // la spinta si sta sgonfiando e i sondaggi non sono ancora scesi.
+    p.tractionShare = (p.tractionShare || 0) + (tractionBonus - (p.tractionShare || 0)) * 0.08;
+    var sondaggiForRatchet = p.sondaggi - Math.max(p.tractionShare, tractionBonus);
+    if (p.baselineSondaggi !== null && p.baselineSondaggi !== undefined && sondaggiForRatchet > p.baselineSondaggi) {
       var baselineRatchetRate = activelyEngaged ? 0.25 : 0;
-      p.baselineSondaggi += (p.sondaggi - p.baselineSondaggi) * baselineRatchetRate;
+      p.baselineSondaggi += (sondaggiForRatchet - p.baselineSondaggi) * baselineRatchetRate;
       p.baselineOrganicTarget += (organicTarget - p.baselineOrganicTarget) * baselineRatchetRate;
     }
-    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3 * electionNoiseMult, 0, 40);
+    // Il partito da battere è più esposto: sopra il 25% i sondaggi diventano più ballerini (fino a quasi
+    // il doppio al 40%), in entrambe le direzioni.
+    var frontrunnerNoise = 1 + clamp((p.sondaggi - 25) / 18, 0, 0.85);
+    p.sondaggi = clamp(p.sondaggi + (target - p.sondaggi) * 0.08 + momentumTerm + (Math.random() - 0.5) * 0.3 * electionNoiseMult * frontrunnerNoise, 0, 40);
     // Richiesto da un giocatore: niente più tetto fisso da "chiudere a scappatoia" qui — lo smorzamento
     // sul BERSAGLIO sopra (EARLY_GROWTH_DAMP_FLOOR/RAMP_TURNS) è continuo, non un muro, quindi un bonus
     // diretto occasionale (eff.sondaggi in applyChoice, un evento di rivalità...) può avere il suo
@@ -35489,6 +35564,32 @@
     return html;
   }
 
+  function renderEuElectionStandings(compact) {
+    var le = state.lastEuElection;
+    if (!le || !le.standings) return "";
+    var max = Math.max.apply(null, le.standings.map(function (r) { return r.pct; }).concat([1]));
+    return '<ol class="eu-standings" style="list-style:none;margin:.4rem 0 0;padding:0">' + le.standings.filter(function (r) { return !compact || r.pct >= 1 || r.id === "player"; }).map(function (r, i) {
+      var me = r.id === "player";
+      return '<li style="display:flex;align-items:center;gap:.5rem;margin:.28rem 0' + (me ? ";font-weight:700" : "") + '">' +
+        '<span style="flex:0 0 1.6rem;text-align:right;font-family:var(--font-mono);font-size:.8rem">' + (i + 1) + "°</span>" +
+        '<span style="flex:0 0 38%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + r.label + (me ? ' <span class="chip accent">Tu</span>' : "") + "</span>" +
+        '<span style="flex:1;height:9px;border-radius:5px;background:rgba(255,255,255,0.08);overflow:hidden"><span style="display:block;height:100%;width:' + Math.round(r.pct / max * 100) + "%;background:" + r.color + '"></span></span>' +
+        '<span style="flex:0 0 3.4rem;text-align:right;font-family:var(--font-mono);font-size:.82rem">' + fmt1(r.pct) + "%</span>" +
+        '<span style="flex:0 0 2.6rem;text-align:right;font-family:var(--font-mono);font-size:.75rem;color:var(--text-dim)">' + (r.seats ? r.seats + " s." : "—") + "</span></li>";
+    }).join("") + "</ol>";
+  }
+  // Nelle settimane subito dopo il voto europeo, il risultato completo compare in cima alla pagina.
+  function renderEuElectionResultCard() {
+    var le = state.lastEuElection;
+    if (!le || state.turn - le.turn > 3) return "";
+    var me = le.standings.filter(function (r) { return r.id === "player"; })[0];
+    var rank = le.standings.indexOf(me) + 1;
+    return '<section aria-label="Risultati delle elezioni europee"><div class="election-card"><p class="eyebrow">🇪🇺 Elezioni europee · ' + weekLabel(le.turn) + "</p>" +
+      "<h2>Risultati in Italia</h2>" +
+      (me ? '<p class="brief">' + state.player.name + " prende il <strong>" + fmt1(me.pct) + "%</strong> ed è il <strong>" + rank + "° partito</strong>" + (me.seats ? ", con " + me.seats + " " + (me.seats === 1 ? "eurodeputato" : "eurodeputati") : ", fuori dal Parlamento Europeo (soglia del " + EU_THRESHOLD + "%)") + ".</p>" : "") +
+      renderEuElectionStandings(true) +
+      '<p class="ci-hint" style="margin-top:.5rem">Percentuali sui voti validi. Seggi ripartiti tra i partiti sopra la soglia del ' + EU_THRESHOLD + "% (" + EU_SEATS_ITALY + " seggi per l'Italia).</p></div></section>";
+  }
   function renderPollGrid(prevSnapshot) {
     var p = state.player;
     var html = '<section aria-label="Sondaggi nazionali"><p class="eyebrow">Sondaggi nazionali</p><div class="poll-grid">';
@@ -35509,8 +35610,23 @@
         '<div class="value">' + fmt1(val) + "%</div>" + deltaLabel(before, val, "pt") + "</div>";
     });
     html += '<div class="poll-tile indecisi"><div class="name">Indecisi / Astensione</div><div class="value">' + fmt1(state.indecisi) + "%</div></div>";
-    html += "</div></section>";
+    html += "</div>" + renderConsensusTraction(p) + "</section>";
     return html;
+  }
+  function renderConsensusTraction(p) {
+    if (!p || state.mode === "president") return "";
+    var tr = p.consensusTraction || 0;
+    if (p.sondaggi < TRACTION_THRESHOLD - 3 && tr <= 0) return "";
+    var engaged = Math.min(p.lastPartyEventTurn != null ? state.turn - p.lastPartyEventTurn : Infinity, p.lastVitaPubblicaTurn != null ? state.turn - p.lastVitaPubblicaTurn : Infinity) <= 25;
+    var conds = consensusTractionConditions(p, engaged);
+    var allOk = conds.every(function (c) { return c.ok; });
+    var pct = Math.round(tr * 100);
+    return '<details class="log" style="margin-top:.7rem"><summary>Spinta del consenso: ' + pct + "% · +" + fmt1(consensusTractionBonus(p)) + " punti " + (allOk ? "▲" : tr > 0 ? "▼" : "") + "<span>▾</span></summary>" +
+      '<div class="gauge" style="margin:.4rem 0 .6rem"><span style="width:' + pct + "%;background:" + (allOk ? "var(--good)" : "var(--warning)") + '"></span></div>' +
+      '<p class="ci-hint">Oltre il ' + TRACTION_THRESHOLD + "% un partito al massimo della forma può trascinare consenso oltre quello che giustificano iscritti, sezioni e reputazione, fino a " + TRACTION_MAX_BONUS + " punti in più. " +
+      "Si costruisce lentamente, in anni, solo se tutte le condizioni qui sotto reggono insieme; appena una cede si sgonfia in fretta, uno scandalo la taglia di colpo, e i punti guadagnati così non restano: senza spinta si torna dove le statistiche del partito giustificano. " +
+      "Essere il partito da battere ha un prezzo: sopra il 25% gli scandali sono più probabili e i sondaggi più ballerini.</p>" +
+      '<ul class="enacted-policy-list">' + conds.map(function (c) { return "<li>" + (c.ok ? "✔ " : "✘ ") + c.label + "</li>"; }).join("") + "</ul></details>";
   }
 
   function renderNationalStrip() {
@@ -35916,8 +36032,9 @@
       var hasSeats = e.seats > 0;
       return '<div class="party-row"><div class="party-row-body"><div class="party-row-head"><span class="chip ' + (hasSeats ? "good" : "critical") + '">Europee</span> <strong>Elezioni Europee</strong></div>' +
         '<div class="party-row-sub">' + (hasSeats
-          ? p.name + " elegge " + e.seats + " " + (e.seats === 1 ? "eurodeputato" : "eurodeputati") + " al Parlamento Europeo."
-          : p.name + " non raggiunge la soglia di sbarramento e resta fuori dal Parlamento Europeo.") +
+          ? p.name + (e.pct !== undefined ? " prende il " + fmt1(e.pct) + "% (" + e.rank + "° partito) ed" : "") + " elegge " + e.seats + " " + (e.seats === 1 ? "eurodeputato" : "eurodeputati") + " al Parlamento Europeo."
+          : p.name + (e.pct !== undefined ? " prende il " + fmt1(e.pct) + "% (" + e.rank + "° partito) e" : "") + " non raggiunge la soglia di sbarramento e resta fuori dal Parlamento Europeo.") +
+        (e.first ? " Primo partito: " + e.first + "." : "") +
         ' <span class="ci-hint">(settimana ' + e.turn + ' — ' + weekLabel(e.turn) + ')</span></div></div></div>';
     };
     return '<section aria-label="Cronologia Elettorale"><details class="log">' +
@@ -39096,7 +39213,9 @@
     return '<section aria-label="Composizione del Parlamento Europeo"><details class="log" open><summary>' + headerNote + '<span>▾</span></summary>' +
       '<p class="ci-hint">' + note + '</p>' +
       '<div class="chamber"><div class="hemicycle-wrap">' + renderHemicycleSvg(entries) + '</div>' +
-      '<div class="chamber-legend">' + hemicycleLegend(entries) + '</div></div></details></section>';
+      '<div class="chamber-legend">' + hemicycleLegend(entries) + '</div></div></details></section>' +
+      (state.lastEuElection ? '<section aria-label="Risultati delle ultime europee"><details class="log"><summary>Risultati delle ultime elezioni europee in Italia (' + weekLabel(state.lastEuElection.turn) + ')<span>▾</span></summary>' +
+        '<p class="ci-hint">Classifica completa dei partiti, percentuali sui voti validi e seggi conquistati (soglia ' + EU_THRESHOLD + '%).</p>' + renderEuElectionStandings(false) + "</details></section>" : "");
   }
   function renderEuParliament() {
     var p = state.player;
@@ -41919,6 +42038,7 @@
       var statsSection = "";
       statsSection += renderPlayerStats();
       statsSection += renderFondiLedgerPanel();
+      statsSection += renderEuElectionResultCard();
       statsSection += renderPollGrid(state.prevSnapshot);
       statsSection += renderPublicOpinionPanel();
 
