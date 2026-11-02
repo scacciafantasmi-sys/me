@@ -3725,6 +3725,30 @@
     centrodestra: { label: "Coalizione di Centrodestra", members: ["fdi", "lega", "fi"] },
     campolargo:   { label: "Campo Largo",    members: ["pd", "avs", "m5s"] }
   };
+  // Segnalato da un giocatore: iniziando una nuova partita i due blocchi storici si portavano dietro i
+  // membri della partita precedente (COALITIONS vive in memoria, non nello stato): partiti come FN o IV
+  // già dentro il Centrodestra, o id di partiti che in questa partita non esistono nemmeno. Ogni nuova
+  // partita riparte dai membri reali di partenza; ogni caricamento ripulisce gli id che non esistono.
+  var COALITIONS_START_MEMBERS = { centrodestra: ["fdi", "lega", "fi"], campolargo: ["pd", "avs", "m5s"] };
+  function resetFixedCoalitions() {
+    Object.keys(COALITIONS_START_MEMBERS).forEach(function (id) { COALITIONS[id].members = COALITIONS_START_MEMBERS[id].slice(); });
+  }
+  function sanitizeFixedCoalitions() {
+    Object.keys(COALITIONS).forEach(function (id) {
+      var seen = {};
+      COALITIONS[id].members = COALITIONS[id].members.filter(function (mid) {
+        if (seen[mid] || mid === "player" || typeof partyById !== "function" || !partyById(mid)) return false;
+        seen[mid] = true; return true;
+      });
+    });
+  }
+  // Nomi dei membri attuali di un blocco, per i sottotitoli (prima erano scritti fissi: "FdI, Lega, Forza
+  // Italia" anche dopo che un partito era uscito o un altro era entrato).
+  function blocMembersLabel(id) {
+    var coal = coalitionById(id);
+    if (!coal) return "";
+    return liveCoalitionMemberIds(coal).map(function (mid) { var pt = partyById(mid); return pt ? (pt.short || pt.name) : null; }).filter(Boolean).join(", ");
+  }
 
   // ---------- Sfondo del mondo: geopolitica, tecnologia, cronaca, governo, referendum ----------
   // Contenuto sempre attivo, per dare la sensazione che il mondo vada avanti anche indipendentemente
@@ -25144,6 +25168,7 @@
   }
 
   var state = load() || freshState();
+  try { sanitizeFixedCoalitions(); } catch (e) {}
   // Migrazione una tantum per i salvataggi la cui ultima elezione (politica e/o europea) è avvenuta
   // PRIMA che il gioco iniziasse a registrare la composizione reale dei seggi (state.parliamentSeats /
   // state.euParliamentSeats, salvati da resolveElection()/resolveEuropeanElection()): quel dettaglio
@@ -25351,6 +25376,7 @@
     // Ripristina la membership salvata dei due blocchi storici (vedi save()): senza questo, COALITIONS
     // tornerebbe sempre ai suoi 3 membri di partenza a ogni caricamento, cancellando ogni adesione o
     // defezione avvenuta in partita.
+    resetFixedCoalitions();
     if (parsed.fixedCoalitionMembers) {
       if (parsed.fixedCoalitionMembers.centrodestra) COALITIONS.centrodestra.members = parsed.fixedCoalitionMembers.centrodestra.slice();
       if (parsed.fixedCoalitionMembers.campolargo) COALITIONS.campolargo.members = parsed.fixedCoalitionMembers.campolargo.slice();
@@ -26608,14 +26634,14 @@
     // giocatore, adesioni spontanee della CPU), che invece già escludono categoricamente chi supererebbe
     // COALITION_IDEOLOGY_GAP_LIMIT — vedi wouldExceedCoalitionSpread. Qui si applica lo stesso identico
     // controllo, così un partito troppo lontano da un blocco non lo vede proprio più tra le opzioni.
-    if (currentId !== "centrodestra" && !wouldExceedCoalitionSpread(coalitionFamilyIds("centrodestra"), fam.id)) {
-      choices.push({ label: "Allearsi con il Centrodestra", hint: "FdI, Lega, Forza Italia — soglia coalizione " + sc + "%",
+    if (currentId !== "centrodestra" && blocMembersLabel("centrodestra") && !wouldExceedCoalitionSpread(coalitionFamilyIds("centrodestra"), fam.id)) {
+      choices.push({ label: "Allearsi con il Centrodestra", hint: blocMembersLabel("centrodestra") + " — soglia coalizione " + sc + "%",
         effects: { reputazione: 3 },
         result: "L'accordo con il centrodestra apre le porte a un listino comune, con soglia di coalizione al " + sc + "%.",
         alliance: "centrodestra" });
     }
-    if (currentId !== "campolargo" && !wouldExceedCoalitionSpread(coalitionFamilyIds("campolargo"), fam.id)) {
-      choices.push({ label: "Allearsi con il Campo Largo", hint: "PD, AVS — soglia coalizione " + sc + "%",
+    if (currentId !== "campolargo" && blocMembersLabel("campolargo") && !wouldExceedCoalitionSpread(coalitionFamilyIds("campolargo"), fam.id)) {
+      choices.push({ label: "Allearsi con il Campo Largo", hint: blocMembersLabel("campolargo") + " — soglia coalizione " + sc + "%",
         effects: { reputazione: 3 },
         result: "L'intesa con il campo largo porta il partito dentro una coalizione ampia, soglia al " + sc + "%.",
         alliance: "campolargo" });
@@ -38929,7 +38955,10 @@
       }
     } else {
       html += '<p class="ci-hint">Nessuna alleanza in corso: puoi invitare un blocco o un singolo partito, ma solo tra quelli ideologicamente vicini a te — i partiti troppo distanti sull\'asse sinistra-destra non compaiono nemmeno tra gli invitabili. L\'invito può comunque essere accettato o rifiutato, non è mai automatico.</p><div class="option-grid">';
-      [["centrodestra", "Centrodestra", "FdI, Lega, Forza Italia"], ["campolargo", "Campo Largo", "PD, AVS, M5S"]].forEach(function (b) {
+      [["centrodestra", "Centrodestra"], ["campolargo", "Campo Largo"]].forEach(function (b) {
+        // un blocco rimasto senza membri si è sciolto: non si può più invitare
+        b[2] = blocMembersLabel(b[0]);
+        if (!b[2]) return;
         var cd = p.coalitionInviteCooldowns[b[0]] || 0;
         var weeksLeft = cd - state.turn;
         var disabled = weeksLeft > 0;
@@ -45763,6 +45792,7 @@
       return;
     }
     state = freshState();
+    resetFixedCoalitions();
     save();
     render();
     resetArmed = false;
