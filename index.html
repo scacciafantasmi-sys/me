@@ -2009,26 +2009,33 @@
   // usata per orientare l'esito quando si risolve davvero (vedi resolveRegionalConflictsIfDue).
   function buildRegionalWarDossier() {
     state.regionalWarCooldownTurn = state.turn + REGIONAL_WAR_COOLDOWN_TURNS;
-    var region = CONFLICT_REGIONS[Math.floor(Math.random() * CONFLICT_REGIONS.length)];
-    var involvedA = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
-    var involvedB = WORLD_NATIONS.filter(function (n) { return n.id !== involvedA.id; })[Math.floor(Math.random() * (WORLD_NATIONS.length - 1))];
+    // Coppia credibile, area di crisi coerente con il paese attaccato (vedi pickConflictPair).
+    var pair = pickConflictPair();
+    var involvedA = pair[0], involvedB = pair[1];
+    var region = conflictRegionFor(involvedB);
     // sideAId/sideBId (oltre ai nomi già usati per il testo): servono a collegare il conflitto alle
     // vere relazioni con l'estero (state.foreignRelations) e all'area politica reale della nazione
     // (WORLD_NATIONS[].family) — usati dal sostegno continuativo (renderGeopoliticalTensionPanel) e
     // dalle dichiarazioni dei leader di partito (triggerConflictStatement).
     var conflict = { id: "conflict_" + state.turn, region: region, sideA: involvedA.name, sideB: involvedB.name, sideAId: involvedA.id, sideBId: involvedB.id, startWeek: state.turn, resolveTurn: state.turn + 20 + Math.floor(Math.random() * 20), supportedSide: null };
+    buildConflictContext(conflict);
     state.activeConflicts.push(conflict);
+    var worldLine = conflict.opinions.filter(function (o) { return o.stance !== "n"; }).slice(0, 3).map(function (o) { return o.who + " " + o.text; }).join("; ");
     state.geopoliticalTension = clamp(state.geopoliticalTension + rand(5, 12), 0, 100);
     return {
       id: "geo_regional_war", kind: "notizia", cat: "Politica Estera",
       eyebrow: "Scoppia un nuovo conflitto regionale", title: "Guerra " + inRegione(region),
-      brief: "La crisi " + inRegione(region) + " degenera in un conflitto armato aperto tra " + involvedA.name + " e " + involvedB.name + ". Il mondo osserva con apprensione: come si posiziona il governo italiano?",
+      brief: "La crisi " + inRegione(region) + " degenera in un conflitto armato aperto: " + involvedA.name + " attacca " + involvedB.name + ". Il motivo: " + conflict.why + ". " +
+        involvedA.name + " parla di " + conflict.claimA + ", " + involvedB.name + " denuncia " + conflict.claimB + ". " + (worldLine ? "Nel mondo: " + worldLine + ". " : "") +
+        "In Italia il " + conflict.italyPoll.b + "% vorrebbe aiutare " + involvedB.name + ". Come si posiziona il governo italiano?",
       geoConflictId: conflict.id,
       choices: [
         { label: "Invia aiuti umanitari alla popolazione civile", hint: "Postura equilibrata, costo contenuto", regionalConflictStance: "umanitaria", effects: { fondi: -400, reputazione: 2, national: { relazioniDiplomatiche: 0.4, felicita: 0.2 } },
           result: "L'Italia invia aiuti umanitari alla popolazione colpita dal conflitto, senza schierarsi apertamente con una delle parti." },
         { label: "Fornisci supporto militare a " + involvedA.name, hint: "Schieramento netto, rischio di ritorsioni", regionalConflictStance: "sideA", effects: { fondi: -900, national: { relazioniDiplomatiche: -0.3, difesa: 0.3, economia: -0.3 } },
           result: "Il governo sceglie di fornire supporto militare a " + involvedA.name + ": un passo che rafforza quell'alleanza ma espone l'Italia a possibili ritorsioni diplomatiche ed economiche." },
+        { label: "Fornisci supporto militare a " + involvedB.name + ", il paese aggredito", hint: "Schieramento netto con chi si difende, rischio di ritorsioni", regionalConflictStance: "sideB", effects: { fondi: -900, national: { relazioniDiplomatiche: 0.1, difesa: 0.3, economia: -0.3 } },
+          result: "Il governo invia armi e aiuti militari a " + involvedB.name + " per difendersi dall'attacco di " + involvedA.name + ": una scelta netta, che " + involvedA.name + " non dimenticherà." },
         { label: "Contribuisci a una missione di pace NATO/ONU", hint: "Linea multilaterale, costo maggiore", regionalConflictStance: "peacekeeping", effects: { fondi: -1500, reputazione: 3, national: { relazioniDiplomatiche: 0.7, difesa: 0.2 } },
           result: "L'Italia partecipa a una missione di pace internazionale nella regione, rafforzando il proprio ruolo multilaterale." },
         { label: "Mantieni una neutralità assoluta", hint: "Nessun coinvolgimento, nessun rischio immediato", regionalConflictStance: "neutrale", effects: { national: { relazioniDiplomatiche: -0.2 } },
@@ -2095,6 +2102,478 @@
     var resultText = "Il Governo rafforza apertamente il sostegno a " + supportedNation.name + " nel conflitto " + inRegione(conflict.region) + ": i rapporti con " + supportedNation.name + " migliorano, ma " + otherNation.name + " non la prende bene.";
     state.log.unshift({ week: state.turn, title: "Sostegno diplomatico rafforzato", choiceLabel: supportedNation.name, result: resultText, headlines: [], type: "dossier", cat: "Politica Estera" });
     return { resultText: resultText, headlines: [] };
+  }
+  // ---------- Contesto dei conflitti e guerre dichiarate dal giocatore ----------
+  // Richiesto dal creatore del gioco: ogni conflitto (anche quelli che scoppiano tra paesi della CPU) deve
+  // avere un perché, qualcuno che l'ha iniziato e le posizioni del mondo, come nella realtà; e chi guida il
+  // governo deve poter dichiarare guerra a un altro paese, scegliendo le motivazioni (possibili o no a
+  // seconda dei rapporti con quel paese, del ruolo nella NATO e della potenza militare), coinvolgendo
+  // altri paesi e affrontando poi tutte le dinamiche del conflitto.
+  var NATO_MEMBER_IDS = ["germania", "francia", "spagna", "polonia", "paesibassi", "belgio", "svezia", "portogallo", "grecia", "romania", "ungheria", "repubblicaceca", "danimarca", "finlandia", "croazia", "slovacchia", "statiuniti", "regnounito", "canada", "turchia", "norvegia"];
+  var WESTERN_PARTNER_IDS = ["giappone", "coreadelsud", "australia", "israele"];
+  var EAST_BLOC_IDS = ["russia", "cina"];
+  var NATION_MILITARY_POWER = { statiuniti: 100, cina: 85, russia: 80, india: 62, regnounito: 52, francia: 52, giappone: 44, coreadelsud: 44, turchia: 44, israele: 40, germania: 38, polonia: 30, egitto: 30, arabiasaudita: 30, brasile: 28, indonesia: 26, australia: 24, spagna: 24, grecia: 22, canada: 22, emiratiarabi: 20 };
+  function nationById(id) { return WORLD_NATIONS.filter(function (n) { return n.id === id; })[0] || null; }
+  function nationPower(id) { return NATION_MILITARY_POWER[id] || 16; }
+  function italyMilitaryPower() {
+    var d = state.countryProfile && state.countryProfile.difesa !== undefined ? state.countryProfile.difesa : 5;
+    return Math.round(14 + d * 4.2);
+  }
+  function nationInNato(id) { return NATO_MEMBER_IDS.indexOf(id) !== -1; }
+  function nationBloc(id) {
+    if (id === "italia") return state.leftNato ? "nonallineati" : "occidente";
+    if (EAST_BLOC_IDS.indexOf(id) !== -1) return "est";
+    if (nationInNato(id) || WESTERN_PARTNER_IDS.indexOf(id) !== -1) return "occidente";
+    return "nonallineati";
+  }
+  function italyRelation(id) { return state.foreignRelations && state.foreignRelations[id] !== undefined ? state.foreignRelations[id] : 50; }
+  var WAR_CAUSES = [
+    { id: "confine", label: "Contesa di confine", why: "{A} rivendica una fascia di territorio lungo il confine con {B}, contesa da decenni", claimA: "riprendersi terre che considera storicamente sue", claimB: "un'invasione del proprio territorio sovrano" },
+    { id: "risorse", label: "Risorse energetiche", why: "{A} vuole il controllo dei giacimenti di gas e petrolio scoperti in un'area contesa con {B}", claimA: "proteggere risorse vitali per la propria economia", claimB: "un furto di risorse con la forza" },
+    { id: "minoranza", label: "Protezione di una minoranza", why: "{A} dice di intervenire per proteggere una minoranza che sostiene sia perseguitata in {B}", claimA: "un intervento umanitario", claimB: "un pretesto per un'annessione" },
+    { id: "attentato", label: "Rappresaglia per un attentato", why: "dopo un attentato con decine di vittime, {A} accusa {B} di aver armato e protetto il gruppo responsabile", claimA: "legittima difesa contro il terrorismo", claimB: "accuse senza prove per giustificare la guerra" },
+    { id: "acqua", label: "Guerra dell'acqua", why: "una grande diga costruita da {B} ha ridotto la portata dei fiumi da cui dipende {A}", claimA: "una questione di sopravvivenza", claimB: "il diritto sovrano a usare le proprie acque" },
+    { id: "rotte", label: "Blocco delle rotte commerciali", why: "{B} ha chiuso uno stretto marittimo vitale e {A} ha deciso di riaprirlo con la forza", claimA: "difendere la libertà di navigazione", claimB: "un'aggressione contro le proprie acque territoriali" },
+    { id: "incidente", label: "Incidente militare", why: "un aereo militare di {A} è stato abbattuto vicino al confine con {B}, e la risposta è degenerata", claimA: "la risposta a un atto di guerra", claimB: "la difesa del proprio spazio aereo violato" },
+    { id: "golpe", label: "Interferenza politica", why: "{A} accusa {B} di aver sostenuto un tentato colpo di Stato contro il proprio governo", claimA: "difendere la propria stabilità", claimB: "propaganda per coprire una crisi interna" }
+  ];
+  var AREA_CONFLICT_REGIONS = {
+    "Unione Europea": ["i Balcani", "l'Europa dell'Est"], "Europa (extra-UE)": ["l'Europa dell'Est", "il Caucaso", "i Balcani", "l'Artico"],
+    "Medio Oriente": ["il Golfo Persico", "il Medio Oriente", "il Nord Africa"], "Asia-Pacifico": ["il Mar Cinese Meridionale", "la penisola coreana", "l'Asia Centrale", "l'Himalaya"],
+    "Africa": ["il Sahel", "il Corno d'Africa", "l'Africa centrale"], "America Latina": ["il Sud America", "l'America Centrale"], "Nord America": ["l'Artico"]
+  };
+  // Coppie credibili: chi attacca non è un paese dell'Unione Europea (l'UE non fa guerre di aggressione),
+  // ha una forza militare almeno pari alla metà di chi viene attaccato e di solito colpisce un vicino;
+  // solo le grandi potenze (forza 60+) combattono lontano da casa, e di rado. Mai due paesi occidentali tra loro.
+  function pickConflictPair() {
+    for (var tries = 0; tries < 200; tries++) {
+      var a = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)], b = WORLD_NATIONS[Math.floor(Math.random() * WORLD_NATIONS.length)];
+      if (a.id === b.id || a.id === "svizzera" || b.id === "svizzera") continue;
+      if (nationIsEU(a)) continue;
+      if (nationBloc(a.id) === "occidente" && nationBloc(b.id) === "occidente") continue;
+      if (nationPower(a.id) < nationPower(b.id) * 0.5) continue;
+      var near = a.area === b.area || (/Europa|Unione/.test(a.area) && /Europa|Unione/.test(b.area)) || (/Medio Oriente|Africa/.test(a.area) && /Medio Oriente|Africa/.test(b.area));
+      if (!near && (nationPower(a.id) < 60 || Math.random() < 0.7)) continue;
+      return [a, b];
+    }
+    return [nationById("russia"), nationById("turchia")];
+  }
+  function conflictRegionFor(b) {
+    var list = AREA_CONFLICT_REGIONS[b.area] || CONFLICT_REGIONS;
+    return list[Math.floor(Math.random() * list.length)];
+  }
+  // Chi sta con chi, nel mondo: le grandi potenze seguono il proprio blocco; chi non è coinvolto chiede
+  // una tregua. All'ONU un membro permanente dello stesso blocco dell'aggressore blocca la condanna.
+  function conflictWorldOpinions(aId, bId, aName, bName) {
+    var blocA = nationBloc(aId), blocB = nationBloc(bId);
+    var actors = [["statiuniti", "Stati Uniti"], ["russia", "Russia"], ["cina", "Cina"], ["ue", "Unione Europea"], ["india", "India"], ["turchia", "Turchia"]];
+    var out = [];
+    actors.forEach(function (ac) {
+      if (ac[0] === aId || ac[0] === bId) return;
+      if (ac[0] === "ue" && (aId === "italia" ? !state.leftEu : false)) {
+        out.push({ who: ac[1], stance: "n", text: "è divisa: alcuni governi difendono la scelta italiana, altri chiedono di fermarsi subito" });
+        return;
+      }
+      var bloc = ac[0] === "ue" ? "occidente" : nationBloc(ac[0]);
+      if (bloc === blocA && bloc !== blocB && bloc !== "nonallineati") { out.push({ who: ac[1], stance: "a", text: "sta con " + aName + " e ne difende le ragioni" }); return; }
+      if (bloc === blocB && bloc !== blocA && bloc !== "nonallineati") { out.push({ who: ac[1], stance: "b", text: "condanna l'attacco e sostiene " + bName }); return; }
+      // Nessun blocco in gioco (es. due paesi non allineati): contano vicinanza geografica e affinità
+      // politica; chi non ha interessi diretti a volte condanna comunque l'aggressore.
+      var actor = ac[0] === "ue" ? { area: "Unione Europea", family: "europeista" } : nationById(ac[0]);
+      var na = nationById(aId), nb = nationById(bId);
+      var leanA = (na && actor && (na.area === actor.area ? 2 : 0) + (na.family === actor.family ? 1 : 0)) || 0;
+      var leanB = (nb && actor && (nb.area === actor.area ? 2 : 0) + (nb.family === actor.family ? 1 : 0)) || 0;
+      var r = Math.random();
+      if (leanA > leanB && r < 0.7) out.push({ who: ac[1], stance: "a", text: "difende le ragioni di " + aName + ", un paese amico" });
+      else if (leanB > leanA && r < 0.7) out.push({ who: ac[1], stance: "b", text: "sostiene " + bName + " e chiede il ritiro delle truppe di " + aName });
+      else if (r < 0.35) out.push({ who: ac[1], stance: "b", text: "condanna l'aggressione di " + aName });
+      else if (r < 0.5) out.push({ who: ac[1], stance: "n", text: "evita di schierarsi: troppi interessi economici con entrambi" });
+      else out.push({ who: ac[1], stance: "n", text: "chiede un cessate il fuoco immediato e si offre come mediatore" });
+    });
+    var permanent = ["statiuniti", "russia", "cina", "regnounito", "francia"];
+    var veto = blocA !== "nonallineati" && permanent.some(function (id) { return id !== bId && nationBloc(id) === blocA; });
+    out.push({ who: "ONU", stance: veto ? "n" : "b", text: veto ? "il Consiglio di Sicurezza si spacca: la risoluzione di condanna è bloccata da un veto" : "il Consiglio di Sicurezza chiede il ritiro immediato delle truppe di " + aName });
+    return out;
+  }
+  function italyPollOnConflict(aId, bId) {
+    var forB = 34 + Math.random() * 14, forA = 8 + Math.random() * 8;
+    if (nationBloc(aId) === "occidente") forA += 12;
+    if (nationBloc(bId) === "occidente") forB += 10;
+    if (nationBloc(aId) === "est") forB += 6;
+    forA = Math.round(forA); forB = Math.round(forB);
+    return { a: forA, b: forB, n: Math.max(5, 100 - forA - forB) };
+  }
+  function buildConflictContext(c) {
+    var cause = WAR_CAUSES[Math.floor(Math.random() * WAR_CAUSES.length)];
+    var fill = function (s) { return s.replace(/\{A\}/g, c.sideA).replace(/\{B\}/g, c.sideB); };
+    c.causeLabel = cause.label;
+    c.why = fill(cause.why);
+    c.claimA = cause.claimA; c.claimB = cause.claimB;
+    c.aggressor = c.sideA;
+    c.opinions = conflictWorldOpinions(c.sideAId, c.sideBId, c.sideA, c.sideB);
+    c.italyPoll = italyPollOnConflict(c.sideAId, c.sideBId);
+    return c;
+  }
+  function renderConflictContext(c) {
+    if (!c.why && !c.playerWar) buildConflictContext(c);
+    // nei conflitti tra altri paesi in rosso chi sta con l'aggressore; nella guerra dell'Italia in verde
+    // chi sta con l'Italia
+    var stanceCol = c.playerWar ? { a: "var(--good)", b: "var(--critical)", n: "var(--text-dim)" } : { a: "var(--critical)", b: "var(--good)", n: "var(--text-dim)" };
+    var html = '<details class="log" style="margin-top:.5rem"><summary>' + (c.playerWar ? "🇮🇹 " : "⚔️ ") + c.sideA + " contro " + c.sideB + " — " + c.region + "<span>▾</span></summary>";
+    html += '<p class="ci-hint"><strong>Perché è scoppiato:</strong> ' + (c.causeLabel ? c.causeLabel + ". " : "") + (c.why ? c.why.charAt(0).toUpperCase() + c.why.slice(1) + "." : "") + "</p>";
+    html += '<p class="ci-hint"><strong>Chi l\'ha iniziato:</strong> ' + (c.aggressor || c.sideA) + ", dalla settimana " + c.startWeek + "." + (c.claimA ? " " + c.sideA + " parla di " + c.claimA + "; " + c.sideB + " denuncia " + c.claimB + "." : "") + "</p>";
+    if (c.opinions && c.opinions.length) {
+      html += '<p class="eyebrow" style="margin:.5rem 0 .3rem">Le posizioni nel mondo</p><ul class="enacted-policy-list">' + c.opinions.map(function (o) {
+        return '<li><strong style="color:' + (stanceCol[o.stance] || "inherit") + '">' + o.who + "</strong> " + o.text + ".</li>";
+      }).join("") + "</ul>";
+    }
+    if (c.italyPoll) {
+      html += '<p class="ci-hint"><strong>Gli italiani:</strong> ' + c.italyPoll.b + "% vorrebbe aiutare " + c.sideB + ", " + c.italyPoll.a + "% sta con " + c.sideA + ", " + c.italyPoll.n + "% preferisce restarne fuori.</p>";
+    }
+    return html + "</details>";
+  }
+
+  // --- Guerra dichiarata dall'Italia ---
+  var PLAYER_WAR_MOTIVES = [
+    { id: "alleato", label: "Difesa di un alleato aggredito", legit: 0.85, desc: "Il paese ha attaccato un alleato: l'Italia interviene in sua difesa (art. 5 NATO o un patto bilaterale)." },
+    { id: "provocazione", label: "Risposta a un'aggressione o a una provocazione", legit: 0.6, desc: "Incidenti, minacce, sabotaggi: il governo dice di rispondere a un attacco." },
+    { id: "umanitario", label: "Intervento umanitario", legit: 0.55, desc: "Fermare violenze contro civili. Senza un mandato ONU convince meno." },
+    { id: "rotte", label: "Sicurezza delle rotte energetiche e commerciali", legit: 0.3, desc: "Proteggere gas, petrolio e commerci: serve una flotta capace di farlo." },
+    { id: "preventiva", label: "Guerra preventiva", legit: 0.15, desc: "Colpire prima di essere colpiti. Pochi ci crederanno." },
+    { id: "espansione", label: "Rivendicazione territoriale", legit: 0, desc: "Una guerra di conquista." }
+  ];
+  var PLAYER_WAR_COOLDOWN_TURNS = 150;
+  var PLAYER_WAR_MAX_WEEKS = 90;
+  function playerWarMotiveById(id) { return PLAYER_WAR_MOTIVES.filter(function (m) { return m.id === id; })[0] || null; }
+  function playerRulesAsRegime() { return !!(state.regime && state.regime.isPlayer); }
+  function canDeclareWar() {
+    var p = state.player;
+    if (!p) return { ok: false, why: "" };
+    if (state.playerWar) return { ok: false, why: "L'Italia è già in guerra." };
+    if (state.worldWar) return { ok: false, why: "È in corso una guerra mondiale." };
+    if (!playerLeadsGovernment() && !playerRulesAsRegime()) return { ok: false, why: "Solo chi guida il governo può portare una dichiarazione di guerra in Parlamento." };
+    var cd = (state.playerWarCooldownTurn || 0) - state.turn;
+    if (cd > 0) return { ok: false, why: "Dopo l'ultima guerra (o l'ultimo voto perso) il Paese non ne vuole sentire parlare: riprova tra " + cd + " settimane." };
+    return { ok: true, why: "" };
+  }
+  function nationIsWarTarget(n) {
+    if (n.id === "svizzera") return false;
+    if (nationIsEU(n) && !state.leftEu) return false;
+    if (nationInNato(n.id) && !state.leftNato) return false;
+    return true;
+  }
+  function conflictsWhereAggressor(targetId) {
+    return (state.activeConflicts || []).filter(function (c) { return !c.playerWar && c.sideAId === targetId; });
+  }
+  function playerWarMotiveCheck(m, targetId) {
+    var rel = italyRelation(targetId), dif = state.countryProfile.difesa, inNato = !state.leftNato;
+    if (m.id === "alleato") {
+      var victims = conflictsWhereAggressor(targetId).filter(function (c) { return (inNato && nationInNato(c.sideBId)) || italyRelation(c.sideBId) >= 70; });
+      return victims.length ? { ok: true, why: "Ha aggredito " + victims[0].sideB + "." } :
+        { ok: false, why: inNato ? "Serve che abbia aggredito un alleato NATO o un paese con cui hai rapporti di almeno 70." : "Fuori dalla NATO serve che abbia aggredito un paese con cui hai rapporti di almeno 70." };
+    }
+    if (m.id === "provocazione") return rel <= 25 ? { ok: true, why: "Rapporti ai minimi (" + Math.round(rel) + ")." } : { ok: false, why: "Servono rapporti molto tesi: 25 o meno (ora " + Math.round(rel) + ")." };
+    if (m.id === "umanitario") return (conflictsWhereAggressor(targetId).length || rel <= 35) ? { ok: true, why: "" } : { ok: false, why: "Serve che stia aggredendo un altro paese, o rapporti sotto 35 (ora " + Math.round(rel) + ")." };
+    if (m.id === "rotte") return dif >= 6 && rel <= 45 ? { ok: true, why: "" } : { ok: false, why: "Serve una Difesa almeno 6 (ora " + fmt1(dif) + ") e rapporti sotto 45 (ora " + Math.round(rel) + ")." };
+    if (m.id === "preventiva") return dif >= 7 && rel <= 20 ? { ok: true, why: "" } : { ok: false, why: "Serve una Difesa almeno 7 (ora " + fmt1(dif) + ") e rapporti sotto 20 (ora " + Math.round(rel) + ")." };
+    if (m.id === "espansione") return playerRulesAsRegime() ? { ok: true, why: "" } : { ok: false, why: "La Costituzione (art. 11) ripudia la guerra di conquista: possibile solo sotto un regime." };
+    return { ok: false, why: "" };
+  }
+  function allyJoinChance(id, motive, targetId) {
+    if (id === "svizzera") return 0.01;
+    var p = 0.08 + (italyRelation(id) - 50) / 100 + motive.legit * 0.35;
+    var bt = nationBloc(targetId), bi = nationBloc(id);
+    if (bi === bt) p -= 0.4;
+    else if (bt !== "nonallineati") p += 0.1;
+    if (motive.id === "alleato" && nationInNato(id) && !state.leftNato) p += 0.25;
+    if (nationPower(id) >= 80) p -= 0.08;
+    return clamp(p, 0.02, 0.9);
+  }
+  function playerWarAllyCandidates(targetId) {
+    return WORLD_NATIONS.filter(function (n) { return n.id !== targetId && n.id !== "svizzera" && italyRelation(n.id) >= 55; })
+      .sort(function (a, b) { return italyRelation(b.id) - italyRelation(a.id); }).slice(0, 8);
+  }
+  // Chi si schiera con il paese attaccato: il suo blocco, e chi ha pessimi rapporti con l'Italia; più la
+  // guerra è ingiustificata, più paesi le danno almeno armi e soldi.
+  function playerWarEnemySupport(targetId, motive, allies) {
+    var out = [], bt = nationBloc(targetId);
+    WORLD_NATIONS.forEach(function (n) {
+      if (n.id === targetId || allies.indexOf(n.id) !== -1 || n.id === "svizzera") return;
+      var chanceWar = 0, chanceArms = 0;
+      if (bt !== "nonallineati" && nationBloc(n.id) === bt) { chanceWar = bt === "est" ? 0.45 : 0.3; chanceArms = 0.4; }
+      else if (italyRelation(n.id) <= 30) { chanceWar = 0.08 * (1 - motive.legit); chanceArms = 0.3 * (1 - motive.legit); }
+      else if (nationPower(n.id) >= 80 && nationBloc(n.id) !== nationBloc("italia")) chanceArms = 0.35 * (1 - motive.legit * 0.6);
+      var r = Math.random();
+      if (r < chanceWar) out.push({ id: n.id, name: n.name, mode: "guerra" });
+      else if (r < chanceWar + chanceArms) out.push({ id: n.id, name: n.name, mode: "armi" });
+    });
+    return out;
+  }
+  function govSeatShare(chamber) {
+    var seats = (state.parliamentSeats && state.parliamentSeats[chamber]) || projectSeats(chamber === "camera" ? 400 : 200);
+    var total = Object.keys(seats).reduce(function (s, id) { return s + (seats[id] || 0); }, 0) || 1;
+    var ids = ((state.govEntity && state.govEntity.memberIds) || []).concat(["player"]);
+    var gov = ids.reduce(function (s, id) { return s + (seats[id] || 0); }, 0);
+    return { gov: gov, total: total };
+  }
+  // Art. 78: le Camere deliberano lo stato di guerra. Votano compatti i partiti di governo solo se la
+  // motivazione regge; l'opposizione vota a favore solo per le guerre davvero giustificate.
+  function playerWarParliamentVote(motive) {
+    if (playerRulesAsRegime()) return { passed: true, text: "Sotto il regime non c'è nessun voto: la decisione è tua." };
+    var res = { passed: true, parts: [] };
+    ["camera", "senato"].forEach(function (ch) {
+      var s = govSeatShare(ch), opp = s.total - s.gov;
+      var yes = Math.round(s.gov * clamp(0.6 + motive.legit * 0.42 + rand(-0.08, 0.04), 0, 1) + opp * clamp(motive.legit * 0.55 - 0.1 + rand(-0.05, 0.05), 0, 1));
+      var need = Math.floor(s.total / 2) + 1;
+      res.parts.push((ch === "camera" ? "Camera" : "Senato") + ": " + yes + " sì su " + s.total + " (servivano " + need + ")");
+      if (yes < need) res.passed = false;
+    });
+    res.text = res.parts.join(" · ");
+    return res;
+  }
+  function declarePlayerWar(targetId, motiveId, allyIds) {
+    var p = state.player, can = canDeclareWar();
+    var target = nationById(targetId), motive = playerWarMotiveById(motiveId);
+    if (!can.ok || !target || !motive || !nationIsWarTarget(target) || !playerWarMotiveCheck(motive, targetId).ok) return null;
+    if (!state.foreignRelations) state.foreignRelations = {};
+    if (!state.activeConflicts) state.activeConflicts = [];
+    var vote = playerWarParliamentVote(motive);
+    var text;
+    if (!vote.passed) {
+      state.playerWarCooldownTurn = state.turn + 26;
+      p.reputazione = clamp(p.reputazione - rand(3, 6), 0, 100);
+      state.consensoGoverno = clamp((state.consensoGoverno || 50) - rand(2, 4), 0, 100);
+      text = "Il Parlamento respinge la deliberazione dello stato di guerra contro " + target.name + " (" + vote.text + "). Il governo esce indebolito: anche una parte della maggioranza non ti ha seguito.";
+      state.log.unshift({ week: state.turn, title: "Il Parlamento dice no alla guerra", choiceLabel: motive.label, result: text, headlines: [], type: "istituzioni", cat: "Politica Estera" });
+      return { resultText: text, headlines: [] };
+    }
+    var allies = [], refused = [];
+    (allyIds || []).forEach(function (id) { if (Math.random() < allyJoinChance(id, motive, targetId)) allies.push(id); else refused.push(id); });
+    var enemies = playerWarEnemySupport(targetId, motive, allies);
+    var war = {
+      id: "pw_" + state.turn, targetId: targetId, targetName: target.name, motiveId: motive.id, motiveLabel: motive.label, legit: motive.legit,
+      startTurn: state.turn, front: 50, allies: allies, refused: refused, enemies: enemies, caduti: 0, costMld: 0, posture: "equilibrata",
+      nextReportTurn: state.turn + 6, opinions: conflictWorldOpinions("italia", targetId, "l'Italia", target.name), italyPoll: null
+    };
+    var support = Math.round(clamp(20 + motive.legit * 55 + rand(-6, 6), 5, 85));
+    war.italyPoll = { a: support, b: Math.round((100 - support) * 0.25), n: 100 - support - Math.round((100 - support) * 0.25) };
+    state.playerWar = war;
+    state.activeConflicts.push({
+      id: war.id, playerWar: true, region: conflictRegionFor(target), sideA: "Italia", sideB: target.name, sideAId: "italia", sideBId: targetId,
+      startWeek: state.turn, resolveTurn: null, supportedSide: null, causeLabel: motive.label, why: "il governo italiano ha dichiarato guerra a " + target.name + " invocando: " + motive.label.toLowerCase(),
+      aggressor: "Italia", claimA: motive.label.toLowerCase(), claimB: "un'aggressione ingiustificata", opinions: war.opinions, italyPoll: war.italyPoll
+    });
+    // effetti immediati: tensione, rapporti, mercati, umore del paese
+    var cp = state.countryProfile;
+    state.geopoliticalTension = clamp(state.geopoliticalTension + rand(15, 25), 0, 100);
+    state.foreignRelations[targetId] = Math.min(5, italyRelation(targetId) - 40);
+    enemies.forEach(function (e) { state.foreignRelations[e.id] = clamp(italyRelation(e.id) - (e.mode === "guerra" ? 30 : 15), 0, 100); });
+    allies.forEach(function (id) { state.foreignRelations[id] = clamp(italyRelation(id) + 8, 0, 100); });
+    refused.forEach(function (id) { state.foreignRelations[id] = clamp(italyRelation(id) - 4, 0, 100); });
+    if (!state.leftEu) WORLD_NATIONS.forEach(function (n) { if (nationIsEU(n) && allies.indexOf(n.id) === -1) state.foreignRelations[n.id] = clamp(italyRelation(n.id) - (1 - motive.legit) * 12, 0, 100); });
+    state.spreadBps = clamp((state.spreadBps || 150) + Math.round(40 + (1 - motive.legit) * 90), 40, 900);
+    cp.felicita = clamp(cp.felicita - (0.3 + (1 - motive.legit) * 0.8), 1, 10);
+    cp.economia = clamp(cp.economia - 0.4, 1, 10);
+    cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + (motive.legit - 0.5) * 1.6, 1, 10);
+    state.consensoGoverno = clamp((state.consensoGoverno || 50) + (motive.legit - 0.4) * 12, 0, 100);
+    state.italyMilitaryStance = "belligerante";
+    var names = function (ids) { return ids.map(function (id) { var n = nationById(id); return n ? n.name : id; }).join(", "); };
+    text = (vote.parts ? "Il Parlamento approva la deliberazione dello stato di guerra (" + vote.text + ") e il Presidente della Repubblica la dichiara. " : vote.text + " ") +
+      "L'Italia è in guerra con " + target.name + ": " + motive.label.toLowerCase() + ". " +
+      (allies.length ? "Al tuo fianco: " + names(allies) + ". " : "Nessun paese entra in guerra al tuo fianco. ") +
+      (refused.length ? "Hanno detto no: " + names(refused) + ". " : "") +
+      (enemies.length ? "Con " + target.name + " si schierano: " + enemies.map(function (e) { return e.name + (e.mode === "guerra" ? " (in guerra)" : " (armi e soldi)"); }).join(", ") + "." : "");
+    state.log.unshift({ week: state.turn, title: "L'Italia dichiara guerra a " + target.name, choiceLabel: motive.label, result: text, headlines: [], type: "istituzioni", cat: "Politica Estera" });
+    addDiaryEntry("Il giorno della guerra", "Oggi ho chiesto al Parlamento di dichiarare guerra a " + target.name + ". " + (motive.legit >= 0.6 ? "Sono convinto che fosse l'unica strada." : "Non tutti mi hanno creduto, e lo so.") + " Da qui in avanti ogni settimana conterà.");
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Politica Estera", text: "L'Italia dichiara guerra a " + target.name + "." });
+    return { resultText: text, headlines: [] };
+  }
+  function playerWarForces(w) {
+    var ours = italyMilitaryPower() + w.allies.reduce(function (s, id) { return s + nationPower(id) * 0.6; }, 0);
+    var theirs = nationPower(w.targetId) + w.enemies.reduce(function (s, e) { return s + nationPower(e.id) * (e.mode === "guerra" ? 0.6 : 0.22); }, 0);
+    return { ours: Math.round(ours), theirs: Math.round(theirs), ratio: ours / (ours + theirs) };
+  }
+  function playerWarTick() {
+    var w = state.playerWar;
+    if (!w) return;
+    var cp = state.countryProfile, f = playerWarForces(w);
+    // L'offensiva paga solo con un rapporto di forze favorevole: da più deboli si perde terreno.
+    var bias = w.posture === "offensiva" ? clamp((f.ratio - 0.45) * 4, -0.7, 0.8) : w.posture === "difensiva" ? -0.15 : 0;
+    var intensity = w.posture === "offensiva" ? 1.5 : w.posture === "difensiva" ? 0.6 : 1;
+    w.front = clamp(w.front + (f.ratio - 0.5) * 5 + bias + rand(-1.5, 1.5), 0, 100);
+    w.caduti += Math.round(rand(4, 22) * intensity * (1.25 - f.ratio));
+    var weekly = 0.15 + 0.35 * intensity;
+    if (state.bilancioStato) state.bilancioStato.uscite += weekly;
+    w.costMld = Math.round((w.costMld + weekly) * 10) / 10;
+    cp.economia = clamp(cp.economia - 0.025 * intensity, 1, 10);
+    cp.commercio = clamp(cp.commercio - 0.02, 1, 10);
+    cp.felicita = clamp(cp.felicita - 0.02 * (1.25 - w.legit) * intensity, 1, 10);
+    cp.difesa = clamp(cp.difesa + 0.01, 1, 10);
+    var weeks = state.turn - w.startTurn;
+    if (weeks > 16) state.consensoGoverno = clamp((state.consensoGoverno || 50) - 0.07 * (1.3 - w.legit), 0, 100);
+    if (w.front >= 85) endPlayerWar("vittoria");
+    else if (w.front <= 15) endPlayerWar("sconfitta");
+    else if (weeks >= PLAYER_WAR_MAX_WEEKS) endPlayerWar("armistizio");
+  }
+  function endPlayerWar(kind) {
+    var w = state.playerWar, p = state.player, cp = state.countryProfile;
+    if (!w) return;
+    state.playerWar = null;
+    state.activeConflicts = (state.activeConflicts || []).filter(function (c) { return c.id !== w.id; });
+    state.playerWarCooldownTurn = state.turn + PLAYER_WAR_COOLDOWN_TURNS;
+    state.italyMilitaryStance = state.leftNato ? "non_allineata" : "nato";
+    state.geopoliticalTension = clamp(state.geopoliticalTension - rand(15, 25), 0, 100);
+    var text, weeks = state.turn - w.startTurn;
+    if (kind === "vittoria") {
+      p.reputazione = clamp(p.reputazione + (w.legit >= 0.5 ? 8 : 2), 0, 100);
+      cp.difesa = clamp(cp.difesa + 0.6, 1, 10);
+      cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + (w.legit - 0.4) * 2, 1, 10);
+      cp.felicita = clamp(cp.felicita + (w.legit >= 0.5 ? 0.4 : -0.2), 1, 10);
+      state.consensoGoverno = clamp((state.consensoGoverno || 50) + 8 * w.legit, 0, 100);
+      if (state.bilancioStato) state.bilancioStato.entrate += 12;
+      w.allies.forEach(function (id) { state.foreignRelations[id] = clamp(italyRelation(id) + 6, 0, 100); });
+      text = (nationPower(w.targetId) >= 60 ? w.targetName + " accetta una pace alle condizioni dell'Italia dopo " + weeks + " settimane: è una vittoria, con riparazioni per 12 miliardi."
+        : w.targetName + " si arrende dopo " + weeks + " settimane: l'Italia vince la guerra e ottiene riparazioni per 12 miliardi.") + (w.legit < 0.5 ? " Ma nel mondo in molti la ricorderanno come una guerra che non andava fatta." : "");
+    } else if (kind === "sconfitta" || kind === "resa") {
+      var k = kind === "resa" ? 0.55 : 1;
+      cp.economia = clamp(cp.economia - 1.5 * k, 1, 10); cp.felicita = clamp(cp.felicita - 1.5 * k, 1, 10);
+      cp.difesa = clamp(cp.difesa - 1 * k, 1, 10); cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche - 0.8 * k, 1, 10);
+      p.reputazione = clamp(p.reputazione - 10 * k, 0, 100);
+      p.sondaggi = clamp(p.sondaggi - 3 * k, 0, 40);
+      state.consensoGoverno = clamp((state.consensoGoverno || 50) - 15 * k, 0, 100);
+      text = kind === "resa"
+        ? "L'Italia si ritira e firma una pace sfavorevole con " + w.targetName + " dopo " + weeks + " settimane: limitare i danni ha un prezzo, in casa e fuori."
+        : "Il fronte crolla: dopo " + weeks + " settimane l'Italia perde la guerra con " + w.targetName + ". Le opposizioni chiedono le dimissioni del governo, il Paese è sotto choc.";
+    } else if (kind === "pace") {
+      p.reputazione = clamp(p.reputazione + 2, 0, 100);
+      cp.felicita = clamp(cp.felicita + 0.3, 1, 10); cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 0.3, 1, 10);
+      state.consensoGoverno = clamp((state.consensoGoverno || 50) + 2, 0, 100);
+      state.foreignRelations[w.targetId] = clamp(italyRelation(w.targetId) + 15, 0, 100);
+      text = "Dopo " + weeks + " settimane l'Italia e " + w.targetName + " firmano una pace negoziata, con il fronte " + (w.front >= 55 ? "a tuo favore: le condizioni sono buone." : "in equilibrio: nessuno vince davvero.");
+    } else {
+      p.reputazione = clamp(p.reputazione - 2, 0, 100);
+      state.consensoGoverno = clamp((state.consensoGoverno || 50) - 3, 0, 100);
+      text = "Dopo " + weeks + " settimane di stallo l'Italia e " + w.targetName + " firmano un armistizio: il fronte resta dov'è, e nessuno può dire di aver vinto.";
+    }
+    text += " Bilancio: " + w.caduti + " caduti italiani e " + fmt1(w.costMld) + " miliardi spesi.";
+    state.log.unshift({ week: state.turn, title: "Finisce la guerra con " + w.targetName, choiceLabel: kind, result: text, headlines: [], type: "istituzioni", cat: "Politica Estera" });
+    addDiaryEntry("La fine della guerra", text);
+    state.playerWarEnded = { kind: kind, text: text, targetName: w.targetName };
+  }
+  function buildPlayerWarEndDossier() {
+    var e = state.playerWarEnded;
+    state.playerWarEnded = null;
+    var good = e.kind === "vittoria" || e.kind === "pace";
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: good ? "La guerra è finita" : "La guerra è finita, a caro prezzo", cat: "Politica Estera",
+      title: "Dopo la guerra con " + e.targetName, brief: e.text + " Come parli al Paese?",
+      choices: [
+        { label: "Commemora i caduti in una cerimonia nazionale", hint: "Sobrio, unisce il Paese", effects: { reputazione: 1, national: { felicita: 0.2 } }, result: "Una cerimonia sobria all'Altare della Patria: per un giorno il Paese si ritrova unito." },
+        { label: good ? "Rivendica il risultato in diretta TV" : "Difendi in TV le scelte fatte", hint: good ? "Visibilità, ma rischi di sembrare trionfalista" : "Rischioso: molti chiedono scuse, non difese", effects: good ? { visibilita: 6, reputazione: 1 } : { visibilita: 4, reputazione: -3 }, result: good ? "Il discorso fa il pieno di ascolti, e di polemiche." : "Il discorso divide: per alcuni coraggio, per molti arroganza." },
+        { label: "Avvia la ricostruzione e chiudi il capitolo", hint: "Concreto, costa", effects: { fondi: -500, national: { economia: 0.2, felicita: 0.1 } }, result: "Un piano per le famiglie dei caduti e per le imprese colpite: il Paese prova a voltare pagina." }
+      ]
+    };
+  }
+  function playerWarReportDue() { return !!(state.playerWar && state.turn >= state.playerWar.nextReportTurn); }
+  function buildPlayerWarReportDossier() {
+    var w = state.playerWar, f = playerWarForces(w), weeks = state.turn - w.startTurn;
+    w.nextReportTurn = state.turn + 8;
+    var status = w.front >= 65 ? "Le truppe italiane avanzano" : w.front >= 45 ? "Il fronte è in equilibrio" : w.front >= 30 ? "Il nemico guadagna terreno" : "Il fronte rischia di crollare";
+    var choices = [
+      { label: "Ordina una grande offensiva", hint: "Avanzi di più, ma con più caduti e più spesa", playerWarAction: "offensiva", effects: { national: { felicita: -0.15 } }, result: "" },
+      { label: "Mantieni la linea e consolida le posizioni", hint: "Né rischi né vantaggi in più", playerWarAction: "equilibrata", effects: {}, result: "" },
+      { label: "Passa alla difesa per limitare le perdite", hint: "Meno caduti e meno spesa, ma il fronte si muove meno a tuo favore", playerWarAction: "difensiva", effects: {}, result: "" },
+      { label: "Chiedi a un altro paese di entrare in guerra", hint: "Dipende dai rapporti e da quanto la guerra sembra giusta", playerWarAction: "alleato", effects: {}, result: "" },
+      { label: "Proponi un cessate il fuoco", hint: "Accettato più facilmente se il fronte è a tuo favore", playerWarAction: "pace", effects: {}, result: "" }
+    ];
+    if (w.front < 35) choices.push({ label: "Ritirati e chiedi la pace", hint: "Limiti i danni, ma è una sconfitta", playerWarAction: "resa", effects: {}, result: "" });
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Bollettino dal fronte — settimana " + weeks, cat: "Politica Estera",
+      title: "Guerra con " + w.targetName + ": " + status.toLowerCase(),
+      brief: status + " (fronte " + Math.round(w.front) + "/100). Forze in campo: " + f.ours + " contro " + f.theirs + ". Caduti italiani finora: " + w.caduti + ", spesa " + fmt1(w.costMld) + " miliardi. Come prosegue il governo?",
+      choices: choices
+    };
+  }
+  function resolvePlayerWarAction(choice) {
+    var w = state.playerWar;
+    if (!w) return "La guerra è già finita.";
+    var a = choice.playerWarAction, motive = playerWarMotiveById(w.motiveId) || { id: "", legit: w.legit }, f = playerWarForces(w);
+    if (a === "offensiva" || a === "equilibrata" || a === "difensiva") {
+      w.posture = a;
+      if (a === "offensiva") { w.front = clamp(w.front + rand(-4, 7) * (f.ratio * 2 - 0.2), 0, 100); w.caduti += Math.round(rand(20, 60)); }
+      return a === "offensiva" ? "L'offensiva parte all'alba: il fronte si sposta (ora " + Math.round(w.front) + "/100), ma il prezzo in vite è alto."
+        : a === "difensiva" ? "Le truppe si attestano su posizioni difensive: meno perdite, meno spesa, ma l'iniziativa passa al nemico."
+        : "Il comando consolida le posizioni: nessuna avanzata, nessuna ritirata.";
+    }
+    if (a === "alleato") {
+      var cands = WORLD_NATIONS.filter(function (n) { return n.id !== w.targetId && n.id !== "svizzera" && w.allies.indexOf(n.id) === -1 && !w.enemies.some(function (e) { return e.id === n.id; }) && italyRelation(n.id) >= 50; })
+        .sort(function (x, y) { return allyJoinChance(y.id, motive, w.targetId) - allyJoinChance(x.id, motive, w.targetId); });
+      if (!cands.length) return "Non c'è nessun paese abbastanza vicino all'Italia da chiederglielo.";
+      var n = cands[0];
+      if (Math.random() < allyJoinChance(n.id, motive, w.targetId)) { w.allies.push(n.id); return n.name + " entra in guerra al fianco dell'Italia: il rapporto di forze cambia."; }
+      state.foreignRelations[n.id] = clamp(italyRelation(n.id) - 3, 0, 100);
+      return n.name + " dice no: «Non è la nostra guerra».";
+    }
+    if (a === "pace") {
+      var weeks = state.turn - w.startTurn;
+      var accept = clamp(0.12 + (w.front - 50) / 55 + weeks / PLAYER_WAR_MAX_WEEKS * 0.3, 0.05, 0.85);
+      if (Math.random() < accept) { endPlayerWar("pace"); return "La proposta di cessate il fuoco viene accettata."; }
+      state.player.reputazione = clamp(state.player.reputazione - 1, 0, 100);
+      return w.targetName + " respinge il cessate il fuoco: pensa di poter ottenere di più sul campo.";
+    }
+    if (a === "resa") { endPlayerWar("resa"); return "Il governo ordina il ritiro e chiede la pace."; }
+    return "";
+  }
+  var warDraft = { target: "", motive: "", allies: {} };
+  function renderPlayerWarPanel() {
+    var p = state.player;
+    if (!p || (p.parliamentRole !== "governo" && !playerRulesAsRegime())) return "";
+    var w = state.playerWar;
+    var html = '<section aria-label="Guerra"><details class="log"' + (w ? " open" : "") + "><summary>" + (w ? "⚔️ L'Italia è in guerra con " + w.targetName : "Dichiarare guerra") + "<span>▾</span></summary>";
+    var names = function (ids) { return ids.map(function (id) { var n = nationById(id); return n ? n.name : id; }).join(", "); };
+    if (w) {
+      var f = playerWarForces(w), weeks = state.turn - w.startTurn;
+      html += '<p class="ci-hint">Motivazione: <strong>' + w.motiveLabel + "</strong> · settimana " + weeks + " di guerra (al massimo " + PLAYER_WAR_MAX_WEEKS + ", poi armistizio).</p>" +
+        '<div class="stat-grid"><div class="stat-tile" style="grid-column:1/-1"><div class="label">Fronte (sopra 85 vinci, sotto 15 perdi)</div><div class="row"><span class="value">' + Math.round(w.front) + "/100</span></div>" +
+        '<div class="gauge"><span style="width:' + Math.round(w.front) + "%;background:" + (w.front >= 55 ? "var(--good)" : w.front >= 35 ? "var(--warning)" : "var(--critical)") + '"></span></div></div>' +
+        '<div class="stat-tile"><div class="label">Forze in campo</div><div class="row"><span class="value">' + f.ours + " vs " + f.theirs + "</span></div></div>" +
+        '<div class="stat-tile"><div class="label">Caduti italiani</div><div class="row"><span class="value">' + fmtInt(w.caduti) + "</span></div></div>" +
+        '<div class="stat-tile"><div class="label">Spesa di guerra</div><div class="row"><span class="value">' + fmt1(w.costMld) + " mld</span></div></div>" +
+        '<div class="stat-tile"><div class="label">Postura</div><div class="row"><span class="value">' + (w.posture === "offensiva" ? "Offensiva" : w.posture === "difensiva" ? "Difensiva" : "Equilibrata") + "</span></div></div></div>" +
+        '<p class="ci-hint"><strong>Con l\'Italia:</strong> ' + (w.allies.length ? names(w.allies) : "nessuno") + ". <strong>Con " + w.targetName + ":</strong> " + (w.enemies.length ? w.enemies.map(function (e) { return e.name + (e.mode === "guerra" ? " (in guerra)" : " (armi)"); }).join(", ") : "nessuno") + ".</p>" +
+        '<p class="ci-hint">Ogni settimana il fronte si muove secondo il rapporto di forze (la tua Difesa e i tuoi alleati contro i loro), la postura scelta e un po\' di caso. Ogni 8 settimane arriva un bollettino dal fronte con le decisioni da prendere. Costi: spesa pubblica, economia e commercio che calano, felicità che scende, e dopo qualche mese il consenso al governo si logora.</p>';
+      var c = (state.activeConflicts || []).filter(function (x) { return x.id === w.id; })[0];
+      if (c) html += renderConflictContext(c);
+      return html + "</details></section>";
+    }
+    var can = canDeclareWar();
+    html += '<p class="ci-hint">La Costituzione (art. 11) ripudia la guerra come strumento di offesa: una dichiarazione di guerra la delibera il Parlamento (art. 78) e la proclama il Presidente della Repubblica (art. 87). Le motivazioni possibili dipendono dai rapporti con quel paese, dal ruolo dell\'Italia nella NATO e dalla sua potenza militare (Difesa ' + fmt1(state.countryProfile.difesa) + "/10, forza " + italyMilitaryPower() + ").</p>";
+    if (!can.ok) return html + '<p class="ci-hint"><strong>' + can.why + "</strong></p></details></section>";
+    var targets = WORLD_NATIONS.filter(nationIsWarTarget).sort(function (a, b) { return italyRelation(a.id) - italyRelation(b.id); });
+    html += '<div class="field"><label class="field-label" for="war-target">Contro quale paese</label><select id="war-target" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;"><option value="">— scegli —</option>' +
+      targets.map(function (n) { return '<option value="' + n.id + '"' + (warDraft.target === n.id ? " selected" : "") + ">" + n.name + " — rapporti " + Math.round(italyRelation(n.id)) + ", forza " + nationPower(n.id) + (conflictsWhereAggressor(n.id).length ? " · sta aggredendo un altro paese" : "") + "</option>"; }).join("") + "</select>" +
+      '<p class="ci-hint">Fin quando l\'Italia è nell\'Unione Europea e nella NATO non può attaccare paesi membri; la Svizzera è neutrale.</p></div>';
+    if (warDraft.target) {
+      var tId = warDraft.target, tgt = nationById(tId);
+      var f2 = { ours: italyMilitaryPower(), theirs: nationPower(tId) };
+      html += '<p class="ci-hint">Rapporto di forze di partenza: Italia <strong>' + f2.ours + "</strong> contro " + tgt.name + " <strong>" + f2.theirs + "</strong>" + (f2.ours < f2.theirs * 0.6 ? " — <strong>senza alleati forti è un suicidio militare</strong>" : "") + ".</p>";
+      html += '<p class="eyebrow" style="margin:.6rem 0 .3rem">Motivazione</p><div class="option-grid">' + PLAYER_WAR_MOTIVES.map(function (m) {
+        var chk = playerWarMotiveCheck(m, tId);
+        return '<button type="button" class="option-card' + (warDraft.motive === m.id ? " selected" : "") + '" data-war-motive="' + m.id + '"' + (chk.ok ? "" : " disabled") + '><span class="olabel">' + m.label + '</span><span class="odesc">' + m.desc + " Credibilità: " + Math.round(m.legit * 100) + "%." + (chk.why ? " " + chk.why : "") + "</span></button>";
+      }).join("") + "</div>";
+      var cands = playerWarAllyCandidates(tId);
+      if (cands.length) {
+        var mot = playerWarMotiveById(warDraft.motive) || PLAYER_WAR_MOTIVES[1];
+        html += '<p class="eyebrow" style="margin:.6rem 0 .3rem">Paesi da coinvolgere (rapporti almeno 55)</p><div class="option-grid">' + cands.map(function (n) {
+          return '<button type="button" class="option-card' + (warDraft.allies[n.id] ? " selected" : "") + '" data-war-ally="' + n.id + '"><span class="olabel">' + n.name + '</span><span class="odesc">Rapporti ' + Math.round(italyRelation(n.id)) + ", forza " + nationPower(n.id) + " · probabilità che accetti circa " + Math.round(allyJoinChance(n.id, mot, tId) * 100) + "%</span></button>";
+        }).join("") + "</div>";
+      } else html += '<p class="ci-hint">Nessun paese ha con l\'Italia rapporti abbastanza buoni (almeno 55) da essere coinvolto.</p>';
+      var mot2 = playerWarMotiveById(warDraft.motive);
+      html += '<div class="choices"><button type="button" class="choice-btn" id="war-declare-btn"' + (mot2 && playerWarMotiveCheck(mot2, tId).ok ? "" : " disabled") + '><span class="clabel">' + (playerRulesAsRegime() ? "Dichiara guerra a " : "Porta in Parlamento la guerra a ") + tgt.name + '</span><span class="chint">' +
+        (playerRulesAsRegime() ? "Sotto il regime decidi da solo." : "Servono i sì della maggioranza di Camera e Senato: con una motivazione poco credibile anche i tuoi possono votare contro.") + "</span></button></div>";
+    }
+    return html + "</details></section>";
   }
   var WORLD_WAR_TENSION_THRESHOLD = 88;
   var WORLD_WAR_MIN_ACTIVE_CONFLICTS = 2;
@@ -2316,7 +2795,7 @@
       '<div class="stat-tile"><div class="label">Postura militare italiana</div><div class="row"><span class="value">' + (state.italyMilitaryStance === "belligerante" ? "Belligerante" : state.italyMilitaryStance === "neutrale" ? "Neutrale" : (state.italyMilitaryStance === "non_allineata" || state.leftNato) ? "Non allineata" : "Membro NATO") + '</span></div></div>' +
       "</div>";
     if (state.activeConflicts.length) {
-      html += '<p class="ci-hint">In corso: ' + state.activeConflicts.map(function (c) { return c.sideA + " contro " + c.sideB + " (" + c.region + ")"; }).join("; ") + '.</p>';
+      html += '<p class="ci-hint">Conflitti in corso: tocca per sapere perché sono scoppiati, chi li ha iniziati e chi sta con chi.</p>' + state.activeConflicts.map(renderConflictContext).join("");
     }
     // Richiesto da un giocatore: prima la postura su un conflitto regionale si sceglieva UNA SOLA volta,
     // al momento in cui scoppiava, e restava fissa per tutta la sua durata (20-40 settimane) — nessun
@@ -5660,6 +6139,7 @@
     triggerWorldNews();
     triggerRealConflictNews();
     resolveRegionalConflictsIfDue();
+    playerWarTick();
     ensureRegionsInit();
     driftRegionalMetrics();
     maybeGenerateCitizenPetition(regionId);
@@ -21276,6 +21756,7 @@
     triggerWorldNews();
     triggerRealConflictNews();
     resolveRegionalConflictsIfDue();
+    playerWarTick();
     ensureRegionsInit();
     driftRegionalMetrics();
     resolveRegionalLawsIfDue();
@@ -34421,7 +34902,7 @@
     var famOpts = FAMILIES.map(function (f) { return '<option value="' + f.id + '"' + (f.id === p.family ? " selected" : "") + ">" + f.label + (f.id === p.family ? " (come ora)" : "") + "</option>"; }).join("");
     var fields = '<div class="field"><label class="field-label" for="newparty-name">Nome del nuovo partito</label><input id="newparty-name" type="text" maxlength="40" placeholder="Es. Nuova Italia Civica"></div>' +
       '<div class="field"><label class="field-label" for="newparty-short">Sigla (facoltativa)</label><input id="newparty-short" type="text" maxlength="8" placeholder="Es. NIC"></div>' +
-      '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family">' + famOpts + "</select></div>";
+      '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;">' + famOpts + "</select></div>";
     if (asLeader) {
       return '<div class="field"><label class="field-label">Guida del partito</label>' +
         '<p class="ci-hint">Puoi dimetterti normalmente: un dirigente interno prende il tuo posto e potrai riprovarci alle prossime primarie. Oppure puoi lasciare il partito e fondarne un altro: ' + p.name + ' resta a un dirigente interno con la maggior parte del seguito, tu porti con te i fedelissimi. Se cambi area politica ti seguono in meno.</p>' +
@@ -34433,7 +34914,7 @@
       '<p class="ci-hint" style="margin:.3rem 0 .5rem">' + p.name + ' resta a ' + (p.interimLeaderName || "chi lo guida ora") + ' con la maggior parte del seguito; tu porti con te i fedelissimi e torni leader. Se cambi area politica ti seguono in meno.</p>' +
       '<div class="field"><label class="field-label" for="newparty-name">Nome del nuovo partito</label><input id="newparty-name" type="text" maxlength="40" placeholder="Es. Nuova Italia Civica"></div>' +
       '<div class="field"><label class="field-label" for="newparty-short">Sigla (facoltativa)</label><input id="newparty-short" type="text" maxlength="8" placeholder="Es. NIC"></div>' +
-      '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family">' + famOpts + "</select></div>" +
+      '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;">' + famOpts + "</select></div>" +
       '<button type="button" class="staff-btn" id="leave-found-btn">Lascia ' + p.name + " e fondane un altro</button></div>";
   }
   function renderPlayerStats() {
@@ -40536,7 +41017,7 @@
       visible: function () { return !!(state.player && state.playerMinistry && state.cabinet && state.cabinet.premierId !== "player"); },
       render: function () { return renderMinisteroPage(); } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", icon: "🌍", nav: "Estero", render: function () {
-        return renderGeopoliticalTensionPanel() + renderReaccessionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations() + renderTransnationalWorks();
+        return renderGeopoliticalTensionPanel() + renderPlayerWarPanel() + renderReaccessionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations() + renderTransnationalWorks();
       } },
     { id: "coalizioni", label: "Coalizioni e Alleanze", icon: "🤝", nav: "Alleanze", render: function () {
         return renderReunificationPanel() + renderCoalitionPanel();
@@ -42673,6 +43154,9 @@
           addDiaryEntry("Il mondo è in guerra", "Oggi il governo ha scelto la collocazione dell'Italia nella guerra mondiale: " + choice.label.toLowerCase() + ". Qualunque cosa succeda da qui in avanti, questa scelta segnerà il paese per una generazione.");
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (choice.playerWarAction) {
+        choice.result = resolvePlayerWarAction(choice);
+        state.resultData = applyChoice(dossier, choice);
       } else if (choice.worldWarCheckin && state.worldWar) {
         state.worldWar.momentum = (state.worldWar.momentum || 0) + (choice.worldWarMomentumDelta || 0);
         state.worldWar.nextCheckinIdx = (state.worldWar.nextCheckinIdx || 0) + 1;
@@ -44298,6 +44782,27 @@
         render();
       });
     });
+    var warTargetSel = document.getElementById("war-target");
+    if (warTargetSel) warTargetSel.addEventListener("change", function () { warDraft = { target: warTargetSel.value, motive: "", allies: {} }; render(); });
+    app.querySelectorAll("[data-war-motive]").forEach(function (btn) {
+      btn.addEventListener("click", function () { if (btn.disabled) return; warDraft.motive = btn.getAttribute("data-war-motive"); render(); });
+    });
+    app.querySelectorAll("[data-war-ally]").forEach(function (btn) {
+      btn.addEventListener("click", function () { var id = btn.getAttribute("data-war-ally"); warDraft.allies[id] = !warDraft.allies[id]; render(); });
+    });
+    var warBtn = document.getElementById("war-declare-btn");
+    if (warBtn) warBtn.addEventListener("click", function () {
+      if (warBtn.disabled) return;
+      var tgt = nationById(warDraft.target);
+      if (!tgt || !window.confirm("Vuoi davvero portare l'Italia in guerra contro " + tgt.name + "? Non si torna indietro.")) return;
+      var out = declarePlayerWar(warDraft.target, warDraft.motive, Object.keys(warDraft.allies).filter(function (k) { return warDraft.allies[k]; }));
+      if (!out) return;
+      warDraft = { target: "", motive: "", allies: {} };
+      state.resultData = out;
+      state.phase = "result";
+      save();
+      render();
+    });
     app.querySelectorAll("[data-conflict-support]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         if (btn.disabled) return;
@@ -44777,6 +45282,7 @@
       triggerWorldNews();
       triggerRealConflictNews();
       resolveRegionalConflictsIfDue();
+      playerWarTick();
       ensureRegionsInit();
       driftRegionalMetrics();
       resolveRegionalLawsIfDue();
@@ -44973,6 +45479,7 @@
     triggerWorldNews();
     triggerRealConflictNews();
     resolveRegionalConflictsIfDue();
+    playerWarTick();
     ensureRegionsInit();
     driftRegionalMetrics();
     resolveRegionalLawsIfDue();
@@ -45058,6 +45565,21 @@
     // checkStoryArcTrigger) deve occupare il dossier della settimana finché non si conclude, altrimenti
     // la sua premessa — ogni puntata dipende da come è andata la precedente, settimana dopo settimana
     // consecutiva — smetterebbe di valere se restasse bloccato dietro altre scene per turni di fila.
+    // Una guerra in corso ha la precedenza su archi narrativi, interviste e scene: il bollettino dal
+    // fronte e la fine della guerra non possono slittare per settimane dietro ad altro.
+    if (state.playerWarEnded) {
+      state.aiDynamicDossier = buildPlayerWarEndDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    if (playerWarReportDue()) {
+      state.aiDynamicDossier = buildPlayerWarReportDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+
     if (checkStoryArcTrigger()) {
       state.aiDynamicDossier = buildStoryArcDossier();
       state.currentDossierId = "ai_dynamic";
