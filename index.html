@@ -23696,11 +23696,43 @@
       ]
     };
   }
+  // Segnalato da un giocatore: «sono all'opposizione con il PD, voto a favore con il centrodestra che
+  // governa con la maggioranza, e vince il contrario». L'esito dei voti sulle proposte degli altri partiti
+  // era una probabilità fissa (68-92% per il governo) e il voto del giocatore la spostava solo del 6%,
+  // che avesse 2 deputati o 100. Ora contano i seggi veri della Camera: una maggioranza compatta passa
+  // quasi sempre (restano pochi franchi tiratori), un governo di minoranza dipende dai voti di chi sta
+  // fuori, e il voto del giocatore pesa quanto i suoi seggi.
+  function cpuProposalPassChance(meta, vote, fallback) {
+    var p = state.player;
+    var base = meta.baseProb === undefined ? fallback : meta.baseProb;
+    var seats = (state.parliamentSeats && state.parliamentSeats.camera) || projectSeats(400);
+    var total = Object.keys(seats).reduce(function (sum, id) { return sum + (seats[id] || 0); }, 0);
+    if (!total) return clamp(base + (vote === "favore" ? 0.06 : vote === "contro" ? -0.06 : 0), 0.03, 0.95);
+    var need = Math.floor(total / 2) + 1;
+    var pSeats = seats.player || 0;
+    var playerInGov = p && p.parliamentRole === "governo";
+    var govIds = (state.govEntity && state.govEntity.memberIds) || [];
+    var gov = govIds.reduce(function (sum, id) { return sum + (id === "player" ? 0 : (seats[id] || 0)); }, 0);
+    var playerYes = vote === "favore" ? pSeats : vote === "astensione" ? 0 : 0;
+    var yes;
+    if (meta.isGovProposer) {
+      var others = total - gov - pSeats;
+      yes = gov * 0.96 + playerYes + others * clamp((base - 0.6) * 0.5, 0.02, 0.18);
+    } else {
+      // proposta dell'opposizione: la maggioranza tende a bloccarla (più o meno a seconda della distanza
+      // politica dal governo, già in base), le altre opposizioni la sostengono più facilmente
+      var proposerSeats = seats[meta.proposerId] || 0;
+      var govBlock = playerInGov ? gov : gov;
+      var otherOpp = Math.max(0, total - proposerSeats - pSeats - govBlock);
+      yes = proposerSeats + playerYes + govBlock * clamp(base * 0.5, 0.01, 0.45) + otherOpp * clamp(base * 1.3, 0.05, 0.9);
+    }
+    var margin = (yes - need) / (total * 0.018);
+    return clamp(1 / (1 + Math.exp(-margin)), 0.02, 0.98);
+  }
   function resolveCpuAmendmentChoice(dossier, choice) {
     var p = state.player;
     var meta = dossier.cpuAmendmentMeta || {};
-    var voteAdj = choice.mozioneVote === "favore" ? 0.06 : choice.mozioneVote === "contro" ? -0.06 : 0;
-    var prob = clamp((meta.baseProb === undefined ? 0.25 : meta.baseProb) + voteAdj, 0.03, 0.95);
+    var prob = cpuProposalPassChance(meta, choice.mozioneVote, 0.25);
     var passed = Math.random() < prob;
     var delta = passed ? rand(0.35, 0.8) : rand(-0.08, 0.08);
     if (meta.metric) state.countryProfile[meta.metric] = clamp(state.countryProfile[meta.metric] + delta, 1, 10);
@@ -23757,7 +23789,7 @@
       var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
       baseProb = (myPos === undefined || govPos === undefined) ? 0.18 : clamp(0.5 - (Math.abs(myPos - govPos) / 6) * 0.46, 0.03, 0.5);
     }
-    var passed = Math.random() < baseProb;
+    var passed = Math.random() < cpuProposalPassChance({ baseProb: baseProb, isGovProposer: isGovProposer, proposerId: proposer.id }, "astensione", baseProb);
     var delta = passed ? rand(0.35, 0.8) : rand(-0.08, 0.08);
     if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
     if (state.consensoGoverno !== undefined) {
@@ -23823,8 +23855,7 @@
   function resolveCpuLeggeChoice(dossier, choice) {
     var p = state.player;
     var meta = dossier.cpuLeggeMeta || {};
-    var voteAdj = choice.mozioneVote === "favore" ? 0.06 : choice.mozioneVote === "contro" ? -0.06 : 0;
-    var prob = clamp((meta.baseProb === undefined ? 0.3 : meta.baseProb) + voteAdj + constLawBonus(meta.isGovProposer), 0.03, 0.95);
+    var prob = clamp(cpuProposalPassChance(meta, choice.mozioneVote, 0.3) + constLawBonus(meta.isGovProposer), 0.02, 0.98);
     var passed = Math.random() < prob;
     var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
     if (meta.metric) state.countryProfile[meta.metric] = clamp(state.countryProfile[meta.metric] + delta, 1, 10);
@@ -23966,8 +23997,7 @@
   function resolveCpuMozioneChoice(dossier, choice) {
     var p = state.player;
     var meta = dossier.cpuMozioneMeta || {};
-    var voteAdj = choice.mozioneVote === "favore" ? 0.06 : choice.mozioneVote === "contro" ? -0.06 : 0;
-    var prob = clamp((meta.baseProb === undefined ? 0.4 : meta.baseProb) + voteAdj, 0.03, 0.95);
+    var prob = cpuProposalPassChance(meta, choice.mozioneVote, 0.4);
     var passed = Math.random() < prob;
     var delta = passed ? rand(0.15, 0.35) : rand(-0.03, 0.03);
     if (meta.metric) state.countryProfile[meta.metric] = clamp(state.countryProfile[meta.metric] + delta, 1, 10);
@@ -24039,7 +24069,7 @@
       var myPos = LEFT_RIGHT_POSITION[proposer.familyId], govPos = LEFT_RIGHT_POSITION[govFam];
       baseProb = (myPos === undefined || govPos === undefined) ? 0.35 : clamp(0.78 - (Math.abs(myPos - govPos) / 6) * 0.68, 0.06, 0.78);
     }
-    var passed = Math.random() < baseProb;
+    var passed = Math.random() < cpuProposalPassChance({ baseProb: baseProb, isGovProposer: isGovProposer, proposerId: proposer.id }, "astensione", baseProb);
     var delta = passed ? rand(0.15, 0.35) : rand(-0.03, 0.03);
     if (topic.metric) state.countryProfile[topic.metric] = clamp(state.countryProfile[topic.metric] + delta, 1, 10);
     if (state.consensoGoverno !== undefined) {
