@@ -40415,9 +40415,31 @@
     { id: "Molise", pop: 0.29, pil: 23, base: 8 }, { id: "Valle d'Aosta", pop: 0.12, pil: 43, base: 26 }
   ];
   function indepRegion(id) { return INDEP_REGIONS.filter(function (r) { return r.id === id; })[0]; }
+  // Richiesto da un giocatore: l'indipendenza era possibile solo fondando da zero un partito
+  // regionalista. Ora vale anche per chi prende in mano un partito di storia autonomista (Lega, SVP) e
+  // per chi porta il proprio partito all'ideologia regionalista durante la partita: in quei casi le
+  // regioni di riferimento si scelgono nella pagina Partito (vedi renderIndependencePanel).
+  var INDEP_AUTONOMIST_PARTIES = ["lega", "svp"];
+  function indepProjectAllowed() {
+    var p = state.player;
+    return !!(p && !state.regime && (p.family === "regionalista" || INDEP_AUTONOMIST_PARTIES.indexOf(p.takeoverPartyId) !== -1));
+  }
   function indepEligible() {
     var p = state.player;
-    return !!(p && p.family === "regionalista" && p.homeRegions && p.homeRegions.length && !state.regime);
+    return !!(indepProjectAllowed() && p.homeRegions && p.homeRegions.length);
+  }
+  var indepRegionDraft = [];
+  function renderIndepRegionPicker() {
+    var p = state.player;
+    var why = p.family === "regionalista" ? "Il tuo partito è regionalista" : p.name + " nasce come forza autonomista";
+    var html = '<section aria-label="Indipendenza"><details class="log" open><summary>Il progetto di indipendenza<span>▾</span></summary>' +
+      '<p class="ci-hint">' + why + ": puoi scegliere fino a " + INDEP_MAX_REGIONS + " regioni di riferimento. Lì crescerà il sostegno all'indipendenza e, con il " + INDEP_REFERENDUM_THRESHOLD + "% nei sondaggi nazionali, potrai chiedere un referendum. La scelta è definitiva.</p>" +
+      '<div class="option-grid">' + INDEP_REGIONS.map(function (r) {
+        var sel = indepRegionDraft.indexOf(r.id) !== -1;
+        return '<button type="button" class="option-card' + (sel ? " selected" : "") + '" data-indep-region="' + r.id.replace(/"/g, "&quot;") + '"' + (!sel && indepRegionDraft.length >= INDEP_MAX_REGIONS ? " disabled" : "") + '><span class="olabel">' + r.id + '</span><span class="odesc">' + fmt1(r.pop) + " milioni di abitanti · sostegno all'indipendenza oggi circa " + r.base + "%</span></button>";
+      }).join("") + "</div>" +
+      '<div class="choices"><button type="button" class="choice-btn" id="indep-regions-confirm"' + (indepRegionDraft.length ? "" : " disabled") + '><span class="clabel">Avvia il progetto in ' + (indepRegionDraft.length ? indepRegionDraft.length + (indepRegionDraft.length === 1 ? " regione" : " regioni") : "…") + '</span><span class="chint">Scegli almeno una regione.</span></button></div>';
+    return html + "</details></section>";
   }
   function ensureIndep() {
     var p = state.player;
@@ -40530,6 +40552,7 @@
       result: results.map(function (x) { return x.region + ": Sì " + fmt1(x.yes) + "% (affluenza " + fmt1(x.turnout) + "%)"; }).join(" · "), headlines: [], type: "istituzioni", cat: "Indipendenza" });
   }
   function renderIndependencePanel() {
+    if (indepProjectAllowed() && !(state.player.homeRegions && state.player.homeRegions.length)) return renderIndepRegionPicker();
     if (!indepEligible()) return "";
     var p = state.player, ind = ensureIndep();
     var ref = ind.referendum;
@@ -41024,6 +41047,21 @@
   // così funzionano a ogni render senza toccare il collegamento degli altri pannelli.
   if (typeof document !== "undefined") {
     document.addEventListener("click", function (e) {
+      var rb = e.target && e.target.closest ? e.target.closest("[data-indep-region]") : null;
+      if (rb && !rb.disabled) {
+        var rid = rb.getAttribute("data-indep-region"), at = indepRegionDraft.indexOf(rid);
+        if (at !== -1) indepRegionDraft.splice(at, 1); else if (indepRegionDraft.length < INDEP_MAX_REGIONS) indepRegionDraft.push(rid);
+        render(); return;
+      }
+      var cb = e.target && e.target.closest ? e.target.closest("#indep-regions-confirm") : null;
+      if (cb && !cb.disabled && indepProjectAllowed() && indepRegionDraft.length) {
+        if (!window.confirm("Avviare il progetto di indipendenza in " + indepRegionDraft.join(", ") + "? La scelta è definitiva.")) return;
+        state.player.homeRegions = indepRegionDraft.slice(0, INDEP_MAX_REGIONS);
+        indepRegionDraft = [];
+        ensureIndep();
+        addDiaryEntry("Il progetto di indipendenza", "Oggi abbiamo indicato le regioni del nostro progetto: " + state.player.homeRegions.join(", ") + ". Da qui comincia la strada verso il referendum.");
+        save(); render(); return;
+      }
       var b = e.target && e.target.closest ? e.target.closest("[data-indep]") : null;
       if (!b || b.disabled || !indepEligible()) return;
       var k = b.getAttribute("data-indep");
