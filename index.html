@@ -1444,6 +1444,113 @@
   // (COUNTRY_PROFILE_HISTORY_WEEKS), solo quanta memoria si tiene in giro: 20 settimane bastano a mostrare
   // un vero andamento senza appesantire il salvataggio.
   var COUNTRY_PROFILE_HISTORY_WEEKS = 20;
+  // ---------- Popolazione e demografia ----------
+  // Richiesto da un giocatore: una schermata sulla popolazione, con il calo o l'aumento demografico.
+  // Valori di partenza indicativi, nell'ordine di grandezza dei dati ISTAT recenti (popolazione intorno ai
+  // 58,9 milioni, circa 370 mila nati e 650 mila decessi l'anno, circa 1,18 figli per donna). Ogni
+  // settimana i flussi dipendono dalla Scheda Paese e dalle leggi approvate: la fecondità da welfare,
+  // casa, occupazione, salari, felicità e dalle misure per la natalità; i decessi da sanità e
+  // invecchiamento; l'immigrazione da economia e lavoro; l'emigrazione da salari, lavoro e ricerca.
+  // A fine anno arriva il rapporto ISTAT, e l'invecchiamento pesa sulla spesa pubblica.
+  var DEMO_START = { popolazione: 58.93, fecondita: 1.18, over65: 24.7, under15: 12.0, etaMedia: 46.8, nati: 0.370, morti: 0.651, immigrati: 0.435, emigrati: 0.191 };
+  var DEMO_HISTORY_SEED = [[2021, 59.24], [2022, 59.03], [2023, 58.85], [2024, 58.99], [2025, 58.97]];
+  function demoYear(turn) { var m = /(\d{4})\s*$/.exec(weekLabel(turn === undefined ? state.turn : turn)); return m ? +m[1] : 2026; }
+  function ensureDemografia() {
+    if (state.demografia) return state.demografia;
+    var s0 = DEMO_START;
+    state.demografia = {
+      year: demoYear(), pop: s0.popolazione, popInizioAnno: s0.popolazione, fecondita: s0.fecondita, over65: s0.over65, under15: s0.under15, etaMedia: s0.etaMedia,
+      ytd: { nati: 0, morti: 0, imm: 0, emi: 0 }, lastTickTurn: state.turn, partialYear: true,
+      last: { year: demoYear() - 1, nati: s0.nati, morti: s0.morti, imm: s0.immigrati, emi: s0.emigrati },
+      history: DEMO_HISTORY_SEED.map(function (h) { return { year: h[0], pop: h[1] }; })
+    };
+    return state.demografia;
+  }
+  function demoNatalitaPolicies() {
+    return (state.enactedPolicies || []).filter(function (e) { return /natalit|bebè|bebe|asil[io] nido|famiglie numerose|congedi parentali|quoziente familiare/i.test((e.title || "") + " " + (e.note || "")); }).length;
+  }
+  // Fattori che oggi spingono la natalità in su o in giù, per mostrarli al giocatore.
+  function demoFactors() {
+    var cp = state.countryProfile, pol = Math.min(6, demoNatalitaPolicies());
+    return [
+      ["Welfare e protezione sociale", (cp.welfare - 5.5) * 0.05],
+      ["Accesso alla casa", (cp.casa - 5.5) * 0.04],
+      ["Occupazione", (cp.disoccupazione - 5.5) * 0.03],
+      ["Salari", (cp.salari - 5.5) * 0.03],
+      ["Felicità e qualità della vita", (cp.felicita - 5.5) * 0.02],
+      ["Leggi per la natalità approvate (" + pol + ")", pol * 0.025]
+    ];
+  }
+  function demoFlows() {
+    var d = ensureDemografia(), cp = state.countryProfile;
+    var war = !!(state.playerWar || state.worldWar);
+    var fecTarget = clamp(1.18 + demoFactors().reduce(function (s, f) { return s + f[1]; }, 0) - (war ? 0.08 : 0), 0.9, 2.1);
+    var nati = d.pop * 0.00628 * (d.fecondita / 1.18) * clamp(1 - (d.over65 - 24.7) * 0.012, 0.6, 1.2);
+    var morti = d.pop * 0.01105 * clamp(1 + (d.over65 - 24.7) * 0.02 - (cp.sanita - 5.5) * 0.02, 0.8, 1.4);
+    var imm = 0.435 * clamp(1 + (cp.economia - 5.5) * 0.07 + (cp.disoccupazione - 5.5) * 0.05 - (state.leftEu ? 0.2 : 0) - (war ? 0.15 : 0), 0.4, 1.8);
+    var emi = 0.191 * clamp(1 + (5.5 - cp.salari) * 0.08 + (5.5 - cp.disoccupazione) * 0.06 + (5.5 - cp.ricercaSviluppo) * 0.04 + (war ? 0.2 : 0), 0.5, 2.2);
+    return { fecTarget: fecTarget, nati: nati, morti: morti, imm: imm, emi: emi };
+  }
+  function demografiaTick() {
+    if (!state.countryProfile) return;
+    var d = ensureDemografia(), f = demoFlows();
+    // recupera anche le settimane in cui l'aggiornamento non è passato (elezioni, scene speciali)
+    var weeks = clamp(state.turn - (d.lastTickTurn === undefined ? state.turn - 1 : d.lastTickTurn), 0, 8);
+    d.lastTickTurn = state.turn;
+    if (!weeks) return;
+    var w = weeks / 52;
+    d.ytd.nati += f.nati * w; d.ytd.morti += f.morti * w; d.ytd.imm += f.imm * w; d.ytd.emi += f.emi * w;
+    d.pop += (f.nati - f.morti + f.imm - f.emi) * w;
+    d.fecondita = clamp(d.fecondita + (f.fecTarget - d.fecondita) * 0.004, 0.8, 2.3);
+    // invecchiamento: gli over 65 crescono da soli; più nati e più giovani immigrati lo frenano
+    d.over65 = clamp(d.over65 + (0.32 - (f.nati - 0.37) * 3 - (f.imm - f.emi - 0.244) * 0.8) * w, 15, 40);
+    d.under15 = clamp(d.under15 + (-0.12 + (d.fecondita - 1.18) * 0.6 + (f.imm - f.emi - 0.244) * 0.3) * w, 7, 20);
+    d.etaMedia = clamp(d.etaMedia + (0.22 - (f.nati - 0.37) * 1.5 - (f.imm - f.emi - 0.244) * 0.5) * w, 38, 58);
+    var y = demoYear();
+    if (y !== d.year) {
+      var saldo = d.pop - d.popInizioAnno;
+      d.last = { year: d.year, nati: d.ytd.nati, morti: d.ytd.morti, imm: d.ytd.imm, emi: d.ytd.emi };
+      d.history.push({ year: d.year, pop: Math.round(d.pop * 100) / 100 });
+      if (d.history.length > 40) d.history.shift();
+      var k = function (x) { return fmtInt(x * 1000) + " mila"; };
+      var text = "Al 1° gennaio " + y + " in Italia vivono " + fmt1(d.pop) + " milioni di persone (" + (saldo >= 0 ? "+" : "−") + fmtInt(Math.abs(saldo) * 1000) + " mila " + (d.partialYear ? "nelle settimane giocate del " + d.year : "in un anno") + "). Nati: " + k(d.ytd.nati) + ", decessi: " + k(d.ytd.morti) +
+        ", immigrati: " + k(d.ytd.imm) + ", emigrati: " + k(d.ytd.emi) + ". Figli per donna: " + d.fecondita.toFixed(2).replace(".", ",") + ". Over 65: " + fmt1(d.over65) + "%.";
+      state.log.unshift({ week: state.turn, title: "ISTAT: il bilancio demografico " + d.year, choiceLabel: saldo >= 0 ? "Popolazione in crescita" : "Popolazione in calo", result: text, headlines: [], type: "cronaca", cat: "Popolazione" });
+      if (!state.worldNews) state.worldNews = [];
+      state.worldNews.unshift({ cat: "Popolazione", text: "ISTAT: " + (saldo >= 0 ? "la popolazione cresce" : "la popolazione cala") + " di " + fmtInt(Math.abs(saldo) * 1000) + " mila persone nel " + d.year + "." });
+      if (state.worldNews.length > 6) state.worldNews.length = 6;
+      // più anziani, più spesa per pensioni e sanità
+      if (state.bilancioStato) state.bilancioStato.uscite += Math.max(0, d.over65 - 24.7) * 0.8;
+      d.year = y; d.popInizioAnno = d.pop; d.ytd = { nati: 0, morti: 0, imm: 0, emi: 0 }; d.partialYear = false;
+    }
+  }
+  function renderPopulationPanel() {
+    if (!state.countryProfile) return "";
+    var d = ensureDemografia(), f = demoFlows();
+    var k = function (x) { return fmtInt(x * 1000) + " mila"; };
+    var naturale = f.nati - f.morti, migratorio = f.imm - f.emi, tot = naturale + migratorio;
+    var tile = function (label, value, sub, cls) { return '<div class="stat-tile"><div class="label">' + label + '</div><div class="row"><span class="value"' + (cls ? ' style="color:var(--' + cls + ')"' : "") + ">" + value + "</span></div>" + (sub ? '<div class="ci-hint" style="margin-top:.3rem">' + sub + "</div>" : "") + "</div>"; };
+    var hist = d.history.map(function (h) { return h.pop; }).concat([d.pop]);
+    var html = '<section aria-label="Popolazione"><details class="log"><summary>Popolazione: ' + fmt1(d.pop) + " milioni " + (tot >= 0 ? "▲" : "▼") + "<span>▾</span></summary>" +
+      '<p class="ci-hint">Quante persone vivono in Italia e come cambia la popolazione, anno dopo anno. Il rapporto ISTAT arriva a ogni inizio d\'anno, nel registro degli eventi.</p>' +
+      '<div class="stat-grid">' +
+      tile("Popolazione", fmt1(d.pop) + " mln", (d.pop >= d.popInizioAnno ? "+" : "−") + fmtInt(Math.abs(d.pop - d.popInizioAnno) * 1000) + " mila da inizio anno", d.pop >= d.popInizioAnno ? "good" : "critical") +
+      tile("Variazione all'anno", (tot >= 0 ? "+" : "−") + k(Math.abs(tot)), "al ritmo di oggi", tot >= 0 ? "good" : "critical") +
+      tile("Nati all'anno", k(f.nati), "saldo naturale " + (naturale >= 0 ? "+" : "−") + k(Math.abs(naturale)), naturale >= 0 ? "good" : "critical") +
+      tile("Decessi all'anno", k(f.morti), "") +
+      tile("Immigrati all'anno", k(f.imm), "saldo migratorio " + (migratorio >= 0 ? "+" : "−") + k(Math.abs(migratorio)), "") +
+      tile("Emigrati all'anno", k(f.emi), "") +
+      tile("Figli per donna", d.fecondita.toFixed(2).replace(".", ","), "ne servono 2,1 per tenere stabile la popolazione senza immigrazione", d.fecondita >= 1.5 ? "good" : "warning") +
+      tile("Over 65", fmt1(d.over65) + "%", "under 15: " + fmt1(d.under15) + "% · età media " + fmt1(d.etaMedia), d.over65 > 27 ? "critical" : "warning") +
+      "</div>";
+    if (hist.length >= 2) html += '<p class="eyebrow" style="margin:.8rem 0 .3rem">Andamento della popolazione (' + d.history[0].year + "–oggi)</p>" + sparkline(hist, "var(--accent)");
+    html += '<p class="eyebrow" style="margin:.8rem 0 .3rem">Cosa spinge oggi la natalità</p><ul class="enacted-policy-list">' + demoFactors().map(function (fc) {
+      var v = fc[1];
+      return "<li>" + (v > 0.005 ? "▲ " : v < -0.005 ? "▼ " : "• ") + fc[0] + ' <span class="ci-hint">' + (v > 0.005 ? "aiuta" : v < -0.005 ? "frena" : "neutro") + "</span></li>";
+    }).join("") + "</ul>" +
+      '<p class="ci-hint">Sanità migliore significa meno decessi. Economia e lavoro attirano immigrati. Salari bassi, poco lavoro e poca ricerca fanno partire i giovani. Più anziani significa più spesa per pensioni e sanità a ogni bilancio annuale.</p>';
+    return html + "</details></section>";
+  }
   function driftCountryProfile() {
     state.countryProfilePrev = Object.assign({}, state.countryProfile);
     if (!state.countryProfileHistory) state.countryProfileHistory = {};
@@ -26414,6 +26521,7 @@
     var countryTrendDelta = computeCountryTrendDelta();
     driftConsensoGovernoByCountryTrend(countryTrendDelta);
     driftCountryProfile();
+    demografiaTick();
     driftEconomySectors();
     checkLongTermTrackMilestones();
     driftPartyRelations();
@@ -30044,6 +30152,7 @@
     }
     html += renderPresidentCard();
     html += renderCountryProfile().replace('<details class="log">', '<details class="log" open>');
+    html += renderPopulationPanel();
     return html;
   }
   // Segnalato da un giocatore: in carriera i sondaggi sembravano fermi (solo un rumore minimo che si
@@ -31907,6 +32016,7 @@
     var c = state.career;
     ensureCareerFields(c);
     if (c.pending.length) { showSaveStatus("Prima affronta i dossier della settimana.", true); return; }
+    demografiaTick();
     var cal = careerCalendar(state.turn);
     if (c.stage === "scuola") {
       if (cal.lezioni && !cal.natale) careerStudyTick(c);
@@ -36282,7 +36392,7 @@
     var page = state.presidentUiPage || "quirinale";
     if (page === "agenda") return renderPresidentAgendaPage();
     if (page === "leggi") return renderPresidentLawsPage();
-    if (page === "paese") return renderNationalStrip() + renderCountryProfile();
+    if (page === "paese") return renderNationalStrip() + renderCountryProfile() + renderPopulationPanel();
     return renderPresidentQuirinalePage();
   }
 
@@ -41167,7 +41277,7 @@
         // si cerca per davvero). renderIniziativaLiberaPanel si è spostato in Parlamento (vedi sopra),
         // insieme alle altre proposte dello stesso tipo (mozioni, leggi, modifiche) invece di restare
         // isolato qui in mezzo agli indicatori della Scheda Paese.
-        return renderNationalStrip() + renderPresidentCard() + renderCountryProfile() + renderEconomySectors() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetMeasuresPanel() + renderBudgetAllocation() + renderPolicyHistoryPanel();
+        return renderNationalStrip() + renderPresidentCard() + renderCountryProfile() + renderPopulationPanel() + renderEconomySectors() + renderBilancioStato() + renderFiscalPolicyPanel() + renderBudgetMeasuresPanel() + renderBudgetAllocation() + renderPolicyHistoryPanel();
       } },
     { id: "partiti", label: "Partiti Politici e Relazioni", icon: "🎭", nav: "Partiti", render: function () {
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
