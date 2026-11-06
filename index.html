@@ -4950,7 +4950,10 @@
   function computeRegionalCampaignStrength(regionId) {
     var p = state.player;
     var sectionsHere = playerSectionsInRegion(regionId).length;
-    return clamp(p.sondaggi * 0.5, 0, 20) + sectionsHere * 4 + Math.min(openNuclei().length, 10) * 0.3;
+    // un partito autonomista nelle sue regioni pesca anche nel sentimento identitario locale
+    var homeRegs = regionalistHomeRegions(p);
+    var identity = homeRegs && homeRegs.indexOf(regionId) !== -1 && state.indep && state.indep.support ? (state.indep.support[regionId] || 0) * 0.12 : 0;
+    return clamp(p.sondaggi * 0.5, 0, 20) + sectionsHere * 4 + Math.min(openNuclei().length, 10) * 0.3 + identity;
   }
   // Una regione dove il giocatore non ha alcuna sezione resta cronaca di sottofondo: la maggioranza
   // cambia solo in minoranza dei casi (più stabilità nel tempo, non un ribaltone ogni 5 anni ovunque),
@@ -29488,7 +29491,7 @@
       if (d.family === "regionalista") {
         var homeRegs = d.homeRegions || [];
         html += '<div class="field"><label class="field-label">Le regioni del tuo progetto (da 1 a ' + INDEP_MAX_REGIONS + ')</label>' +
-          '<p class="field-hint">Qui il partito mette radici e lavora per l\'autonomia, fino all\'indipendenza. Con il ' + INDEP_REFERENDUM_THRESHOLD + '% nei sondaggi potrai indire un referendum: le regioni dove vince il Sì formeranno un nuovo Stato. Scelte: ' + homeRegs.length + "/" + INDEP_MAX_REGIONS + '.</p><div class="option-grid">' +
+          '<p class="field-hint">Qui il partito mette radici e lavora per l\'autonomia, fino all\'indipendenza. Quando governerai una di queste regioni (o con il ' + INDEP_REFERENDUM_THRESHOLD + '% nei sondaggi nazionali) potrai chiedere un referendum: le regioni dove vince il Sì formeranno un nuovo Stato. Scelte: ' + homeRegs.length + "/" + INDEP_MAX_REGIONS + '.</p><div class="option-grid">' +
           INDEP_REGIONS.map(function (r) {
             var sel = homeRegs.indexOf(r.id) !== -1;
             return '<button type="button" class="option-card' + (sel ? " selected" : "") + '" data-home-region="' + r.id.replace(/"/g, "&quot;") + '"' + (!sel && homeRegs.length >= INDEP_MAX_REGIONS ? " disabled" : "") + '><span class="olabel">' + r.id + '</span><span class="odesc">' + fmt1(r.pop) + " milioni di abitanti · sostegno all'indipendenza oggi circa " + r.base + "%</span></button>";
@@ -40586,7 +40589,7 @@
     var p = state.player;
     var why = p.family === "regionalista" ? "Il tuo partito è regionalista" : p.name + " nasce come forza autonomista";
     var html = '<section aria-label="Indipendenza"><details class="log" open><summary>Il progetto di indipendenza<span>▾</span></summary>' +
-      '<p class="ci-hint">' + why + ": puoi scegliere fino a " + INDEP_MAX_REGIONS + " regioni di riferimento. Lì crescerà il sostegno all'indipendenza e, con il " + INDEP_REFERENDUM_THRESHOLD + "% nei sondaggi nazionali, potrai chiedere un referendum. La scelta è definitiva.</p>" +
+      '<p class="ci-hint">' + why + ": puoi scegliere fino a " + INDEP_MAX_REGIONS + " regioni di riferimento. Lì crescerà il sostegno all'indipendenza e, quando governerai una di queste regioni (o con il " + INDEP_REFERENDUM_THRESHOLD + "% nei sondaggi nazionali), potrai chiedere un referendum. La scelta è definitiva.</p>" +
       '<div class="option-grid">' + INDEP_REGIONS.map(function (r) {
         var sel = indepRegionDraft.indexOf(r.id) !== -1;
         return '<button type="button" class="option-card' + (sel ? " selected" : "") + '" data-indep-region="' + r.id.replace(/"/g, "&quot;") + '"' + (!sel && indepRegionDraft.length >= INDEP_MAX_REGIONS ? " disabled" : "") + '><span class="olabel">' + r.id + '</span><span class="odesc">' + fmt1(r.pop) + " milioni di abitanti · sostegno all'indipendenza oggi circa " + r.base + "%</span></button>";
@@ -40640,18 +40643,27 @@
     }
     if (ref && ref.stage === "campagna" && state.turn >= ref.voteTurn) indepRunReferendum();
   }
+  function indepGovernedHomeRegions() {
+    var p = state.player;
+    return (p.homeRegions || []).filter(function (r) { return state.regions && state.regions[r] && state.regions[r].playerGoverns; });
+  }
   function indepCanReferendum() {
     var p = state.player, ind = ensureIndep();
     if (ind.referendum) return { ok: false, why: "C'è già un referendum in corso." };
     if (state.turn < ind.cooldownUntil) return { ok: false, why: "Dopo un referendum perso servono anni prima di riprovarci (ancora " + (ind.cooldownUntil - state.turn) + " settimane)." };
-    if (p.sondaggi < INDEP_REFERENDUM_THRESHOLD) return { ok: false, why: "Serve almeno il " + INDEP_REFERENDUM_THRESHOLD + "% nei sondaggi nazionali (oggi " + fmt1(p.sondaggi) + "%)." };
+    // Suggerito da un giocatore: un partito autonomista realisticamente non arriva al 20% nazionale. La
+    // strada vera è conquistare la propria regione: basta governarne una (aver vinto le regionali lì).
+    // Il 20% nazionale resta come strada alternativa, per i partiti grandi.
+    if (!indepGovernedHomeRegions().length && p.sondaggi < INDEP_REFERENDUM_THRESHOLD) return { ok: false, why: "Devi prima governare una delle tue regioni, vincendo le elezioni regionali lì (oppure arrivare al " + INDEP_REFERENDUM_THRESHOLD + "% nei sondaggi nazionali: oggi " + fmt1(p.sondaggi) + "%)." };
     return { ok: true };
   }
   function indepStartReferendum(kind) {
     var p = state.player, ind = ensureIndep();
     if (!indepCanReferendum().ok) return;
     if (kind === "concordato") {
-      var chance = clamp(0.12 + (p.sondaggi - 20) * 0.02 + (p.reputazione - 50) / 250, 0.05, 0.6);
+      // Roma accetta di rado: conta un po' il peso del partito, la sua reputazione, quante regioni governa
+      // e se siede nel governo nazionale.
+      var chance = clamp(0.04 + (p.sondaggi - 10) * 0.008 + (p.reputazione - 50) / 400 + indepGovernedHomeRegions().length * 0.03 + (p.parliamentRole === "governo" ? 0.05 : 0), 0.03, 0.25);
       ind.referendum = { stage: "trattativa", answerTurn: state.turn + 6, acceptChance: chance, campaign: 0, agreed: false };
       addDiaryEntry("Chiediamo a Roma di lasciarci votare", "Ho chiesto al governo un referendum concordato sull'indipendenza. Ci vorranno settimane per avere una risposta.");
       showSaveStatus("Trattativa aperta con Roma: risposta tra 6 settimane.", false);
@@ -40724,7 +40736,7 @@
     var can = indepCanReferendum();
     var actionWait = 4 - (state.turn - ind.actionTurn);
     var html = '<section aria-label="Indipendenza"><details class="log" open><summary>Indipendenza delle tue regioni<span>▾</span></summary>' +
-      '<p class="ci-hint">Le regioni del tuo progetto: quanto sostegno c\'è oggi all\'indipendenza. Cresce con la forza del partito e il lavoro sul territorio. Con il ' + INDEP_REFERENDUM_THRESHOLD + '% nei sondaggi nazionali puoi indire un referendum: dove vince il Sì, quella regione entra nel nuovo Stato.</p>' +
+      '<p class="ci-hint">Le regioni del tuo progetto: quanto sostegno c\'è oggi all\'indipendenza. Cresce con la forza del partito e il lavoro sul territorio. Per chiedere il referendum devi governare almeno una delle tue regioni (vincendo le regionali lì) oppure arrivare al ' + INDEP_REFERENDUM_THRESHOLD + '% nei sondaggi nazionali. Dove vince il Sì, quella regione entra nel nuovo Stato.' + (indepGovernedHomeRegions().length ? " <strong>Governi già: " + indepGovernedHomeRegions().join(", ") + ".</strong>" : "") + '</p>' +
       '<div class="stat-grid">' + p.homeRegions.map(function (r) {
         var v = ind.support[r];
         return '<div class="stat-tile"><div class="label">' + r + '</div><div class="row"><span class="value">' + Math.round(v) + '%</span><span class="ci-hint">per il Sì</span></div><div class="gauge"><span style="width:' + clamp(v, 0, 100) + '%;background:' + (v >= 50 ? "var(--good)" : v >= 35 ? "var(--warning)" : "var(--critical)") + '"></span></div></div>';
@@ -40741,7 +40753,7 @@
         "</div>";
       if (can.ok) {
         html += '<p class="ci-hint"><strong>Il partito è abbastanza forte per chiedere il referendum.</strong></p><div class="choices">' +
-          '<button type="button" class="choice-btn" data-indep="ref_concordato"><span class="clabel">Chiedi a Roma un referendum concordato</span><span class="chint">Risposta in 6 settimane, Roma probabilmente dirà no. Se accetta, il nuovo Stato nasce riconosciuto e in buoni rapporti con l\'Italia.</span></button>' +
+          '<button type="button" class="choice-btn" data-indep="ref_concordato"><span class="clabel">Chiedi a Roma un referendum concordato</span><span class="chint">Risposta in 6 settimane: Roma accetta di rado. Se accetta, il nuovo Stato nasce riconosciuto e in buoni rapporti con l\'Italia.</span></button>' +
           '<button type="button" class="choice-btn" data-indep="ref_unilaterale"><span class="clabel">Indici un referendum unilaterale</span><span class="chint">Si vota tra 8 settimane. Chi è contrario boicotta: il Sì è più facile, ma il nuovo Stato nascerebbe isolato e in rotta con l\'Italia.</span></button></div>';
       } else {
         html += '<p class="ci-hint">Referendum: ' + can.why + "</p>";
