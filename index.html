@@ -23786,7 +23786,280 @@
     var dist = Math.abs(myPos - govPos);
     return clamp(0.5 - (dist / 6) * 0.46, 0.03, 0.5);
   }
-  function proposeAmendment(topic) {
+  // ---------- Le tre modifiche concrete per ogni legge ----------
+  // Segnalato da un giocatore: nelle modifiche di legge non era specificato lo scopo, quindi era
+  // difficile capire il risultato. Ora, scelta la legge, il giocatore sceglie COSA cambiare tra tre
+  // modifiche concrete, ognuna con il suo scopo, gli effetti previsti sulla Scheda Paese e le
+  // probabilità di approvazione (che dipendono anche da quanto la modifica è lontana dalla linea del
+  // Governo). Formato: [titolo, cosa cambia, effetti, orientamento]. Effetti: indicatore:peso
+  // (peso 1 ≈ un normale effetto di modifica approvata); "bilancio" è il costo annuo in miliardi.
+  // Orientamento: "sx" sinistra, "c" centro, "dx" destra.
+  var AMENDMENT_LAW_OPTIONS = {
+    "la Legge Fornero sulle pensioni": [
+      ["Quota 41 per tutti", "Si va in pensione con 41 anni di contributi, a qualunque età.", "welfare:1.2,felicita:0.5,bilancio:-6,economia:-0.4", "sx"],
+      ["Uscita flessibile dai 64 anni", "Si può uscire dai 64 anni con un piccolo taglio dell'assegno per ogni anno di anticipo.", "welfare:0.6,felicita:0.3,bilancio:-2", "c"],
+      ["Età legata all'aspettativa di vita", "L'età pensionabile sale automaticamente con l'aspettativa di vita: conti più solidi, meno consenso.", "economia:0.8,welfare:-0.7,felicita:-0.4,bilancio:4", "dx"]],
+    "il Jobs Act sul mercato del lavoro": [
+      ["Ritorno dell'articolo 18", "Torna il reintegro per i licenziamenti senza giusta causa.", "salari:0.6,felicita:0.4,aziende:-0.7", "sx"],
+      ["Indennizzi più alti", "Restano i licenziamenti con indennizzo, ma l'indennizzo minimo raddoppia.", "salari:0.4,aziende:-0.2", "c"],
+      ["Più flessibilità in uscita", "Tetto agli indennizzi e meno contenziosi: più facile assumere e licenziare.", "aziende:0.8,disoccupazione:0.4,salari:-0.4", "dx"]],
+    "il Decreto Dignità sui contratti di lavoro": [
+      ["Contratti a termine più corti", "Massimo 12 mesi e causale obbligatoria fin dal primo rinnovo.", "salari:0.6,aziende:-0.6", "sx"],
+      ["Bonus per chi stabilizza", "Sgravi contributivi per chi trasforma un contratto a termine in indeterminato.", "disoccupazione:0.5,salari:0.3,bilancio:-1", "c"],
+      ["Contratti a termine fino a 36 mesi", "Via la causale: contratti a termine più lunghi e più semplici.", "aziende:0.7,disoccupazione:0.4,salari:-0.4", "dx"]],
+    "la Legge Bossi-Fini sull'immigrazione": [
+      ["Permesso per ricerca di lavoro", "Si può entrare con un permesso temporaneo per cercare lavoro, non solo con un contratto già firmato.", "immigrazione:0.6,disoccupazione:0.3,sicurezza:-0.3", "sx"],
+      ["Canali legali con i paesi d'origine", "Quote d'ingresso legate ad accordi di rimpatrio con i paesi di partenza.", "immigrazione:0.8,relazioniDiplomatiche:0.3", "c"],
+      ["Espulsioni più rapide", "Tempi dimezzati per le espulsioni e più posti nei centri per il rimpatrio.", "sicurezza:0.7,immigrazione:0.3,relazioniDiplomatiche:-0.3,bilancio:-0.5", "dx"]],
+    "il Testo Unico sull'Immigrazione": [
+      ["Ius scholae", "Cittadinanza ai ragazzi nati o cresciuti in Italia che finiscono un ciclo di studi.", "immigrazione:0.6,scuola:0.3,felicita:0.2", "sx"],
+      ["Permessi più semplici", "Rinnovo dei permessi digitale e in tempi certi.", "immigrazione:0.6,aziende:0.3", "c"],
+      ["Requisiti più severi", "Più anni di residenza e un esame di lingua per i permessi di lungo periodo.", "sicurezza:0.5,immigrazione:-0.3", "dx"]],
+    "la Legge 194 sull'interruzione di gravidanza": [
+      ["Garantire il servizio in ogni ospedale", "Ogni ospedale pubblico deve garantire il servizio, con limiti all'obiezione di coscienza.", "sanita:0.5,felicita:0.3", "sx"],
+      ["Più consultori", "Più consultori e sostegno alle donne in difficoltà, senza toccare la legge.", "sanita:0.4,welfare:0.4,bilancio:-0.4", "c"],
+      ["Sostegno alla maternità", "Fondi alle associazioni che aiutano le madri a proseguire la gravidanza.", "welfare:0.4,felicita:-0.2", "dx"]],
+    "la Legge Cirinnà sulle unioni civili": [
+      ["Matrimonio egualitario", "Il matrimonio viene esteso alle coppie dello stesso sesso.", "felicita:0.6", "sx"],
+      ["Adozione del figlio del partner", "Si riconosce l'adozione del figlio del partner nelle unioni civili.", "felicita:0.4,welfare:0.2", "c"],
+      ["Nessuna estensione", "Si conferma la legge com'è, rafforzando invece le misure per la famiglia tradizionale.", "welfare:0.3,felicita:-0.2", "dx"]],
+    "il Codice della Strada": [
+      ["Zone 30 nelle città", "Limite a 30 km/h nei centri urbani e più piste ciclabili.", "sicurezza:0.4,ambientalismo:0.5,trasporti:-0.2", "sx"],
+      ["Patente a punti più severa", "Pene più alte per chi guida al telefono o sotto effetto di sostanze.", "sicurezza:0.7", "c"],
+      ["Meno autovelox", "Autovelox solo nei punti più pericolosi e multe ridotte per chi paga subito.", "felicita:0.3,sicurezza:-0.3", "dx"]],
+    "la Riforma Cartabia della giustizia": [
+      ["Più magistrati e cancellieri", "Un piano straordinario di assunzioni per abbattere l'arretrato.", "giustizia:1.0,bilancio:-1.2", "sx"],
+      ["Processo telematico", "Udienze e atti digitali per tutti i tribunali.", "giustizia:0.7,ricercaSviluppo:0.2,bilancio:-0.5", "c"],
+      ["Separazione delle carriere", "Pubblici ministeri e giudici con carriere separate.", "giustizia:0.4,corruzione:-0.2", "dx"]],
+    "il Codice Antimafia": [
+      ["Beni confiscati ai Comuni", "I beni confiscati passano subito ai Comuni per scuole e servizi.", "corruzione:0.7,felicita:0.2", "sx"],
+      ["Più controlli sugli appalti", "Verifiche antimafia rafforzate su subappalti e fornitori.", "corruzione:0.8,aziende:-0.2", "c"],
+      ["Pene più dure per il voto di scambio", "Carcere più lungo per chi compra voti dalla criminalità.", "corruzione:0.6,sicurezza:0.3", "dx"]],
+    "la Legge Severino sull'incandidabilità": [
+      ["Incandidabilità più ampia", "Si estende anche ai condannati in primo grado per corruzione.", "corruzione:0.8", "sx"],
+      ["Sospensione solo dopo l'appello", "Gli amministratori locali vengono sospesi solo dopo la condanna in appello.", "corruzione:-0.2,giustizia:0.3", "c"],
+      ["Abrogazione per gli amministratori locali", "Via la sospensione automatica per sindaci e consiglieri.", "corruzione:-0.5,aziende:0.2", "dx"]],
+    "il Codice dei Contratti Pubblici": [
+      ["Più trasparenza sugli appalti", "Tutti i contratti pubblicati online, con tetto ai subappalti.", "corruzione:0.8,trasporti:-0.2", "sx"],
+      ["Gare digitali", "Una piattaforma unica per tutte le gare, più veloce e controllabile.", "corruzione:0.5,trasporti:0.3", "c"],
+      ["Affidamenti diretti più alti", "Soglie più alte per gli affidamenti senza gara: cantieri più rapidi.", "trasporti:0.6,aziende:0.4,corruzione:-0.5", "dx"]],
+    "la Legge sul Reddito di Cittadinanza": [
+      ["Reddito più alto e per tutti", "Assegno più alto e senza limiti di durata.", "welfare:1.2,felicita:0.4,bilancio:-4,disoccupazione:-0.2", "sx"],
+      ["Legato alla formazione", "Il sostegno resta, ma solo per chi segue corsi o accetta offerte congrue.", "welfare:0.5,disoccupazione:0.4,bilancio:-1", "c"],
+      ["Solo per chi non può lavorare", "Sostegno solo per anziani, disabili e famiglie con minori.", "economia:0.4,bilancio:3,welfare:-0.6,felicita:-0.3", "dx"]],
+    "la Riforma Gelmini della scuola": [
+      ["Classi meno affollate", "Massimo 20 alunni per classe e più docenti.", "scuola:1.0,bilancio:-1.5", "sx"],
+      ["Tempo pieno ovunque", "Tempo pieno garantito alle elementari in tutto il paese.", "scuola:0.7,welfare:0.3,bilancio:-1", "c"],
+      ["Autonomia ai presidi", "I presidi scelgono una parte dei docenti e gestiscono il budget.", "scuola:0.4,aziende:0.2", "dx"]],
+    "la Riforma della Buona Scuola": [
+      ["Stabilizzare i precari", "Assunzione dei docenti precari con almeno tre anni di servizio.", "scuola:0.8,salari:0.3,bilancio:-1.2", "sx"],
+      ["Docenti pagati meglio", "Stipendi dei docenti allineati alla media europea in cinque anni.", "scuola:0.6,salari:0.4,bilancio:-2", "c"],
+      ["Merito e valutazione", "Scatti di stipendio legati alla valutazione dei docenti.", "scuola:0.4,salari:-0.1", "dx"]],
+    "la Legge Biagi sul mercato del lavoro": [
+      ["Meno contratti precari", "Si aboliscono le forme di contratto più precarie.", "salari:0.6,aziende:-0.5", "sx"],
+      ["Tutele per i lavoratori delle piattaforme", "Rider e lavoratori digitali con tutele minime garantite.", "salari:0.5,felicita:0.2,aziende:-0.2", "c"],
+      ["Contratti più flessibili", "Più tipologie di contratto e meno vincoli per le imprese.", "aziende:0.7,disoccupazione:0.3,salari:-0.4", "dx"]],
+    "il Testo Unico Bancario": [
+      ["Tetto agli interessi sui mutui", "Limite agli interessi su mutui e prestiti alle famiglie.", "casa:0.5,felicita:0.3,economia:-0.3", "sx"],
+      ["Più tutele per i risparmiatori", "Controlli più severi sui prodotti finanziari venduti allo sportello.", "economia:0.4,corruzione:0.3", "c"],
+      ["Credito più facile alle imprese", "Meno vincoli per i prestiti alle piccole e medie imprese.", "aziende:0.7,economia:0.4", "dx"]],
+    "il Codice del Consumo": [
+      ["Class action più facili", "I consumatori possono fare causa collettiva più facilmente.", "felicita:0.4,aziende:-0.3", "sx"],
+      ["Bollette più chiare", "Bollette e contratti con un riepilogo obbligatorio dei costi.", "felicita:0.3,energia:0.2", "c"],
+      ["Meno obblighi per i negozi", "Semplificazione degli obblighi informativi per piccoli commercianti.", "commercio:0.5,aziende:0.3", "dx"]],
+    "la Legge sull'Equo Canone delle locazioni": [
+      ["Ritorno dell'equo canone", "Affitti calmierati per legge nelle grandi città.", "casa:1.0,economia:-0.3", "sx"],
+      ["Sgravi a chi affitta a canone concordato", "Meno tasse per i proprietari che affittano a prezzi calmierati.", "casa:0.6,bilancio:-0.8", "c"],
+      ["Sfratti più rapidi", "Tempi certi per gli sfratti: più case tornano sul mercato.", "casa:0.3,economia:0.3,felicita:-0.3", "dx"]],
+    "la Riforma del Catasto": [
+      ["Valori aggiornati e patrimoniale sulle grandi case", "Rendite catastali aggiornate e più tasse sulle case di lusso.", "economia:0.3,bilancio:2,felicita:-0.3", "sx"],
+      ["Mappatura senza aumenti", "Si aggiornano i dati e si scovano le case fantasma, senza alzare le tasse.", "corruzione:0.4,bilancio:0.8", "c"],
+      ["Blocco delle rendite", "Le rendite catastali restano congelate per dieci anni.", "casa:0.3,felicita:0.2", "dx"]],
+    "il Codice della Privacy": [
+      ["Più tutele contro le big tech", "Multe più alte per chi usa i dati personali senza consenso.", "ricercaSviluppo:0.3,felicita:0.3", "sx"],
+      ["Sanità digitale con garanzie", "Fascicolo sanitario condiviso tra regioni, con il consenso del paziente.", "sanita:0.5,ricercaSviluppo:0.4", "c"],
+      ["Meno burocrazia per le imprese", "Obblighi privacy semplificati per piccole imprese e professionisti.", "aziende:0.6,ricercaSviluppo:0.2", "dx"]],
+    "la Legge sul Terzo Settore": [
+      ["Più fondi al volontariato", "Un fondo nazionale stabile per associazioni e volontariato.", "welfare:0.6,felicita:0.4,bilancio:-0.8", "sx"],
+      ["Registro unico più semplice", "Iscrizione e rendiconti più semplici per le piccole associazioni.", "felicita:0.4,aziende:0.2", "c"],
+      ["Servizi sociali affidati al privato sociale", "Più servizi sociali gestiti da cooperative e associazioni.", "welfare:0.4,bilancio:0.5", "dx"]],
+    "la Legge Merlin sulla regolamentazione della prostituzione": [
+      ["Modello nordico", "Si punisce chi compra sesso, non chi lo vende.", "sicurezza:0.4,felicita:0.2", "sx"],
+      ["Più lotta alla tratta", "Più risorse contro la tratta e protezione per chi denuncia.", "sicurezza:0.5,giustizia:0.3,bilancio:-0.3", "c"],
+      ["Regolamentazione e tasse", "Prostituzione legale in luoghi autorizzati, con controlli sanitari e tasse.", "bilancio:0.5,corruzione:0.2,felicita:-0.2", "dx"]],
+    "il Codice dell'Ambiente": [
+      ["Reati ambientali più gravi", "Pene più dure per chi inquina e risarcimenti obbligatori.", "ambientalismo:1.0,aziende:-0.3", "sx"],
+      ["Bonifiche dei siti inquinati", "Un piano nazionale per bonificare i siti più contaminati.", "ambientalismo:0.8,sanita:0.2,bilancio:-1.2", "c"],
+      ["Autorizzazioni più rapide", "Meno passaggi burocratici per impianti e cantieri.", "aziende:0.7,ambientalismo:-0.4", "dx"]],
+    "la Legge Quadro sulle Aree Protette": [
+      ["Nuovi parchi nazionali", "Più aree protette e più guardiaparco.", "ambientalismo:0.9,bilancio:-0.5", "sx"],
+      ["Turismo sostenibile nei parchi", "Incentivi al turismo lento nelle aree protette.", "ambientalismo:0.5,commercio:0.4", "c"],
+      ["Più attività economiche nei parchi", "Meno vincoli per agricoltura e attività tradizionali nelle aree protette.", "aziende:0.5,ambientalismo:-0.4", "dx"]],
+    "il Decreto Clima": [
+      ["Neutralità climatica al 2040", "Obiettivi più ambiziosi e stop ai sussidi ai combustibili fossili.", "ambientalismo:1.1,energia:0.3,aziende:-0.4", "sx"],
+      ["Incentivi alla mobilità elettrica", "Bonus per auto elettriche e colonnine di ricarica.", "ambientalismo:0.6,trasporti:0.3,bilancio:-1", "c"],
+      ["Transizione più graduale", "Obiettivi rinviati per non pesare su famiglie e industria.", "aziende:0.5,economia:0.3,ambientalismo:-0.6", "dx"]],
+    "la Legge sul Divorzio Breve": [
+      ["Divorzio diretto", "Si divorzia direttamente, senza passare dalla separazione.", "felicita:0.5,giustizia:0.2", "sx"],
+      ["Mediazione familiare gratuita", "Mediazione familiare gratuita per le coppie con figli.", "felicita:0.4,welfare:0.2,bilancio:-0.2", "c"],
+      ["Tempi più lunghi con figli minori", "Più tempo per riflettere quando ci sono figli piccoli.", "felicita:-0.2,welfare:0.2", "dx"]],
+    "la Legge sulle Adozioni": [
+      ["Adozioni per i single", "Possono adottare anche le persone single.", "welfare:0.4,felicita:0.3", "sx"],
+      ["Tempi dimezzati", "Procedure più rapide e costi a carico dello Stato.", "welfare:0.6,felicita:0.3,bilancio:-0.3", "c"],
+      ["Priorità alle coppie sposate", "Le coppie sposate hanno la precedenza nelle adozioni.", "welfare:0.2", "dx"]],
+    "il Codice di Procedura Civile": [
+      ["Gratuito patrocinio più ampio", "Più cittadini possono avere un avvocato pagato dallo Stato.", "giustizia:0.6,welfare:0.3,bilancio:-0.5", "sx"],
+      ["Cause più brevi", "Tempi massimi per ogni grado di giudizio.", "giustizia:0.8,aziende:0.2", "c"],
+      ["Mediazione obbligatoria", "Più cause risolte fuori dai tribunali, con la mediazione obbligatoria.", "giustizia:0.5,aziende:0.3", "dx"]],
+    "la Legge sul Whistleblowing nella Pubblica Amministrazione": [
+      ["Premi a chi denuncia", "Una ricompensa a chi fa emergere casi di corruzione.", "corruzione:0.9,bilancio:-0.2", "sx"],
+      ["Anonimato garantito", "Canali digitali anonimi e protezione dal licenziamento.", "corruzione:0.7", "c"],
+      ["Sanzioni per le denunce false", "Più tutele per chi viene accusato ingiustamente.", "giustizia:0.3,corruzione:-0.2", "dx"]],
+    "la Riforma della Pubblica Amministrazione": [
+      ["Assunzioni di giovani nella PA", "Un piano di assunzioni per abbassare l'età media dei dipendenti pubblici.", "disoccupazione:0.5,aziende:0.3,bilancio:-1.5", "sx"],
+      ["Tutto digitale", "Ogni pratica online, con tempi certi e silenzio-assenso.", "aziende:0.7,ricercaSviluppo:0.3,bilancio:-0.5", "c"],
+      ["Licenziamenti per gli improduttivi", "Valutazione dei dipendenti e licenziamento per chi non lavora.", "aziende:0.5,corruzione:0.2,felicita:-0.2", "dx"]],
+    "la Legge Bassanini sul decentramento amministrativo": [
+      ["Più fondi ai Comuni", "Più risorse ai Comuni per i servizi ai cittadini.", "welfare:0.5,felicita:0.3,bilancio:-1", "sx"],
+      ["Sportello unico per le imprese", "Un solo ufficio per aprire un'attività, in ogni Comune.", "aziende:0.7", "c"],
+      ["Autonomia fiscale ai territori", "Regioni e Comuni trattengono più tasse e decidono come spenderle.", "aziende:0.3,economia:0.2,welfare:-0.2", "dx"]],
+    "la Legge Sblocca Cantieri": [
+      ["Più controlli sulla sicurezza nei cantieri", "Ispettori del lavoro in più e patente a punti per le imprese edili.", "sicurezza:0.4,salari:0.2,trasporti:-0.2", "sx"],
+      ["Commissari per le opere bloccate", "Un commissario per ogni grande opera ferma da anni.", "trasporti:0.8,bilancio:-0.5", "c"],
+      ["Via i vincoli sui subappalti", "Subappalti liberi per accelerare i lavori.", "trasporti:0.7,aziende:0.4,corruzione:-0.4", "dx"]],
+    "il Codice della Navigazione": [
+      ["Più diritti per i passeggeri", "Rimborsi automatici per ritardi di navi e aerei.", "trasporti:0.4,felicita:0.3", "sx"],
+      ["Porti più efficienti", "Autorità portuali accorpate e investimenti sulle banchine.", "commercio:0.8,bilancio:-0.8", "c"],
+      ["Concessioni balneari prorogate", "Le concessioni restano agli attuali gestori.", "commercio:0.3,relazioniDiplomatiche:-0.3,corruzione:-0.2", "dx"]],
+    "la Legge sul Golden Power": [
+      ["Stato più presente nelle aziende strategiche", "Lo Stato entra nel capitale delle aziende strategiche a rischio.", "relazioniDiplomatiche:0.2,energia:0.4,bilancio:-1.5", "sx"],
+      ["Controlli sugli investimenti cinesi e russi", "Verifiche più severe sugli acquisti da paesi extra-UE.", "relazioniDiplomatiche:0.6,difesa:0.2", "c"],
+      ["Mercato più aperto", "Golden power solo per difesa ed energia: più investimenti esteri.", "economia:0.6,aziende:0.4,relazioniDiplomatiche:0.2", "dx"]],
+    "il Testo Unico della Radiotelevisione": [
+      ["RAI fuori dal controllo dei partiti", "Vertici RAI scelti da una fondazione indipendente.", "corruzione:0.5,felicita:0.3", "sx"],
+      ["Tetto alla pubblicità", "Meno pubblicità sulla TV pubblica, più qualità.", "felicita:0.3,commercio:-0.2", "c"],
+      ["Abolizione del canone", "Via il canone RAI, finanziata con la pubblicità.", "felicita:0.4,bilancio:-1.8", "dx"]],
+    "la Legge sul Diritto d'Autore": [
+      ["Compenso giusto per gli artisti", "Le piattaforme pagano di più autori e musicisti.", "ricercaSviluppo:0.3,felicita:0.3,aziende:-0.2", "sx"],
+      ["Regole sull'intelligenza artificiale", "Le IA devono dichiarare le opere usate per l'addestramento.", "ricercaSviluppo:0.5", "c"],
+      ["Meno vincoli per le piattaforme", "Regole più leggere per non frenare le startup digitali.", "aziende:0.5,ricercaSviluppo:0.3", "dx"]],
+    "il Codice dei Beni Culturali": [
+      ["Musei gratuiti la domenica", "Ingresso libero nei musei statali ogni domenica.", "felicita:0.5,bilancio:-0.3", "sx"],
+      ["Restauri con l'Art Bonus", "Crediti d'imposta per chi finanzia restauri.", "felicita:0.4,commercio:0.3,bilancio:-0.4", "c"],
+      ["Gestione privata dei siti minori", "Siti minori affidati in gestione a privati.", "commercio:0.5,bilancio:0.3,felicita:-0.1", "dx"]],
+    "il Conto Energia sulle rinnovabili": [
+      ["Comunità energetiche ovunque", "Incentivi alle comunità energetiche di cittadini e Comuni.", "energia:0.8,ambientalismo:0.6,bilancio:-1", "sx"],
+      ["Autorizzazioni rapide per il solare", "Impianti sui tetti senza autorizzazioni e aste per i grandi parchi.", "energia:0.8,ambientalismo:0.4", "c"],
+      ["Incentivi anche al nucleare", "Gli incentivi si estendono al nucleare di nuova generazione.", "energia:0.7,ambientalismo:-0.2,bilancio:-1", "dx"]],
+    "la Legge sul Codice Rosso contro la violenza di genere": [
+      ["Centri antiviolenza in ogni provincia", "Fondi stabili per centri e case rifugio.", "sicurezza:0.5,welfare:0.4,bilancio:-0.4", "sx"],
+      ["Braccialetto elettronico obbligatorio", "Braccialetto per chi viola il divieto di avvicinamento.", "sicurezza:0.7", "c"],
+      ["Pene più severe", "Pene più alte e niente sconti per femminicidio e stalking.", "sicurezza:0.6,giustizia:0.2", "dx"]],
+    "la Legge di Programmazione Militare": [
+      ["Meno armi, più protezione civile", "Fondi spostati dalla difesa alla protezione civile.", "welfare:0.3,sicurezza:0.3,difesa:-0.6,relazioniDiplomatiche:-0.2", "sx"],
+      ["Difesa comune europea", "Acquisti di armamenti coordinati con gli altri paesi UE.", "difesa:0.6,relazioniDiplomatiche:0.4,bilancio:-1", "c"],
+      ["Spesa militare al 2% del PIL", "La spesa militare sale fino all'obiettivo NATO.", "difesa:1.0,relazioniDiplomatiche:0.3,bilancio:-4", "dx"]],
+    "il Decreto Sicurezza": [
+      ["Abrogazione delle norme più dure", "Si cancellano le pene più severe per chi protesta.", "felicita:0.3,sicurezza:-0.3", "sx"],
+      ["Più agenti nelle periferie", "Assunzioni di agenti per i quartieri più difficili.", "sicurezza:0.7,bilancio:-1", "c"],
+      ["Pene più dure per i reati di strada", "Arresto obbligatorio per furti e spaccio in flagranza.", "sicurezza:0.7,giustizia:-0.2", "dx"]],
+    "il Codice Penale": [
+      ["Pene alternative al carcere", "Lavori di pubblica utilità per i reati minori.", "giustizia:0.6,bilancio:0.3", "sx"],
+      ["Prescrizione più lunga per la corruzione", "Più tempo per processare i reati contro la pubblica amministrazione.", "corruzione:0.7,giustizia:0.2", "c"],
+      ["Legittima difesa più ampia", "Sempre legittima la difesa in casa propria.", "sicurezza:0.4,giustizia:-0.2", "dx"]],
+    "il Codice di Procedura Penale": [
+      ["Limiti alla custodia cautelare", "Carcere prima della condanna solo per i reati più gravi.", "giustizia:0.5", "sx"],
+      ["Processi penali più rapidi", "Udienze ravvicinate e notifiche digitali.", "giustizia:0.8,bilancio:-0.3", "c"],
+      ["Limiti alle intercettazioni", "Intercettazioni solo per i reati più gravi e divieto di pubblicarle.", "giustizia:0.2,corruzione:-0.4", "dx"]],
+    "la Legge sull'Edilizia Residenziale Pubblica": [
+      ["Piano di case popolari", "Centomila nuove case popolari in dieci anni.", "casa:1.1,disoccupazione:0.2,bilancio:-2.5", "sx"],
+      ["Recupero degli alloggi sfitti", "Si ristrutturano gli alloggi pubblici vuoti prima di costruirne di nuovi.", "casa:0.7,bilancio:-0.8", "c"],
+      ["Vendita agli inquilini", "Gli inquilini possono comprare la casa popolare in cui vivono.", "casa:0.4,bilancio:0.5", "dx"]],
+    "la Legge Martelli sull'immigrazione": [
+      ["Più tutele per i rifugiati", "Accoglienza diffusa nei piccoli Comuni.", "immigrazione:0.6,welfare:0.2,bilancio:-0.5", "sx"],
+      ["Corridoi umanitari", "Ingressi legali e sicuri per chi fugge dalle guerre.", "immigrazione:0.6,relazioniDiplomatiche:0.3", "c"],
+      ["Protezione più ristretta", "Meno casi di protezione speciale e controlli più rigidi.", "sicurezza:0.4,immigrazione:-0.2", "dx"]],
+    "il Decreto Flussi sull'immigrazione regolare": [
+      ["Quote raddoppiate", "Il doppio degli ingressi regolari per lavoro.", "immigrazione:0.7,disoccupazione:0.4,aziende:0.3", "sx"],
+      ["Ingressi legati alle carenze di lavoro", "Quote decise settore per settore in base ai posti scoperti.", "immigrazione:0.6,aziende:0.4", "c"],
+      ["Quote ridotte", "Meno ingressi, priorità ai disoccupati italiani.", "sicurezza:0.3,aziende:-0.4,immigrazione:-0.2", "dx"]],
+    "la Legge sugli Ammortizzatori Sociali": [
+      ["Sussidio universale di disoccupazione", "Sussidio per tutti, anche autonomi e precari.", "welfare:0.9,disoccupazione:-0.1,bilancio:-2", "sx"],
+      ["Formazione obbligatoria per chi lo riceve", "Il sussidio è legato a corsi di riqualificazione.", "disoccupazione:0.6,welfare:0.3,bilancio:-0.5", "c"],
+      ["Sussidi più brevi", "Durata ridotta per spingere a cercare lavoro.", "bilancio:1,disoccupazione:0.3,welfare:-0.5", "dx"]],
+    "il Decreto Lavoro": [
+      ["Salario minimo a 9 euro", "Nessuno può essere pagato meno di 9 euro l'ora.", "salari:1.0,aziende:-0.4", "sx"],
+      ["Taglio del cuneo fiscale", "Meno tasse sul lavoro, più soldi in busta paga.", "salari:0.7,disoccupazione:0.3,bilancio:-3", "c"],
+      ["Voucher e lavoro occasionale", "Più spazio a voucher e contratti occasionali.", "aziende:0.6,disoccupazione:0.4,salari:-0.3", "dx"]],
+    "il Decreto Energia": [
+      ["Tassa sugli extraprofitti energetici", "Una tassa sugli extraprofitti per abbassare le bollette.", "energia:0.4,felicita:0.4,aziende:-0.3,bilancio:1", "sx"],
+      ["Bonus bollette per le famiglie", "Sconti in bolletta per le famiglie a basso reddito.", "felicita:0.5,welfare:0.3,bilancio:-1.5", "c"],
+      ["Più gas nazionale", "Via libera a nuove estrazioni di gas in Italia.", "energia:0.8,aziende:0.3,ambientalismo:-0.5", "dx"]]
+  };
+  var AMENDMENT_LEAN_POS = { sx: -1.8, c: 0, dx: 1.8 };
+  // Per le leggi tematiche (temi identitari delle famiglie) le tre modifiche sono costruite sul tema.
+  function genericAmendmentOptions(topic) {
+    var n = topic.noun, m = topic.metric || "economia";
+    return [
+      ["Più risorse e controlli pubblici", "Rafforza la normativa su " + n + " con più fondi pubblici e più controlli.", m + ":1.1,bilancio:-1.2", "sx"],
+      ["Riordino mirato", "Corregge solo le norme che non funzionano su " + n + ", senza costi aggiuntivi.", m + ":0.6,corruzione:0.2", "c"],
+      ["Meno vincoli e burocrazia", "Semplifica le regole su " + n + " e lascia più spazio ai privati.", m + ":0.6,aziende:0.5", "dx"]
+    ];
+  }
+  function amendmentOptionsFor(topic) {
+    var raw = AMENDMENT_LAW_OPTIONS[topic.noun] || genericAmendmentOptions(topic);
+    return raw.map(function (o, i) {
+      var eff = {};
+      o[2].split(",").forEach(function (pair) { var kv = pair.split(":"); eff[kv[0]] = parseFloat(kv[1]); });
+      return { idx: i, label: o[0], desc: o[1], effects: eff, lean: o[3] };
+    });
+  }
+  // Probabilità di approvazione di una modifica precisa: metà dipende da quanto il tuo partito è vicino al
+  // Governo (come prima), metà da quanto il CONTENUTO della modifica è vicino alla linea del Governo.
+  function amendmentOptionAcceptProbability(p, opt) {
+    var base = amendmentAcceptProbability(p);
+    if (state.regime) return base;
+    var govPos = LEFT_RIGHT_POSITION[governingFamilyId(p)];
+    if (govPos === undefined) return base;
+    var dist = Math.abs(AMENDMENT_LEAN_POS[opt.lean] - govPos);
+    var contentProb = clamp(0.8 - dist * 0.16, 0.08, 0.8);
+    return clamp((base + contentProb) / 2, 0.03, 0.9);
+  }
+  // Quanto la modifica è coerente con l'ideologia del tuo partito: se va contro la tua linea, la base lo nota.
+  function amendmentOptionCoherence(p, opt) {
+    var my = LEFT_RIGHT_POSITION[p.family];
+    if (my === undefined) return 0;
+    var d = Math.abs(AMENDMENT_LEAN_POS[opt.lean] - my);
+    return d <= 1.2 ? 1 : d >= 3 ? -1 : 0;
+  }
+  function amendmentEffectsLabel(eff) {
+    return Object.keys(eff).map(function (k) {
+      var v = eff[k];
+      if (k === "bilancio") return v < 0 ? "Bilancio: costa " + fmt1(-v).replace(".", ",") + " mld l'anno" : "Bilancio: +" + fmt1(v).replace(".", ",") + " mld l'anno";
+      var lbl = METRIC_LABELS[k] || k; lbl = lbl.replace(/^(il|la|lo|l'|i|gli|le) ?/, "");
+      return lbl.charAt(0).toUpperCase() + lbl.slice(1) + " " + (v > 0 ? (v >= 0.8 ? "▲▲" : "▲") : (v <= -0.6 ? "▼▼" : "▼"));
+    }).join(" · ");
+  }
+  function renderAmendmentDraft() {
+    var p = state.player;
+    if (!p || !p.amendmentDraft) return "";
+    var topic = p.amendmentDraft;
+    var opts = amendmentOptionsFor(topic);
+    var html = '<section id="amendment-draft" aria-label="Scegli la modifica"><p class="eyebrow">Modifica di legge</p><div class="dossier">' +
+      "<h2>" + topic.title + "</h2>" +
+      '<p class="brief">Cosa vuoi cambiare, esattamente? Scegli una delle tre modifiche: ognuna ha uno scopo diverso, effetti diversi sulla Scheda Paese e probabilità diverse di passare in Aula. Costo del deposito: ' + fmtInt(AMENDMENT_PROPOSAL_COST) + " €.</p><div class=\"choices\">";
+    opts.forEach(function (o) {
+      var prob = Math.round(amendmentOptionAcceptProbability(p, o) * 100);
+      var coh = amendmentOptionCoherence(p, o);
+      html += '<button type="button" class="choice-btn" data-amendment-option="' + o.idx + '"><span class="clabel">' + o.label + "</span>" +
+        '<span class="chint" style="display:block">' + o.desc + "</span>" +
+        '<span class="chint" style="display:block;margin-top:.35rem"><strong>Effetti se approvata:</strong> ' + amendmentEffectsLabel(o.effects) + "</span>" +
+        '<span class="chint" style="display:block;margin-top:.25rem"><strong>Probabilità di approvazione:</strong> circa ' + prob + "%" + (coh > 0 ? " · coerente con la tua linea" : coh < 0 ? " · lontana dalla tua linea: la base potrebbe non gradire" : "") + "</span></button>";
+    });
+    html += '</div><button type="button" class="staff-btn" data-amendment-cancel="1">← Scegli un\'altra legge</button></div></section>';
+    return html;
+  }
+  function proposeAmendment(topic, opt) {
     var p = state.player;
     if (!p.inParliament) return null;
     if (state.turn < (p.amendmentCooldownTurn || 0)) return null;
@@ -23798,17 +24071,24 @@
     recordFondiLedger("Deposito modifica di legge: " + topic.title, -AMENDMENT_PROPOSAL_COST);
     p.amendmentCooldownTurn = state.turn + AMENDMENT_COOLDOWN_TURNS;
     p.pendingAmendment = {
-      title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun,
-      acceptProb: amendmentAcceptProbability(p), resolveTurn: state.turn + 3 + Math.floor(Math.random() * 4)
+      title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, option: opt || null,
+      acceptProb: opt ? amendmentOptionAcceptProbability(p, opt) : amendmentAcceptProbability(p), resolveTurn: state.turn + 3 + Math.floor(Math.random() * 4)
     };
+    p.amendmentDraft = null;
+    var cohNote = "";
+    if (opt) {
+      var coh = amendmentOptionCoherence(p, opt);
+      if (coh > 0) { p.iscritti += Math.round(rand(2, 5)); cohNote = " La base apprezza: è una modifica in linea con il partito."; }
+      else if (coh < 0) { p.iscritti = Math.max(0, p.iscritti - Math.round(rand(3, 8))); p.reputazione = clamp(p.reputazione - 1, 0, 100); cohNote = " Una parte della base storce il naso: la modifica è lontana dalla linea del partito."; }
+    }
     p.amendmentCandidates = null;
     p.amendmentSelectedCat = null;
     state.log.unshift({
       week: state.turn, title: "Proposta di modifica di legge depositata", choiceLabel: topic.title,
-      result: "Il partito deposita in Parlamento una proposta di modifica su " + topic.noun + ". L'iter passerà dalle commissioni prima del voto finale in Aula.",
+      result: "Il partito deposita in Parlamento una proposta di modifica su " + topic.noun + (opt ? ": «" + opt.label + "». " + opt.desc : ".") + " L'iter passerà dalle commissioni prima del voto finale in Aula." + cohNote,
       headlines: [], type: "mozione", cat: "Modifica di Legge"
     });
-    return { resultText: "Hai depositato una proposta di modifica su " + topic.noun + ". L'iter parlamentare richiederà qualche settimana.", headlines: [] };
+    return { resultText: "Hai depositato una proposta di modifica su " + topic.noun + (opt ? " («" + opt.label + "», approvazione stimata circa " + Math.round(p.pendingAmendment.acceptProb * 100) + "%)" : "") + ". L'iter parlamentare richiederà qualche settimana." + cohNote, headlines: [] };
   }
   function resolveAmendmentIfDue() {
     var p = state.player;
@@ -23820,8 +24100,20 @@
     var passed = Math.random() < topic.acceptProb;
     var mult = institutionalPowerMultiplier(p);
     var isGoverno = p.parliamentRole === "governo";
-    var delta = passed ? rand(0.18, 0.38) : rand(-0.1, 0.1);
-    if (topic.metric) applyCountryMetricDelta(topic.metric, delta * mult);
+    var optEffectsNote = "";
+    if (topic.option) {
+      if (passed) {
+        Object.keys(topic.option.effects).forEach(function (k) {
+          var v = topic.option.effects[k];
+          if (k === "bilancio") { if (state.bilancioStato) state.bilancioStato.uscite -= v; }
+          else applyCountryMetricDelta(k, v * rand(0.22, 0.32) * mult);
+        });
+        optEffectsNote = " Cosa cambia: " + topic.option.desc + " Effetti: " + amendmentEffectsLabel(topic.option.effects) + ".";
+      }
+    } else {
+      var delta = passed ? rand(0.18, 0.38) : rand(-0.1, 0.1);
+      if (topic.metric) applyCountryMetricDelta(topic.metric, delta * mult);
+    }
     var repDelta = passed ? rand(1.2, 3) : (isGoverno ? -rand(1, 2.5) : rand(0.3, 1));
     p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
     if (state.consensoGoverno !== undefined) {
@@ -23829,8 +24121,8 @@
       state.consensoGoverno = clamp(state.consensoGoverno + cgDelta, 0, 100);
     }
     var esito = passed
-      ? "La proposta di modifica del tuo partito viene approvata in via definitiva dall'Aula: " + topic.noun + " viene aggiornata secondo la linea che avevi chiesto."
-      : "La proposta di modifica del tuo partito viene respinta in Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": " + topic.noun + " resta invariata, anche se il tema resta acceso nel dibattito pubblico.";
+      ? "La proposta di modifica del tuo partito viene approvata in via definitiva dall'Aula: " + topic.noun + " viene aggiornata" + (topic.option ? " con la modifica «" + topic.option.label + "»." + optEffectsNote : " secondo la linea che avevi chiesto.")
+      : "La proposta di modifica del tuo partito" + (topic.option ? " («" + topic.option.label + "»)" : "") + " viene respinta in Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": " + topic.noun + " resta invariata, anche se il tema resta acceso nel dibattito pubblico.";
     state.log.unshift({
       week: state.turn, title: topic.title, choiceLabel: "Esito del voto finale in Aula", result: esito,
       headlines: [], type: "mozione", cat: "Modifica di Legge"
@@ -43367,6 +43659,11 @@
         dossierSection += renderResultCard(state.resultData);
         dossierSection += renderHeadlines(state.resultData.headlines);
       }
+      // la scelta delle tre modifiche concrete di una legge, appena il giocatore ha scelto quale legge
+      if (state.player && state.player.amendmentDraft && state.phase !== "coup") {
+        if (state.player.pendingAmendment || !state.player.inParliament) state.player.amendmentDraft = null;
+        else dossierSection += renderAmendmentDraft();
+      }
       if (state.player && !state.player.formationComplete) dossierSection += renderFormationSocialPanel();
       dossierSection += renderExplorationHint();
 
@@ -45321,12 +45618,30 @@
         var p = state.player;
         var topic = p.amendmentCandidates && p.amendmentCandidates[idx];
         if (!topic) return;
-        var res = proposeAmendment(topic);
+        if (!p.inParliament || p.pendingAmendment || state.turn < (p.amendmentCooldownTurn || 0)) { showSaveStatus("Non puoi ancora depositare una proposta di modifica (tempo di recupero o proposta già in corso).", true); return; }
+        p.amendmentDraft = { title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, cat: topic.cat, shapeId: topic.shapeId };
+        save();
+        render();
+        var dr = document.getElementById("amendment-draft"); if (dr) dr.scrollIntoView({ block: "start" });
+      });
+    });
+    app.querySelectorAll("[data-amendment-option]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var p = state.player, draft = p.amendmentDraft;
+        if (!draft) return;
+        var opt = amendmentOptionsFor(draft)[parseInt(btn.getAttribute("data-amendment-option"), 10)];
+        if (!opt) return;
+        if (p.fondi < AMENDMENT_PROPOSAL_COST) { showSaveStatus("Servono " + fmtInt(AMENDMENT_PROPOSAL_COST) + " € per depositare la modifica.", true); return; }
+        var res = proposeAmendment(draft, opt);
         if (!res) { showSaveStatus("Non puoi ancora depositare una proposta di modifica (tempo di recupero o proposta già in corso).", true); return; }
+        p.amendmentDraft = null;
         showSaveStatus(res.resultText, false);
         save();
         render();
       });
+    });
+    app.querySelectorAll("[data-amendment-cancel]").forEach(function (btn) {
+      btn.addEventListener("click", function () { state.player.amendmentDraft = null; save(); render(); });
     });
     app.querySelectorAll("[data-select-amendment-cat]").forEach(function (btn) {
       btn.addEventListener("click", function () {
