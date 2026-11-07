@@ -12024,21 +12024,66 @@
   // (il modo in cui ogni archetipo già segnala da sé quanto sta rischiando, senza bisogno di etichettarlo
   // a mano uno per uno): un affondo mediatico resta un azzardo vero, una linea prudente resta più sicura
   // ma mai blindata al 100%, esattamente come già corretto per le Dichiarazioni.
-  // Classifica una scelta come "più mercato" o "più Stato" dal testo, e la confronta con la famiglia
-  // politica del partito del giocatore: +1 coerente, -1 contro la linea, 0 neutra.
-  var LINE_MARKET_RE = /privatizz|privat[oa] convenzionat|sanità privata|scuol[ae] privat|ruolo (del|dei|della) privat|liberalizz|mercato|deregol|concorrenz|sgrav|tagli\w* (delle |le |di )?tass|meno tasse|flat tax|riduzione (delle|della) (tasse|pressione|spesa)|burocrazi|vincoli|innovazione senza freni|voucher|libera iniziativa|impresa privata/i;
-  var LINE_MARKET_EXCLUDE_RE = /mercato rionale|fallimento di mercato|mercato unico|intervento pubblico/i;
-  var LINE_STATE_RE = /ospedali pubblici|scuola pubblica|sanità pubblica|investiment\w* pubblic|assunzioni straordinarie|nazionalizz|statalizz|patrimoniale|salario minimo|extraprofitt|tassa\w* (sui |i |le )?(grandi|ricch|rendit)|reddito di cittadinanza|edilizia popolare|controllo (dei|degli) (prezz|affitt)|in mano pubblica|gestione pubblica/i;
+  // Coerenza con la linea: ogni scelta viene associata, dal testo, ai temi che tocca (mercato, Stato,
+  // sicurezza, immigrazione, Europa, ambiente, lavoro, famiglia, territorio...). Ogni famiglia politica
+  // ha temi che la sua base apprezza e temi che rifiuta: +1 coerente, -1 contro la linea, 0 neutra
+  // (nessun tema riconosciuto, oppure segnali contrastanti).
+  var LINE_AXES = {
+    mercato: /privatizz|privat[oa] convenzionat|sanità privata|scuol[ae] privat|liberalizz|mercato|deregol|concorrenz|sgrav|tagli\w* (delle |le |di )?tass|meno tasse|flat tax|riduzione (delle|della) (tasse|pressione|spesa)|vincoli (al|del) mercato|zero vincoli|senza vincoli|innovazione senza freni|voucher|libera iniziativa|impresa privata/i,
+    stato: /ospedali pubblici|scuola pubblica|sanità pubblica|investiment\w* pubblic|piano pubblico|assunzioni straordinarie|nazionalizz|statalizz|patrimoniale|salario minimo|extraprofitt|tassa\w* (sui |i |le )?(grandi|ricch|rendit)|reddito di cittadinanza|edilizia popolare|controllo (dei|degli) (prezz|affitt)|in mano pubblica|gestione pubblica|welfare|redistribuzione (della|delle) ricchezz|redistribuzione del reddito/i,
+    sicurezza: /sicurezza (urbana|nelle|dei cittadini)|forze dell'ordine|polizia|carabinieri|pene più severe|certezza della pena|tolleranza zero|videosorveglianza|militari nelle strade|ordine pubblico|legge e ordine/i,
+    stretta: /sbarchi|rimpatri|espulsion|immigrazione (irregolare|clandestina)|stretta sull'immigrazione|blocco navale|controllo dei confini|chiusura dei confini|difesa dei confini|prima gli italiani/i,
+    accoglienza: /accoglienza|integrazione dei migranti|ius soli|ius scholae|corridoi umanitari|diritti dei migranti|cittadinanza ai figli/i,
+    sovranita: /sovranità|fuori da vincoli esteri|contro bruxelles|uscita dall'euro|interesse nazionale|identità nazionale|orgoglio nazionale|patria/i,
+    europa: /integrazione europea|federalismo europeo|eurobond|esercito europeo|più europa|stati uniti d'europa|difesa comune europea|bilancio comune europeo/i,
+    ambiente: /transizione ecologica|rinnovabil|emissioni|ambientale|ambiente|sostenibil|fotovoltaic|eolic|crisi climatica|clima\b/i,
+    lavoro: /sindacat|lavorator|cassa integrazione|sciopero|contratt\w* nazional|precar|diritti dei lavoratori|rider|operai/i,
+    famiglia: /famigli|natalit|valori cristian|terzo settore|volontariat|parrocchi|caritas/i,
+    territorio: /autonomia|decentr|federalismo fiscale|enti locali|\bcomuni\b|identità local|identità territoriale|regione autonoma|statuto speciale/i,
+    sud: /mezzogiorno|\bsud\b|meridion|ponte sullo stretto/i,
+    differenziata: /autonomia differenziata|federalismo fiscale/i,
+    casta: /trasparenza|casta|privilegi|vitalizi|costi della politica|corruzione|democrazia diretta|referendum propositivo|onestà/i,
+    innovazione: /innovazion|digital|startup|intelligenza artificiale|tecnologi|ricerca scientifica|automazione|robot/i,
+    diritti: /diritti civili|lgbt|matrimonio egualitario|fine vita|eutanasia|cannabis|parità di genere/i,
+    gratuita: /gratuit|gratis/i,
+    tradizione: /tradizion|monarchi|casa reale|corona|radici|patrimonio storico/i,
+    semplifica: /burocrazi|semplificazion|semplifica/i,
+    autorita: /pugno di ferro|gerarchia|disciplina|autorità dello stato|uomo forte|stato forte/i
+  };
+  var LINE_PREFS = {
+    sovranista: { like: ["sicurezza", "stretta", "sovranita", "famiglia", "tradizione"], dislike: ["accoglienza", "europa", "diritti"] },
+    liberale: { like: ["mercato", "semplifica", "innovazione", "europa"], dislike: ["stato", "gratuita"] },
+    progressista: { like: ["ambiente", "diritti", "accoglienza", "stato", "lavoro"], dislike: ["stretta", "autorita"] },
+    movimentista: { like: ["casta", "ambiente", "stato"], dislike: ["autorita"] },
+    sinistra: { like: ["lavoro", "stato", "diritti"], dislike: ["mercato", "stretta"] },
+    cattolico: { like: ["famiglia", "accoglienza"], dislike: ["diritti"] },
+    regionalista: { like: ["territorio"], dislike: ["sovranita"] },
+    comunista: { like: ["stato", "lavoro", "accoglienza"], dislike: ["mercato", "stretta", "sicurezza"] },
+    nazionalpopolare: { like: ["sovranita", "stretta", "sicurezza"], dislike: ["europa", "accoglienza"] },
+    europeista: { like: ["europa", "diritti", "innovazione"], dislike: ["sovranita", "stretta"] },
+    libertario: { like: ["mercato", "semplifica", "diritti"], dislike: ["stato", "gratuita", "autorita"] },
+    tecnoprogressista: { like: ["innovazione", "semplifica", "mercato", "ambiente"], dislike: ["tradizione"] },
+    meridionalista: { like: ["sud", "stato"], dislike: ["differenziata"] },
+    fascista: { like: ["autorita", "sicurezza", "sovranita", "stretta", "tradizione"], dislike: ["europa", "diritti", "accoglienza"] },
+    monarchico: { like: ["tradizione", "famiglia", "sicurezza"], dislike: ["diritti"] },
+    gratuitista: { like: ["gratuita", "stato"], dislike: ["mercato"] },
+    comunismolusso: { like: ["innovazione", "stato", "gratuita"], dislike: ["mercato"] }
+  };
   function choiceLineCoherence(c) {
     var fam = state.player && state.player.family;
-    if (!fam || !c || !c.label) return 0;
-    var cluster = RESPONSE_CLUSTER_BY_FAMILY[fam];
-    if (cluster !== "liberista" && cluster !== "statalista") return 0;
+    var pref = fam && LINE_PREFS[fam];
+    if (!pref || !c || !c.label) return 0;
+    // discorsi e risposte scritti su misura per l'identità della famiglia ("di lotta", "identitario"...)
+    if (c.lineCoherent) return 1;
     var txt = c.label;
-    var mk = LINE_MARKET_RE.test(txt) && !LINE_MARKET_EXCLUDE_RE.test(txt), st = LINE_STATE_RE.test(txt);
-    if (mk === st) return 0;
-    if (cluster === "liberista") return mk ? 1 : -1;
-    return st ? 1 : -1;
+    if (/mercato rionale|fallimento di mercato|mercato unico|intervento pubblico/i.test(txt)) txt = txt.replace(/mercato/gi, "");
+    // posizioni che citano un tema per contestarlo, non per sostenerlo
+    if (/accus\w* (le )?forze dell'ordine|contro (la polizia|le forze dell'ordine)/i.test(txt)) txt = txt.replace(/forze dell'ordine|polizia/gi, "");
+    if (/non solo (sulla|la) gratuit/i.test(txt)) txt = txt.replace(/gratuit/gi, "");
+    var hit = function (ax) { return LINE_AXES[ax].test(txt); };
+    var pos = pref.like.some(hit), neg = pref.dislike.some(hit);
+    if (pos === neg) return 0;
+    return pos ? 1 : -1;
   }
   function applyOutcomeVariance(c) {
     // Il rischio di contraccolpo pesava SOLO la visibilità: una mossa che prometteva +30 iscritti o +5
@@ -12059,7 +12104,7 @@
       backfireChance *= 0.5;
       c = Object.assign({}, c, { effects: Object.assign({}, eff0) });
       if (typeof c.effects.reputazione === "number" && c.effects.reputazione < 0) c.effects.reputazione = -c.effects.reputazione * 0.5;
-      c.effects.iscritti = Math.max(c.effects.iscritti || 0, 0) + rand(3, 8);
+      c.effects.iscritti = Math.max(c.effects.iscritti || 0, 0) + rand(2, 6);
       c.result = c.result + " La base apprezza la coerenza con la linea del partito.";
     } else if (coh < 0) {
       backfireChance = Math.min(0.6, backfireChance * 1.3);
@@ -12145,7 +12190,7 @@
           territoriale: { label: "Rispondi con forza, in difesa del territorio", result: "L'affondo in difesa del territorio " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." },
           riformista: { label: "Rispondi con toni combattivi, all'attacco", result: "Rispondi con un affondo deciso " + suLabel(ctx.topicLabel) + ": la clip fa il giro dei social, scalda la base ma non convince tutti." }
         }[responseCluster(ctx)];
-        return { label: v.label, hint: "Più visibilità, rischio di polarizzare",
+        return { lineCoherent: true, label: v.label, hint: "Più visibilità, rischio di polarizzare",
           effects: { visibilita: rand(4, 8) * mag, reputazione: -rand(0, 2), iscritti: rand(5, 15) * mag },
           result: v.result };
       } },
@@ -12222,7 +12267,7 @@
           territoriale: { label: "Un discorso appassionato, in difesa del territorio", result: "Il discorso in difesa del territorio su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." },
           riformista: { label: "Un discorso appassionato e identitario", result: "Il discorso appassionato su " + ctx.noun + " scalda la sala: applausi lunghi, ma anche qualche titolo polemico il giorno dopo." }
         }[responseCluster(ctx)];
-        return { label: v.label, hint: "Più entusiasmo, un po' più divisivo",
+        return { lineCoherent: true, label: v.label, hint: "Più entusiasmo, un po' più divisivo",
           effects: { visibilita: rand(4, 8) * mag, iscritti: rand(20, 40) * mag, reputazione: -rand(0, 1) },
           result: v.result };
       } },
@@ -12248,7 +12293,7 @@
           territoriale: { label: "Un discorso visionario sul futuro del territorio", result: "Il discorso sul futuro del territorio ispira la platea più giovane su " + ctx.noun + ", lasciando più scettici i pragmatici." },
           riformista: { label: "Un discorso visionario, proiettato sul futuro", result: "Il discorso visionario su " + ctx.noun + " ispira la platea più giovane, lasciando più scettici i pragmatici." }
         }[responseCluster(ctx)];
-        return { label: v.label, hint: "Ispira, ma rischia di sembrare astratto",
+        return { lineCoherent: true, label: v.label, hint: "Ispira, ma rischia di sembrare astratto",
           effects: { visibilita: rand(3, 6) * mag, iscritti: rand(15, 30) * mag, reputazione: rand(-1, 1) },
           result: v.result };
       } }
@@ -12270,7 +12315,7 @@
           territoriale: { label: "Un intervento appassionato, in difesa del territorio", result: "Il tuo intervento in difesa del territorio al " + ctx.congressLabel + " scalda la sala: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." },
           riformista: { label: "Un intervento appassionato e identitario", result: "Il tuo intervento appassionato al " + ctx.congressLabel + " scalda la sala internazionale: gli applausi durano a lungo, e la clip fa il giro della stampa di partito di mezza Europa." }
         }[responseCluster(ctx)];
-        return { label: v.label, hint: "Scalda la sala, più clamore internazionale",
+        return { lineCoherent: true, label: v.label, hint: "Scalda la sala, più clamore internazionale",
           effects: { visibilita: rand(8, 16), iscritti: rand(20, 40), reputazione: -rand(0, 2), national: { relazioniDiplomatiche: rand(0.05, 0.15) } },
           result: v.result };
       } },
