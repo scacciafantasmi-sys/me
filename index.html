@@ -2497,6 +2497,7 @@
     return { resultText: text, headlines: [] };
   }
   function playerWarForces(w) {
+    if (w.coupWar) { var cr = coupWarRatio(w); return { ours: Math.round(cr * 100), theirs: Math.round((1 - cr) * 100), ratio: cr }; }
     var ours = italyMilitaryPower() + w.allies.reduce(function (s, id) { return s + nationPower(id) * 0.6; }, 0);
     var theirs = nationPower(w.targetId) + w.enemies.reduce(function (s, e) { return s + nationPower(e.id) * (e.mode === "guerra" ? 0.6 : 0.22); }, 0);
     return { ours: Math.round(ours), theirs: Math.round(theirs), ratio: ours / (ours + theirs) };
@@ -2531,6 +2532,7 @@
     state.playerWarCooldownTurn = state.turn + PLAYER_WAR_COOLDOWN_TURNS;
     state.italyMilitaryStance = state.leftNato ? "non_allineata" : "nato";
     state.geopoliticalTension = clamp(state.geopoliticalTension - rand(15, 25), 0, 100);
+    if (w.coupWar) { endCoupNatoWar(kind, w); return; }
     var text, weeks = state.turn - w.startTurn;
     if (kind === "vittoria") {
       p.reputazione = clamp(p.reputazione + (w.legit >= 0.5 ? 8 : 2), 0, 100);
@@ -28337,6 +28339,356 @@
     };
   }
 
+  // ---------- Colpo di Stato organizzato dal giocatore (o a cui il giocatore aderisce) ----------
+  // Richiesto da un giocatore: quando il paese è in rivolta (governo sotto il 20% di fiducia, oppure la
+  // crisi sociale città per città della Rivoluzione Popolare) i partiti estremisti possono tentare di
+  // prendere il potere con la forza. Il dossier compare solo alle ideologie estremiste (nazional-fascisti,
+  // nazional-popolari, monarchici, comunisti, comunismo di lusso, gratuitisti). In alternativa, un
+  // partito estremista della CPU dello stesso schieramento può invitare il giocatore (anche socialista o
+  // sovranista) ad aderire al suo colpo di stato. Accettando si apre una schermata di pianificazione:
+  // quanta base mobilitare e quali partiti affini invitare. Le probabilità di riuscita restano basse
+  // (in media intorno al 30%). Se riesce, lo schieramento golpista va al governo e instaura un regime;
+  // l'Italia viene espulsa dall'UE, esce dalla NATO e la NATO interviene militarmente nel paese: una
+  // guerra interna che si vince stabilizzando il paese (fiducia, felicità, sicurezza, difesa).
+  var COUP_LEADER_REGIME = { fascista: "fascista", nazionalpopolare: "fascista", monarchico: "monarchico", comunista: "comunista", comunismolusso: "comunista", gratuitista: "comunista" };
+  var COUP_BLOC_OF = { fascista: "destra", nazionalpopolare: "destra", monarchico: "destra", sovranista: "destra", comunista: "sinistra", comunismolusso: "sinistra", gratuitista: "sinistra", sinistra: "sinistra" };
+  var COUP_OFFER_COOLDOWN_TURNS = 40, COUP_FAIL_COOLDOWN_TURNS = 90;
+  var COUP_MOBILIZATION = {
+    ristretta: { label: "Solo i fedelissimi", desc: "Pochi uomini fidati: costa poco e quasi nessuno lo sa, ma la forza è minima.", cost: 500, bonus: 0, leak: 0 },
+    media: { label: "Militanti e sezioni", desc: "Coinvolgi i quadri e le sezioni più radicali: più forza, più rischio.", cost: 1500, bonus: 0.05, leak: 0.04 },
+    totale: { label: "Tutta la base in piazza", desc: "Mobiliti l'intero partito: la spinta più forte, ma se fallisce paghi tutto.", cost: 3000, bonus: 0.09, leak: 0.08 }
+  };
+  function coupUnrestActive() {
+    if (state.regime) return false;
+    if (state.collapseSaga && state.collapseSaga.active) return true;
+    return state.consensoGoverno !== undefined && state.consensoGoverno <= 20;
+  }
+  function coupGovMemberIds() { return (state.govEntity && state.govEntity.memberIds) || []; }
+  // Partiti CPU dello stesso schieramento, fuori dal governo, con un minimo di forza.
+  function coupCpuPartners(bloc, excludeId) {
+    var gov = coupGovMemberIds();
+    return activeParties().filter(function (pt) {
+      return pt.id !== excludeId && gov.indexOf(pt.id) === -1 && COUP_BLOC_OF[pt.familyId] === bloc && (state.parties[pt.id] || 0) >= 0.5;
+    });
+  }
+  function coupUnrestBonus() {
+    var cp = state.countryProfile;
+    var b = (state.collapseSaga && state.collapseSaga.active) ? 0.05 : 0;
+    if (state.consensoGoverno !== undefined) b += clamp((20 - state.consensoGoverno) / 100, 0, 0.08);
+    if (cp && cp.sicurezza < 4) b += 0.03;
+    return b;
+  }
+  function coupSuccessChance(plan, acceptedIds) {
+    var p = state.player;
+    var allies = acceptedIds || [];
+    var alliedVotes = allies.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0);
+    var mob = COUP_MOBILIZATION[plan.mobilization] || COUP_MOBILIZATION.media;
+    var chance = 0.18 + mob.bonus + Math.min(0.1, alliedVotes * 0.006) + Math.min(0.08, p.sondaggi * 0.004) + coupUnrestBonus();
+    if (plan.organizer !== "player") chance += 0.04 + Math.min(0.08, (state.parties[plan.organizer] || 0) * 0.006);
+    return clamp(chance, 0.08, 0.45);
+  }
+  function coupAllyAcceptChance(id) {
+    var pt = partyById(id);
+    var c = 0.35 + (pt && COUP_LEADER_REGIME[pt.familyId] ? 0.15 : 0) + ((state.parties[id] || 0) < 3 ? 0.1 : 0) + coupUnrestBonus();
+    return clamp(c, 0.15, 0.8);
+  }
+  function checkCoupOpportunity() {
+    var p = state.player;
+    if (state.coupPlan && state.phase !== "coup") state.coupPlan = null;
+    if (!p || !p.formationComplete || state.mode === "career") return null;
+    if (p.parliamentRole === "governo" || state.coupPlan || state.playerWar) return null;
+    if (state.turn < (state.coupOfferCooldownTurn || 0)) return null;
+    if (!coupUnrestActive()) return null;
+    var bloc = COUP_BLOC_OF[p.family];
+    if (!bloc) return null;
+    var prob = (state.collapseSaga && state.collapseSaga.active) ? 0.3 : 0.45;
+    if (Math.random() >= prob) return null;
+    var canLead = !!COUP_LEADER_REGIME[p.family];
+    var cpuLeaders = coupCpuPartners(bloc, null).filter(function (pt) { return COUP_LEADER_REGIME[pt.familyId] && (state.parties[pt.id] || 0) >= 0.5; });
+    if (canLead && (!cpuLeaders.length || Math.random() < 0.6)) return { kind: "offer" };
+    if (!cpuLeaders.length) return null;
+    var inviter = cpuLeaders.sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); })[0];
+    return { kind: "invite", inviterId: inviter.id };
+  }
+  function coupRiotCity() { return UPRISING_CITIES[Math.floor(Math.random() * UPRISING_CITIES.length)]; }
+  function coupGovLabel() { return govEntityLabel() || "Il governo"; }
+  function buildCoupOfferDossier() {
+    var p = state.player;
+    state.coupOfferCooldownTurn = state.turn + COUP_OFFER_COOLDOWN_TURNS;
+    var labels = REGIME_LABELS[COUP_LEADER_REGIME[p.family]];
+    var city = coupRiotCity();
+    var cg = state.consensoGoverno !== undefined ? Math.round(state.consensoGoverno) : null;
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Il paese è in rivolta", cat: "Colpo di Stato",
+      title: "Prendere il potere con la forza?",
+      brief: "Mentre a " + city + " le piazze sono in fiamme" + (cg !== null ? " e " + coupGovLabel() + " è crollato al " + cg + "% di fiducia" : "") +
+        ", alcuni dei tuoi uomini più fidati ti chiedono un incontro riservato: con lo Stato allo sbando, dicono, è il momento di prendere il potere e instaurare " + labels.name + ". " +
+        "Le probabilità di riuscita sono basse, e se fallisce il partito pagherà carissimo. Se riesce, l'Italia non sarà più la stessa: UE e NATO reagiranno.",
+      choices: [
+        { label: "Organizza il colpo di stato", hint: "Apre la schermata di pianificazione: base da mobilitare, alleati, probabilità", coupOffer: "accept", effects: {}, result: "" },
+        { label: "Rifiuta: il potere non si prende con la forza", hint: "Resti nella legalità democratica", coupOffer: "refuse", effects: { reputazione: 2 }, result: "Congedi i tuoi uomini: il partito resta nella legalità, qualunque cosa succeda nelle piazze." }
+      ]
+    };
+  }
+  function buildCoupInviteDossier(inviterId) {
+    var inv = partyById(inviterId);
+    state.coupOfferCooldownTurn = state.turn + COUP_OFFER_COOLDOWN_TURNS;
+    var labels = REGIME_LABELS[COUP_LEADER_REGIME[inv.familyId]];
+    var city = coupRiotCity();
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Un invito segreto", cat: "Colpo di Stato", coupInviterId: inviterId,
+      title: inv.name + " prepara un colpo di stato",
+      brief: "Con le rivolte che dilagano da " + city + " al resto del paese, un emissario di " + inv.name + " (" + fmt1(state.parties[inviterId] || 0) + "% nei sondaggi) ti contatta in segreto: stanno preparando un colpo di stato per instaurare " + labels.name + ", e vogliono il tuo partito al loro fianco. " +
+        "Se riesce, entrerai nel nuovo governo. Se fallisce, la repressione colpirà anche voi.",
+      choices: [
+        { label: "Aderisci con tutta la tua base", hint: "Più possibilità di riuscita, ma se fallisce paghi tutto", coupInvite: "full", effects: {}, result: "" },
+        { label: "Aderisci con discrezione, solo con i fedelissimi", hint: "Contributo minore, conseguenze più leggere se fallisce", coupInvite: "discreet", effects: {}, result: "" },
+        { label: "Rifiuta e denuncia pubblicamente il piano", hint: "Ti schieri con la democrazia, e rompi con " + inv.short, coupInvite: "denounce", effects: { reputazione: 3, visibilita: 4 }, result: "" },
+        { label: "Rifiuta in silenzio", hint: "Non ti esponi né da una parte né dall'altra", coupInvite: "refuse", effects: {}, result: "" }
+      ]
+    };
+  }
+  // Risolve le scelte dei dossier sopra; restituisce il testo dell'esito.
+  function resolveCoupDossierChoice(dossier, choice) {
+    var p = state.player;
+    if (choice.coupOffer === "accept") {
+      state.coupPlan = { organizer: "player", type: COUP_LEADER_REGIME[p.family], mobilization: "media", invited: {}, openedTurn: state.turn };
+      state.coupScreenPending = true;
+      return "Convochi i tuoi uomini più fidati in un luogo sicuro: è il momento di pianificare.";
+    }
+    if (choice.coupOffer === "refuse") return choice.result;
+    var invId = dossier.coupInviterId, inv = partyById(invId);
+    if (!inv) return "Il piano svanisce prima ancora di cominciare.";
+    if (choice.coupInvite === "full" || choice.coupInvite === "discreet") {
+      var plan = { organizer: invId, type: COUP_LEADER_REGIME[inv.familyId], mobilization: choice.coupInvite === "full" ? "totale" : "ristretta", playerRole: choice.coupInvite };
+      var others = coupCpuPartners(COUP_BLOC_OF[inv.familyId], invId).filter(function (pt) { return Math.random() < coupAllyAcceptChance(pt.id) * 0.5; }).map(function (pt) { return pt.id; });
+      return executeCoup(plan, [invId].concat(others));
+    }
+    if (choice.coupInvite === "denounce") {
+      // Senza il tuo appoggio e con il piano ormai pubblico, il tentativo parte comunque male.
+      var text = "Denunci pubblicamente il piano di " + inv.name + ". ";
+      if (Math.random() < 0.5) {
+        state.parties[invId] = Math.max(0.3, (state.parties[invId] || 1) * 0.55);
+        text += "Il colpo di stato scatta lo stesso, ma senza sorpresa fallisce in poche ore: i vertici di " + inv.short + " vengono arrestati e il partito crolla nei sondaggi.";
+        state.consensoGoverno = clamp((state.consensoGoverno || 20) + rand(3, 6), 0, 100);
+      } else {
+        state.parties[invId] = Math.max(0.3, (state.parties[invId] || 1) * 0.85);
+        text += inv.short + " smentisce tutto, ma il piano salta e la sua credibilità ne esce a pezzi.";
+      }
+      state.log.unshift({ week: state.turn, title: "Denunciato un piano golpista", choiceLabel: inv.short, result: text, headlines: [], type: "istituzioni", cat: "Colpo di Stato" });
+      return text;
+    }
+    return "Lasci cadere l'invito nel vuoto. Il piano di " + inv.short + ", senza di voi, resta nel cassetto.";
+  }
+  // Lancio dalla schermata di pianificazione (organizzatore: il giocatore).
+  function launchPlayerCoup() {
+    var p = state.player, plan = state.coupPlan;
+    if (!plan || plan.organizer !== "player") return null;
+    var mob = COUP_MOBILIZATION[plan.mobilization];
+    if (p.fondi < mob.cost) return null;
+    p.fondi -= mob.cost;
+    var accepted = [], refused = [];
+    Object.keys(plan.invited).forEach(function (id) {
+      if (!plan.invited[id] || !partyById(id)) return;
+      if (Math.random() < coupAllyAcceptChance(id)) accepted.push(id); else refused.push(id);
+    });
+    var leakChance = mob.leak + refused.length * 0.25;
+    var refusedNote = refused.length ? " Hanno rifiutato di partecipare: " + refused.map(function (id) { return partyById(id).short; }).join(", ") + "." : "";
+    var acceptedNote = accepted.length ? " Al tuo fianco: " + accepted.map(function (id) { return partyById(id).short; }).join(", ") + "." : "";
+    state.coupPlan = null;
+    if (Math.random() < leakChance) return coupFail(plan, accepted, true, acceptedNote + refusedNote);
+    return executeCoup(plan, accepted, acceptedNote + refusedNote);
+  }
+  function executeCoup(plan, cpuIds, note) {
+    var chance = coupSuccessChance(plan, plan.organizer === "player" ? cpuIds : cpuIds.slice(1));
+    if (Math.random() < chance) return coupSucceed(plan, cpuIds, note || "");
+    return coupFail(plan, cpuIds, false, note || "");
+  }
+  function coupFail(plan, cpuIds, leaked, note) {
+    var p = state.player, cp = state.countryProfile;
+    var k = leaked ? 0.6 : (plan.playerRole === "discreet" ? 0.55 : 1);
+    p.sondaggi = clamp(p.sondaggi * (1 - 0.5 * k), 0.3, 40);
+    p.iscritti = Math.max(0, Math.round(p.iscritti * (1 - 0.35 * k)));
+    p.reputazione = clamp(p.reputazione - 25 * k, 0, 100);
+    p.fondi = Math.round(p.fondi * (1 - 0.5 * k));
+    p.leaderTrust = clamp((p.leaderTrust === undefined || p.leaderTrust === null ? 65 : p.leaderTrust) - 30 * k, 0, 100);
+    if (p.judicialRisk !== undefined) p.judicialRisk = clamp(p.judicialRisk + 30 * k, 1, 95);
+    cpuIds.forEach(function (id) { state.parties[id] = Math.max(0.3, (state.parties[id] || 1) * 0.55); });
+    state.consensoGoverno = clamp((state.consensoGoverno || 20) + rand(6, 12), 0, 100);
+    cp.sicurezza = clamp(cp.sicurezza - 0.4, 1, 10);
+    state.coupOfferCooldownTurn = state.turn + COUP_FAIL_COOLDOWN_TURNS;
+    var orgName = plan.organizer === "player" ? p.name : (partyById(plan.organizer) || {}).name;
+    var text = leaked
+      ? "Il piano trapela prima di scattare: la polizia irrompe nelle sedi di " + orgName + " e arresta decine di dirigenti. Il colpo di stato fallisce ancora prima di cominciare." + note
+      : "Il colpo di stato di " + orgName + " fallisce: le forze armate restano fedeli alla Repubblica, i reparti ribelli si arrendono all'alba e i vertici vengono arrestati." + note;
+    text += " Per il tuo partito è una catastrofe: sondaggi " + (k >= 1 ? "dimezzati" : "in caduta libera") + ", iscritti in fuga, sedi perquisite e fondi sequestrati. Il governo in carica, paradossalmente, ne esce rafforzato.";
+    state.log.unshift({ week: state.turn, title: leaked ? "Il golpe viene sventato" : "Il colpo di stato fallisce", choiceLabel: orgName, result: text, headlines: [], type: "istituzioni", cat: "Colpo di Stato" });
+    addDiaryEntry("La notte più lunga", leaked ? "Qualcuno ha parlato. Ci hanno presi prima ancora di cominciare." : "Ci abbiamo provato, ed è andata male. Adesso pagheremo tutto, e forse è giusto così.");
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: "Italia: fallito un tentativo di colpo di stato. Arrestati i vertici di " + orgName + "." });
+    return text;
+  }
+  function coupSucceed(plan, cpuIds, note) {
+    var p = state.player, cp = state.countryProfile;
+    var type = plan.type, labels = REGIME_LABELS[type];
+    var org = plan.organizer;
+    var orgName = org === "player" ? p.name : (partyById(org) || {}).name;
+    var oldGov = coupGovLabel();
+    state.collapseSaga = null; state.uprisingSaga = null; state.snapElectionPending = false; state.govMajorityLostCrisis = false;
+    state.pendingGovFormationNegotiation = null; state.pendingConsultazioni = null; state.pendingGovInvite = null;
+    state.mandatoEsplorativoCooldownTurn = state.turn + 52;
+    var seatSplit = {};
+    cpuIds.forEach(function (id) { seatSplit[id] = { camera: id === org ? 300 : Math.round((state.parties[id] || 1) * 4), senato: 0 }; });
+    state.govEntity = { id: org, formedTurn: state.turn, memberIds: cpuIds.slice(), seatSplit: seatSplit, minority: false, extraAllyIds: [], forcedAllyIds: [], coup: true };
+    p.parliamentRole = "governo";
+    finishGovernmentCabinetSetup();
+    state.pendingGovernmentOath = false;
+    state.pendingConfidenceVote = false;
+    if (state.cabinet) state.cabinet.premierId = org;
+    state.consensoGoverno = rand(32, 42);
+    var votes = p.sondaggi + cpuIds.reduce(function (s, id) { return s + (state.parties[id] || 0); }, 0);
+    applyRegimeConsequences({ type: type, winnerLabel: orgName, votes: votes, isPlayer: org === "player" });
+    // Conseguenze internazionali: espulsione dall'UE, uscita dalla NATO, rapporti a picco con l'Occidente.
+    if (!state.leftEu) applyEuExitConsequences();
+    state.leftNato = true; state.natoDecided = true; state.italyMilitaryStance = "non_allineata";
+    if (!state.foreignRelations) state.foreignRelations = {};
+    WORLD_NATIONS.forEach(function (n) {
+      if (nationIsEU(n) || NATO_MEMBER_IDS.indexOf(n.id) !== -1) state.foreignRelations[n.id] = clamp(italyRelation(n.id) - 30, 0, 100);
+    });
+    cp.sicurezza = clamp(cp.sicurezza - 1.5, 1, 10);
+    cp.felicita = clamp(cp.felicita - 0.8, 1, 10);
+    cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche - 2, 1, 10);
+    p.reputazione = clamp(p.reputazione - 8, 0, 100);
+    state.coupOfferCooldownTurn = state.turn + 200;
+    var nato = startCoupNatoWar(type);
+    var text = "Nella notte i reparti fedeli a " + orgName + " occupano la RAI, i ministeri e Palazzo Chigi: " + oldGov + " cade e all'alba viene proclamata " + labels.name + "." + note +
+      (org === "player" ? " Sei tu a guidare il nuovo governo." : " Il tuo partito entra nel nuovo governo guidato da " + orgName + ".") +
+      " La reazione internazionale è immediata: l'Unione Europea espelle l'Italia, che esce anche dalla NATO, e " + nato + " Per resistere servono fiducia, ordine e un paese che non ti si rivolti contro.";
+    state.log.unshift({ week: state.turn, title: "Colpo di stato: nasce " + labels.name, choiceLabel: orgName, result: text, headlines: [], type: "istituzioni", cat: "Colpo di Stato" });
+    addDiaryEntry("Il giorno del colpo di stato", "Ce l'abbiamo fatta. Il potere è nostro. Ma adesso il mondo intero ci guarda, e la NATO non starà a guardare.");
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: "Colpo di stato in Italia: proclamata " + labels.name + ". La NATO interviene." });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    return text;
+  }
+  // La NATO interviene in Italia: riusa la guerra del giocatore (state.playerWar), con un fronte che non
+  // dipende dalla potenza militare (sarebbe una sconfitta certa) ma dalla tenuta interna del regime.
+  function startCoupNatoWar(type) {
+    var enemyIds = ["statiuniti", "regnounito", "francia", "germania", "spagna", "polonia"].filter(function (id) { return nationById(id); });
+    var enemies = enemyIds.map(function (id, i) { return { id: id, name: nationById(id).name, mode: i < 3 ? "guerra" : "armi" }; });
+    var allies = [];
+    var friend = type === "comunista" ? "cina" : type === "fascista" ? "russia" : null;
+    if (friend && nationById(friend) && Math.random() < 0.35) allies.push(friend);
+    var w = {
+      id: "pw_coup_" + state.turn, coupWar: true, targetId: "statiuniti", targetName: "la NATO", motiveId: "coup", motiveLabel: "Intervento NATO dopo il colpo di stato", legit: 0.15,
+      startTurn: state.turn, front: 50, allies: allies, refused: [], enemies: enemies, caduti: 0, costMld: 0, posture: "equilibrata",
+      nextReportTurn: state.turn + 4, opinions: conflictWorldOpinions("statiuniti", "italia", "la NATO", "il governo golpista italiano"), italyPoll: { a: 30, b: 45, n: 25 }
+    };
+    state.playerWar = w;
+    if (!state.activeConflicts) state.activeConflicts = [];
+    state.activeConflicts.push({
+      id: w.id, playerWar: true, region: "Italia", sideA: "Governo golpista italiano", sideB: "NATO", sideAId: "italia", sideBId: "statiuniti",
+      startWeek: state.turn, resolveTurn: null, supportedSide: null, causeLabel: "Colpo di stato in Italia", why: "la NATO interviene per rovesciare il governo nato dal colpo di stato",
+      aggressor: "NATO", claimA: "la difesa della nuova Italia", claimB: "il ripristino della democrazia", opinions: w.opinions, italyPoll: w.italyPoll
+    });
+    state.geopoliticalTension = clamp((state.geopoliticalTension || 30) + 25, 0, 100);
+    return "le truppe NATO sbarcano nel paese per ripristinare la democrazia" + (allies.length ? ", mentre " + nationById(allies[0]).name + " manda armi e consiglieri al nuovo governo." : ".");
+  }
+  function coupWarRatio(w) {
+    var cp = state.countryProfile, cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 35;
+    var weeks = state.turn - w.startTurn;
+    var r = 0.34 + (cg - 35) / 120 + (cp.felicita - 5) * 0.025 + (cp.sicurezza - 5) * 0.015 + (cp.difesa - 5) * 0.02 + Math.min(0.2, weeks * 0.006) + w.allies.length * 0.04;
+    return clamp(r, 0.12, 0.8);
+  }
+  function endCoupNatoWar(kind, w) {
+    var p = state.player, cp = state.countryProfile, weeks = state.turn - w.startTurn, text;
+    var regimeName = state.regime ? regimeLabelName(state.regime.type) : "il nuovo regime";
+    if (kind === "sconfitta" || kind === "resa") {
+      text = (kind === "resa" ? "Il governo golpista si arrende alla NATO" : "Il fronte interno crolla: le truppe NATO entrano a Roma") + " dopo " + weeks + " settimane. " + regimeName + " cade, i vertici del regime vengono arrestati e la democrazia viene ripristinata, con nuove elezioni sotto supervisione internazionale.";
+      state.regime = null;
+      restoreRegimeBannedParties();
+      state.govEntity = null; state.cabinet = null; state.playerMinistry = null;
+      p.parliamentRole = "opposizione";
+      p.sondaggi = clamp(p.sondaggi * 0.4, 0.3, 40);
+      p.reputazione = clamp(p.reputazione - 20, 0, 100);
+      p.leaderTrust = clamp((p.leaderTrust || 50) - 35, 0, 100);
+      cp.felicita = clamp(cp.felicita - 0.5, 1, 10);
+      state.snapElectionPending = true;
+      state.nextElectionTurn = state.turn + 12;
+      addDiaryEntry("La fine del regime", "Abbiamo perso. Le truppe straniere sono a Roma e il nostro governo non esiste più.");
+    } else {
+      text = "Dopo " + weeks + " settimane la NATO ritira le sue truppe dall'Italia: " + regimeName + " ha retto. Il paese resta fuori dall'UE e dalla NATO, sotto sanzioni, ma il nuovo ordine si è consolidato.";
+      state.consensoGoverno = clamp((state.consensoGoverno || 35) + 6, 0, 100);
+      cp.sicurezza = clamp(cp.sicurezza + 0.8, 1, 10);
+      p.reputazione = clamp(p.reputazione + 4, 0, 100);
+      addDiaryEntry("La NATO se ne va", "Hanno ritirato le truppe. Abbiamo resistito. Adesso viene la parte più difficile: governare davvero.");
+    }
+    text += " Bilancio: " + w.caduti + " caduti e " + fmt1(w.costMld) + " miliardi spesi.";
+    state.log.unshift({ week: state.turn, title: "Finisce l'intervento NATO in Italia", choiceLabel: kind, result: text, headlines: [], type: "istituzioni", cat: "Colpo di Stato" });
+    state.playerWarEnded = { kind: kind === "sconfitta" || kind === "resa" ? "sconfitta" : "vittoria", text: text, targetName: "la NATO" };
+  }
+  // Schermata di pianificazione, al posto del dossier, finché il giocatore non lancia o rinuncia.
+  function renderCoupPlanningScreen() {
+    var p = state.player, plan = state.coupPlan;
+    var labels = REGIME_LABELS[plan.type];
+    var bloc = COUP_BLOC_OF[p.family];
+    var partners = coupCpuPartners(bloc, null);
+    var mob = COUP_MOBILIZATION[plan.mobilization];
+    var invitedIds = Object.keys(plan.invited).filter(function (id) { return plan.invited[id]; });
+    var expectedAllies = invitedIds.filter(function (id) { return coupAllyAcceptChance(id) >= 0.45; });
+    var est = Math.round(coupSuccessChance(plan, expectedAllies) * 100);
+    var leakRisk = Math.round((mob.leak + invitedIds.reduce(function (s, id) { return s + (1 - coupAllyAcceptChance(id)) * 0.25; }, 0)) * 100);
+    var html = '<section id="weekly-card-anchor" aria-label="Colpo di Stato"><p class="eyebrow">Colpo di Stato — pianificazione</p><div class="dossier">' +
+      "<h2>Obiettivo: " + labels.name + "</h2>" +
+      '<p class="brief">' + coupGovLabel() + " è allo sbando" + (state.consensoGoverno !== undefined ? " (fiducia al " + Math.round(state.consensoGoverno) + "%)" : "") + " e il paese è in rivolta. Decidi quanta forza mettere in campo e chi coinvolgere. Ogni partito invitato aggiunge forza, ma chi rifiuta potrebbe tradirti.</p>" +
+      '<p class="eyebrow" style="margin-top:.8rem">1. Quanta base mobiliti</p><div class="choices">' +
+      Object.keys(COUP_MOBILIZATION).map(function (k) {
+        var m = COUP_MOBILIZATION[k], sel = plan.mobilization === k;
+        return '<button type="button" class="choice-btn' + (sel ? " selected" : "") + '" data-coup-mob="' + k + '"' + (p.fondi < m.cost ? " disabled" : "") + '><span class="clabel">' + (sel ? "✓ " : "") + m.label + " (" + fmtInt(m.cost) + " €)</span><span class=\"chint\">" + m.desc + "</span></button>";
+      }).join("") + "</div>" +
+      '<p class="eyebrow" style="margin-top:.8rem">2. Chi inviti</p>' +
+      (partners.length ? '<div class="choices">' + partners.map(function (pt) {
+        var on = !!plan.invited[pt.id], ac = coupAllyAcceptChance(pt.id);
+        return '<button type="button" class="choice-btn' + (on ? " selected" : "") + '" data-coup-ally="' + pt.id + '"><span class="clabel">' + (on ? "✓ " : "") + pt.name + " (" + fmt1(state.parties[pt.id] || 0) + "%)</span><span class=\"chint\">Disponibilità ad aderire: " + (ac >= 0.6 ? "alta" : ac >= 0.4 ? "media" : "bassa") + "</span></button>";
+      }).join("") + "</div>" : '<p class="ci-hint">Nessun partito affine abbastanza forte da coinvolgere: se lo fai, lo fai da solo.</p>') +
+      '<div class="stat-grid" style="margin-top:.8rem"><div class="stat-tile"><div class="label">Probabilità stimata di riuscita</div><div class="row"><span class="value">circa ' + est + '%</span></div></div>' +
+      '<div class="stat-tile"><div class="label">Rischio che il piano trapeli</div><div class="row"><span class="value">circa ' + leakRisk + "%</span></div></div></div>" +
+      '<p class="ci-hint">Se fallisce: sondaggi dimezzati, iscritti in fuga, fondi sequestrati, dirigenti arrestati. Se riesce: vai al governo e nasce ' + labels.name + ", ma l'Italia viene espulsa dall'UE e la NATO interviene militarmente.</p>" +
+      '<div class="choices"><button type="button" class="choice-btn" id="coup-launch-btn"' + (p.fondi < mob.cost ? " disabled" : "") + '><span class="clabel">Lancia il colpo di stato</span><span class="chint">Non si torna indietro</span></button>' +
+      '<button type="button" class="choice-btn" id="coup-abort-btn"><span class="clabel">Rinuncia</span><span class="chint">Il piano resta nel cassetto</span></button></div>' +
+      "</div></section>";
+    return html;
+  }
+  function bindCoupPlanningScreen() {
+    var plan = state.coupPlan;
+    if (!plan || state.phase !== "coup") return;
+    app.querySelectorAll("[data-coup-mob]").forEach(function (btn) {
+      btn.addEventListener("click", function () { if (btn.disabled) return; plan.mobilization = btn.getAttribute("data-coup-mob"); save(); render(); });
+    });
+    app.querySelectorAll("[data-coup-ally]").forEach(function (btn) {
+      btn.addEventListener("click", function () { var id = btn.getAttribute("data-coup-ally"); plan.invited[id] = !plan.invited[id]; save(); render(); });
+    });
+    var launch = document.getElementById("coup-launch-btn");
+    if (launch) launch.addEventListener("click", function () {
+      if (launch.disabled) return;
+      if (!window.confirm("Lanciare davvero il colpo di stato? Non si torna indietro.")) return;
+      var text = launchPlayerCoup();
+      if (!text) return;
+      state.resultData = applyChoice({ title: "Colpo di Stato", cat: "Colpo di Stato" }, { label: "Lancia il colpo di stato", effects: {}, result: text });
+      state.phase = "result";
+      save();
+      render();
+    });
+    var abort = document.getElementById("coup-abort-btn");
+    if (abort) abort.addEventListener("click", function () {
+      state.coupPlan = null;
+      state.resultData = applyChoice({ title: "Colpo di Stato", cat: "Colpo di Stato" }, { label: "Rinuncia", effects: {}, result: "All'ultimo momento rinunci: il piano resta nel cassetto e i tuoi uomini tornano a casa. Nessuno saprà mai quanto ci siete andati vicini." });
+      state.phase = "result";
+      save();
+      render();
+    });
+  }
+
   // ---------- Ingerenza Straniera ----------
   // Il rovescio delle Operazioni Coperte dei Servizi di Intelligence: lì sei TU a colpire un altro paese
   // nell'ombra, qui è un paese straniero a colpire TE, se sei abbastanza forte (al governo, o
@@ -42853,6 +43205,7 @@
       body += activeRegionalPageDef().render();
     } else {
       body = renderPageNav();
+      if (state.phase === "coup" && !state.coupPlan) state.phase = "building";
       if (state.phase === "building") {
         var activeDossier = currentDossier();
         if (!activeDossier) { pickNextDossier(); activeDossier = currentDossier(); }
@@ -42885,6 +43238,8 @@
       var dossierSection = "";
       if (state.phase === "building") {
         dossierSection += renderDossierCard(activeDossier);
+      } else if (state.phase === "coup") {
+        dossierSection += renderCoupPlanningScreen();
       } else if (state.phase === "result") {
         dossierSection += renderResultCard(state.resultData);
         dossierSection += renderHeadlines(state.resultData.headlines);
@@ -43507,6 +43862,9 @@
           addDiaryEntry("Il mondo è in guerra", "Oggi il governo ha scelto la collocazione dell'Italia nella guerra mondiale: " + choice.label.toLowerCase() + ". Qualunque cosa succeda da qui in avanti, questa scelta segnerà il paese per una generazione.");
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (choice.coupOffer || choice.coupInvite) {
+        choice.result = resolveCoupDossierChoice(dossier, choice);
+        state.resultData = applyChoice(dossier, choice);
       } else if (choice.playerWarAction) {
         choice.result = resolvePlayerWarAction(choice);
         state.resultData = applyChoice(dossier, choice);
@@ -44114,6 +44472,7 @@
     bindRegionalPageNavDrawer();
     bindRegionalActionButtons();
     bindPresidentInteractions();
+    bindCoupPlanningScreen();
     var leaveFoundBtn = document.getElementById("leave-found-btn");
     if (leaveFoundBtn) leaveFoundBtn.addEventListener("click", function () {
       var p = state.player;
@@ -44303,7 +44662,8 @@
           else state.resultData = { resultText: "La decisione su \"" + (dossier && dossier.title || "questo dossier") + "\" non produce effetti: la questione si chiude qui e puoi andare avanti.", headlines: [] };
         }
         if (!state.resultData) state.resultData = { resultText: "", headlines: [] };
-        state.phase = "result";
+        state.phase = state.coupScreenPending && state.coupPlan ? "coup" : "result";
+        state.coupScreenPending = false;
         save();
         render();
         // Segnalato da un giocatore dopo centinaia di settimane: QUESTO scroll forzato verso la barra di
@@ -45847,6 +46207,15 @@
 
     // Priorità ancora più alta del crollo di consenso sotto: una rivoluzione popolare non si negozia con
     // un mandato esplorativo, il governo cade subito (vedi triggerPopularRevolutionIfDue sopra).
+    // Colpo di stato: durante le rivolte (fiducia di governo sotto il 20% o crisi sociale città per
+    // città) ai partiti estremisti può arrivare l'occasione, o l'invito, di prendere il potere.
+    var coupOpportunity = checkCoupOpportunity();
+    if (coupOpportunity) {
+      state.aiDynamicDossier = coupOpportunity.kind === "offer" ? buildCoupOfferDossier() : buildCoupInviteDossier(coupOpportunity.inviterId);
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
     var revolutionDossier = resolveCollapseSagaIfDue();
     if (revolutionDossier) {
       state.aiDynamicDossier = revolutionDossier;
