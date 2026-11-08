@@ -29793,6 +29793,24 @@
         return pt ? pt.familyId : null;
       }).filter(Boolean);
     }
+    // Segnalato da un giocatore: il Campo Largo senza maggioranza chiamava al governo Azione e Futuro
+    // Nazionale ("non accetterebbero manco morti"). Prima, finite le forze affini, il reclutamento "per
+    // necessità" prendeva chiunque avesse seggi, e l'alleato accettava sempre. Ora ogni forza decide se
+    // entrare: più è lontana dalla coalizione, meno è disposta; chi sta all'estremo opposto (o è
+    // estremista e dall'altra parte dello schieramento) non entra mai. Se non basta, nasce un governo di
+    // minoranza.
+    function entityAllyWillingness(currentFamilyIds, candidateMemberIds) {
+      var cur = currentFamilyIds.map(function (f) { return LEFT_RIGHT_POSITION[f]; }).filter(function (v) { return v !== undefined; });
+      var cand = entityFamilyIds(candidateMemberIds).map(function (f) { return LEFT_RIGHT_POSITION[f]; }).filter(function (v) { return v !== undefined; });
+      if (!cur.length || !cand.length) return 0.5;
+      var avg = function (a) { return a.reduce(function (s2, v) { return s2 + v; }, 0) / a.length; };
+      var cAvg = avg(cur), aAvg = avg(cand), d = Math.abs(aAvg - cAvg);
+      var oppositeSides = (cAvg <= -0.5 && aAvg >= 0.5) || (cAvg >= 0.5 && aAvg <= -0.5);
+      var extremistAcross = oppositeSides && entityFamilyIds(candidateMemberIds).some(function (f) { return isExtremistFamily(f); });
+      if (extremistAcross || d >= 3) return 0;
+      if (oppositeSides && d >= 2.2) return 0.04;
+      return clamp(0.85 - Math.max(0, d - 1) * 0.42, 0, 0.85);
+    }
     function entityWouldFit(currentFamilyIds, candidateMemberIds) {
       var positions = currentFamilyIds.concat(entityFamilyIds(candidateMemberIds))
         .map(function (f) { return LEFT_RIGHT_POSITION[f]; }).filter(function (v) { return v !== undefined; });
@@ -29862,6 +29880,7 @@
             return {
               id: e.id, label: e.label, members: e.members, isCoalition: e.isCoalition,
               fits: entityWouldFit(currentFamilyIdsForNegotiation, e.members),
+              acceptChance: entityWouldFit(currentFamilyIdsForNegotiation, e.members) ? 0.82 : entityAllyWillingness(currentFamilyIdsForNegotiation, e.members),
               seats: blocChamberSeats(e.members)
             };
           }),
@@ -29936,6 +29955,8 @@
             });
             remainingForForced.forEach(function (ally) {
               if (blocSeats.camera >= CAMERA_MAJORITY_SEATS && blocSeats.senato >= SENATO_MAJORITY_SEATS) return;
+              // l'alleato lontano decide: può rifiutare, e gli opposti estremi non entrano mai
+              if (Math.random() >= entityAllyWillingness(currentFamilyIds, ally.members)) return;
               recruitAlly(ally, true);
             });
           }
@@ -30085,10 +30106,11 @@
     var reachableStayingCompatible = { camera: neg.camera + pendingCompatibleSeats.camera, senato: neg.senato + pendingCompatibleSeats.senato };
     var oppositeAllowed = !hasRealMajority &&
       (reachableStayingCompatible.camera < CAMERA_MAJORITY_SEATS || reachableStayingCompatible.senato < SENATO_MAJORITY_SEATS);
-    var choices = neg.candidates.filter(function (c) { return c.fits || oppositeAllowed; }).map(function (c) {
+    var choices = neg.candidates.filter(function (c) { return c.fits || (oppositeAllowed && c.acceptChance !== 0); }).map(function (c) {
+      var ac = c.acceptChance;
       return {
         label: "Proponi un'alleanza a " + c.label,
-        hint: (c.fits ? "Affine al tuo blocco: proposta probabilmente ben accolta. " : "Molto distante ideologicamente — ultima risorsa di necessità: proposta rischiosa, probabile rifiuto. ") +
+        hint: (c.fits ? "Affine al tuo blocco: proposta probabilmente ben accolta. " : (ac !== undefined && ac < 0.1 ? "All'opposto del tuo blocco: quasi certamente rifiuterà. " : "Molto distante ideologicamente — ultima risorsa di necessità: proposta rischiosa, probabile rifiuto. ")) +
           "+" + (c.seats.camera + c.seats.senato) + " seggi se accetta.",
         negotiateTargetId: c.id, effects: {}, result: ""
       };
@@ -30099,7 +30121,7 @@
     // Ora il dossier le elenca per nome, con un lucchetto per quelle escluse dall'intesa e una riga
     // separata per quelle che hanno già detto no: il giocatore vede subito chi è davvero sul tavolo (i
     // bottoni sopra) e chi invece resta fuori, e perché.
-    var lockedCandidates = oppositeAllowed ? [] : neg.candidates.filter(function (c) { return !c.fits; });
+    var lockedCandidates = neg.candidates.filter(function (c) { return !c.fits && (!oppositeAllowed || c.acceptChance === 0); });
     var rejectedLabels = (neg.rejectedIds || []).map(function (id) {
       var coal = coalitionById(id); if (coal) return coal.label;
       var party = partyById(id); return party ? party.name : id;
@@ -44374,7 +44396,7 @@
             neg.candidates.splice(targetIdx, 1);
             // Affine: accetta quasi sempre. Ideologicamente lontano: spesso rifiuta — anche un partito
             // disposto a un'intesa di necessità ci pensa due volte prima di dire sì.
-            var acceptChance = target.fits ? 0.82 : 0.32;
+            var acceptChance = target.fits ? 0.82 : (target.acceptChance !== undefined ? target.acceptChance : 0.32);
             var accepted = Math.random() < acceptChance;
             if (accepted) {
               neg.governingMemberIds = neg.governingMemberIds.concat(target.members);
