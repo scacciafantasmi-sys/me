@@ -26999,9 +26999,45 @@
     );
   }
   // ---------- Weekly recomputation: polling, drift, decay, upkeep ----------
+  // Rete di sicurezza per le partite già in corso (segnalato da un giocatore: Futuro Nazionale restava
+  // nel governo del Campo Largo anche dopo nuove elezioni). Ogni settimana si controlla la composizione
+  // del governo: una forza all'estremo opposto del nucleo che guida il governo (stessa regola della
+  // formazione: distanza 3 o più, o estremista dall'altra parte) esce dalla maggioranza, che diventa di
+  // minoranza. Non tocca mai il giocatore.
+  function sanitizeGovEntityIdeology() {
+    var ge = state.govEntity;
+    if (!ge || !ge.memberIds || !ge.memberIds.length || state.regime) return;
+    var famOf = function (id) { return id === "player" ? (state.player && state.player.family) : ((partyById(id) || {}).familyId); };
+    var coal = coalitionById(ge.id);
+    var core = coal ? coal.members.filter(function (id) { return ge.memberIds.indexOf(id) !== -1 || id === "player"; }) : [ge.id];
+    var corePos = core.map(function (id) { return LEFT_RIGHT_POSITION[famOf(id)]; }).filter(function (v) { return v !== undefined; });
+    if (!corePos.length) return;
+    var cAvg = corePos.reduce(function (a, v) { return a + v; }, 0) / corePos.length;
+    var removed = [];
+    ge.memberIds.slice().forEach(function (id) {
+      if (id === "player" || core.indexOf(id) !== -1) return;
+      var f = famOf(id), pos = LEFT_RIGHT_POSITION[f];
+      if (pos === undefined) return;
+      var opposite = (cAvg <= -0.5 && pos >= 0.5) || (cAvg >= 0.5 && pos <= -0.5);
+      if (Math.abs(pos - cAvg) >= 3 || (opposite && isExtremistFamily(f))) removed.push(id);
+    });
+    if (!removed.length) return;
+    ge.memberIds = ge.memberIds.filter(function (id) { return removed.indexOf(id) === -1; });
+    ["extraAllyIds", "forcedAllyIds"].forEach(function (k) { if (ge[k]) ge[k] = ge[k].filter(function (id) { return removed.indexOf(id) === -1; }); });
+    if (ge.seatSplit) removed.forEach(function (id) { delete ge.seatSplit[id]; });
+    ge.minority = true;
+    if (state.cabinet && state.cabinet.ministries) removed.forEach(function (id) { delete state.cabinet.ministries[id]; });
+    var names = removed.map(function (id) { return (partyById(id) || {}).name || id; }).join(", ");
+    var text = names + " esce dalla maggioranza: troppo lontano dalle forze che guidano il governo per restarci. Il governo va avanti, ma di minoranza.";
+    state.log.unshift({ week: state.turn, title: "Un partito esce dalla maggioranza", choiceLabel: names, result: text, headlines: [], type: "istituzioni", cat: "Governo" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Governo", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+  }
   function recomputePeriodic() {
     var p = state.player;
     if (!p) return;
+    sanitizeGovEntityIdeology();
     if (p.parliamentRole === "governo") p.cumulativeGovWeeks = (p.cumulativeGovWeeks || 0) + 1;
     // Uno scandalo vero (vedi collapse_moment sopra) continua a pesare un poco ogni settimana finché non
     // si esaurisce, invece di essere un unico colpo secco che il resto della formula dimentica subito
