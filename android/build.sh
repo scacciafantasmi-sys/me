@@ -5,8 +5,8 @@
 # (così gli aggiornamenti si installano sopra la versione precedente); altrimenti crea una chiave
 # temporanea a ogni compilazione.
 set -euo pipefail
-cd "$(dirname "$0")"
 OUT="$(realpath -m "$1")"
+cd "$(dirname "$0")"
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 [ -n "$SDK" ] || { echo "Android SDK non trovato"; exit 1; }
 BT="$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)"
@@ -33,7 +33,7 @@ else
   PASS="politis-temp"
 fi
 mkdir -p "$(dirname "$OUT")"
-"$BT/apksigner" sign --ks "$W/release.jks" --ks-key-alias politis --ks-pass "pass:$PASS" --key-pass "pass:$PASS" --out "$OUT" "$W/aligned.apk"
+"$BT/apksigner" sign --ks "$W/release.jks" --ks-key-alias politis --ks-pass "pass:$PASS" --key-pass "pass:$PASS" --v4-signing-enabled false --out "$OUT" "$W/aligned.apk"
 "$BT/apksigner" verify --print-certs "$OUT" | head -3
 rm -rf "$W"
 echo "APK pronto: $OUT ($(du -h "$OUT" | cut -f1))"
