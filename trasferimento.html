@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Trasferimento partite — Politis-IT</title>
+<style>
+  body { margin: 0; background: #0a0c18; color: #f4f5fb; font: 16px/1.5 system-ui, sans-serif; display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; text-align: center; }
+  #msg { font-weight: 700; }
+  a { color: #9b8bff; }
+</style>
+</head>
+<body>
+<div><div id="msg">Trasferimento delle partite in corso…</div><div id="sub"></div></div>
+<script>
+// Riceve le partite dalla vecchia copia su GitHub Pages. Le partite possono pesare diversi MB: troppo per
+// un solo indirizzo, quindi arrivano a pezzi. Ogni pezzo arriva qui nell'indirizzo (dopo il #), viene
+// messo da parte in sessionStorage e si torna su GitHub a prendere il successivo; all'ultimo pezzo le
+// partite vengono scritte negli slot e si apre il gioco. Gli slot che qui hanno già una partita non
+// vengono mai sovrascritti: le partite di GitHub vanno negli slot liberi. Su GitHub le partite restano.
+(function () {
+  var GH = "https://scacciafantasmi-sys.github.io/me/";
+  var BASE = "politisit_founder_save_v2", ACTIVE = "politisit_active_slot";
+  var msg = document.getElementById("msg"), sub = document.getElementById("sub");
+  function slotKey(n) { return n === 1 ? BASE : BASE + "_slot" + n; }
+  function finish(note) {
+    try { sessionStorage.setItem("politis_transfer_note", note); } catch (e) {}
+    location.replace("/");
+  }
+  function fail(text) {
+    msg.textContent = text;
+    sub.innerHTML = 'Le partite sono ancora al sicuro sul vecchio indirizzo. <a href="' + GH + '">Torna indietro</a> e usa «Scarica le partite come file», poi nel gioco «Importa partita».';
+  }
+  var p = {};
+  (location.hash || "").replace(/^#/, "").split("&").forEach(function (kv) { var i = kv.indexOf("="); if (i > 0) p[kv.slice(0, i)] = kv.slice(i + 1); });
+  var id = p.id, i = parseInt(p.i, 10), n = parseInt(p.n, 10), kind = p.k;
+  if (!id || !(n > 0) || !(i >= 0) || typeof p.d !== "string") { location.replace("/"); return; }
+  msg.textContent = "Trasferimento delle partite in corso… " + Math.round((i + 1) / n * 100) + "%";
+  try { sessionStorage.setItem("politis_tx_" + id + "_" + i, p.d); }
+  catch (e) { fail("Trasferimento non riuscito: memoria del browser piena."); return; }
+  if (i < n - 1) { location.replace(GH + "?tx=" + encodeURIComponent(id) + "&next=" + (i + 1)); return; }
+  var parts = [];
+  for (var j = 0; j < n; j++) {
+    var c = sessionStorage.getItem("politis_tx_" + id + "_" + j);
+    if (c === null) { fail("Trasferimento non riuscito: manca un pezzo."); return; }
+    parts.push(c);
+  }
+  for (var j2 = 0; j2 < n; j2++) { try { sessionStorage.removeItem("politis_tx_" + id + "_" + j2); } catch (e) {} }
+  function apply(saves) {
+    var before = {};
+    for (var b = 1; b <= 5; b++) { try { before[b] = localStorage.getItem(slotKey(b)); } catch (e) { before[b] = null; } }
+    var copied = 0, skipped = 0, used = {}, newActive = null;
+    var srcActive = parseInt(saves[ACTIVE] || "1", 10) || 1;
+    for (var s = 1; s <= 5; s++) {
+      var data = saves[slotKey(s)];
+      if (!data) continue;
+      var target = null;
+      if (before[s] === data || (before[s] === null && !used[s])) target = s;
+      else { for (var k = 1; k <= 5; k++) { if (before[k] === null && !used[k]) { target = k; break; } } }
+      if (target === null) { skipped++; continue; }
+      used[target] = true;
+      if (before[target] !== data) {
+        try { localStorage.setItem(slotKey(target), data); } catch (err) { used[target] = false; skipped++; continue; }
+      }
+      copied++;
+      if (s === srcActive) newActive = target;
+    }
+    if (newActive === null) { for (var a = 1; a <= 5; a++) if (used[a]) { newActive = a; break; } }
+    try { if (newActive !== null) localStorage.setItem(ACTIVE, String(newActive)); } catch (err) {}
+    if (!copied && skipped) { fail("Non c'è spazio per le partite su questo sito (slot pieni o memoria piena)."); return; }
+    finish(copied ? "ok:" + copied + ":" + skipped : "none:0");
+  }
+  try {
+    var bin = atob(parts.join("").replace(/-/g, "+").replace(/_/g, "/"));
+    var bytes = new Uint8Array(bin.length); for (var x = 0; x < bin.length; x++) bytes[x] = bin.charCodeAt(x);
+    if (kind === "r") { apply(JSON.parse(new TextDecoder().decode(bytes))); return; }
+    new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text()
+      .then(function (t) { apply(JSON.parse(t)); })
+      .catch(function () { fail("Trasferimento non riuscito."); });
+  } catch (err) { fail("Trasferimento non riuscito."); }
+})();
+</script>
+</body>
+</html>
