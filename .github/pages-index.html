@@ -47,19 +47,44 @@
   var saves = window.__saves || {};
   var msg = document.getElementById("msg");
   function b64(bytes) { var s = ""; for (var i = 0; i < bytes.length; i += 32768) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768)); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+  // Le partite possono pesare diversi MB: troppo per un solo indirizzo. Si spediscono a pezzi: ogni pezzo va
+  // alla pagina di arrivo su Cloudflare (trasferimento.html) dentro l'indirizzo, che lo mette da parte e
+  // torna qui a chiedere il successivo (?tx=…&next=…). Tutto nella stessa scheda, niente finestre in più.
+  var CHUNK = 200000;
+  function pack() {
+    var only = {};
+    Object.keys(saves).forEach(function (k) { if (/save_v2|active_slot/.test(k)) only[k] = saves[k]; });
+    var json = JSON.stringify(only);
+    if (window.CompressionStream) {
+      return new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer()
+        .then(function (buf) { return { k: "g", d: b64(new Uint8Array(buf)) }; })
+        .catch(function () { return { k: "r", d: b64(new TextEncoder().encode(json)) }; });
+    }
+    return Promise.resolve({ k: "r", d: b64(new TextEncoder().encode(json)) });
+  }
+  function getPayload(id) {
+    try { var st = JSON.parse(sessionStorage.getItem("politis_tx") || "null"); if (st && st.id === id) return Promise.resolve(st); } catch (e) {}
+    return pack().then(function (pk) { pk.id = id; return pk; });
+  }
+  function send(pk, i) {
+    var n = Math.max(1, Math.ceil(pk.d.length / CHUNK));
+    msg.textContent = "Trasferimento in corso… " + Math.round(i / n * 100) + "%";
+    location.replace(TARGET_ORIGIN + "/trasferimento.html#id=" + pk.id + "&k=" + pk.k + "&i=" + i + "&n=" + n + "&d=" + pk.d.slice(i * CHUNK, (i + 1) * CHUNK));
+  }
+  var q = /[?&]tx=([^&]+)&next=(\d+)/.exec(location.search);
+  if (q) {
+    msg.textContent = "Trasferimento in corso…";
+    getPayload(decodeURIComponent(q[1])).then(function (pk) { send(pk, parseInt(q[2], 10)); })
+      .catch(function () { msg.textContent = "Trasferimento non riuscito: usa «Scarica le partite come file»."; });
+  }
   document.getElementById("move").addEventListener("click", function () {
     msg.textContent = "Trasferimento in corso…";
-    var json = JSON.stringify(saves);
-    var go = function (kind, payload) {
-      // salvataggi enormi: niente indirizzo lunghissimo, meglio scaricarli come file
-      if (payload.length > 1500000) { msg.textContent = "Le partite sono troppo grandi per il trasferimento automatico: le scarico come file. Sul nuovo sito usa «Importa partita»."; document.getElementById("dl").click(); return; }
-      location.href = TARGET_ORIGIN + "/#pt=" + kind + ":" + payload;
-    };
-    if (window.CompressionStream) {
-      new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer()
-        .then(function (buf) { go("g", b64(new Uint8Array(buf))); })
-        .catch(function () { go("r", b64(new TextEncoder().encode(json))); });
-    } else go("r", b64(new TextEncoder().encode(json)));
+    var id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    pack().then(function (pk) {
+      pk.id = id;
+      try { sessionStorage.setItem("politis_tx", JSON.stringify(pk)); } catch (e) {}
+      location.href = TARGET_ORIGIN + "/trasferimento.html#id=" + id + "&k=" + pk.k + "&i=0&n=" + Math.max(1, Math.ceil(pk.d.length / CHUNK)) + "&d=" + pk.d.slice(0, CHUNK);
+    }).catch(function () { msg.textContent = "Trasferimento non riuscito: usa «Scarica le partite come file»."; });
   });
   document.getElementById("dl").addEventListener("click", function () {
     Object.keys(saves).forEach(function (k) {
