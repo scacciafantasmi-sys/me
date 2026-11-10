@@ -1104,7 +1104,7 @@
   <div class="save-bar" id="save-bar">
     <span class="save-bar-icon" aria-hidden="true">💾</span>
     <span class="save-bar-label">Salva i tuoi progressi</span>
-    <button class="save-bar-btn primary" id="install-app-btn" type="button" hidden>📲 Installa l'app</button>
+    <button class="save-bar-btn primary" id="install-app-btn" type="button" hidden>📲 Scarica l'app</button>
     <button class="save-bar-btn primary" id="export-btn" type="button">Esporta partita</button>
     <button class="save-bar-btn" id="import-btn" type="button">Importa partita</button>
     <button class="save-bar-btn" id="slots-btn" type="button">Slot di salvataggio</button>
@@ -47934,6 +47934,14 @@
   exportBtn.addEventListener("click", function () {
     if (!state.player && !state.career) return;
     var data = JSON.stringify(state, null, 2);
+    // nell'app Android la WebView non scarica i file creati dalla pagina: li salva l'app in Download
+    if (window.PolitisApp && window.PolitisApp.saveFile) {
+      var appName = "politis-it-" + ((state.player ? state.player.name : state.career.name).replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "") || "partita") + "-settimana" + state.turn + ".json";
+      var okApp = false;
+      try { okApp = window.PolitisApp.saveFile(appName, data); } catch (eApp) { okApp = false; }
+      showSaveStatus(okApp ? "Partita esportata nella cartella Download." : "Esportazione non riuscita.", !okApp);
+      return;
+    }
     var blob = new Blob([data], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var safeName = (state.player ? state.player.name : state.career.name).replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "") || (state.player ? "partito" : "carriera");
@@ -48141,35 +48149,65 @@
 })();
 </script>
 <script>
-// ---------- App installabile (PWA) ----------
-// Richiesto: un'app da scaricare direttamente dal sito. Il sito è installabile come app (icona sulla
-// schermata home, schermo intero, gioco disponibile anche offline). Su Android e sui computer il pulsante
-// "Installa l'app" apre la richiesta di installazione del browser; su iPhone e iPad mostra come fare
-// (Condividi → Aggiungi alla schermata Home), perché Safari non permette di farlo con un pulsante.
+// ---------- App da scaricare: Android (APK), iPhone (profilo Web Clip) e installazione dal browser ----------
+// Richiesto: dal sito si deve poter scaricare l'app sia per Android sia per iPhone.
+// - Android: un vero file APK (app/politis-it.apk), compilato da GitHub Actions a ogni pubblicazione.
+// - iPhone/iPad: Apple non permette di installare app scaricate dal web fuori dall'App Store; il file
+//   app/politis-it.mobileconfig è un profilo che aggiunge l'icona di Politis-IT alla schermata Home e
+//   apre il gioco a schermo intero, come un'app.
+// - Tutti: il sito è anche una PWA installabile dal browser (service worker sw.js, gioco offline).
 (function () {
   var btn = document.getElementById("install-app-btn");
-  var standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
   var ua = navigator.userAgent || "";
+  var inAndroidApp = /PolitisITApp/.test(ua) || !!window.PolitisApp;
+  var standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
   var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  var isAndroid = /Android/i.test(ua);
   var deferred = null;
-  if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  if ("serviceWorker" in navigator && location.protocol !== "file:" && !inAndroidApp) {
     window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js", { scope: "./" }).catch(function () {}); });
   }
-  if (!btn || standalone) return;
-  window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); deferred = e; btn.hidden = false; });
-  window.addEventListener("appinstalled", function () { btn.hidden = true; deferred = null; });
-  if (isIOS) btn.hidden = false;
-  btn.addEventListener("click", function () {
-    if (deferred) {
+  if (!btn || standalone || inAndroidApp) return;
+  btn.hidden = false;
+  window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); deferred = e; });
+  window.addEventListener("appinstalled", function () { deferred = null; close(); });
+  var box = null;
+  function close() { if (box) { box.remove(); box = null; } }
+  function section(title, highlight, body) {
+    return '<div style="border:1px solid ' + (highlight ? "#9b8bff" : "rgba(255,255,255,0.14)") + ';border-radius:16px;padding:14px 16px;margin:12px 0;background:' + (highlight ? "rgba(155,139,255,0.12)" : "rgba(255,255,255,0.03)") + '">' +
+      '<div style="font-weight:800;font-size:1.05rem;margin-bottom:6px">' + title + (highlight ? ' <span style="font-size:.75rem;color:#5ee6d6">· il tuo dispositivo</span>' : "") + "</div>" + body + "</div>";
+  }
+  var linkStyle = 'display:inline-block;margin:6px 0 8px;padding:10px 16px;border-radius:999px;background:linear-gradient(135deg,#7c6cf0,#9b8bff);color:#fff;font-weight:800;text-decoration:none';
+  function open() {
+    close();
+    box = document.createElement("div");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Scarica l'app");
+    box.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(5,6,11,0.78);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 14px";
+    var html = '<div style="max-width:520px;width:100%;background:#12142a;color:#f4f5fb;border-radius:22px;padding:20px 20px 12px;box-shadow:0 20px 60px rgba(0,0,0,0.5);font:15px/1.45 Inter,system-ui,sans-serif">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between"><strong style="font-size:1.3rem">📲 Scarica Politis-IT</strong><button type="button" id="app-dl-close" style="background:none;border:0;color:#f4f5fb;font-size:1.4rem;cursor:pointer" aria-label="Chiudi">✕</button></div>';
+    var secA = section("🤖 Android", isAndroid,
+      '<a href="app/politis-it.apk" download style="' + linkStyle + '">Scarica l\'app per Android (APK)</a>' +
+      '<ol style="margin:4px 0 0 18px;padding:0;color:#c9cce0"><li>Apri il file scaricato (dalle notifiche o dalla cartella Download).</li><li>Se il telefono lo chiede, consenti l\'installazione da questa fonte («Origini sconosciute»).</li><li>Tocca «Installa».</li></ol>' +
+      '<p style="margin:8px 0 0;color:#9ba1ba;font-size:.85rem">L\'app non viene dal Play Store, per questo Android chiede il permesso. Le partite dell\'app sono separate da quelle del browser: per portarne una usa «Esporta partita» qui e «Importa partita» nell\'app.</p>');
+    var secI = section("🍏 iPhone e iPad", isIOS,
+      '<a href="app/politis-it.mobileconfig" style="' + linkStyle + '">Scarica il file per iPhone</a>' +
+      '<ol style="margin:4px 0 0 18px;padding:0;color:#c9cce0"><li>Aprilo da <strong>Safari</strong> e tocca «Consenti».</li><li>Vai in <strong>Impostazioni</strong> → «Profilo scaricato» → «Installa».</li><li>Trovi l\'icona di Politis-IT sulla schermata Home: si apre a schermo intero, come un\'app.</li></ol>' +
+      '<p style="margin:8px 0 0;color:#9ba1ba;font-size:.85rem">Apple permette di installare app scaricate solo dall\'App Store: questo file aggiunge il gioco alla schermata Home. iPhone lo segnala come «non verificato» perché non passa dall\'App Store; si rimuove quando vuoi da Impostazioni → Generali → VPN e gestione dispositivi. In alternativa: in Safari tocca Condividi → «Aggiungi alla schermata Home». Le partite sono separate da quelle di Safari: usa Esporta/Importa partita per portarle.</p>');
+    var secP = section("💻 Computer (o Android dal browser)", !isIOS && !isAndroid,
+      (deferred ? '<button type="button" id="app-dl-pwa" style="' + linkStyle + ';border:0;cursor:pointer">Installa dal browser</button>' : '<p style="margin:0;color:#c9cce0">Con Chrome o Edge: apri il menu del browser (⋮) e scegli «Installa app». L\'app usa le stesse partite del sito.</p>'));
+    html += (isIOS ? secI + secA + secP : isAndroid ? secA + secI + secP : secP + secA + secI) + "</div>";
+    box.innerHTML = html;
+    document.body.appendChild(box);
+    box.addEventListener("click", function (e) { if (e.target === box) close(); });
+    document.getElementById("app-dl-close").addEventListener("click", close);
+    var pwa = document.getElementById("app-dl-pwa");
+    if (pwa) pwa.addEventListener("click", function () {
+      if (!deferred) return;
       deferred.prompt();
-      deferred.userChoice.then(function (r) { if (r && r.outcome === "accepted") btn.hidden = true; deferred = null; });
-      return;
-    }
-    if (isIOS) {
-      alert("Per installare Politis-IT su iPhone o iPad:\n\n1. Tocca il pulsante Condividi di Safari (il quadrato con la freccia verso l'alto)\n2. Scegli «Aggiungi alla schermata Home»\n3. Tocca «Aggiungi»\n\nAttenzione: l'app installata su iPhone ha salvataggi separati da Safari. Prima di passare all'app usa «Esporta partita» qui e poi «Importa partita» nell'app.");
-      return;
-    }
-    alert("Per installare Politis-IT apri il menu del browser (⋮) e scegli «Installa app» o «Aggiungi a schermata Home».");
-  });
+      deferred.userChoice.then(function () { deferred = null; close(); });
+    });
+  }
+  btn.addEventListener("click", open);
 })();
 </script>
