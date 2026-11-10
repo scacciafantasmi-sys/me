@@ -35,7 +35,7 @@
 <div class="card">
   <img src="logo.png" alt="Politis-IT">
   <h1>Politis-IT ha un nuovo indirizzo</h1>
-  <p>Il gioco ora è su <strong>politisit.scacciafantasmi.workers.dev</strong>. Su questo dispositivo hai partite salvate al vecchio indirizzo: trasferiscile con un tocco, poi continua a giocare sul nuovo sito.</p>
+  <p>Il gioco ora è su <strong>politisit.scacciafantasmi.workers.dev</strong>. Su questo dispositivo hai partite salvate al vecchio indirizzo: trasferiscile con un tocco, poi continua a giocare sul nuovo sito. Le partite restano anche qui, non vengono cancellate.</p>
   <button type="button" class="main" id="move">Trasferisci le mie partite e apri il gioco</button>
   <button type="button" class="alt" id="dl">Scarica le partite come file</button>
   <a class="btn alt" href="https://politisit.scacciafantasmi.workers.dev/">Vai al nuovo sito senza trasferire</a>
@@ -46,16 +46,20 @@
   var TARGET_ORIGIN = "https://politisit.scacciafantasmi.workers.dev";
   var saves = window.__saves || {};
   var msg = document.getElementById("msg");
+  function b64(bytes) { var s = ""; for (var i = 0; i < bytes.length; i += 32768) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768)); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
   document.getElementById("move").addEventListener("click", function () {
-    var w = window.open(TARGET_ORIGIN + "/?transfer=github", "_blank");
-    if (!w) { msg.textContent = "Il browser ha bloccato la nuova finestra: consenti i popup e riprova."; return; }
     msg.textContent = "Trasferimento in corso…";
-    var sent = false;
-    window.addEventListener("message", function (e) {
-      if (e.origin !== TARGET_ORIGIN || !e.data) return;
-      if (e.data.type === "politis-ready" && !sent) { sent = true; w.postMessage({ type: "politis-transfer", saves: saves }, TARGET_ORIGIN); }
-      if (e.data.type === "politis-done") msg.textContent = "Fatto: " + e.data.copied + " salvataggi trasferiti" + (e.data.skipped ? " (" + e.data.skipped + " non trasferiti perché gli slot erano pieni: usa «Scarica le partite come file»)" : "") + ". Continua a giocare nella nuova scheda.";
-    });
+    var json = JSON.stringify(saves);
+    var go = function (kind, payload) {
+      // salvataggi enormi: niente indirizzo lunghissimo, meglio scaricarli come file
+      if (payload.length > 1500000) { msg.textContent = "Le partite sono troppo grandi per il trasferimento automatico: le scarico come file. Sul nuovo sito usa «Importa partita»."; document.getElementById("dl").click(); return; }
+      location.href = TARGET_ORIGIN + "/#pt=" + kind + ":" + payload;
+    };
+    if (window.CompressionStream) {
+      new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer()
+        .then(function (buf) { go("g", b64(new Uint8Array(buf))); })
+        .catch(function () { go("r", b64(new TextEncoder().encode(json))); });
+    } else go("r", b64(new TextEncoder().encode(json)));
   });
   document.getElementById("dl").addEventListener("click", function () {
     Object.keys(saves).forEach(function (k) {
