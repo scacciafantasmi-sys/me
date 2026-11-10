@@ -2827,9 +2827,10 @@
   var EU_REJOIN_MIN_RELAZIONI = 4;
   function renderReaccessionPanel() {
     var p = state.player;
-    if (!p || state.regime || p.parliamentRole !== "governo" || (!state.leftNato && !state.leftEu)) return "";
-    var html = '<section aria-label="Rientro in NATO/UE"><details class="log"><summary>Rientro in NATO/UE<span>▾</span></summary>';
-    if (state.leftNato) {
+    if (!p || state.regime || (!state.leftNato && !state.leftEu)) return "";
+    if (p.parliamentRole !== "governo" && !state.leftEu) return "";
+    var html = '<section aria-label="Rientro in NATO/UE"><details class="log"' + (state.leftEu ? " open" : "") + '><summary>' + (state.euAccession ? "🇪🇺 Riadesione all'UE in corso" : "Rientro in NATO/UE") + '<span>▾</span></summary>';
+    if (state.leftNato && p.parliamentRole === "governo") {
       var natoWeeksLeft = (state.natoRejoinCooldownTurn || 0) - state.turn;
       var natoOnCooldown = natoWeeksLeft > 0;
       html += '<p class="ci-hint">Il paese è fuori dalla NATO: il governo può chiedere il rientro, un processo relativamente rapido, tanto più probabile quante migliori sono le relazioni diplomatiche internazionali (ora: ' + fmt1(state.countryProfile.relazioniDiplomatiche) + '/10).' +
@@ -2837,15 +2838,7 @@
         '<div class="option-grid"><button type="button" class="option-card" data-rejoin-nato="1"' + (natoOnCooldown ? " disabled" : "") + '>' +
         '<span class="olabel">Richiedi il rientro nella NATO</span><span class="odesc">' + (natoOnCooldown ? "In raffreddamento" : "Esito non garantito") + '</span></button></div>';
     }
-    if (state.leftEu) {
-      var euWeeksLeft = (state.euRejoinCooldownTurn || 0) - state.turn;
-      var euOnCooldown = euWeeksLeft > 0;
-      var euEligible = state.countryProfile.relazioniDiplomatiche >= EU_REJOIN_MIN_RELAZIONI;
-      html += '<p class="ci-hint">Il paese è fuori dall\'Unione Europea: il governo può chiedere la riammissione, un processo lungo e incerto, possibile solo con relazioni diplomatiche già in parte ricostruite (serve almeno ' + EU_REJOIN_MIN_RELAZIONI + '/10, ora: ' + fmt1(state.countryProfile.relazioniDiplomatiche) + '/10) — e anche riuscendo, i danni economici dell\'uscita si ricuperano solo in parte.' +
-        (euOnCooldown ? ' Potrai riprovare tra ' + euWeeksLeft + ' settiman' + (euWeeksLeft === 1 ? "a" : "e") + '.' : '') + '</p>' +
-        '<div class="option-grid"><button type="button" class="option-card" data-rejoin-eu="1"' + (euOnCooldown || !euEligible ? " disabled" : "") + '>' +
-        '<span class="olabel">Richiedi la riammissione nell\'Unione Europea</span><span class="odesc">' + (euOnCooldown ? "In raffreddamento" : !euEligible ? "Relazioni diplomatiche ancora troppo deboli" : "Processo lungo, esito incerto") + '</span></button></div>';
-    }
+    if (state.leftEu) html += renderEuAccessionBlock();
     html += "</details></section>";
     return html;
   }
@@ -2868,30 +2861,212 @@
     state.log.unshift({ week: state.turn, title: success ? "Il paese rientra nella NATO" : "Richiesta di rientro nella NATO respinta", choiceLabel: "Rientro in NATO", result: text, headlines: [], type: "istituzioni", cat: "Geopolitica" });
     return { resultText: text, headlines: [] };
   }
+  // ---------- Riadesione all'Unione Europea (art. 49 del Trattato sull'UE) ----------
+  // Richiesto: rientrare nell'UE dopo almeno 2 anni dall'uscita, con la decisione nelle mani dell'UE e
+  // seguendo ciò che succede nella realtà. Le tappe sono quelle vere di un'adesione:
+  // 1. domanda formale al Consiglio dell'UE (dopo almeno 104 settimane dall'uscita, solo in democrazia
+  //    e solo da chi governa);
+  // 2. parere della Commissione e voto all'UNANIMITÀ dei 27 sulla candidatura: pesano i criteri di
+  //    Copenaghen (democrazia, Stato di diritto, economia di mercato) e basta un solo Paese membro con
+  //    rapporti pessimi per mettere il veto;
+  // 3. negoziati capitolo per capitolo (35 capitoli): Bruxelles chiede riforme, si può accettare,
+  //    negoziare un periodo transitorio o tracciare una linea rossa; un Paese membro ostile può
+  //    congelare i negoziati;
+  // 4. trattato di adesione, che deve essere ratificato da tutti i Paesi membri e approvato dal
+  //    Parlamento europeo; con l'adesione l'Italia si impegna a tornare all'euro.
+  var EU_REJOIN_MIN_WEEKS_OUT = 104;
+  var EU_ACCESSION_CHAPTERS = 35;
+  var EU_ACCESSION_RETRY_TURNS = 52;
+  var EU_CHAPTERS = [
+    { name: "Stato di diritto e diritti fondamentali", ask: "più indipendenza della magistratura e un'agenzia anticorruzione con poteri veri", eff: { corruzione: 0.35, giustizia: 0.3 } },
+    { name: "Giustizia, libertà e sicurezza", ask: "il ritorno nello spazio Schengen con controlli comuni alle frontiere esterne", eff: { sicurezza: 0.2, immigrazione: 0.25 } },
+    { name: "Politica economica e monetaria", ask: "un piano per riportare il deficit sotto il 3% del PIL", eff: { felicita: -0.2, welfare: -0.15 }, deficit: -0.6 },
+    { name: "Concorrenza", ask: "lo stop agli aiuti di Stato alle aziende in crisi", eff: { aziende: -0.2, economia: 0.2 } },
+    { name: "Unione doganale", ask: "il ritorno alla tariffa doganale comune europea", eff: { commercio: 0.45 } },
+    { name: "Libera circolazione delle merci", ask: "l'adozione di tutte le norme europee su prodotti e sicurezza", eff: { commercio: 0.3, aziende: -0.1 } },
+    { name: "Agricoltura e sviluppo rurale", ask: "l'adeguamento alle regole della Politica agricola comune", eff: { commercio: 0.2, economia: 0.1 } },
+    { name: "Ambiente e cambiamenti climatici", ask: "gli obiettivi europei di riduzione delle emissioni", eff: { ambientalismo: 0.35, aziende: -0.15 } },
+    { name: "Appalti pubblici", ask: "gare europee trasparenti per tutti gli appalti sopra soglia", eff: { corruzione: 0.3, trasporti: -0.1 } },
+    { name: "Energia", ask: "la liberalizzazione del mercato elettrico e del gas", eff: { energia: 0.25, felicita: -0.05 } },
+    { name: "Politica estera e di sicurezza comune", ask: "l'allineamento alle sanzioni e alle posizioni comuni dell'UE", eff: { relazioniDiplomatiche: 0.35 } },
+    { name: "Controllo finanziario", ask: "controlli europei sull'uso dei fondi pubblici", eff: { corruzione: 0.25 } }
+  ];
+  function euWeeksSinceExit() { return state.euExitTurn === undefined || state.euExitTurn === null ? 9999 : state.turn - state.euExitTurn; }
+  function euRejoinWaitLeft() { return Math.max(0, EU_REJOIN_MIN_WEEKS_OUT - euWeeksSinceExit()); }
+  // Il Paese membro più ostile (rapporti sotto 30 con l'Italia): può mettere il veto.
+  function euVetoCountry(limit) {
+    var worst = null;
+    WORLD_NATIONS.forEach(function (n) {
+      if (!nationIsEU(n) || n.id === "italia") return;
+      var r = italyRelation(n.id);
+      if (r < (limit || 30) && (!worst || r < worst.r)) worst = { id: n.id, name: n.name, r: r };
+    });
+    return worst;
+  }
+  // Criteri di Copenaghen: democrazia, Stato di diritto, economia di mercato, rapporti con l'Europa.
+  function euCandidacyChance() {
+    var cp = state.countryProfile;
+    var c = 0.3 + (cp.relazioniDiplomatiche - 4) * 0.06 + (cp.corruzione - 4) * 0.03 + (cp.giustizia - 4) * 0.03 + (cp.economia - 4) * 0.025;
+    if (isExtremistFamily(currentGoverningFamilyId())) c -= 0.15;
+    if (state.currencyAbolished) c -= 0.2;
+    return clamp(c, 0.03, 0.85);
+  }
+  function euRejoinBlockers() {
+    var p = state.player, out = [];
+    if (!state.leftEu) return ["Il paese fa già parte dell'Unione Europea."];
+    if (state.regime) out.push("Sotto un regime l'UE non apre nemmeno il dossier: serve una piena democrazia.");
+    if (!p || p.parliamentRole !== "governo") out.push("La domanda di adesione la presenta il Governo.");
+    var wait = euRejoinWaitLeft();
+    if (wait > 0) out.push("Devono passare almeno 2 anni dall'uscita: mancano " + wait + " settimane.");
+    if (state.turn < (state.euRejoinCooldownTurn || 0)) out.push("Dopo il no alla candidatura si può ripresentare la domanda tra " + (state.euRejoinCooldownTurn - state.turn) + " settimane.");
+    if (state.euAccession) out.push("Il processo di adesione è già in corso.");
+    return out;
+  }
   function attemptEuRejoin() {
-    var p = state.player;
-    if (state.countryProfile.relazioniDiplomatiche < EU_REJOIN_MIN_RELAZIONI) return null;
-    state.euRejoinCooldownTurn = state.turn + EU_REJOIN_COOLDOWN_TURNS;
-    var prob = clamp(0.08 + (state.countryProfile.relazioniDiplomatiche - EU_REJOIN_MIN_RELAZIONI) / 25, 0.04, 0.3);
-    var success = Math.random() < prob;
-    var text;
-    if (success) {
-      state.leftEu = false;
-      state.euExitDecided = false;
-      state.liraAnnounced = false;
-      var cp = state.countryProfile;
-      cp.economia = clamp(cp.economia + 1.5, 1, 10);
-      cp.commercio = clamp(cp.commercio + 2, 1, 10);
-      cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 1, 1, 10);
-      state.spreadBps = Math.max(60, state.spreadBps - 120);
-      state.deficitPil = clamp((state.deficitPil || 0) - 0.8, -1, 12);
-      text = "Dopo un lungo negoziato di adesione, l'Unione Europea riammette il paese: l'euro torna a essere la moneta nazionale, anche se le cicatrici economiche degli anni fuori dall'Unione non si cancellano del tutto.";
-    } else {
-      p.reputazione = clamp(p.reputazione - rand(1, 3), 0, 100);
-      text = "Il negoziato di riammissione nell'Unione Europea si arena: diversi Stati membri chiedono ancora garanzie prima di riaprire le porte.";
-    }
-    state.log.unshift({ week: state.turn, title: success ? "Il paese rientra nell'Unione Europea" : "Negoziato di riammissione nell'UE fallito", choiceLabel: "Riammissione UE", result: text, headlines: [], type: "istituzioni", cat: "Geopolitica" });
+    if (euRejoinBlockers().length) return null;
+    state.euAccession = { stage: "parere", startTurn: state.turn, nextTurn: state.turn + 8, chapters: 0, frozenUntil: 0, nextChapterTurn: 0, chaptersDone: [] };
+    state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche + 0.2, 1, 10);
+    var text = "Il Governo presenta formalmente la domanda di adesione all'Unione Europea, secondo l'articolo 49 del Trattato. Ora la Commissione prepara il suo parere e tra circa 8 settimane i 27 Paesi membri decideranno, all'unanimità, se concedere lo status di candidato.";
+    state.log.unshift({ week: state.turn, title: "Domanda di adesione all'UE presentata", choiceLabel: "Riadesione UE", result: text, headlines: [], type: "istituzioni", cat: "Geopolitica" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Politica Estera", text: "L'Italia chiede di rientrare nell'Unione Europea." });
     return { resultText: text, headlines: [] };
+  }
+  // Esito della candidatura (si usa sia nel dossier del giocatore sia in automatico).
+  function euDecideCandidacy() {
+    var acc = state.euAccession, veto = euVetoCountry(30), chance = euCandidacyChance() * (veto ? 0.25 : 1);
+    if (Math.random() < chance) {
+      acc.stage = "negoziati"; acc.nextChapterTurn = state.turn + 6; acc.negotiationStart = state.turn;
+      return { ok: true, text: "Il Consiglio dell'UE concede all'unanimità lo status di Paese candidato: si aprono i negoziati di adesione, capitolo per capitolo." };
+    }
+    state.euAccession = null;
+    state.euRejoinCooldownTurn = state.turn + EU_ACCESSION_RETRY_TURNS;
+    state.player.reputazione = clamp(state.player.reputazione - rand(1, 3), 0, 100);
+    var cp = state.countryProfile, why;
+    if (veto) why = veto.name + " pone il veto: i rapporti con l'Italia sono ancora troppo tesi.";
+    else if (cp.corruzione < 4.5 || cp.giustizia < 4.5) why = "per la Commissione lo Stato di diritto non è ancora all'altezza: corruzione e giustizia vanno riformate.";
+    else if (cp.economia < 4.5) why = "per la Commissione l'economia non è ancora pronta a reggere il mercato unico.";
+    else why = "diversi Paesi membri chiedono più garanzie prima di riaprire le porte.";
+    return { ok: false, text: "Il Consiglio dell'UE non concede lo status di candidato: " + why + " La domanda potrà essere ripresentata tra un anno." };
+  }
+  function euFinalRatification() {
+    var acc = state.euAccession, veto = euVetoCountry(25);
+    var epOk = state.countryProfile.relazioniDiplomatiche >= 4;
+    if (!veto && epOk) {
+      state.euAccession = null;
+      state.leftEu = false; state.euExitDecided = false; state.liraAnnounced = false; state.euExitTurn = null;
+      var cp = state.countryProfile;
+      cp.economia = clamp(cp.economia + 1.5, 1, 10); cp.commercio = clamp(cp.commercio + 2, 1, 10);
+      cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 1, 1, 10); cp.inflazione = clamp(cp.inflazione + 0.8, 1, 10);
+      state.spreadBps = Math.max(60, state.spreadBps - 140);
+      state.deficitPil = clamp((state.deficitPil || 0) - 0.8, -1, 12);
+      state.ratingIdx = Math.min((state.ratingIdx || 0) + 1, 9);
+      var weeks = state.turn - acc.startTurn;
+      return { ok: true, text: "Tutti i 27 Paesi membri ratificano il trattato e il Parlamento europeo dà il via libera: dopo " + weeks + " settimane di negoziati l'Italia torna nell'Unione Europea. La lira viene convertita e l'euro torna in tasca agli italiani; i mercati festeggiano, anche se le cicatrici degli anni fuori non spariscono del tutto." };
+    }
+    acc.stage = "negoziati"; acc.chapters = EU_ACCESSION_CHAPTERS - 4; acc.nextChapterTurn = state.turn + 8;
+    return { ok: false, text: veto ? "Il Parlamento di " + veto.name + " boccia la ratifica del trattato di adesione: i negoziati riaprono gli ultimi capitoli per trovare un compromesso." : "Il Parlamento europeo rinvia il voto: chiede altre garanzie prima di approvare l'adesione." };
+  }
+  // Ogni settimana: i negoziati avanzano da soli in base alle riforme del paese; un Paese membro
+  // ostile può congelarli. Se a governare non è il giocatore, le tappe si chiudono in automatico.
+  function euAccessionTick() {
+    var acc = state.euAccession;
+    if (!acc) return;
+    if (state.regime || !state.leftEu) { state.euAccession = null; return; }
+    var p = state.player, playerGov = p && p.parliamentRole === "governo", cp = state.countryProfile;
+    if (acc.stage === "negoziati") {
+      if (state.turn >= acc.frozenUntil) {
+        var quality = clamp(((cp.corruzione + cp.giustizia + cp.economia + cp.relazioniDiplomatiche) / 4 - 4) / 4, 0, 1);
+        acc.chapters = Math.min(EU_ACCESSION_CHAPTERS, acc.chapters + 0.22 + quality * 0.28);
+        var veto = euVetoCountry(30);
+        if (veto && Math.random() < 0.04) {
+          acc.frozenUntil = state.turn + 12;
+          state.log.unshift({ week: state.turn, title: veto.name + " blocca i negoziati con l'Italia", choiceLabel: "Riadesione UE", result: veto.name + ", con cui i rapporti sono pessimi, blocca l'apertura dei prossimi capitoli: i negoziati di adesione restano congelati per circa tre mesi.", headlines: [], type: "istituzioni", cat: "Geopolitica" });
+        }
+      }
+      if (acc.chapters >= EU_ACCESSION_CHAPTERS) { acc.stage = "ratifica"; acc.nextTurn = state.turn + 12; }
+    }
+    if (!playerGov && state.turn >= (acc.nextTurn || 0) && (acc.stage === "parere" || acc.stage === "ratifica")) {
+      var res = acc.stage === "parere" ? euDecideCandidacy() : euFinalRatification();
+      state.log.unshift({ week: state.turn, title: res.ok ? "Riadesione UE: un passo avanti" : "Riadesione UE: uno stop", choiceLabel: "Riadesione UE", result: res.text, headlines: [], type: "istituzioni", cat: "Geopolitica" });
+    }
+  }
+  function euAccessionDossierDue() {
+    var acc = state.euAccession, p = state.player;
+    if (!acc || !p || p.parliamentRole !== "governo") return false;
+    if ((acc.stage === "parere" || acc.stage === "ratifica") && state.turn >= acc.nextTurn) return true;
+    return acc.stage === "negoziati" && state.turn >= acc.nextChapterTurn && state.turn >= acc.frozenUntil && acc.chapters < EU_ACCESSION_CHAPTERS - 1;
+  }
+  function buildEuAccessionDossier() {
+    var acc = state.euAccession;
+    if (acc.stage === "parere" || acc.stage === "ratifica") {
+      var res = acc.stage === "parere" ? euDecideCandidacy() : euFinalRatification();
+      var title = acc.stage === "parere" ? (res.ok ? "L'Italia è di nuovo Paese candidato all'UE" : "L'UE dice no alla candidatura italiana") : (res.ok ? "L'Italia torna nell'Unione Europea" : "Ratifica del trattato di adesione bloccata");
+      state.log.unshift({ week: state.turn, title: title, choiceLabel: "Riadesione UE", result: res.text, headlines: [], type: "istituzioni", cat: "Geopolitica" });
+      if (res.ok && !state.euAccession) addDiaryEntry("Di nuovo in Europa", "Oggi l'Italia è tornata nell'Unione Europea. Ci sono voluti anni, ma ne è valsa la pena.");
+      return {
+        id: "ai_dynamic", kind: "notizia", localDynamic: false, eyebrow: "Riadesione all'Unione Europea", cat: "Politica Estera", title: title, brief: res.text,
+        choices: res.ok
+          ? [{ label: "Festeggia con un discorso alla nazione", hint: "Visibilità e un po' di orgoglio europeo", effects: { visibilita: rand(3, 6), reputazione: rand(1, 2) }, result: "Il discorso del governo viene trasmesso a reti unificate." },
+             { label: "Ringrazia i partner con sobrietà", hint: "Rafforza i rapporti con le capitali europee", effects: { reputazione: rand(1, 2), national: { relazioniDiplomatiche: 0.2 } }, result: "Una nota sobria ai partner europei: le cancellerie apprezzano." }]
+          : [{ label: "Rilancia: lavoreremo per convincerli", hint: "Si riparte dalle riforme", effects: { reputazione: rand(0, 1) }, result: "Il governo promette di continuare sulla strada delle riforme." },
+             { label: "Attacca Bruxelles", hint: "Piace ai più euroscettici, peggiora i rapporti", effects: { visibilita: rand(2, 4), national: { relazioniDiplomatiche: -0.3 } }, result: "Lo scontro con Bruxelles riempie i telegiornali." }]
+      };
+    }
+    // un capitolo dei negoziati
+    var pool = EU_CHAPTERS.filter(function (c) { return acc.chaptersDone.indexOf(c.name) === -1; });
+    if (!pool.length) { acc.chaptersDone = []; pool = EU_CHAPTERS.slice(); }
+    var ch = pool[Math.floor(Math.random() * pool.length)];
+    acc.chaptersDone.push(ch.name);
+    acc.nextChapterTurn = state.turn + 10;
+    var effNational = Object.assign({}, ch.eff);
+    return {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, cat: "Politica Estera", euChapter: ch.name, euChapterDeficit: ch.deficit || 0,
+      eyebrow: "Negoziati di adesione all'UE — capitoli chiusi " + Math.floor(acc.chapters) + " su " + EU_ACCESSION_CHAPTERS,
+      title: "Capitolo «" + ch.name + "»",
+      brief: "Per chiudere il capitolo «" + ch.name + "», Bruxelles chiede " + ch.ask + ". Come risponde il governo?",
+      choices: [
+        { label: "Accetta le richieste di Bruxelles", hint: "Il capitolo si chiude subito: i negoziati accelerano", euChapterAction: "accetta", effects: { national: effNational }, result: "" },
+        { label: "Negozia un periodo transitorio", hint: "Si chiude più lentamente, con meno sacrifici", euChapterAction: "negozia", effects: {}, result: "" },
+        { label: "Linea rossa: su questo non si tratta", hint: "Orgoglio nazionale, ma i negoziati si congelano per qualche mese", euChapterAction: "rifiuta", effects: { visibilita: rand(2, 4) }, result: "" }
+      ]
+    };
+  }
+  function resolveEuChapterAction(dossier, choice) {
+    var acc = state.euAccession;
+    if (!acc) return "I negoziati di adesione non sono più in corso.";
+    var a = choice.euChapterAction, name = dossier.euChapter;
+    if (a === "accetta") {
+      acc.chapters = Math.min(EU_ACCESSION_CHAPTERS, acc.chapters + 4);
+      if (dossier.euChapterDeficit) state.deficitPil = clamp((state.deficitPil || 0) + dossier.euChapterDeficit, -1, 12);
+      state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche + 0.15, 1, 10);
+      return "Il governo accetta le condizioni: il capitolo «" + name + "» viene chiuso. Capitoli chiusi: " + Math.floor(acc.chapters) + " su " + EU_ACCESSION_CHAPTERS + ".";
+    }
+    if (a === "negozia") {
+      acc.chapters = Math.min(EU_ACCESSION_CHAPTERS, acc.chapters + 2);
+      return "Dopo settimane di trattative si trova un compromesso con un periodo transitorio sul capitolo «" + name + "». Capitoli chiusi: " + Math.floor(acc.chapters) + " su " + EU_ACCESSION_CHAPTERS + ".";
+    }
+    acc.frozenUntil = state.turn + 10;
+    state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche - 0.2, 1, 10);
+    return "Il governo traccia una linea rossa sul capitolo «" + name + "»: Bruxelles congela i negoziati per circa due mesi e mezzo.";
+  }
+  function renderEuAccessionBlock() {
+    var acc = state.euAccession, html = "";
+    if (acc) {
+      var stageLabel = acc.stage === "parere" ? "In attesa della decisione dei 27 sulla candidatura (tra " + Math.max(0, acc.nextTurn - state.turn) + " settimane)"
+        : acc.stage === "ratifica" ? "Trattato firmato: ratifica nei 27 Paesi e al Parlamento europeo (tra " + Math.max(0, acc.nextTurn - state.turn) + " settimane)"
+        : "Negoziati in corso" + (state.turn < acc.frozenUntil ? " — CONGELATI per altre " + (acc.frozenUntil - state.turn) + " settimane" : "");
+      html += '<p class="ci-hint"><strong>Riadesione all\'UE:</strong> ' + stageLabel + ".</p>";
+      if (acc.stage !== "parere") html += '<p class="ci-hint">Capitoli chiusi: ' + Math.floor(acc.chapters) + " su " + EU_ACCESSION_CHAPTERS + '</p><div class="gauge"><span style="width:' + Math.round(acc.chapters / EU_ACCESSION_CHAPTERS * 100) + '%;background:var(--accent)"></span></div>';
+      return html;
+    }
+    var blockers = euRejoinBlockers(), veto = euVetoCountry(30);
+    html += '<p class="ci-hint">Il paese è fuori dall\'Unione Europea. Per rientrare servono almeno 2 anni dall\'uscita, poi la domanda di adesione (art. 49 del Trattato): decidono i 27 Paesi membri all\'unanimità, poi si negoziano 35 capitoli e il trattato va ratificato da tutti. Pesano rapporti diplomatici, Stato di diritto (corruzione e giustizia) ed economia.' +
+      (veto ? " Attenzione: con " + veto.name + " i rapporti sono pessimi, e può mettere il veto." : "") + "</p>";
+    if (blockers.length) html += '<ul class="enacted-policy-list">' + blockers.map(function (b) { return "<li>" + b + "</li>"; }).join("") + "</ul>";
+    html += '<div class="option-grid"><button type="button" class="option-card" data-rejoin-eu="1"' + (blockers.length ? " disabled" : "") + '>' +
+      '<span class="olabel">Presenta la domanda di adesione all\'UE</span><span class="odesc">' + (blockers.length ? "Non ancora possibile" : "Probabilità stimata di ottenere la candidatura: circa " + Math.round(euCandidacyChance() * (veto ? 0.25 : 1) * 100) + "%") + "</span></button></div>";
+    return html;
   }
   function renderGeopoliticalTensionPanel() {
     var p = state.player;
@@ -26155,7 +26330,7 @@
     pendingGovFormationNegotiation: null, pendingGovInvite: null, pendingGovInviteWelcome: null,
     playerMinistry: null, regionalPresidency: null, pendingRegionalElectionResult: null,
     natoDecided: false, euExitDecided: false, leftNato: false, leftEu: false, liraAnnounced: false, euExitCooldownTurn: 0, pendingRegimeChoice: null,
-    natoRejoinCooldownTurn: 0, euRejoinCooldownTurn: 0, spaceRaceNewsCooldownTurn: 30,
+    natoRejoinCooldownTurn: 0, euRejoinCooldownTurn: 0, euAccession: null, euExitTurn: null, spaceRaceNewsCooldownTurn: 30,
     uprisingSaga: null, cpuUprisingCooldownTurn: 0, pendingDictatorVerdictTurn: null, fallenRegimeMemory: null, collapseSaga: null,
     salarioMinimoAttivo: false, salarioMinimoNetto: null,
     bilancioStato: { entrate: 920, uscite: 979 },
@@ -27038,6 +27213,7 @@
     var p = state.player;
     if (!p) return;
     sanitizeGovEntityIdeology();
+    euAccessionTick();
     if (p.parliamentRole === "governo") p.cumulativeGovWeeks = (p.cumulativeGovWeeks || 0) + 1;
     // Uno scandalo vero (vedi collapse_moment sopra) continua a pesare un poco ogni settimana finché non
     // si esaurisce, invece di essere un unico colpo secco che il resto della formula dimentica subito
@@ -29474,6 +29650,8 @@
     if (state.spreadHistory.length > 12) state.spreadHistory.shift();
     state.leftEu = true;
     state.euExitDecided = true;
+    state.euExitTurn = state.turn;
+    state.euAccession = null;
     // Un paese fuori dall'UE non ha più eurodeputati: ripulisce subito seggi/gruppo/scelta pendente,
     // così non resta nessun residuo di prima dell'uscita a far comparire ancora dossier sul Parlamento
     // Europeo (vedi anche il guard su state.leftEu aggiunto in resolveEuropeanElection).
@@ -39355,6 +39533,15 @@
   // votano sì i partiti di governo; si astengono i partiti politicamente vicini al governo (l'astensione
   // benevola che fa nascere i governi di minoranza); votano no gli altri. Il gruppo del giocatore vota
   // come ha scelto. Passa se i sì superano i no in entrambe le Camere.
+  // Segnalato da un giocatore: in campagna elettorale il governo si scioglieva più volte di fila. Un
+  // governo di minoranza appena nato perdeva la fiducia, il mandato esplorativo falliva e si tornava al
+  // voto, in un ciclo. Nella realtà, a pochi mesi dalle elezioni il Presidente della Repubblica evita in
+  // ogni modo di sciogliere di nuovo le Camere (governo tecnico o "del Presidente"), e le forze moderate
+  // si astengono per senso di responsabilità. Entro 30 settimane dall'ultimo voto le Camere non vengono
+  // più sciolte.
+  function recentElectionGrace() {
+    return state.lastElectionTurn !== undefined && state.lastElectionTurn !== null && state.turn - state.lastElectionTurn < 30;
+  }
   function govConfidenceTally(playerVote) {
     var p = state.player, ge = state.govEntity;
     var govIds = (ge && ge.memberIds) || [];
@@ -39374,7 +39561,11 @@
         }
         if (govIds.indexOf(id) !== -1) { yes += n; return; }
         var pt = partyById(id), pos = pt ? LEFT_RIGHT_POSITION[pt.familyId] : undefined;
-        if (pos !== undefined && govPos !== undefined && Math.abs(pos - govPos) <= 1) abst += n; else no += n;
+        // si astengono le forze vicine; subito dopo il voto anche quelle un po' più lontane, per non
+        // tornare alle urne (mai gli estremisti dell'altra parte)
+        var band = recentElectionGrace() ? 2 : 1.5;
+        var far = pos !== undefined && govPos !== undefined && ((govPos <= -0.5 && pos >= 0.5) || (govPos >= 0.5 && pos <= -0.5)) && isExtremistFamily(pt.familyId);
+        if (pos !== undefined && govPos !== undefined && !far && Math.abs(pos - govPos) <= band) abst += n; else no += n;
       });
       out[ch] = { yes: yes, no: no, abst: abst };
       if (yes <= no) out.passed = false;
@@ -40083,7 +40274,11 @@
     state.mandatoEsplorativoCooldownTurn = state.turn + 6;
     var semestreBianco = isSemestreBianco();
     var text;
-    if (Math.random() < (semestreBianco ? 0.5 : 0.35) + constMandatoBonus()) {
+    if (recentElectionGrace()) {
+      state.consensoGoverno = Math.max(state.consensoGoverno, rand(34, 42));
+      markGovernmentRebornFromMandato();
+      text = "Crisi di governo a Roma, a pochi mesi dal voto: il Presidente della Repubblica esclude nuove elezioni e affida l'incarico per un governo tecnico di garanzia, che ottiene la fiducia con un'ampia astensione.";
+    } else if (Math.random() < (semestreBianco ? 0.5 : 0.35) + constMandatoBonus()) {
       state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
       markGovernmentRebornFromMandato();
       text = "Crisi di governo a Roma: il mandato esplorativo del Presidente della Repubblica va a buon fine e nasce un nuovo governo, senza elezioni anticipate.";
@@ -44461,6 +44656,9 @@
           addDiaryEntry("Il mondo è in guerra", "Oggi il governo ha scelto la collocazione dell'Italia nella guerra mondiale: " + choice.label.toLowerCase() + ". Qualunque cosa succeda da qui in avanti, questa scelta segnerà il paese per una generazione.");
         }
         state.resultData = applyChoice(dossier, choice);
+      } else if (choice.euChapterAction) {
+        choice.result = resolveEuChapterAction(dossier, choice);
+        state.resultData = applyChoice(dossier, choice);
       } else if (choice.cpuCoupReaction) {
         choice.result = resolveCpuCoup(dossier, choice);
         state.resultData = applyChoice(dossier, choice);
@@ -44917,7 +45115,7 @@
         var mandatoSuccessChance = clamp(0.35 +
           (choice.mandatoStance === "sostegno" ? 0.25 : choice.mandatoStance === "elezioni" ? -0.25 : 0) +
           (mandatoCtx.semestreBianco ? 0.15 : 0) + constMandatoBonus(), 0.05, 0.9);
-        var mandatoSuccess = Math.random() < mandatoSuccessChance;
+        var mandatoSuccess = Math.random() < mandatoSuccessChance || recentElectionGrace();
         var mandatoText;
         if (mandatoSuccess) {
           state.consensoGoverno = Math.max(state.consensoGoverno, rand(38, 52));
@@ -44928,6 +45126,7 @@
           }
           mandatoText = "Il mandato esplorativo va a buon fine: nasce un nuovo governo, sostenuto da una maggioranza diversa da quella uscita dalle urne, senza bisogno di elezioni anticipate." +
             (choice.mandatoStance === "sostegno" ? " Il tuo partito, avendo offerto sostegno fin dall'inizio, ne fa parte." : "");
+          if (recentElectionGrace()) mandatoText += " A pochi mesi dal voto, il Presidente della Repubblica ha escluso di sciogliere di nuovo le Camere: il nuovo esecutivo nasce come governo di garanzia.";
           state.log.unshift({ week: state.turn, title: "Mandato Esplorativo riuscito", choiceLabel: choice.label, result: mandatoText, headlines: [], type: "istituzioni", cat: "Mandato Esplorativo" });
         } else if (mandatoCtx.semestreBianco) {
           state.consensoGoverno = 22;
@@ -46930,6 +47129,12 @@
     // fronte e la fine della guerra non possono slittare per settimane dietro ad altro.
     if (state.playerWarEnded) {
       state.aiDynamicDossier = buildPlayerWarEndDossier();
+      state.currentDossierId = "ai_dynamic";
+      state.phase = "building";
+      return;
+    }
+    if (euAccessionDossierDue()) {
+      state.aiDynamicDossier = buildEuAccessionDossier();
       state.currentDossierId = "ai_dynamic";
       state.phase = "building";
       return;
