@@ -16807,6 +16807,79 @@
   // stesso scopo) e lo mette in maiuscolo a inizio frase. Aggiunge, a volte, il dato reale della Scheda
   // Paese di quella settimana ("fermo a 3,2/10"): sentito citare un numero vero, non un generico "male",
   // rende la voce più credibile ed esperta, non solo più varia.
+  // ---------- Dichiarazioni dei partiti più vere e intelligenti (richiesto) ----------
+  // Prima un leader diceva frasi generiche ("Su X, chi governa ha fallito su tutta la linea") uguali per
+  // tutti. Ora una dichiarazione di partito parte dalla situazione VERA della partita: se il partito
+  // governa o è all'opposizione, il valore reale dell'indicatore, il nome di chi governa o del rivale
+  // principale, una priorità coerente con la propria area politica e, a volte, il proprio sondaggio.
+  function smartPick(a) { return a[Math.floor(Math.random() * a.length)]; }
+  function smartIsGov(author) {
+    if (state.govEntity && state.govEntity.memberIds) return state.govEntity.memberIds.indexOf(author.partyId) !== -1;
+    var pt = activeParties().filter(function (x) { return x.id === author.partyId; })[0];
+    return !!(pt && pt.coalition === "governo");
+  }
+  function smartPartyIsGov(pt) {
+    if (state.govEntity && state.govEntity.memberIds) return state.govEntity.memberIds.indexOf(pt.id) !== -1;
+    return pt.coalition === "governo";
+  }
+  function daLabel(label) { return diLabel(label).replace(/^dell'/, "dall'").replace(/^dello /, "dallo ").replace(/^della /, "dalla ").replace(/^del /, "dal ").replace(/^degli /, "dagli ").replace(/^delle /, "dalle ").replace(/^dei /, "dai ").replace(/^di /, "da "); }
+  function smartNum(v) { return fmt1(v).replace(".", ","); }
+  function smartLevel(v) { return v < 4 ? "critico" : v < 5.8 ? "insufficiente" : v < 7.3 ? "discreto" : "buono"; }
+  function smartRivalName(author) {
+    var parties = activeParties().filter(function (pt) { return pt.id !== author.partyId; });
+    var meGov = smartIsGov(author);
+    var pool = parties.filter(function (pt) { return meGov ? !smartPartyIsGov(pt) : smartPartyIsGov(pt); });
+    if (!pool.length) pool = parties;
+    pool.sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); });
+    var top = pool.slice(0, 3);
+    if (!top.length) return null;
+    var pt = smartPick(top);
+    // un nome di persona non vuole l'articolo ("a Salvini"), un partito sì ("alla Lega"): si usa il leader
+    // quando è una persona, altrimenti frasi senza preposizione davanti al nome del partito
+    var person = pt.leader && /^[A-ZÀ-Ý][a-zà-ÿ']+ [A-ZÀ-Ý]/.test(pt.leader) && !/Coordinamento|Segreteria|portavoce|Direzione|Comitato/i.test(pt.leader);
+    return { name: person ? pt.leader.replace(/\s*\(.*\)$/, "") : pt.name, person: person };
+  }
+  function smartProposal(author, metric, detail) {
+    var theme = metric && METRIC_TO_ANGLE_THEME[metric];
+    var bank = author.familyId && theme && FAMILY_ANGLE_NOUNS[author.familyId] && FAMILY_ANGLE_NOUNS[author.familyId][theme];
+    // solo proposte dello stesso tema: meglio nessuna proposta che una fuori tema
+    var pool = (bank || []).filter(function (x) { return x !== detail; });
+    return pool.length ? smartPick(pool) : null;
+  }
+  function buildSmartPartyQuote(author, metric, detail, tone, replyTo) {
+    var v = metric && state.countryProfile[metric] !== undefined ? state.countryProfile[metric] : null;
+    var lvl = v === null ? "insufficiente" : smartLevel(v);
+    var bad = lvl === "critico" || lvl === "insufficiente";
+    var dato = v === null ? "" : smartPick([" Il dato ufficiale dice " + smartNum(v) + " su 10.", " Siamo a " + smartNum(v) + " su 10: i numeri parlano chiaro.", " Con un indicatore a " + smartNum(v) + " su 10 non servono commenti."]);
+    var su = suLabel(detail); var Su = su.charAt(0).toUpperCase() + su.slice(1);
+    var rival = smartRivalName(author);
+    var prop = smartProposal(author, metric, detail);
+    var poll = author.partyId ? state.parties[author.partyId] : null;
+    var parts = [];
+    if (replyTo) {
+      parts.push(smartPick([
+        replyTo + " confonde la propaganda con la politica.", "Ho ascoltato " + replyTo + ": tante parole, nessuna proposta.",
+        "Rispetto " + replyTo + ", ma la ricetta è sbagliata.", "A " + replyTo + " vorrei ricordare cosa ha votato quando poteva cambiare le cose."
+      ]));
+    }
+    if (smartIsGov(author)) {
+      if (bad) parts.push(smartPick([Su + " c'è ancora molto da fare, e non lo nascondiamo." + dato, Su + " abbiamo ereditato una situazione difficile, ma stiamo invertendo la rotta." + dato, "Sappiamo che " + detail + " pesa su tante famiglie: il Governo ci sta lavorando." + dato]));
+      else parts.push(smartPick([Su + " i risultati arrivano: il Paese è a " + smartNum(v) + " su 10, e non era scontato.", Su + " i numeri ci danno ragione, al di là delle polemiche." + dato, Su + " abbiamo fatto passi avanti concreti, e continueremo."]));
+    } else {
+      if (bad) parts.push(smartPick([Su + " il Governo ha fallito." + dato, Su + " siamo al punto più basso degli ultimi anni." + dato, "Chi governa parla d'altro, ma " + detail + " resta un'emergenza vera." + dato]));
+      else parts.push(smartPick([Su + " qualcosa si muove, ma non certo grazie al Governo.", Su + " i numeri reggono, ma chi governa si prende meriti che non ha." + dato, Su + " il Paese tiene nonostante il Governo, non grazie al Governo."]));
+    }
+    if (prop) parts.push(smartPick(["Al primo posto mettiamo " + prop + ".", "Noi partiremmo " + daLabel(prop) + ".", "Proponiamo di intervenire subito " + suLabel(prop) + ".", "Da mesi chiediamo di occuparsi " + diLabel(prop) + "."]));
+    if (rival && !replyTo && Math.random() < 0.55) {
+      var N = rival.name, hard = tone === "aggressivo" || tone === "critico";
+      parts.push(rival.person
+        ? (hard ? smartPick([N + " ne parla tanto e non ha mai fatto niente.", "Lo dico a " + N + ": meno slogan e più soluzioni.", "Da " + N + " solo propaganda, come sempre."]) : smartPick(["Siamo pronti a discuterne anche con " + N + ", se c'è buona volontà.", "Chiedo a " + N + " di uscire dalle polemiche e lavorare sul merito."]))
+        : (hard ? smartPick([N + " ne parla tanto e non ha mai fatto niente.", N + " sa solo fare propaganda."]) : smartPick(["Il tavolo è aperto a tutti: anche " + N + " può dare una mano, se c'è buona volontà."])));
+    }
+    if (poll && poll > 12 && Math.random() < 0.3) parts.push("Milioni di italiani ci hanno dato fiducia: non li deluderemo.");
+    else if (poll && poll < 3 && Math.random() < 0.3) parts.push("Saremo pochi, ma su questo abbiamo ragione noi.");
+    return parts.join(" ");
+  }
   function buildAmbientQuote(detailPhraseLower, tone, metric) {
     var suPhrase = suLabel(detailPhraseLower);
     var capped = suPhrase.charAt(0).toUpperCase() + suPhrase.slice(1);
@@ -16837,13 +16910,13 @@
     if (parties.length && roll < w.presidentW + w.leaderW) {
       var party = parties[Math.floor(Math.random() * parties.length)];
       var isGovParty = govMemberIds.indexOf(party.id) !== -1;
-      return { name: party.leader, role: "Leader di " + party.name, color: party.color, familyId: party.familyId, toneWeights: isGovParty ? GOV_TONE_WEIGHTS : OPPOSITION_TONE_WEIGHTS };
+      return { name: party.leader, role: "Leader di " + party.name, color: party.color, familyId: party.familyId, partyId: party.id, isGov: isGovParty, isLeader: true, toneWeights: isGovParty ? GOV_TONE_WEIGHTS : OPPOSITION_TONE_WEIGHTS };
     }
     if (parties.length && roll < w.presidentW + w.leaderW + w.mpW) {
       var mpParty = parties[Math.floor(Math.random() * parties.length)];
       var mpIsGov = govMemberIds.indexOf(mpParty.id) !== -1;
       var mpRole = (mpIsGov ? "Parlamentare di maggioranza (" : "Parlamentare di opposizione (") + mpParty.short + ")";
-      return { name: generateStaffName(), role: mpRole, color: mpParty.color, familyId: mpParty.familyId, toneWeights: mpIsGov ? GOV_TONE_WEIGHTS : OPPOSITION_TONE_WEIGHTS };
+      return { name: generateStaffName(), role: mpRole, color: mpParty.color, familyId: mpParty.familyId, partyId: mpParty.id, isGov: mpIsGov, toneWeights: mpIsGov ? GOV_TONE_WEIGHTS : OPPOSITION_TONE_WEIGHTS };
     }
     var pool = PUBLIC_FIGURE_ROLES.slice();
     if (parties.length) {
@@ -16925,7 +16998,7 @@
     var author = pickAmbientAuthor();
     var tone = author.forceTone || pickWeightedTone(author.toneWeights);
     var detailPhrase = pickAmbientDetailPhrase(topic.metric, METRIC_LABELS[topic.metric], author.familyId);
-    var quote = buildAmbientQuote(detailPhrase, tone, topic.metric);
+    var quote = author.partyId && Math.random() < 0.8 ? buildSmartPartyQuote(author, topic.metric, detailPhrase, tone) : buildAmbientQuote(detailPhrase, tone, topic.metric);
     var sentenceTpl = STATEMENT_INTRO_VERBS[Math.floor(Math.random() * STATEMENT_INTRO_VERBS.length)];
     var kws = topic.metric ? STATEMENT_THEME_KEYWORDS[topic.metric] : null;
     var keyword = kws ? kws[Math.floor(Math.random() * kws.length)] : null;
@@ -16967,7 +17040,7 @@
         var replyDetailPhrase = target.themeMetric
           ? pickAmbientDetailPhrase(target.themeMetric, target.topicLabel.toLowerCase(), replyAuthor.familyId)
           : (target.topicLabel === "Attualità politica generale" ? "questo tema" : target.topicLabel.toLowerCase());
-        var replyQuote = buildAmbientQuote(replyDetailPhrase, replyTone, target.themeMetric);
+        var replyQuote = replyAuthor.partyId && !agree && Math.random() < 0.7 ? buildSmartPartyQuote(replyAuthor, target.themeMetric, replyDetailPhrase, replyTone, target.authorName) : buildAmbientQuote(replyDetailPhrase, replyTone, target.themeMetric);
         var introPool = agree ? STATEMENT_REPLY_AGREE_INTROS : STATEMENT_REPLY_DISAGREE_INTROS;
         var introTpl = introPool[Math.floor(Math.random() * introPool.length)];
         target.replies.push({
@@ -35260,7 +35333,7 @@
     careerAdultApply(c, { rep: -1.5, cons: c.office ? -3 : 0 });
     c.lastPartyRank = Math.max(c.lastPartyRank || 0, c.partyRank || 0);
     c.partyId = null; c.partyName = null; c.partyColor = null; c.partyRank = 0; c.partyTrust = 50; c.leftPartyTurn = state.turn;
-    c.candidacy = null; c.partyLawyer = false;
+    c.candidacy = null; c.partyLawyer = false; c.corrente = null;
   }
   function careerPromoCheck(c) {
     if (!c.partyId) return "Non sei tesserato/a.";
@@ -35275,15 +35348,16 @@
   }
   function careerPartyCongressDossier(c) {
     var next = CAREER_PARTY_LADDER[c.partyRank + 1];
-    var base = clamp(0.3 + (c.partyTrust - next.minTrust) / 70 + (c.reputazione - next.minRep) / 110 + c.rete / 400 + (c.loggia ? 0.08 : 0), 0.08, 0.85);
+    var base = clamp(0.3 + (c.partyTrust - next.minTrust) / 70 + (c.reputazione - next.minRep) / 110 + c.rete / 400 + (c.loggia ? 0.08 : 0) + careerCurrentCongressBonus(c), 0.08, 0.88);
     var rival = generateStaffName();
+    var myCur = careerMyCurrent(c);
     return { id: "congresso_partito", cat: "Partito", title: "Congresso: corri per «" + next.label + "»", brief: "Il congresso è convocato. Contro di te c'è " + rival + ", sostenuto/a da " + pickText(["la corrente maggioritaria", "i vecchi dirigenti", "il gruppo che controlla le tessere", "il parlamentare più votato della zona"]) + ". Come imposti la sfida?",
       choices: [
         { label: "Cerchi un accordo con la corrente più forte", chance: clamp(base + 0.12, 0.1, 0.9), act: "promo", eff: { trust: 4, ombre: 1 }, result: "L'accordo regge: vinci, ma ora sei in debito.", fail: { eff: { trust: -6 }, result: "L'accordo salta all'ultimo e perdi la conta." } },
         { label: "Sfida aperta, con un programma tuo", chance: clamp(base - 0.05, 0.05, 0.85), act: "promo", eff: { rep: 2, trust: 2 }, result: "Vinci a viso aperto: il risultato ti dà forza vera.", fail: { eff: { trust: -8, rep: 1 }, result: "Perdi di poco: qualcuno ha notato il coraggio." } },
         { label: "Mobiliti i tuoi contatti e i nuovi iscritti", chance: clamp(base + c.rete / 250, 0.05, 0.9), act: "promo", eff: { rete: 2, ombre: 2 }, result: "La sala è piena di persone portate da te: vinci.", fail: { eff: { trust: -10, ombre: 2 }, result: "Ti accusano di tesseramenti gonfiati. Sconfitta e veleni." } },
         { label: "Ritiri la candidatura", eff: { trust: 2 }, result: "Fai un passo indietro: il partito apprezza la disciplina." }
-      ] };
+      ].concat(myCur ? [{ label: "Porti al voto la tua corrente («" + myCur.label + "», " + Math.round(myCur.share) + "%)", chance: clamp(base + (myCur.share - 25) / 120, 0.05, 0.92), act: "promo", eff: { trust: 1, rete: 1 }, result: "I delegati della tua corrente votano compatti: vinci.", fail: { eff: { trust: -6 }, result: "La tua corrente non basta: perdi il congresso." } }] : []) };
   }
   function careerPrimariesDossier(c) {
     var p = careerParty(c);
@@ -36184,6 +36258,85 @@
     ["er_ultima_sera", "L'ultima sera a {erasmus}", "Domani si torna: gli amici organizzano una festa d'addio.", [["Una festa fino all'alba", { rete: 2 }, "Promesse di rivedersi in tutta Europa."], ["Una cena tranquilla con i più cari", { rete: 1 }, "Una serata commovente."], ["Prepari la valigia e dormi", { prep: 0.5 }, "Parti riposato/a."]]]
   ].map(function (x) { return { id: x[0], r: ["erasmus"], cat: "Erasmus", t: x[1], b: x[2], ch: x[3] }; });
   CAREER_ERASMUS_DOSSIERS.forEach(function (d) { CAREER_ADULT_DOSSIERS.push(d); });
+  // --- Correnti del partito nella Carriera (richiesto) ---
+  // Ogni partito ha le sue correnti (dalle ali tipiche della sua famiglia politica, più l'area che fa capo
+  // al segretario), con un peso che si muove nel tempo. Si può aderire a una corrente: quella di
+  // maggioranza dà fiducia nel partito, una di minoranza dà rete e identità. Il peso della propria corrente
+  // conta ai congressi, e la corrente chiede fedeltà nei momenti chiave.
+  function careerPartyCurrents(c) {
+    if (!c.partyId) return null;
+    if (!state.careerCurrents) state.careerCurrents = {};
+    var cur = state.careerCurrents[c.partyId];
+    if (cur && cur.length) return cur;
+    var pt = careerParty(c);
+    var fam = pt && pt.familyId;
+    var wings = (CORRENTI_BY_FAMILY[fam] || CORRENTI_BY_FAMILY.sovranista || []).slice();
+    for (var i = wings.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = wings[i]; wings[i] = wings[j]; wings[j] = t; }
+    wings = wings.slice(0, 2 + Math.floor(Math.random() * 2));
+    var list = [{ id: "segretario", label: "Area del segretario", share: 38 + Math.random() * 14, leader: pt && pt.leader ? pt.leader.replace(/\s*\(.*\)$/, "") : generateStaffName() }];
+    var rest = 100 - list[0].share;
+    wings.forEach(function (w, k) { var sh = k === wings.length - 1 ? rest : rest * (0.35 + Math.random() * 0.3); rest -= sh; list.push({ id: w.id, label: w.label, share: sh, leader: generateStaffName() }); });
+    state.careerCurrents[c.partyId] = list;
+    return list;
+  }
+  function careerCurrentsNormalize(list) { var tot = list.reduce(function (s, x) { return s + x.share; }, 0) || 1; list.forEach(function (x) { x.share = x.share / tot * 100; }); }
+  function careerMyCurrent(c) { var list = careerPartyCurrents(c); return list && c.corrente ? list.filter(function (x) { return x.id === c.corrente; })[0] || null : null; }
+  function careerCurrentsTick(c) {
+    var list = careerPartyCurrents(c);
+    if (!list) return;
+    list.forEach(function (x) { x.share = Math.max(4, x.share + (Math.random() - 0.5) * 1.6); });
+    var mine = careerMyCurrent(c);
+    // più sali nel partito, più la tua corrente pesa (porti con te i tuoi)
+    if (mine) mine.share += 0.08 * (c.partyRank || 0) + (c.rete || 0) / 400;
+    careerCurrentsNormalize(list);
+    var top = list.slice().sort(function (a, b) { return b.share - a.share; })[0];
+    if (c.currentsTopId && top.id !== c.currentsTopId) addCareerDiaryEntry("Cambiano gli equilibri", "Nel partito la corrente più forte ora è «" + top.label + "» (" + Math.round(top.share) + "%)." + (mine && mine.id === top.id ? " È la tua: il tuo peso cresce." : ""));
+    c.currentsTopId = top.id;
+  }
+  function careerJoinCurrent(c, id) {
+    var list = careerPartyCurrents(c); if (!list) return;
+    var x = list.filter(function (y) { return y.id === id; })[0]; if (!x) return;
+    if (c.corrente === id) return;
+    var top = list.slice().sort(function (a, b) { return b.share - a.share; })[0];
+    if (c.corrente) careerAdultApply(c, { trust: -1 });
+    c.corrente = id; c.correnteTurn = state.turn;
+    if (x.id === top.id) careerAdultApply(c, { trust: 3 }); else careerAdultApply(c, { rete: 2, trust: -1 });
+    x.share += 0.5 + (c.partyRank || 0) * 0.3; careerCurrentsNormalize(list);
+    addCareerDiaryEntry("Entri in una corrente", "Aderisci a «" + x.label + "», guidata da " + x.leader + (x.id === top.id ? ": è la corrente più forte del partito." : ": una minoranza, ma con le idee chiare."));
+  }
+  function careerLeaveCurrent(c) {
+    var x = careerMyCurrent(c); if (!x) { c.corrente = null; return; }
+    c.corrente = null; careerAdultApply(c, { trust: -1, rete: -1 });
+    addCareerDiaryEntry("Lasci la corrente", "Esci da «" + x.label + "»: da oggi non rispondi più a " + x.leader + ".");
+  }
+  // bonus/malus al congresso: il peso della tua corrente
+  function careerCurrentCongressBonus(c) { var x = careerMyCurrent(c); return x ? (x.share - 25) / 160 : 0; }
+  function renderCareerCurrents(c) {
+    var list = careerPartyCurrents(c); if (!list) return "";
+    var sorted = list.slice().sort(function (a, b) { return b.share - a.share; });
+    var mine = careerMyCurrent(c);
+    var html = '<section aria-label="Correnti"><h3>Correnti di ' + fxEsc(c.partyName || "partito") + '</h3><p class="ci-hint">La linea del partito la fa chi pesa di più: oggi è «' + fxEsc(sorted[0].label) + '» (' + Math.round(sorted[0].share) + '%). ' +
+      (mine ? "Sei nella corrente «" + fxEsc(mine.label) + "»: al congresso conta il suo peso (" + Math.round(mine.share) + "%)." : "Non sei in nessuna corrente: libero/a, ma senza truppe al congresso.") + '</p>';
+    html += '<div class="party-directory">' + sorted.map(function (x) {
+      var isMine = mine && mine.id === x.id;
+      return '<div class="party-row"' + (isMine ? ' style="border-color:var(--accent)"' : "") + '><div class="party-row-body" style="width:100%"><div class="party-row-head"><strong>' + fxEsc(x.label) + '</strong>' + (isMine ? ' <span class="chip accent">La tua</span>' : "") + '<span class="chip">' + Math.round(x.share) + '%</span></div>' +
+        '<div style="height:8px;border-radius:4px;background:var(--border);margin:6px 0"><div style="height:8px;border-radius:4px;width:' + Math.round(x.share) + '%;background:' + (isMine ? "var(--accent)" : "var(--text-dim)") + '"></div></div>' +
+        '<p class="ci-hint" style="margin:0">Guidata da ' + fxEsc(x.leader) + '</p>' +
+        (isMine ? '<button type="button" class="save-bar-btn" data-career-corrente-leave="1">Lascia la corrente</button>' : '<button type="button" class="save-bar-btn" data-career-corrente="' + x.id + '">Aderisci</button>') +
+        '</div></div>';
+    }).join("") + '</div></section>';
+    return html;
+  }
+  CAREER_ADULT_DOSSIERS.push(
+    { id: "cor_riunione", r: ["tesserato"], when: function (c) { return !!c.corrente; }, cat: "Corrente", t: "Riunione della tua corrente", b: "La tua corrente si riunisce in una sala d'albergo di {city}: si decide chi candidare alle prossime elezioni interne.",
+      ch: [["Proponi te stesso/a", { rete: 1, trust: 1, rep: 0.5 }, "Il capocorrente annuisce: il tuo nome è sulla lista.", 0.55, { trust: -1 }, "Il capocorrente sceglie un altro: per ora aspetti."], ["Sostieni il candidato del capocorrente", { trust: 2, rete: 1 }, "Lealtà premiata: la corrente si ricorderà di te."], ["Chiedi di aprire la corrente ai giovani", { rep: 1, rete: 2 }, "La proposta piace ai più giovani, meno ai veterani."]] },
+    { id: "cor_voto_contro", r: ["tesserato"], when: function (c) { return !!c.corrente && c.corrente !== "segretario"; }, cat: "Corrente", t: "La corrente vota contro il segretario", b: "In direzione nazionale la tua corrente vuole votare contro la linea del segretario di {party}. Ti chiedono di metterci la faccia.",
+      ch: [["Voti contro, con la corrente", { trust: -3, rete: 2, rep: 1 }, "La tua corrente ti considera dei loro. Il segretario prende nota."], ["Ti astieni", { trust: -1 }, "Né con gli uni né con gli altri: nessuno ti ringrazia."], ["Voti con il segretario", { trust: 3, rete: -3 }, "Il segretario apprezza, la tua corrente ti guarda storto."]] },
+    { id: "cor_fedelta", r: ["tesserato"], when: function (c) { return c.corrente === "segretario"; }, cat: "Corrente", t: "Il segretario conta i suoi", b: "Il segretario di {party} teme un'imboscata in direzione: ti chiede di garantire i voti della tua zona.",
+      ch: [["Garantisci i voti, telefonata dopo telefonata", { trust: 4, rete: 1 }, "La direzione tiene: il segretario ti deve un favore."], ["Prometti, ma senza esporti troppo", { trust: 1 }, "Fai il minimo: va bene così."], ["Dici di no: non sei un portatore di voti", { trust: -3, rep: 1 }, "Il segretario non dimentica, ma qualcuno ti stima di più."]] },
+    { id: "cor_cambio", r: ["tesserato"], when: function (c) { return !!c.corrente; }, cat: "Corrente", t: "Ti corteggia un'altra corrente", b: "Un capocorrente rivale ti invita a cena: ti offre un posto in segreteria se passi con lui.",
+      ch: [["Accetti e cambi corrente", { act: "cambio_corrente", rete: 2, trust: -1, ombre: 1 }, "Cambi corrente: chi lasci ti chiama traditore."], ["Rifiuti e lo racconti al tuo capocorrente", { trust: 2 }, "Lealtà dimostrata: nella tua corrente sali di grado."], ["Prendi tempo", { rete: 1 }, "Ti tieni la porta aperta."]] }
+  );
   // --- Vita comunale più attiva: sedute del Consiglio e riunioni di Giunta ---
   // Richiesto: se sei in Comune la vita comunale deve essere più attiva. Ogni 4-6 settimane c'è una seduta
   // del Consiglio con un punto all'ordine del giorno da votare (e conta se sei in maggioranza o no); da
@@ -36321,6 +36474,7 @@
   function careerAdultGenerateDossiers(c) {
     careerSpecialDossiers(c).forEach(function (d) { c.pending.push(d); });
     careerComuneSessionDossiers(c).forEach(function (d) { c.pending.push(d); });
+    if (c.partyId) careerCurrentsTick(c);
     // sessioni d'esame e tesi
     if (c.uni && !c.uni.laureato) {
       var f = careerFacultyById(c.uni.faculty);
@@ -36399,6 +36553,10 @@
       addCareerDiaryEntry("Candidatura alla Camera", "Sei candidato/a alla Camera " + (ch.listHead ? "da capolista " : "") + "per " + c.partyName + " nella circoscrizione " + careerRegion(c) + ".");
     }
     else if (act === "esami") resultText = careerRunExams(c, ch.n);
+    else if (act === "cambio_corrente") {
+      var others = (careerPartyCurrents(c) || []).filter(function (x) { return x.id !== c.corrente; });
+      if (others.length) { var nx = others[Math.floor(Math.random() * others.length)]; c.corrente = nx.id; resultText += " Ora sei in «" + nx.label + "»."; }
+    }
     else if (act === "laurea") resultText = careerGraduate(c, ch) + " " + ch.result;
     else if (act === "ricandida" && c.office) {
       var type = CAREER_ELECTION_TYPES.filter(function (t) { return t.offices.indexOf(c.office.id) !== -1; })[0];
@@ -36542,6 +36700,7 @@
         var pw = c.reputazione < 60 ? "Serve reputazione nazionale 60." : state.turn < (c.primariesCooldown || 0) ? "Hai perso le ultime primarie: riprova più avanti." : null;
         html += '<button type="button" class="choice-btn" id="career-primaries-btn"' + (pw ? " disabled" : "") + '><span class="clabel">Sfida il segretario alle primarie</span><span class="chint">' + (pw || "Se vinci, guidi il partito e il gioco passa alla modalità partito.") + "</span></button>";
       }
+      html += '</div></section>' + renderCareerCurrents(c) + '<section><div class="choices">';
       html += '<button type="button" class="choice-btn" id="career-leave-party-btn"><span class="clabel">Lascia il partito</span><span class="chint">Perdi il ruolo conquistato. Per tesserarti altrove dovrai aspettare qualche mese.</span></button></div></section>';
     }
     html += '<section aria-label="Fonda un partito"><h3>Fonda il tuo partito</h3><p class="ci-hint">Lasci la carriera e passi alla modalità partito, come fondatore/fondatrice. Si parte da quello che ti sei costruito/a: con reputazione ' + Math.round(c.reputazione) + " e rete " + Math.round(c.rete) + (c.reputazione < 45 ? ", senza una vera notorietà nazionale, sarà durissimo." : ", hai una base da cui partire.") + "</p>" +
@@ -36975,6 +37134,8 @@
     app.querySelectorAll("[data-career-act-kind]").forEach(function (btn) { btn.addEventListener("click", function () { c.actKind = btn.getAttribute("data-career-act-kind"); rerender(); }); });
     on("[data-career-adult-join]", function (btn) { var p = activeParties().filter(function (x) { return x.id === btn.getAttribute("data-career-adult-join"); })[0]; if (p) careerJoinParty(c, p); rerender(); });
     byId("career-leave-party-btn", function () { careerLeaveParty(c); rerender(); });
+    on("[data-career-corrente]", function (btn) { careerJoinCurrent(c, btn.getAttribute("data-career-corrente")); rerender(); });
+    on("[data-career-corrente-leave]", function () { careerLeaveCurrent(c); rerender(); });
     byId("career-congress-btn", function () { if (careerPromoCheck(c)) return; c.partyCongressOpen = true; c.pending.push(careerPartyCongressDossier(c)); rerender(); });
     byId("career-primaries-btn", function () { c.primariesCooldown = state.turn + 104; c.pending.push(careerPrimariesDossier(c)); rerender(); });
     byId("career-newparty-btn", function () {
