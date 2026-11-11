@@ -18977,7 +18977,50 @@
     function jit(c) { return Math.max(25, Math.min(230, c + Math.floor((Math.random() - 0.5) * 100))); }
     return "#" + [jit(r), jit(g), jit(b)].map(function (c) { return c.toString(16).padStart(2, "0"); }).join("");
   }
-  function generateSplinterParty(parent, week) {
+  // Scissioni con ideologia diversa (richiesto): nel 50% dei casi chi se ne va è l'ala più radicale o più
+  // moderata del partito, e il nuovo soggetto nasce in una famiglia ideologica VICINA a quella di partenza
+  // (es. dal PD socialdemocratico esce un partito socialista). Una semplificazione dichiarata: per ogni
+  // famiglia, la vicina "più radicale" e quella "più moderata" (null dove non ha senso).
+  var SPLIT_NEIGHBOR_FAMILIES = {
+    progressista: { radicale: "sinistra", moderata: "europeista" },
+    sinistra: { radicale: "comunista", moderata: "progressista" },
+    comunista: { radicale: "comunismolusso", moderata: "sinistra" },
+    sovranista: { radicale: "nazionalpopolare", moderata: "cattolico" },
+    nazionalpopolare: { radicale: "fascista", moderata: "sovranista" },
+    fascista: { radicale: null, moderata: "nazionalpopolare" },
+    liberale: { radicale: "libertario", moderata: "cattolico" },
+    libertario: { radicale: null, moderata: "liberale" },
+    cattolico: { radicale: "sovranista", moderata: "liberale" },
+    europeista: { radicale: "tecnoprogressista", moderata: "liberale" },
+    tecnoprogressista: { radicale: "comunismolusso", moderata: "europeista" },
+    movimentista: { radicale: "gratuitista", moderata: "progressista" },
+    regionalista: { radicale: "sovranista", moderata: "liberale" },
+    meridionalista: { radicale: "movimentista", moderata: "progressista" },
+    monarchico: { radicale: "fascista", moderata: "cattolico" },
+    gratuitista: { radicale: "comunista", moderata: "sinistra" },
+    comunismolusso: { radicale: "comunista", moderata: "tecnoprogressista" }
+  };
+  // Decide chi se ne va: { wing: "radicale"|"moderata", familyId, shifted }. 50% stessa ideologia.
+  function pickSplitWing(parentFamilyId) {
+    var nb = SPLIT_NEIGHBOR_FAMILIES[parentFamilyId] || {};
+    var dirs = ["radicale", "moderata"].filter(function (d) { return nb[d]; });
+    var wing = Math.random() < 0.5 ? "radicale" : "moderata";
+    if (dirs.length && Math.random() < 0.5) {
+      if (!nb[wing]) wing = dirs[0];
+      return { wing: wing, familyId: nb[wing], shifted: true };
+    }
+    return { wing: wing, familyId: parentFamilyId, shifted: false };
+  }
+  function splitWingText(parentName, split) {
+    var fam = familyById(split.familyId);
+    var wingLbl = split.wing === "radicale" ? "l'ala più radicale" : "l'ala più moderata";
+    if (split.shifted) return wingLbl.charAt(0).toUpperCase() + wingLbl.slice(1) + " di " + parentName + ", in rotta con la linea ufficiale, se ne va e fonda un partito di un'altra area: " + (fam ? fam.label : split.familyId) + ".";
+    return wingLbl.charAt(0).toUpperCase() + wingLbl.slice(1) + " di " + parentName + " contesta la leadership e se ne va, restando nella stessa area politica.";
+  }
+  function generateSplinterParty(parent, week, opts) {
+    opts = opts || {};
+    var split = opts.noShift ? { wing: "moderata", familyId: parent.familyId, shifted: false } : pickSplitWing(parent.familyId);
+    var splitFam = familyById(split.familyId);
     // Pesca finché non trova un nome che non coincide già con un partito reale esistente (es. "Unione
     // Popolare" è già il nome di un partito vero in PARTIES): con 7 etichette x le parole della propria
     // famiglia ideologica il rischio di collisione è basso ma non nullo, e due partiti con lo stesso
@@ -18989,7 +19032,7 @@
     var label, word, name;
     for (var attempt = 0; attempt < 20; attempt++) {
       label = SPLINTER_LABELS[Math.floor(Math.random() * SPLINTER_LABELS.length)];
-      word = pickFamilyPartyWord(parent.familyId, label.gender);
+      word = pickFamilyPartyWord(split.familyId, label.gender);
       name = label.label + " " + word;
       if (existingNames.indexOf(name.toLowerCase()) === -1) break;
     }
@@ -18997,10 +19040,11 @@
     var short = name.split(" ").map(function (w) { return w[0]; }).join("").toUpperCase();
     return {
       id: id, name: name, short: short, color: shiftColor(parent.color),
-      coalition: "opposizione", dynamic: true, parentId: parent.id, familyId: parent.familyId,
+      coalition: "opposizione", dynamic: true, parentId: parent.id, familyId: split.familyId,
       leader: "Un gruppo di ex dirigenti di " + parent.name,
-      famiglia: parent.famiglia,
-      corrente: "Nata da una scissione interna a " + parent.name + " (" + weekLabel(week) + ")"
+      famiglia: split.shifted && splitFam ? splitFam.label : parent.famiglia,
+      splitWing: split.wing, splitShifted: split.shifted, splitText: splitWingText(parent.name, split),
+      corrente: "Nata da una scissione " + (split.wing === "radicale" ? "dell'ala più radicale" : "dell'ala più moderata") + " di " + parent.name + " (" + weekLabel(week) + ")"
     };
   }
   // Nessun tetto al numero di partiti dinamici contemporaneamente in scena: nascita e scioglimento
@@ -19166,8 +19210,7 @@
       delete state.partyArcs[parent.id];
       state.log.unshift({
         week: state.turn, title: "Nasce un nuovo soggetto politico", choiceLabel: born.short,
-        result: "Una componente interna a " + parent.name + " annuncia la scissione e la nascita di " + born.name +
-          ", guidata da " + born.leader + ".",
+        result: born.splitText + " Nasce " + born.name + ", guidata da " + born.leader + ".",
         headlines: [], type: "cronaca"
       });
     }
@@ -19387,7 +19430,7 @@
       state.indecisi = (state.indecisi || 0) + oldPollShare;
     }
 
-    var freshParty = generateSplinterParty(pseudoParent, state.turn);
+    var freshParty = generateSplinterParty(pseudoParent, state.turn, { noShift: true });
     var oldName = p.name;
     p.name = opts.name || freshParty.name;
     p.short = opts.short || null;
@@ -35438,11 +35481,54 @@
     if (c.track && CAREER_TRACK_ACTS[c.track.id]) return CAREER_TRACK_ACTS[c.track.id];
     return null;
   }
+  // --- Atti scritti di pugno: tipo di atto, competenze, valutazione spiegata ---
+  // Richiesto: le scelte scritte liberamente da consigliere, assessore, sindaco ecc. andavano migliorate e
+  // rese più riconoscibili. Ora ogni ruolo ha i suoi tipi di atto (mozione, interrogazione, ordine del
+  // giorno, delibera, ordinanza...), un esempio adatto al ruolo, e dopo il voto una scheda che spiega
+  // perché è passato o no: concretezza, copertura, competenze del ruolo, coerenza, propaganda.
+  var CAREER_ACT_KINDS = {
+    consigliere_comunale: [
+      { id: "mozione", label: "Mozione", desc: "Impegna la Giunta a fare qualcosa: serve la maggioranza in aula.", bonus: 0 },
+      { id: "interrogazione", label: "Interrogazione", desc: "Chiedi conto alla Giunta: la risposta è dovuta, conta come la usi.", bonus: 0.35 },
+      { id: "odg", label: "Ordine del giorno", desc: "Un impegno politico più leggero, più facile da far votare.", bonus: 0.15 }
+    ],
+    assessore: [
+      { id: "delibera", label: "Delibera di Giunta", desc: "Decide la Giunta: devi convincere sindaco e colleghi assessori.", bonus: 0 },
+      { id: "proposta_consiglio", label: "Proposta al Consiglio", desc: "Serve il voto del Consiglio comunale: più forte, più difficile.", bonus: -0.1 }
+    ],
+    sindaco: [
+      { id: "ordinanza", label: "Ordinanza", desc: "Effetto immediato, ma solo su sicurezza, igiene, traffico, emergenze.", bonus: 0.1 },
+      { id: "delibera_sindaco", label: "Delibera di Giunta", desc: "Un atto della tua Giunta, con tempi e soldi veri.", bonus: 0 }
+    ]
+  };
+  var CAREER_ACT_EXAMPLES = {
+    consigliere_comunale: "Es. Impegna la Giunta a rifare entro giugno l'illuminazione di via Roma, con 150.000 euro dai risparmi sull'energia",
+    assessore: "Es. 300.000 euro dal bilancio per i centri estivi dei quartieri nord, da luglio, con bando per le associazioni",
+    sindaco: "Es. Dal 1° settembre stop ai camion in centro dalle 8 alle 10, con navette gratuite dai parcheggi",
+    consigliere_regionale: "Es. 20 milioni dai fondi europei per le liste d'attesa: 50 nuovi medici negli ospedali di provincia entro un anno",
+    presidente_regione: "Es. Abbonamento regionale ai treni a 20 euro al mese per gli under 26, finanziato dall'avanzo di bilancio",
+    deputato: "Es. Credito d'imposta del 30% per le imprese che assumono under 30 a tempo indeterminato, coperto dal taglio dei sussidi fossili",
+    ministro: "Es. Decreto: 2.000 nuovi ispettori del lavoro in due anni, finanziati con le sanzioni riscosse"
+  };
+  var CAREER_COMUNE_OUT_OF_SCOPE = ["nato", "guerra", "politica estera", "esteri", "pension", "legge elettorale", "costituzion", "uscire dall'euro", "esercito", "irpef", "iva ", "unione europea", "parlamento", "governo nazionale", "frontiere", "confini"];
+  var CAREER_COMUNE_COUNCIL_SEATS = 32;
+  function careerIsComuneRole(c) { return !!(c.office && ["consigliere_comunale", "assessore", "sindaco"].indexOf(c.office.id) !== -1); }
+  function careerActKinds(c) { return c.office ? CAREER_ACT_KINDS[c.office.id] || null : null; }
+  function careerActKind(c) { var ks = careerActKinds(c); if (!ks) return null; return ks.filter(function (k) { return k.id === c.actKind; })[0] || ks[0]; }
+  // Consigliere comunale: in maggioranza o all'opposizione? Si decide una volta per mandato.
+  function careerCityMajority(c) {
+    if (!c.office) return false;
+    if (c.office.id === "assessore" || c.office.id === "sindaco") return true;
+    if (c.office.majority === undefined) c.office.majority = Math.random() < 0.45;
+    return !!c.office.majority;
+  }
   function careerProposeAct(c, text) {
     var label = careerActLabel(c);
     if (!label) return;
     if (text.length < 15) { showSaveStatus("Scrivi un testo un po' più articolato.", true); return; }
     if (state.turn - c.attoTurn < 3) { showSaveStatus("Hai presentato un atto da poco: aspetta qualche settimana.", true); return; }
+    var kind = careerActKind(c);
+    if (kind) label = kind.label;
     var cls = classifyStatement(text);
     var t = text.toLowerCase();
     var demagogic = CAREER_DEMAGOGIC_ADULT.some(function (k) { return t.indexOf(k) !== -1; });
@@ -35450,23 +35536,42 @@
     Object.keys(CAREER_IDEOLOGY_KEYS).forEach(function (side) { CAREER_IDEOLOGY_KEYS[side].forEach(function (k) { if (t.indexOf(k) !== -1) ideo[side]++; }); });
     var side = ideo.left > ideo.right && ideo.left > ideo.center ? "left" : ideo.right > ideo.left && ideo.right > ideo.center ? "right" : ideo.center > 0 ? "center" : null;
     var fit = careerIdeologyFit(side);
-    var concrete = /\d/.test(text) || /(istitui|finanzia|stanzia|modifica|abroga|introduce|prevede|entro|euro|milioni)/.test(t);
+    var hasNumber = /\d/.test(text);
+    var hasDeadline = /(entro|da (gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)|dal \d|mesi|settiman|anno|anni|giorni)/.test(t);
+    var hasCover = /(copert|dal bilancio|dai risparmi|fondi europei|pnrr|tassa di soggiorno|avanzo|risparmi|finanziat|coperto|sanzioni|bando)/.test(t);
+    var hasAction = /(istitui|finanzia|stanzia|modifica|abroga|introduce|prevede|impegna|rifare|apre|aprire|assume|costruire|ridurre|aumentare|vietare|stop)/.test(t);
+    var concrete = hasNumber || hasAction;
+    var outOfScope = careerIsComuneRole(c) && CAREER_COMUNE_OUT_OF_SCOPE.some(function (k) { return t.indexOf(k) !== -1; });
     var base = { consigliere_comunale: 0.3, assessore: 0.6, sindaco: 0.65, consigliere_regionale: 0.25, presidente_regione: 0.6, deputato: careerPartyInGov(c) ? 0.3 : 0.08, ministro: 0.55 }[c.office ? c.office.id : ""];
     if (base === undefined) base = { sindacato: 0.35 + c.track.rank * 0.04, militare: 0.2 + c.track.rank * 0.05, magistratura: 0.25 + (c.csm ? 0.2 : 0), carcere: 0.45 + c.track.rank * 0.04, avvocato: 0.5 }[c.track.id];
-    var chance = clamp(base + c.rete / 350 + (concrete ? 0.1 : -0.05) - (demagogic ? 0.2 : 0) + (c.intelletto - 50) / 400 + (c.office && c.office.id === "ministro" ? c.intelletto / 500 : 0), 0.03, 0.9);
+    if (c.office && c.office.id === "consigliere_comunale") base += careerCityMajority(c) ? 0.12 : -0.08;
+    var chance = clamp(base + (kind ? kind.bonus : 0) + c.rete / 350 + (hasNumber ? 0.05 : 0) + (hasDeadline ? 0.05 : 0) + (hasCover ? 0.07 : 0) + (concrete ? 0.03 : -0.08) - (demagogic ? 0.2 : 0) - (outOfScope ? 0.3 : 0) + fit * 0.03 + (c.intelletto - 50) / 400 + (c.office && c.office.id === "ministro" ? c.intelletto / 500 : 0), 0.03, 0.92);
     var passed = Math.random() < chance;
     c.attoTurn = state.turn;
-    var eff = passed ? { cons: concrete ? rand(4, 8) : rand(2, 5), rep: rand(1, 3) + (CAREER_OFFICES[c.office ? c.office.id : ""] || { level: 1 }).level * 0.3, trust: fit * 3, merito: c.track ? rand(3, 6) : 0 }
+    var isQuestion = kind && kind.id === "interrogazione";
+    var eff = passed ? { cons: (concrete ? rand(4, 8) : rand(2, 5)) * (isQuestion ? 0.6 : 1), rep: rand(1, 3) + (CAREER_OFFICES[c.office ? c.office.id : ""] || { level: 1 }).level * 0.3, trust: fit * 3, merito: c.track ? rand(3, 6) : 0 }
       : { cons: demagogic ? rand(1, 3) : -rand(0.5, 2), rep: -rand(0, 1), trust: fit * 1.5 };
     if (demagogic) eff.rep = (eff.rep || 0) - 1.5;
+    if (outOfScope) eff.rep = (eff.rep || 0) - 1;
     careerAdultApply(c, eff);
-    var verdict = passed ? pickText(["approvato/a", "approvato/a con qualche modifica", "approvato/a dopo una lunga discussione"]) : pickText(["respinto/a", "bocciato/a dalla maggioranza", "insabbiato/a in commissione", "rinviato/a sine die"]);
+    var verdict = isQuestion
+      ? (passed ? "la Giunta risponde in aula e prende un impegno" : "la Giunta risponde con una non-risposta")
+      : passed ? pickText(["approvato/a", "approvato/a con qualche modifica", "approvato/a dopo una lunga discussione"]) : pickText(["respinto/a", "bocciato/a dalla maggioranza", "insabbiato/a in commissione", "rinviato/a sine die"]);
+    var checks = [
+      [hasNumber, hasNumber ? "Ci sono cifre precise" : "Mancano cifre: quanto costa, quanti, quanto?"],
+      [hasDeadline, hasDeadline ? "C'è una scadenza" : "Manca una scadenza (entro quando?)"],
+      [hasCover, hasCover ? "Dici dove prendere i soldi" : "Manca la copertura: da dove arrivano i soldi?"],
+      [!outOfScope, outOfScope ? "Fuori dalle competenze del Comune: in aula te lo fanno notare" : "È nelle competenze del tuo ruolo"],
+      [fit >= 0, fit > 0 ? "Coerente con la linea del tuo partito" : fit < 0 ? "Il tuo partito la considera fuori linea" : "Neutra rispetto alla linea del partito"],
+      [!demagogic, demagogic ? "Suona come propaganda: promessa irrealizzabile" : "Credibile, non propaganda"]
+    ];
+    var tally = careerIsComuneRole(c) && !isQuestion && !(kind && (kind.id === "delibera" || kind.id === "ordinanza" || kind.id === "delibera_sindaco")) ? careerCouncilTally(passed) : null;
+    c.lastAtto = { turn: state.turn, label: label, text: text, passed: passed, verdict: verdict, checks: checks, tally: tally, topic: cls.topicLabel, chance: Math.round(chance * 100) };
     c.atti.unshift({ turn: state.turn, label: label, text: text, topic: cls.topicLabel, passed: passed });
     if (c.atti.length > 12) c.atti.length = 12;
-    addCareerDiaryEntry(label, "«" + text.slice(0, 100) + (text.length > 100 ? "…" : "") + "» (" + cls.topicLabel.toLowerCase() + "): " + verdict + "." + (demagogic ? " In molti la definiscono pura propaganda." : "") + (fit < 0 ? " Il tuo partito non ha gradito." : ""));
-    showSaveStatus(label + " " + verdict + ".", !passed);
+    addCareerDiaryEntry(label, "«" + text.slice(0, 100) + (text.length > 100 ? "…" : "") + "» (" + cls.topicLabel.toLowerCase() + "): " + verdict + (tally ? " (" + tally + ")" : "") + "." + (demagogic ? " In molti la definiscono pura propaganda." : "") + (outOfScope ? " Più di un collega ti ricorda che non è materia del Comune." : "") + (fit < 0 ? " Il tuo partito non ha gradito." : ""));
+    showSaveStatus(label + ": " + verdict + ".", !passed);
   }
-
   // --- Offerte, indagini, sfiducia: i dossier speciali della vita adulta ---
   // Richiesto da un giocatore: da segretario/a regionale in su il partito ti considera un nome da
   // Parlamento. Qualche mese prima delle politiche arriva la proposta di candidatura alla Camera, senza
@@ -36077,6 +36182,106 @@
     ["er_ultima_sera", "L'ultima sera a {erasmus}", "Domani si torna: gli amici organizzano una festa d'addio.", [["Una festa fino all'alba", { rete: 2 }, "Promesse di rivedersi in tutta Europa."], ["Una cena tranquilla con i più cari", { rete: 1 }, "Una serata commovente."], ["Prepari la valigia e dormi", { prep: 0.5 }, "Parti riposato/a."]]]
   ].map(function (x) { return { id: x[0], r: ["erasmus"], cat: "Erasmus", t: x[1], b: x[2], ch: x[3] }; });
   CAREER_ERASMUS_DOSSIERS.forEach(function (d) { CAREER_ADULT_DOSSIERS.push(d); });
+  // --- Vita comunale più attiva: sedute del Consiglio e riunioni di Giunta ---
+  // Richiesto: se sei in Comune la vita comunale deve essere più attiva. Ogni 4-6 settimane c'è una seduta
+  // del Consiglio con un punto all'ordine del giorno da votare (e conta se sei in maggioranza o no); da
+  // assessore o sindaco, ogni 6-8 settimane, la Giunta decide dove mettere i soldi.
+  var CAREER_COUNCIL_ITEMS = [
+    { t: "Variazione di bilancio", b: "La Giunta sposta 400.000 euro dalla cultura alla manutenzione delle strade." },
+    { t: "Nuova ZTL in centro", b: "Si vota l'allargamento della zona a traffico limitato: commercianti contrari, residenti divisi." },
+    { t: "Aumento della TARI", b: "La tassa sui rifiuti sale dell'8% per coprire i costi del nuovo impianto di riciclo." },
+    { t: "Piano dei parcheggi", b: "Strisce blu in tre nuovi quartieri, con abbonamenti agevolati per i residenti." },
+    { t: "Mensa scolastica", b: "Il nuovo appalto della mensa costa meno, ma i genitori temono una qualità peggiore." },
+    { t: "Il nuovo stadio", b: "Un privato propone di costruire lo stadio in cambio di un centro commerciale accanto." },
+    { t: "Asili nido comunali", b: "Si vota l'apertura di 60 nuovi posti al nido, finanziati con fondi del PNRR." },
+    { t: "Verde pubblico", b: "Il taglio di 80 alberi per allargare una strada divide il Consiglio e i comitati." },
+    { t: "Sicurezza urbana", b: "La Giunta propone telecamere e vigili di quartiere nelle zone della movida." },
+    { t: "Case popolari", b: "Si vota la vendita di 40 alloggi popolari per finanziare la ristrutturazione degli altri." },
+    { t: "Trasporto pubblico", b: "Tagliate due linee di autobus serali per risparmiare: i quartieri periferici protestano." },
+    { t: "Regolamento dehors", b: "Nuove regole per i tavolini all'aperto di bar e ristoranti in centro." },
+    { t: "Gemellaggio con una città estera", b: "Un gemellaggio con una città straniera divide il Consiglio per ragioni politiche." },
+    { t: "Intitolazione di una piazza", b: "Si vota a chi intitolare la nuova piazza del quartiere: tre nomi, tre schieramenti." },
+    { t: "Bilancio di previsione", b: "Il voto più importante dell'anno: senza bilancio approvato arriva il commissario." }
+  ];
+  function careerCouncilTally(passed) {
+    var seats = CAREER_COMUNE_COUNCIL_SEATS, present = seats - Math.floor(Math.random() * 4);
+    var yes = passed ? Math.floor(present / 2) + 1 + Math.floor(Math.random() * 6) : Math.floor(present / 2) - 1 - Math.floor(Math.random() * 6);
+    var abst = Math.floor(Math.random() * 3);
+    return yes + " sì, " + Math.max(0, present - yes - abst) + " no, " + abst + " astenuti";
+  }
+  function careerCouncilSessionDossier(c) {
+    var it = CAREER_COUNCIL_ITEMS[Math.floor(Math.random() * CAREER_COUNCIL_ITEMS.length)];
+    var maj = careerCityMajority(c), place = c.office.place;
+    var roleTxt = c.office.id === "consigliere_comunale" ? (maj ? "Siedi nei banchi della maggioranza." : "Siedi nei banchi dell'opposizione.") : "La proposta è della tua Giunta: devi portarla a casa.";
+    var passYes = careerCouncilTally(true), passNo = careerCouncilTally(false);
+    return { id: "seduta_consiglio", cat: "Consiglio comunale", title: "Seduta del Consiglio comunale di " + place + ": " + it.t,
+      brief: "All'ordine del giorno: " + it.b + " " + roleTxt,
+      choices: maj ? [
+        { label: "Voti a favore con la maggioranza", eff: { trust: 2, cons: 1 }, result: "Approvato con " + passYes + ". La maggioranza tiene." },
+        { label: "Difendi il provvedimento con un intervento in aula", eff: { trust: 2, rep: 1.5, cons: 1.5 }, result: "Il tuo intervento convince anche qualche indeciso: approvato con " + passYes + "." },
+        { label: "Presenti un emendamento per migliorarlo", eff: { cons: 3, rep: 1, intel: 0.5 }, result: "L'emendamento passa e il testo finale porta la tua firma: approvato con " + passYes + ".", chance: 0.55, fail: { eff: { trust: -1 }, result: "L'emendamento viene respinto dalla tua stessa maggioranza. Il provvedimento passa lo stesso con " + passYes + "." } },
+        { label: "Voti contro la tua maggioranza", eff: { trust: -5, rep: 1, cons: 1 }, result: "Il tuo no fa rumore: " + (Math.random() < 0.5 ? "il provvedimento passa lo stesso con " + passYes : "il provvedimento cade con " + passNo) + ". In maggioranza qualcuno non te lo perdona." }
+      ] : [
+        { label: "Voti contro", eff: { trust: 2, cons: 1 }, result: "Il tuo gruppo vota compatto contro, ma la maggioranza tiene: approvato con " + passYes + "." },
+        { label: "Intervento duro in aula, poi voto contrario", eff: { trust: 2, rep: 1.5, cons: 2 }, result: "Il video del tuo intervento gira sui gruppi del quartiere. Approvato comunque con " + passYes + "." },
+        { label: "Presenti un emendamento costruttivo", eff: { cons: 3, rep: 1.5 }, result: "Sorpresa: l'emendamento dell'opposizione passa. Il provvedimento è approvato con " + passYes + ", ma con la tua modifica.", chance: 0.35, fail: { eff: { cons: 0.5 }, result: "Emendamento respinto, provvedimento approvato con " + passYes + "." } },
+        { label: "Voti a favore: è una cosa giusta", eff: { trust: -3, cons: 2, rep: 1 }, result: "Voti con la maggioranza: i cittadini apprezzano il pragmatismo, il tuo gruppo molto meno. Approvato con " + passYes + "." },
+        { label: "Esci dall'aula e fai mancare il numero legale", eff: { trust: 1, cons: -1, rep: 0.5 }, result: "Manca il numero legale: seduta rinviata. La maggioranza è furiosa, i giornali locali ne parlano." }
+      ] };
+  }
+  function careerGiuntaMeetingDossier(c) {
+    var budget = (2 + Math.floor(Math.random() * 7)) * 100;
+    return { id: "riunione_giunta", cat: "Giunta comunale", title: "Riunione di Giunta: come usare " + budget + ".000 euro",
+      brief: "Si chiude l'assestamento di bilancio a " + c.office.place + ": restano " + budget + ".000 euro da assegnare. Il sindaco vuole una proposta" + (c.office.id === "assessore" ? " anche da te, per la delega " + (c.office.delega || "") : "") + ".",
+      choices: [
+        { label: "Ai quartieri periferici: strade, luci e marciapiedi", eff: { cons: 3, trust: 1 }, result: "I cantieri in periferia partono in un mese: chi abita lì se ne accorge." },
+        { label: "Alle scuole: palestre e cortili", eff: { cons: 2, rep: 1 }, result: "Le scuole ringraziano: i genitori ne parlano bene." },
+        { label: "Al centro e al commercio: eventi e decoro", eff: { rete: 2, cons: 1 }, result: "Commercianti e associazioni di categoria apprezzano: la tua rete cresce." },
+        { label: "Un fondo per le famiglie in difficoltà", eff: { cons: 2, trust: 1, rep: 0.5 }, result: "Il fondo aiuta centinaia di famiglie: i servizi sociali lo considerano una boccata d'ossigeno." },
+        { label: "Li accantoni per le emergenze", eff: { rep: 1, cons: -0.5 }, result: "Prudente: l'opposizione dice che i soldi restano fermi mentre la città aspetta." }
+      ] };
+  }
+  function careerComuneSessionDossiers(c) {
+    var out = [];
+    if (!careerIsComuneRole(c)) return out;
+    if (c.councilNextTurn === undefined) c.councilNextTurn = state.turn + 1 + Math.floor(Math.random() * 3);
+    if (state.turn >= c.councilNextTurn && !c.pending.some(function (d) { return d.id === "seduta_consiglio"; })) {
+      c.councilNextTurn = state.turn + 4 + Math.floor(Math.random() * 3);
+      out.push(careerCouncilSessionDossier(c));
+    }
+    if (c.office.id !== "consigliere_comunale") {
+      if (c.giuntaNextTurn === undefined) c.giuntaNextTurn = state.turn + 3 + Math.floor(Math.random() * 3);
+      if (state.turn >= c.giuntaNextTurn && !c.pending.some(function (d) { return d.id === "riunione_giunta"; })) {
+        c.giuntaNextTurn = state.turn + 6 + Math.floor(Math.random() * 3);
+        out.push(careerGiuntaMeetingDossier(c));
+      }
+    }
+    return out;
+  }
+  // Altri dossier della vita comunale.
+  CAREER_ADULT_DOSSIERS.push(
+    { id: "cc_accesso_atti", r: ["consigliere_comunale"], cat: "Consiglio comunale", t: "Un appalto che non torna", b: "Un dipendente comunale ti passa una copia di un appalto per le pulizie: il prezzo è il doppio della media.",
+      ch: [["Chiedi l'accesso agli atti e studi le carte", { intel: 1, rep: 1.5, cons: 2 }, "Dopo due settimane di carte trovi le prove: la Giunta deve spiegare in aula."], ["Lo racconti subito ai giornali", { rep: 2, cons: 2, trust: -1 }, "La notizia esplode, ma senza carte qualcuno parla di sciacallaggio.", 0.6, { rep: -1 }, "Senza documenti la storia si sgonfia in un giorno."], ["Porti tutto in Procura", { rep: 2, ombre: -2 }, "La Procura apre un fascicolo: tu resti fuori dai riflettori, ma pulito."]] },
+    { id: "cc_question_time", r: ["consigliere_comunale"], cat: "Consiglio comunale", t: "Question time con il sindaco", b: "Il sindaco di {place} risponde ogni mese alle domande dei consiglieri. Hai tre minuti.",
+      ch: [["Domanda tecnica e precisa sul bilancio", { intel: 1, rep: 1, trust: 1 }, "Il sindaco va in difficoltà sui numeri: i giornalisti locali se ne accorgono."], ["Porti in aula la lettera di una cittadina", { cons: 3, rep: 0.5 }, "La lettera commuove l'aula: il sindaco promette di occuparsene."], ["Provochi il sindaco per fare notizia", { rep: 1.5, cons: 1, trust: -1 }, "Lo scontro finisce sui social: tanta visibilità, poca sostanza."]] },
+    { id: "cc_assemblea_quartiere", r: ["consigliere_comunale", "assessore", "sindaco"], cat: "Città", t: "Assemblea di quartiere infuocata", b: "Al centro civico del quartiere più popoloso di {place} ti aspettano 200 persone arrabbiate per spaccio e degrado.",
+      ch: [["Ci vai e ascolti tutto, fino all'ultimo", { cons: 4, rete: 1 }, "Tre ore di sfoghi: alla fine qualcuno ti stringe la mano."], ["Ci vai con un piano già pronto", { cons: 3, rep: 1, intel: 0.5 }, "Il piano convince: illuminazione e presidio entro un mese.", 0.6, { cons: -1 }, "Il piano sembra calato dall'alto: fischi."], ["Mandi un collaboratore", { cons: -3 }, "La tua assenza è il tema della serata."]] },
+    { id: "cc_bilancio_partecipato", r: ["consigliere_comunale", "assessore", "sindaco"], cat: "Città", t: "Bilancio partecipato", b: "Proposta: far decidere ai cittadini come spendere 500.000 euro con un voto online e assemblee nei quartieri.",
+      ch: [["La sostieni e la promuovi nei quartieri", { cons: 3, rete: 2 }, "Migliaia di persone partecipano: il progetto più votato porta il tuo nome tra i promotori."], ["Sì, ma con regole chiare contro i soliti noti", { rep: 1.5, intel: 0.5, cons: 1 }, "Le regole evitano che vincano solo i comitati più organizzati."], ["Contrario: decide chi è stato eletto", { trust: 1, cons: -2 }, "Coerente con l'idea di rappresentanza, ma sembri chiuso."]] },
+    { id: "cc_sciopero_mezzi", r: ["consigliere_comunale", "assessore", "sindaco"], cat: "Città", t: "Sciopero dei mezzi pubblici", b: "Gli autisti dell'azienda dei trasporti di {place} scioperano: la città è paralizzata.",
+      ch: [["Incontri gli autisti e ascolti le loro ragioni", { cons: 2, trust: 1, rete: 1 }, "Gli autisti apprezzano: la vertenza si sblocca in parte."], ["Chiedi all'azienda di trattare subito", { rep: 1, cons: 1 }, "La richiesta è ragionevole e viene ascoltata.", 0.6, { cons: -1 }, "L'azienda non ti ascolta: sciopero anche la settimana dopo."], ["Attacchi lo sciopero: i cittadini sono ostaggio", { cons: 1, trust: -1, rete: -1 }, "Molti pendolari sono d'accordo, i sindacati no."]] },
+    { id: "ass_bando_deserto", r: ["assessore"], cat: "Giunta comunale", t: "Il bando va deserto", b: "Il bando per la ristrutturazione della biblioteca, nella tua delega, non riceve nessuna offerta: i prezzi sono troppo bassi.",
+      ch: [["Rifai il bando con prezzi aggiornati", { intel: 1, rep: 1, cons: 1 }, "Al secondo bando arrivano cinque offerte: i lavori partono."], ["Affidi i lavori con procedura d'urgenza", { cons: 2, ombre: 3 }, "I lavori partono subito, ma qualcuno parla di scorciatoie."], ["Dai la colpa agli uffici", { trust: -1, cons: -1 }, "Gli uffici non la prendono bene e il progetto si ferma."]] },
+    { id: "ass_conflitto_sindaco", r: ["assessore"], cat: "Giunta comunale", t: "Scontro con il sindaco", b: "Il sindaco ha annunciato in TV un progetto della tua delega senza dirti niente, e con cifre sbagliate.",
+      ch: [["Chiarisci in privato", { trust: 2, rete: 1 }, "Il sindaco si scusa: il rapporto ne esce più solido."], ["Correggi pubblicamente le cifre", { rep: 1.5, trust: -3 }, "Hai ragione, ma il sindaco non dimentica."], ["Minacci le dimissioni", { rep: 1, trust: -2 }, "Ottieni più autonomia sulla delega.", 0.5, { trust: -4, cons: -1 }, "Il sindaco ti ritira la delega per un mese."]] },
+    { id: "sind_alluvione", r: ["sindaco"], cat: "Emergenza", t: "Allerta rossa su {place}", b: "La Protezione civile dirama l'allerta rossa per piogge intense nelle prossime 24 ore.",
+      ch: [["Chiudi scuole e parchi e apri il centro operativo", { cons: 3, rep: 1.5 }, "La città resta chiusa un giorno: nessun ferito, anche se qualcuno parla di eccesso di prudenza."], ["Chiudi solo le zone a rischio", { cons: 1, intel: 0.5 }, "Scelta equilibrata.", 0.7, { cons: -4, rep: -1 }, "Una strada fuori dalle zone chiuse si allaga: polemiche durissime."], ["Aspetti di vedere come evolve", { cons: -2 }, "La pioggia arriva prima del previsto: i social ti accusano di immobilismo."]] },
+    { id: "sind_fascia_tricolore", r: ["sindaco"], cat: "Città", t: "Un matrimonio, una festa, un funerale", b: "Nello stesso sabato sei invitato/a a celebrare un matrimonio, alla festa del patrono e al funerale di un ex sindaco di un altro partito.",
+      ch: [["Vai a tutti e tre, di corsa", { cons: 3, rete: 1 }, "Una giornata infinita, ma la città ti vede ovunque."], ["Scegli il funerale: il rispetto prima di tutto", { rep: 2, cons: 1 }, "Il gesto viene apprezzato anche dall'opposizione."], ["Scegli la festa del patrono", { cons: 2 }, "La festa ti porta in mezzo alla gente."]] },
+    { id: "cc_cittadinanza_onoraria", r: ["consigliere_comunale", "sindaco"], cat: "Consiglio comunale", t: "Cittadinanza onoraria", b: "Si propone di dare la cittadinanza onoraria di {place} a una figura nota e divisiva.",
+      ch: [["Voti a favore", { cons: 1, trust: 1 }, "La cittadinanza viene approvata tra gli applausi di una parte dell'aula."], ["Voti contro e spieghi perché", { rep: 1, trust: 1 }, "Il tuo intervento viene ripreso dai giornali locali."], ["Non partecipi al voto", { cons: -0.5 }, "Nessuno se ne accorge, o quasi."]] }
+  );
+
 
   function careerAdultContext(c) {
     var ctxErasmus = c.erasmus ? c.erasmus.city : "l'estero";
@@ -36113,6 +36318,7 @@
   }
   function careerAdultGenerateDossiers(c) {
     careerSpecialDossiers(c).forEach(function (d) { c.pending.push(d); });
+    careerComuneSessionDossiers(c).forEach(function (d) { c.pending.push(d); });
     // sessioni d'esame e tesi
     if (c.uni && !c.uni.laureato) {
       var f = careerFacultyById(c.uni.faculty);
@@ -36288,9 +36494,25 @@
     var actLabel = careerActLabel(c);
     if (actLabel) {
       var wait = 3 - (state.turn - c.attoTurn);
-      html += '<section aria-label="Atti"><h3>' + actLabel + '</h3><p class="ci-hint">Scrivi liberamente cosa proponi. Contano la concretezza (cifre, scadenze, coperture), la coerenza con le tue idee e la forza del tuo ruolo; le promesse irrealizzabili vengono bollate come propaganda.' + (wait > 0 ? " <strong>Puoi presentarne un altro tra " + wait + " settiman" + (wait === 1 ? "a" : "e") + ".</strong>" : "") + '</p>' +
-        '<div class="field"><textarea id="career-act-input" class="autogrow-textarea" rows="3" placeholder="Es. Stanziare 2 milioni di euro entro marzo per rifare le scuole del quartiere nord"></textarea></div>' +
-        '<div class="choices"><button type="button" class="choice-btn" id="career-act-btn"' + (wait > 0 ? " disabled" : "") + '><span class="clabel">Presenta</span></button></div>';
+      var kinds = careerActKinds(c), kindSel = careerActKind(c);
+      var roleTitle = careerOfficeLabel(c) || (c.track ? careerTrack(c).label : "");
+      html += '<section aria-label="Atti" style="border:1.5px solid var(--accent);border-radius:16px;padding:14px;background:var(--accent-soft)">' +
+        '<p style="margin:0 0 4px;font:800 .7rem JetBrains Mono,monospace;letter-spacing:.08em;color:var(--accent)">✍️ ATTO SCRITTO DA TE · ' + fxEsc(roleTitle.toUpperCase()) + '</p>' +
+        '<h3 style="margin:0 0 6px">' + (kindSel ? kindSel.label : actLabel) + '</h3>';
+      if (kinds && kinds.length > 1) html += '<div class="option-grid">' + kinds.map(function (k) { return '<button type="button" class="option-card' + (k.id === kindSel.id ? " selected" : "") + '" data-career-act-kind="' + k.id + '"><span class="olabel">' + k.label + '</span><span class="odesc">' + k.desc + '</span></button>'; }).join("") + '</div>';
+      html += '<p class="ci-hint">Scrivi tu il testo. Per farlo passare conta:</p><ul class="ci-hint" style="margin:0 0 6px;padding-left:1.1rem"><li><strong>cifre</strong> (quanto, quanti)</li><li><strong>una scadenza</strong> (entro quando)</li><li><strong>la copertura</strong> (da dove arrivano i soldi)</li><li><strong>le competenze del ruolo</strong>' + (careerIsComuneRole(c) ? " (il Comune non decide su pensioni, guerre o tasse nazionali)" : "") + '</li><li>la coerenza con la tua linea; le promesse irrealizzabili sono propaganda.</li></ul>' +
+        (careerIsComuneRole(c) && c.office.id === "consigliere_comunale" ? '<p class="ci-hint">In Consiglio sei ' + (careerCityMajority(c) ? "in <strong>maggioranza</strong>: è più facile far passare i tuoi atti." : "all'<strong>opposizione</strong>: servirà convincere qualcuno della maggioranza.") + '</p>' : "") +
+        (wait > 0 ? '<p class="ci-hint"><strong>Puoi presentarne un altro tra ' + wait + " settiman" + (wait === 1 ? "a" : "e") + '.</strong></p>' : "") +
+        '<div class="field"><textarea id="career-act-input" class="autogrow-textarea" rows="3" placeholder="' + fxEsc(CAREER_ACT_EXAMPLES[c.office ? c.office.id : ""] || "Es. Stanziare 2 milioni di euro entro marzo per rifare le scuole del quartiere nord") + '"></textarea></div>' +
+        '<div class="choices"><button type="button" class="choice-btn" id="career-act-btn"' + (wait > 0 ? " disabled" : "") + '><span class="clabel">Presenta ' + (kindSel ? kindSel.label.toLowerCase() : "l'atto") + '</span></button></div>';
+      var la = c.lastAtto;
+      if (la && state.turn - la.turn <= 6) {
+        html += '<div style="margin-top:10px;border-radius:12px;padding:10px 12px;background:var(--panel-solid);border-left:4px solid ' + (la.passed ? "#4fe0a8" : "#ff6b6b") + '">' +
+          '<p style="margin:0;font-weight:900">' + (la.passed ? "✔ " : "✖ ") + fxEsc(la.label) + " — " + fxEsc(la.verdict) + '</p>' +
+          (la.tally ? '<p class="ci-hint" style="margin:2px 0 0">Voto in aula: ' + la.tally + '</p>' : "") +
+          '<p class="ci-hint" style="margin:4px 0 2px">«' + fxEsc(la.text.slice(0, 160)) + (la.text.length > 160 ? "…" : "") + '» · tema: ' + fxEsc(String(la.topic || "").toLowerCase()) + '</p>' +
+          '<ul style="margin:4px 0 0;padding-left:0;list-style:none">' + la.checks.map(function (k) { return '<li style="font-size:.85rem">' + (k[0] ? "✅ " : "⚠️ ") + fxEsc(k[1]) + "</li>"; }).join("") + '</ul></div>';
+      }
       if (c.atti.length) html += '<ul class="enacted-policy-list">' + c.atti.slice(0, 6).map(function (a) { return "<li>" + (a.passed ? "✔ " : "✖ ") + a.label + " (S" + a.turn + "): " + a.text.replace(/</g, "&lt;").slice(0, 140) + "</li>"; }).join("") + "</ul>";
       html += "</section>";
     }
@@ -36748,6 +36970,7 @@
     });
     on("[data-career-campaign]", function (btn) { careerCampaignAction(c, btn.getAttribute("data-career-campaign")); rerender(); });
     byId("career-act-btn", function () { careerProposeAct(c, (document.getElementById("career-act-input").value || "").trim()); rerender(); });
+    app.querySelectorAll("[data-career-act-kind]").forEach(function (btn) { btn.addEventListener("click", function () { c.actKind = btn.getAttribute("data-career-act-kind"); rerender(); }); });
     on("[data-career-adult-join]", function (btn) { var p = activeParties().filter(function (x) { return x.id === btn.getAttribute("data-career-adult-join"); })[0]; if (p) careerJoinParty(c, p); rerender(); });
     byId("career-leave-party-btn", function () { careerLeaveParty(c); rerender(); });
     byId("career-congress-btn", function () { if (careerPromoCheck(c)) return; c.partyCongressOpen = true; c.pending.push(careerPartyCongressDossier(c)); rerender(); });
@@ -44839,7 +45062,8 @@
             state.log.unshift({
               week: state.turn, title: "Nasce un nuovo soggetto politico", choiceLabel: splinter.short,
               result: "La " + correnteLbl + " lascia il partito e fonda " + splinter.name + ", guidata da " + splinter.leader +
-                ": i rapporti restano molto tesi, ma in futuro una riunificazione non è impossibile.",
+                (splinter.splitShifted ? ", e cambia area politica: il nuovo partito è " + splinter.famiglia + "." : ".") +
+                " I rapporti restano molto tesi, ma in futuro una riunificazione non è impossibile.",
               headlines: [], type: "cronaca"
             });
           } else {
