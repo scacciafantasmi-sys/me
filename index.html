@@ -34816,7 +34816,8 @@
     consigliere_regionale: { label: "Consigliere/a regionale", act: "Proposta di legge regionale", level: 3 },
     presidente_regione: { label: "Presidente di Regione", act: "Legge regionale della Giunta", level: 5 },
     deputato: { label: "Deputato/a", act: "Proposta di legge", level: 4 },
-    ministro: { label: "Ministro/a", act: "Disegno di legge o decreto ministeriale", level: 6 }
+    ministro: { label: "Ministro/a", act: "Disegno di legge o decreto ministeriale", level: 6 },
+    eurodeputato: { label: "Parlamentare europeo/a", act: "Emendamento o interrogazione al Parlamento europeo", level: 4 }
   };
   var CAREER_TRACK_ACTS = { sindacato: "Piattaforma rivendicativa", militare: "Proposta di riforma allo Stato Maggiore", magistratura: "Proposta organizzativa al CSM", carcere: "Regolamento interno dell'istituto", avvocato: "Esposto o parere pubblico" };
 
@@ -34883,6 +34884,7 @@
     if (c.office.id === "consigliere_regionale") return "Consigliere/a regionale (" + c.office.place + ")";
     if (c.office.id === "assessore") return "Assessore/a " + (c.office.delega || "") + " a " + c.office.place;
     if (c.office.id === "consigliere_comunale") return "Consigliere/a comunale a " + c.office.place;
+    if (c.office.id === "eurodeputato") return "Parlamentare europeo/a (eletto/a in " + c.office.place + ")";
     return o.label;
   }
   function careerRegion(c) { var loc = ITALY_LOCATIONS.filter(function (l) { return l.name === c.city; })[0]; return loc ? loc.region : "Lazio"; }
@@ -34921,6 +34923,7 @@
     Object.keys(defaults).forEach(function (k) { if (c[k] === undefined) c[k] = defaults[k]; });
     if (!c.nextComunali) c.nextComunali = state.turn + 20 + Math.floor(Math.random() * 200);
     if (!c.nextRegionali) c.nextRegionali = state.turn + 30 + Math.floor(Math.random() * 220);
+    if (!c.nextEuropee) c.nextEuropee = state.turn + 40 + Math.floor(Math.random() * 200);
     if (!state.careerNextPolitiche) state.careerNextPolitiche = Math.max(state.turn + 10, 52 * 5 - 10 + Math.floor(Math.random() * 20));
   }
 
@@ -35264,7 +35267,8 @@
     var label = id === "sindacato" ? "Ti iscrivi alla " + (CAREER_UNIONS.filter(function (u) { return u.id === opt; })[0] || CAREER_UNIONS[0]).label + "." :
       id === "militare" ? "Superi il concorso: entri all'" + CAREER_MIL_BRANCHES[c.track.branch].academy + "." :
       id === "magistratura" ? "Superi il concorso in magistratura: un risultato che pochissimi raggiungono." :
-      id === "avvocato" ? "Inizi la pratica forense in uno studio di " + c.city + "." : "Vinci il concorso: sei vicedirettore/trice di un istituto penitenziario.";
+      id === "avvocato" ? "Inizi la pratica forense in uno studio di " + c.city + "." :
+      CAREER_TRACK_START_TEXT[id] ? CAREER_TRACK_START_TEXT[id] : "Vinci il concorso: sei vicedirettore/trice di un istituto penitenziario.";
     addCareerDiaryEntry("Nuovo percorso: " + t.label, label);
     showSaveStatus(label, false);
   }
@@ -35455,7 +35459,8 @@
   var CAREER_ELECTION_TYPES = [
     { id: "comunali", label: "Elezioni comunali", next: function (c) { return c.nextComunali; }, offices: ["consigliere_comunale", "sindaco"] },
     { id: "regionali", label: "Elezioni regionali", next: function (c) { return c.nextRegionali; }, offices: ["consigliere_regionale", "presidente_regione"] },
-    { id: "politiche", label: "Elezioni politiche", next: function () { return state.careerNextPolitiche; }, offices: ["deputato"] }
+    { id: "politiche", label: "Elezioni politiche", next: function () { return state.careerNextPolitiche; }, offices: ["deputato"] },
+    { id: "europee", label: "Elezioni europee", next: function (c) { return c.nextEuropee; }, offices: ["eurodeputato"] }
   ];
   function careerHeld(c, id) { return (c.officesHeld || []).indexOf(id) !== -1 || (c.office && c.office.id === id); }
   function careerCandidacyBlock(c, officeId) {
@@ -35472,6 +35477,7 @@
     if (!c.partyId) return "Serve la tessera di un partito.";
     if (officeId === "consigliere_regionale") return (c.partyRank >= 3 || careerHeld(c, "consigliere_comunale") || careerHeld(c, "sindaco") || careerHeld(c, "assessore")) && c.reputazione >= 22 ? null : "Serve un ruolo nella direzione provinciale o un'esperienza in Comune, e reputazione 22.";
     if (officeId === "presidente_regione") return (c.partyRank >= 6 || careerHeld(c, "sindaco") || careerHeld(c, "consigliere_regionale") || careerHeld(c, "deputato")) && c.reputazione >= 45 ? null : "Serve essere nella direzione regionale o aver fatto il sindaco/consigliere regionale, e reputazione 45.";
+    if (officeId === "eurodeputato") return (c.partyRank >= 4 || c.reputazione >= 40 || careerHeld(c, "deputato") || careerHeld(c, "consigliere_regionale")) && c.reputazione >= 25 ? null : "Serve essere almeno nella segreteria provinciale con reputazione 25, oppure reputazione nazionale 40.";
     if (officeId === "deputato") return (c.partyRank >= 5 || c.reputazione >= 45 || (exPrestige && c.reputazione >= 35)) && c.reputazione >= 25 ? null : "Serve essere almeno segretario/a provinciale (con reputazione 25), oppure reputazione 45.";
     return null;
   }
@@ -35483,7 +35489,7 @@
     if ((c.candidacyDenied || {})[type.id] === type.next(c)) { showSaveStatus("Il partito ha già scelto un altro nome per queste elezioni.", true); return; }
     var executive = officeId === "sindaco" || officeId === "presidente_regione";
     if (c.partyId) {
-      var need = executive ? clamp(c.partyTrust / 100 * 0.7 + c.reputazione / 220, 0.05, 0.9) : officeId === "deputato" ? clamp(c.partyTrust / 100 * 0.6 + c.partyRank * 0.04 + c.reputazione / 300, 0.05, 0.92) : clamp(0.55 + c.partyTrust / 200, 0.3, 0.97);
+      var need = executive ? clamp(c.partyTrust / 100 * 0.7 + c.reputazione / 220, 0.05, 0.9) : (officeId === "deputato" || officeId === "eurodeputato") ? clamp(c.partyTrust / 100 * 0.6 + c.partyRank * 0.04 + c.reputazione / 300, 0.05, 0.92) : clamp(0.55 + c.partyTrust / 200, 0.3, 0.97);
       if (Math.random() >= need) {
         c.candidacyDenied = c.candidacyDenied || {};
         c.candidacyDenied[type.id] = type.next(c);
@@ -35493,7 +35499,7 @@
         return;
       }
     }
-    c.candidacy = { type: type.id, office: officeId, place: place || (officeId === "presidente_regione" || officeId === "consigliere_regionale" ? careerRegion(c) : c.city), turn: state.turn, campagna: 0 };
+    c.candidacy = { type: type.id, office: officeId, place: place || (officeId === "presidente_regione" || officeId === "consigliere_regionale" || officeId === "eurodeputato" ? careerRegion(c) : c.city), turn: state.turn, campagna: 0 };
     addCareerDiaryEntry("Candidatura", "Sei candidato/a come " + CAREER_OFFICES[officeId].label.toLowerCase() + (c.candidacy.place ? " (" + c.candidacy.place + ")" : "") + (c.partyId ? " per " + c.partyName : " con una lista civica") + ".");
     showSaveStatus("Candidatura presentata.", false);
   }
@@ -35514,6 +35520,9 @@
     var p;
     if (o === "consigliere_comunale" || o === "consigliere_regionale") {
       p = 0.12 + c.rete / 160 + c.reputazione / 220 + c.consenso / 350 + poll / 70 + (c.partyRank || 0) * 0.02 + Math.min(cand.campagna, 50) / 120 + (wasIncumbent ? 0.08 : 0) - (o === "consigliere_regionale" ? 0.08 : 0);
+    } else if (o === "eurodeputato") {
+      // proporzionale con soglia al 4%: sotto la soglia il partito non elegge nessuno
+      p = poll < 4 ? 0.03 : 0.1 + poll / 40 + (c.partyRank || 0) * 0.025 + c.reputazione / 170 + Math.min(cand.campagna, 50) / 140;
     } else if (o === "deputato") {
       p = 0.12 + poll / 45 + (c.partyRank || 0) * 0.03 + c.reputazione / 160 + c.partyTrust / 320 + Math.min(cand.campagna, 50) / 150 + (cand.listHead ? 0.1 : 0);
     } else {
@@ -35540,7 +35549,7 @@
     var typeLabel = CAREER_ELECTION_TYPES.filter(function (t) { return t.id === typeId; })[0].label;
     var executiveRace = o === "sindaco" || o === "presidente_regione";
     var myShare = executiveRace ? (won ? rand(50.5, 61) : rand(36, 49.5)) : null;
-    var prefs = !executiveRace ? Math.round((o === "deputato" ? 18000 : o === "consigliere_regionale" ? 6000 : 900) * (0.4 + c.rete / 60 + c.reputazione / 80) * rand(0.8, 1.2)) : null;
+    var prefs = !executiveRace ? Math.round((o === "eurodeputato" ? 45000 : o === "deputato" ? 18000 : o === "consigliere_regionale" ? 6000 : 900) * (0.4 + c.rete / 60 + c.reputazione / 80) * rand(0.8, 1.2)) : null;
     var detail = executiveRace ? "Hai preso il " + fmt1(myShare) + "% dei voti" + (won ? "." : ": non basta.") : "Hai raccolto " + fmtInt(prefs) + " preferenze" + (won ? ", abbastanza per un seggio." : ", non abbastanza per un seggio.");
     c.pending.unshift({ id: "risultati_elezioni_adulto", cat: typeLabel, adult: true, title: (won ? "Eletto/a: " : "Non eletto/a: ") + CAREER_OFFICES[o].label.toLowerCase() + (cand.place ? " — " + cand.place : ""),
       brief: typeLabel + (cand.place ? " a " + cand.place : "") + ". " + detail + (won ? " Da oggi sei " + careerOfficeLabel(c) + "." : " Il seggio va a un altro candidato."),
@@ -35624,8 +35633,9 @@
     var hasAction = /(istitui|finanzia|stanzia|modifica|abroga|introduce|prevede|impegna|rifare|apre|aprire|assume|costruire|ridurre|aumentare|vietare|stop)/.test(t);
     var concrete = hasNumber || hasAction;
     var outOfScope = careerIsComuneRole(c) && CAREER_COMUNE_OUT_OF_SCOPE.some(function (k) { return t.indexOf(k) !== -1; });
-    var base = { consigliere_comunale: 0.3, assessore: 0.6, sindaco: 0.65, consigliere_regionale: 0.25, presidente_regione: 0.6, deputato: careerPartyInGov(c) ? 0.3 : 0.08, ministro: 0.55 }[c.office ? c.office.id : ""];
+    var base = { consigliere_comunale: 0.3, assessore: 0.6, sindaco: 0.65, consigliere_regionale: 0.25, presidente_regione: 0.6, deputato: careerPartyInGov(c) ? 0.3 : 0.08, ministro: 0.55, eurodeputato: 0.2 }[c.office ? c.office.id : ""];
     if (base === undefined) base = { sindacato: 0.35 + c.track.rank * 0.04, militare: 0.2 + c.track.rank * 0.05, magistratura: 0.25 + (c.csm ? 0.2 : 0), carcere: 0.45 + c.track.rank * 0.04, avvocato: 0.5 }[c.track.id];
+    if (base === undefined && c.track) base = (CAREER_TRACK_ACT_BASE[c.track.id] || 0.4) + c.track.rank * 0.04;
     if (c.office && c.office.id === "consigliere_comunale") base += careerCityMajority(c) ? 0.12 : -0.08;
     var chance = clamp(base + (kind ? kind.bonus : 0) + c.rete / 350 + (hasNumber ? 0.05 : 0) + (hasDeadline ? 0.05 : 0) + (hasCover ? 0.07 : 0) + (concrete ? 0.03 : -0.08) - (demagogic ? 0.2 : 0) - (outOfScope ? 0.3 : 0) + fit * 0.03 + (c.intelletto - 50) / 400 + (c.office && c.office.id === "ministro" ? c.intelletto / 500 : 0), 0.03, 0.92);
     var passed = Math.random() < chance;
@@ -35831,6 +35841,7 @@
     // elezioni
     if (state.turn >= c.nextComunali) { careerResolveElection(c, "comunali"); c.nextComunali = state.turn + 260; }
     if (state.turn >= c.nextRegionali) { careerResolveElection(c, "regionali"); c.nextRegionali = state.turn + 260; }
+    if (c.nextEuropee && state.turn >= c.nextEuropee) { careerResolveElection(c, "europee"); c.nextEuropee = state.turn + 260; }
     var polBefore = state.careerNextPolitiche;
     if (state.turn >= polBefore) {
       if (c.office && c.office.id === "ministro" && c.candidacy && c.candidacy.type === "politiche") {
@@ -36348,6 +36359,123 @@
     { id: "cor_cambio", r: ["tesserato"], when: function (c) { return !!c.corrente; }, cat: "Corrente", t: "Ti corteggia un'altra corrente", b: "Un capocorrente rivale ti invita a cena: ti offre un posto in segreteria se passi con lui.",
       ch: [["Accetti e cambi corrente", { act: "cambio_corrente", rete: 2, trust: -1, ombre: 1 }, "Cambi corrente: chi lasci ti chiama traditore."], ["Rifiuti e lo racconti al tuo capocorrente", { trust: 2 }, "Lealtà dimostrata: nella tua corrente sali di grado."], ["Prendi tempo", { rete: 1 }, "Ti tieni la porta aperta."]] }
   );
+  // --- Nuovi percorsi (richiesti): rappresentanza d'impresa, diplomazia, comunicazione politica, sondaggi,
+  // terzo settore, giornalismo politico. Stesso motore dei percorsi esistenti (merito, gradi, promozioni). ---
+  CAREER_TRACKS.push(
+    { id: "confindustria", label: "Confindustria e rappresentanza d'impresa", exclusive: false, desc: "Dall'ufficio studi alla presidenza nazionale: tavoli con il governo, contratti, lobby trasparente per le imprese. Compatibile con la tessera.",
+      ranks: ["Funzionario/a dell'ufficio studi", "Responsabile relazioni istituzionali", "Direttore/trice di un'associazione territoriale", "Presidente di Confindustria provinciale", "Vicepresidente nazionale", "Presidente di Confindustria"],
+      req: function (c) { return (careerHasLaurea(c, "economia") || careerHasLaurea(c, "giurisprudenza") || careerHasLaurea(c, "ingegneria") || careerHasLaurea(c, "scienze_politiche")) ? null : "Serve una laurea in Economia, Giurisprudenza, Ingegneria o Scienze Politiche."; } },
+    { id: "diplomazia", label: "Diplomazia e organizzazioni internazionali", exclusive: true, desc: "Concorso diplomatico, poi ambasciate, consolati e organizzazioni internazionali (ONU, FAO, OMC, cooperazione allo sviluppo). Niente partiti né cariche elettive.",
+      ranks: ["Segretario/a di legazione", "Consigliere/a d'ambasciata", "Console generale", "Rappresentante presso un'organizzazione internazionale", "Ministro/a plenipotenziario/a", "Ambasciatore/trice", "Segretario/a generale della Farnesina"],
+      req: function (c) { return (careerHasLaurea(c, "scienze_politiche") || careerHasLaurea(c, "giurisprudenza") || careerHasLaurea(c, "economia")) ? null : "Serve una laurea in Scienze Politiche, Giurisprudenza o Economia."; } },
+    { id: "spin", label: "Consulenza politica e spin doctor", exclusive: false, desc: "Comunicazione, marketing elettorale e strategia: costruisci l'immagine di partiti e candidati, gestisci le crisi, progetti le campagne.",
+      ranks: ["Social media manager di partito", "Consulente di comunicazione", "Spin doctor di un candidato", "Responsabile comunicazione di un partito", "Stratega elettorale nazionale", "Guru delle campagne"],
+      req: function (c) { return careerAge(c) >= 20 ? null : "Serve avere almeno 20 anni."; } },
+    { id: "sondaggi", label: "Sondaggista ed esperto/a di dati", exclusive: false, desc: "Analizzi opinione pubblica e flussi elettorali: capisci i bisogni dei cittadini e orienti le scelte dei partiti. I tuoi numeri finiscono in TV.",
+      ranks: ["Analista junior", "Ricercatore/trice di un istituto", "Responsabile flussi elettorali", "Direttore/trice di ricerca", "Volto dei sondaggi in TV", "Fondatore/trice di un grande istituto"],
+      req: function (c) { return (c.uni && c.uni.laureato) ? null : "Serve una laurea (meglio economia, scienze politiche o ingegneria)."; } },
+    { id: "ong", label: "Attivismo, ONG e Terzo settore", exclusive: false, desc: "Associazioni ambientaliste, per i diritti civili, cooperazione: fai advocacy, pressione politica e sensibilizzi l'opinione pubblica su temi precisi.",
+      ranks: ["Volontario/a", "Coordinatore/trice di progetto", "Responsabile advocacy", "Direttore/trice nazionale", "Presidente di una grande ONG", "Portavoce internazionale"],
+      req: function (c) { return careerAge(c) >= 18 ? null : "Serve la maggiore età."; } },
+    { id: "giornalismo", label: "Giornalismo politico", exclusive: false, desc: "Racconti, analizzi e verifichi l'operato delle istituzioni (fact-checking): dal praticantato alla direzione di una testata. Con la tessera rischi l'accusa di parzialità.",
+      ranks: ["Collaboratore/trice", "Praticante", "Giornalista professionista", "Cronista parlamentare", "Notista politico/a", "Editorialista e commentatore/trice TV", "Direttore/trice di testata"],
+      req: function (c) { return careerAge(c) >= 19 ? null : "Serve avere almeno 19 anni."; } }
+  );
+  CAREER_TRACK_ACTS.confindustria = "Documento di proposte al governo";
+  CAREER_TRACK_ACTS.diplomazia = "Nota diplomatica o proposta di accordo";
+  CAREER_TRACK_ACTS.spin = "Piano di comunicazione o di campagna";
+  CAREER_TRACK_ACTS.sondaggi = "Rapporto di ricerca";
+  CAREER_TRACK_ACTS.ong = "Campagna di advocacy";
+  CAREER_TRACK_ACTS.giornalismo = "Inchiesta o editoriale";
+  var CAREER_TRACK_ACT_BASE = { confindustria: 0.45, diplomazia: 0.4, spin: 0.45, sondaggi: 0.5, ong: 0.4, giornalismo: 0.5 };
+  CAREER_ACT_EXAMPLES.confindustria = "Es. Taglio del costo dell'energia per le PMI del 20% in due anni, finanziato con i fondi europei per la transizione";
+  CAREER_ACT_EXAMPLES.diplomazia = "Es. Accordo con il Marocco per 5.000 ingressi regolari di lavoratori stagionali l'anno, con formazione nel paese d'origine";
+  CAREER_ACT_EXAMPLES.spin = "Es. Campagna in 8 settimane: 3 temi, 40 tappe nelle periferie, video di 30 secondi ogni giorno, budget 200.000 euro";
+  CAREER_ACT_EXAMPLES.sondaggi = "Es. Rapporto su 4.000 interviste: tra gli under 30 il primo problema è la casa (38%), poi il lavoro (27%)";
+  CAREER_ACT_EXAMPLES.ong = "Es. Campagna per 100 nuovi centri antiviolenza entro il 2028, con una petizione da 200.000 firme da portare in Parlamento";
+  CAREER_ACT_EXAMPLES.giornalismo = "Es. Inchiesta in 3 puntate sugli appalti dei ponti in Calabria, con i documenti di 12 gare e le risposte dei ministeri";
+  CAREER_ACT_EXAMPLES.eurodeputato = "Es. Emendamento: 2 miliardi del bilancio UE per i treni notturni tra le capitali entro il 2030";
+  CAREER_ADULT_DOSSIERS.push(
+    { id: "tr_conf_tavolo", r: ["confindustria"], cat: "Confindustria", t: "Il tavolo con il governo", b: "Il governo convoca le parti sociali sulla legge di bilancio. Tocca a te portare le richieste delle imprese.",
+      ch: [["Chiedi il taglio del cuneo fiscale", { merito: 4, rete: 2 }, "La richiesta entra nel documento finale: le associazioni ti ringraziano."], ["Proponi un patto con i sindacati sulla produttività", { merito: 3, rep: 2 }, "Un patto raro e apprezzato: il tuo nome gira tra i ministri."], ["Minacci la rottura", { merito: 2, rep: 1, rete: -2 }, "Il governo cede su un punto, ma ti considera un osso duro.", 0.5, { merito: -3 }, "Il governo non cede: figura magra."]] },
+    { id: "tr_conf_crisi", r: ["confindustria"], cat: "Confindustria", t: "Un'azienda associata delocalizza", b: "Un'impresa iscritta alla tua associazione annuncia di spostare la produzione all'estero: 300 lavoratori a casa.",
+      ch: [["Difendi la libertà d'impresa", { merito: 2, rep: -1 }, "Gli imprenditori approvano, l'opinione pubblica molto meno."], ["Cerchi un compratore italiano", { merito: 5, rete: 2 }, "Dopo mesi di trattative un gruppo italiano rileva lo stabilimento."], ["Chiedi all'impresa di ripensarci", { rep: 2, rete: -1 }, "Un gesto apprezzato dai lavoratori, meno dagli associati."]] },
+    { id: "tr_dip_crisi", r: ["diplomazia"], cat: "Diplomazia", t: "Italiani bloccati all'estero", b: "Un colpo di Stato blocca 400 turisti italiani nel paese dove lavori. Il ministero ti chiede di organizzare l'evacuazione.",
+      ch: [["Organizzi i voli con le altre ambasciate europee", { merito: 6, rep: 2 }, "In 72 ore tutti gli italiani sono a casa: la Farnesina ti segnala."], ["Tratti direttamente con i golpisti", { merito: 3, ombre: 2 }, "I corridoi si aprono, ma qualcuno ti accusa di aver legittimato i militari.", 0.6, { merito: -3 }, "La trattativa fallisce e serve l'aiuto francese."], ["Aspetti istruzioni da Roma", { merito: -2 }, "Le istruzioni arrivano tardi: le famiglie protestano in TV."]] },
+    { id: "tr_dip_commercio", r: ["diplomazia"], cat: "Commercio internazionale", t: "Un accordo commerciale da chiudere", b: "All'Organizzazione mondiale del commercio si discute un accordo che riguarda il vino e l'olio italiani.",
+      ch: [["Difendi le denominazioni d'origine a ogni costo", { merito: 4, rete: 1 }, "Le DOP italiane restano protette: i consorzi ti mandano una cassa di vino."], ["Cedi su un punto per aprire nuovi mercati", { merito: 5, rep: 1 }, "L'export cresce in Asia: un compromesso che paga."], ["Fai saltare il tavolo", { merito: -2, rep: 1 }, "Il ministero non apprezza."]] },
+    { id: "tr_dip_cooperazione", r: ["diplomazia"], cat: "Cooperazione", t: "Un progetto di cooperazione allo sviluppo", b: "Gestisci 20 milioni per un progetto idrico in Africa occidentale. Un ministro locale chiede di cambiare il villaggio beneficiario.",
+      ch: [["Rifiuti: si segue il bando", { merito: 5, rep: 1 }, "Il progetto va avanti dove serve davvero."], ["Accetti per non rovinare i rapporti", { merito: 1, ombre: 3 }, "I rapporti restano buoni, ma l'acqua arriva nel villaggio sbagliato."], ["Coinvolgi le ONG locali per mediare", { merito: 4, rete: 2 }, "Una soluzione che accontenta tutti."]] },
+    { id: "tr_spin_crisi", r: ["spin"], cat: "Comunicazione", t: "Il tuo candidato fa una gaffe", b: "Il candidato che segui dice una frase terribile in un fuori onda. Il video è ovunque. Hai un'ora.",
+      ch: [["Scuse immediate e sincere", { merito: 4, rep: 1 }, "Le scuse arrivano prima della polemica: il danno si limita."], ["Contrattacco: è un video tagliato", { merito: 2, ombre: 2 }, "Funziona con i suoi, non con gli altri.", 0.5, { merito: -4 }, "Esce il video integrale: disastro."], ["Sposti l'attenzione con un annuncio forte", { merito: 5 }, "Il giorno dopo si parla solo della proposta: il fuori onda è dimenticato."]] },
+    { id: "tr_spin_campagna", r: ["spin"], cat: "Campagna elettorale", t: "La strategia della campagna", b: "Un partito ti affida la campagna per le prossime elezioni. Che linea scegli?",
+      ch: [["Tre temi chiari, ripetuti fino alla fine", { merito: 5, rep: 1 }, "La campagna è disciplinata: i sondaggi salgono."], ["Tutto sui social e sui giovani", { merito: 3, rete: 2 }, "Video virali e tanto entusiasmo, ma gli anziani non ti vedono.", 0.6, { merito: -2 }, "I like non diventano voti."], ["Campagna negativa sugli avversari", { merito: 3, ombre: 2, rep: -1 }, "Funziona, ma lascia veleni."]] },
+    { id: "tr_sond_errore", r: ["sondaggi"], cat: "Sondaggi", t: "Il sondaggio sbagliato", b: "Alle ultime elezioni il tuo istituto ha sbagliato la previsione di quattro punti. I giornali ti attaccano.",
+      ch: [["Pubblichi un'analisi onesta dell'errore", { merito: 5, rep: 2 }, "L'analisi viene apprezzata dagli esperti: la credibilità torna."], ["Dai la colpa agli indecisi", { merito: -1 }, "Una scusa che non convince nessuno."], ["Cambi metodo e investi sul campione", { merito: 4, rete: 1 }, "Il prossimo sondaggio è il più preciso di tutti."]] },
+    { id: "tr_sond_commissione", r: ["sondaggi"], cat: "Sondaggi", t: "Un partito ti chiede un sondaggio «aggiustato»", b: "Un partito ti offre un ottimo contratto se il prossimo sondaggio lo darà qualche punto più in alto.",
+      ch: [["Rifiuti", { merito: 3, rep: 2 }, "Perdi un cliente, ma tieni la reputazione."], ["Accetti", { merito: 1, ombre: 5 }, "Il contratto è ottimo. Se si scopre, sei finito/a."], ["Pubblichi la richiesta", { rep: 3, rete: -2 }, "Lo scandalo fa rumore: il partito smentisce."]] },
+    { id: "tr_ong_campagna", r: ["ong"], cat: "Advocacy", t: "La campagna dell'anno", b: "La tua organizzazione deve scegliere la campagna principale dell'anno. Hai pochi soldi e tanti volontari.",
+      ch: [["Una petizione da portare in Parlamento", { merito: 4, rep: 1, rete: 1 }, "Le firme sono 300.000: alcuni parlamentari si impegnano."], ["Un'azione dimostrativa che fa notizia", { merito: 3, rep: 2, ombre: 1 }, "Le foto fanno il giro del mondo, ma c'è chi parla di estremismo."], ["Un rapporto con dati inattaccabili", { merito: 5, intel: 1 }, "Il rapporto viene citato in Parlamento e nei tribunali."]] },
+    { id: "tr_ong_fondi", r: ["ong"], cat: "Terzo settore", t: "Una donazione scomoda", b: "Una grande azienda vuole donare un milione alla tua organizzazione. È la stessa azienda che critichi da anni.",
+      ch: [["Rifiuti pubblicamente", { merito: 3, rep: 2 }, "Il rifiuto ti fa guadagnare credibilità e piccoli donatori."], ["Accetti con condizioni trasparenti", { merito: 2, rete: 2 }, "I soldi arrivano, ma qualcuno parla di greenwashing."], ["Accetti in silenzio", { merito: 1, ombre: 3 }, "I fondi servono, ma il segreto pesa."]] },
+    { id: "tr_gio_fact", r: ["giornalismo"], cat: "Giornalismo", t: "Un dato falso in diretta", b: "Durante un talk show un ministro cita un dato sbagliato sulla disoccupazione. Hai i numeri veri davanti.",
+      ch: [["Lo correggi in diretta, con garbo", { merito: 5, rep: 2 }, "Il fact-checking in diretta diventa virale."], ["Scrivi un pezzo il giorno dopo", { merito: 3 }, "Un articolo preciso, letto da chi conta."], ["Lasci correre per non rovinare i rapporti", { merito: -2, rete: 2 }, "Il ministro ti tiene buono/a come fonte."]] },
+    { id: "tr_gio_fonte", r: ["giornalismo"], cat: "Giornalismo", t: "Una fonte ti passa un documento", b: "Una fonte anonima ti consegna un documento riservato che imbarazza il governo. Potrebbe essere vero, o una trappola.",
+      ch: [["Verifichi con altre due fonti prima di pubblicare", { merito: 6, rep: 2 }, "Lo scoop è solido: tutti i giornali ti riprendono."], ["Pubblichi subito: il pubblico ha diritto di sapere", { merito: 3, rep: 2 }, "Lo scoop fa rumore.", 0.55, { merito: -6, rep: -3 }, "Il documento era falso: devi smentire."], ["Rinunci: troppo rischioso", { merito: -1 }, "Un altro giornale lo pubblica la settimana dopo."]] },
+    { id: "eu_dep_voto", r: ["eurodeputato"], cat: "Parlamento europeo", t: "Il voto di Strasburgo", b: "A Strasburgo si vota una direttiva che conviene all'Europa ma pesa su un settore produttivo della tua circoscrizione.",
+      ch: [["Voti per la direttiva", { rep: 2, cons: -2 }, "A Bruxelles ti stimano, a casa meno."], ["Voti contro per difendere il territorio", { cons: 3, trust: 1 }, "Il territorio ti ringrazia."], ["Ottieni un emendamento con una deroga", { cons: 2, rep: 2, intel: 1 }, "La deroga passa: tutti contenti.", 0.5, { cons: -1 }, "L'emendamento non passa."]] },
+    { id: "eu_dep_commissione", r: ["eurodeputato"], cat: "Parlamento europeo", t: "Relatore/trice di una legge europea", b: "Il tuo gruppo ti propone come relatore/trice di un regolamento europeo sull'intelligenza artificiale.",
+      ch: [["Accetti e lavori sul serio", { rep: 3, intel: 1, rete: 2 }, "Mesi di negoziati: il regolamento porta il tuo nome."], ["Accetti, ma deleghi ai collaboratori", { rep: 1 }, "Il testo va avanti senza di te."], ["Rifiuti: troppo tecnico", { trust: -1 }, "Il posto va a un collega più motivato."]] }
+  );
+  // --- Fondare una corrente (richiesto): solo di un'area affine a quella del partito, e solo con il peso
+  // per farlo (grado nel partito, rete, fiducia). La corrente nasce piccola e cresce se la curi.
+  function careerCurrentFoundOptions(c) {
+    var pt = careerParty(c); if (!pt) return [];
+    var nb = SPLIT_NEIGHBOR_FAMILIES[pt.familyId] || {};
+    var fams = [pt.familyId].concat([nb.radicale, nb.moderata].filter(Boolean));
+    var existing = (careerPartyCurrents(c) || []).map(function (x) { return x.id; });
+    var out = [];
+    fams.forEach(function (f) { (CORRENTI_BY_FAMILY[f] || []).forEach(function (w) { if (existing.indexOf(w.id) === -1 && !out.some(function (o) { return o.id === w.id; })) out.push({ id: w.id, label: w.label, familyId: f }); }); });
+    return out.slice(0, 6);
+  }
+  function careerCurrentFoundBlock(c) {
+    if (!c.partyId) return "Serve la tessera di un partito.";
+    if ((c.partyRank || 0) < 3) return "Serve almeno un ruolo nella segreteria provinciale (grado 3 nel partito).";
+    if (c.rete < 25) return "Serve una rete più ampia (" + Math.round(c.rete) + "/25).";
+    if (c.partyTrust < 40) return "Il partito non si fida abbastanza di te (" + Math.round(c.partyTrust) + "/40).";
+    if (c.foundedCurrentTurn && state.turn - c.foundedCurrentTurn < 104) return "Hai già fondato una corrente da poco.";
+    if (!careerCurrentFoundOptions(c).length) return "Non c'è spazio per una nuova corrente in questo partito.";
+    return null;
+  }
+  function careerFoundCurrent(c, id) {
+    var why = careerCurrentFoundBlock(c); if (why) { showSaveStatus(why, true); return; }
+    var opt = careerCurrentFoundOptions(c).filter(function (o) { return o.id === id; })[0]; if (!opt) return;
+    var list = careerPartyCurrents(c);
+    var share = clamp(4 + (c.partyRank || 0) * 1.2 + c.rete / 12, 5, 18);
+    list.push({ id: opt.id, label: opt.label, share: share, leader: c.name, founded: true });
+    careerCurrentsNormalize(list);
+    c.corrente = opt.id; c.correnteTurn = state.turn; c.foundedCurrentTurn = state.turn;
+    var pt = careerParty(c);
+    var sameArea = pt && opt.familyId === pt.familyId;
+    careerAdultApply(c, { rep: 2, rete: 2, trust: sameArea ? -2 : -5 });
+    addCareerDiaryEntry("Nasce la tua corrente", "Fondi «" + opt.label + "» dentro " + c.partyName + ": parte dal " + Math.round(list.filter(function (x) { return x.id === opt.id; })[0].share) + "%. " + (sameArea ? "Il segretario la tollera." : "Il segretario la guarda con sospetto: porta idee di un'area vicina, ma diversa."));
+    showSaveStatus("Hai fondato la corrente «" + opt.label + "».", false);
+  }
+  function renderCareerCurrentFound(c) {
+    var why = careerCurrentFoundBlock(c), opts = careerCurrentFoundOptions(c);
+    var html = '<section aria-label="Fonda una corrente"><h3>Fonda una tua corrente</h3><p class="ci-hint">Una corrente nuova deve stare in un\'area affine a quella del partito: la stessa, o quella appena più radicale o più moderata. Nasce piccola: cresce con il tuo grado, la tua rete e i congressi.</p>';
+    if (why) return html + '<p class="ci-hint"><strong>' + fxEsc(why) + '</strong></p></section>';
+    html += '<div class="option-grid">' + opts.map(function (o) { var fam = familyById(o.familyId); return '<button type="button" class="option-card" data-career-found-current="' + o.id + '"><span class="olabel">' + fxEsc(o.label) + '</span><span class="odesc">Area: ' + fxEsc(fam ? fam.label : o.familyId) + '</span></button>'; }).join("") + '</div></section>';
+    return html;
+  }
+  var CAREER_TRACK_START_TEXT = {
+    confindustria: "Entri all'ufficio studi della Confindustria della tua provincia: numeri, dossier e i primi tavoli con la politica.",
+    diplomazia: "Superi il concorso diplomatico, uno dei più selettivi d'Italia: sei segretario/a di legazione alla Farnesina.",
+    spin: "Il primo incarico: gestisci i social di un partito. Notti lunghe, grafiche e tweet scritti alle due.",
+    sondaggi: "Entri in un istituto di ricerca come analista junior: questionari, campioni e flussi elettorali.",
+    ong: "Inizi come volontario/a in un'associazione: banchetti, raccolte firme, le prime campagne.",
+    giornalismo: "Inizi a collaborare con una testata: pezzi brevi, pagati poco, ma la tua firma è in pagina."
+  };
   // --- Vita comunale più attiva: sedute del Consiglio e riunioni di Giunta ---
   // Richiesto: se sei in Comune la vita comunale deve essere più attiva. Ogni 4-6 settimane c'è una seduta
   // del Consiglio con un punto all'ordine del giorno da votare (e conta se sei in maggioranza o no); da
@@ -36711,7 +36839,7 @@
         var pw = c.reputazione < 60 ? "Serve reputazione nazionale 60." : state.turn < (c.primariesCooldown || 0) ? "Hai perso le ultime primarie: riprova più avanti." : null;
         html += '<button type="button" class="choice-btn" id="career-primaries-btn"' + (pw ? " disabled" : "") + '><span class="clabel">Sfida il segretario alle primarie</span><span class="chint">' + (pw || "Se vinci, guidi il partito e il gioco passa alla modalità partito.") + "</span></button>";
       }
-      html += '</div></section>' + renderCareerCurrents(c) + '<section><div class="choices">';
+      html += '</div></section>' + renderCareerCurrents(c) + renderCareerCurrentFound(c) + '<section><div class="choices">';
       html += '<button type="button" class="choice-btn" id="career-leave-party-btn"><span class="clabel">Lascia il partito</span><span class="chint">Perdi il ruolo conquistato. Per tesserarti altrove dovrai aspettare qualche mese.</span></button></div></section>';
     }
     html += '<section aria-label="Fonda un partito"><h3>Fonda il tuo partito</h3><p class="ci-hint">Lasci la carriera e passi alla modalità partito, come fondatore/fondatrice. Si parte da quello che ti sei costruito/a: con reputazione ' + Math.round(c.reputazione) + " e rete " + Math.round(c.rete) + (c.reputazione < 45 ? ", senza una vera notorietà nazionale, sarà durissimo." : ", hai una base da cui partire.") + "</p>" +
@@ -37147,6 +37275,7 @@
     byId("career-leave-party-btn", function () { careerLeaveParty(c); rerender(); });
     on("[data-career-corrente]", function (btn) { careerJoinCurrent(c, btn.getAttribute("data-career-corrente")); rerender(); });
     on("[data-career-corrente-leave]", function () { careerLeaveCurrent(c); rerender(); });
+    on("[data-career-found-current]", function (btn) { careerFoundCurrent(c, btn.getAttribute("data-career-found-current")); rerender(); });
     byId("career-congress-btn", function () { if (careerPromoCheck(c)) return; c.partyCongressOpen = true; c.pending.push(careerPartyCongressDossier(c)); rerender(); });
     byId("career-primaries-btn", function () { c.primariesCooldown = state.turn + 104; c.pending.push(careerPrimariesDossier(c)); rerender(); });
     byId("career-newparty-btn", function () {
