@@ -12,6 +12,7 @@ import android.provider.MediaStore;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -22,7 +23,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 
-// Politis-IT per Android: apre il gioco online a schermo intero. I salvataggi restano nella memoria
+// Politis-IT per Android: apre il gioco a schermo intero; dopo la prima apertura online funziona anche offline. I salvataggi restano nella memoria
 // dell'app (localStorage della WebView); "Esporta partita" salva il file nella cartella Download e
 // "Importa partita" apre il selettore di file del telefono.
 public class MainActivity extends Activity {
@@ -54,6 +55,18 @@ public class MainActivity extends Activity {
                 if (host != null && (host.endsWith("scacciafantasmi.workers.dev") || host.endsWith("github.io"))) return false;
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception e) { /* nessuna app per aprire il link */ }
                 return true;
+            }
+
+            // Senza connessione il gioco si apre dalla copia salvata dal service worker. Solo se l'app non
+            // è mai stata aperta online (copia non ancora salvata) si mostra questo avviso.
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (!request.isForMainFrame()) return;
+                String html = "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>"
+                    + "<body style='margin:0;background:#0a0c18;color:#f4f5fb;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center;padding:24px;box-sizing:border-box'>"
+                    + "<div><h2>Nessuna connessione</h2><p style='color:#c9cce0'>Apri Politis-IT una volta con internet: da quel momento potrai giocare anche offline.</p>"
+                    + "<button onclick=\"location.href='" + HOME + "'\" style='margin-top:12px;padding:14px 22px;border:0;border-radius:999px;background:#9b8bff;color:#fff;font-weight:800;font-size:16px'>Riprova</button></div></body></html>";
+                view.loadDataWithBaseURL(HOME, html, "text/html", "UTF-8", null);
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
