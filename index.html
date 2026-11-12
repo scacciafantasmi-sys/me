@@ -20307,7 +20307,7 @@
     var passed = opts.passed;
     var bannerLabel = (opts.kindLabel + (passed ? " APPROVATA" : " RESPINTA")).toUpperCase();
     var html = '<div class="enactment-banner' + (passed ? "" : " rejected") + '">' + bannerLabel + "</div>";
-    html += opts.popularVote ? buildPopularVoteTallyHtml(passed) : buildVoteTallyHtml(passed);
+    html += opts.tallyHtml || (opts.popularVote ? buildPopularVoteTallyHtml(passed) : buildVoteTallyHtml(passed));
 
     // Bug segnalato da un giocatore: una mozione/legge/modifica proposta da UN ALTRO PARTITO (vedi
     // resolveCpuMozioneChoice, resolveCpuAmendmentChoice, resolveCpuLeggeChoice) usava comunque il
@@ -24337,7 +24337,10 @@
     if (maybeApplyBureaucraticDelay(p.pendingLegge, "Proposta di Legge", "legge")) return null;
     var topic = p.pendingLegge;
     p.pendingLegge = null;
-    var passed = Math.random() < topic.acceptProb + constLawBonus(p.parliamentRole === "governo");
+    // L'esito nasce dai seggi dei gruppi (vedi lawVoteResolve); sotto un regime resta il vecchio calcolo.
+    var lawVoteRes = state.regime ? null : lawVoteResolve(lawFromPending(topic), "si", constLawBonus(p.parliamentRole === "governo") * 0.5);
+    var passed = topic.presidentReturned ? true : lawVoteRes ? lawVoteRes.passed : Math.random() < topic.acceptProb + constLawBonus(p.parliamentRole === "governo");
+    if (lawVoteRes) lawVoteRes.passed = passed;
     if (passed && !topic.presidentReturned && checkPresidentialReturn(topic)) {
       state.presidentReturnedLawTitles.push(topic.title);
       p.pendingLegge = { title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, acceptProb: 1, resolveTurn: state.turn + 2, presidentReturned: true };
@@ -24352,7 +24355,7 @@
     }
     var mult = institutionalPowerMultiplier(p);
     var isGoverno = p.parliamentRole === "governo";
-    if (topic.pact && passed) engageSchedule("patto_voto", 4, 8, { label: "Tratti con un altro gruppo: voti in cambio di un favore", title: topic.title });
+    if (topic.pact && passed && !(topic.deals && Object.keys(topic.deals).length)) engageSchedule("patto_voto", 4, 8, { label: "Tratti con un altro gruppo: voti in cambio di un favore", title: topic.title });
     // Segnalato da un giocatore: una sola legge, per un partito forte al governo (institutionalPower-
     // Multiplier può arrivare a 8x), poteva spostare un indicatore di diversi punti in una sola settimana
     // — troppo, anche prima che i rendimenti decrescenti di applyCountryMetricDelta iniziassero a farsi
@@ -24375,6 +24378,7 @@
     var esito = passed
       ? "La proposta di legge del tuo partito viene approvata in via definitiva dall'Aula: " + topic.noun + " diventa legge dello Stato."
       : "La proposta di legge del tuo partito viene respinta in Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": " + topic.noun + " resta senza una legge dedicata, anche se il tema resta acceso nel dibattito pubblico.";
+    if (lawVoteRes) esito += " " + lawScrutinioText(lawVoteRes);
     state.log.unshift({
       week: state.turn, title: topic.title, choiceLabel: "Esito del voto finale in Aula", result: esito,
       headlines: [], type: "mozione", cat: "Proposta di Legge"
@@ -24402,11 +24406,11 @@
     // reazione del partito resta (reputazione/iscritti/visibilità), ma non rimette più in discussione
     // l'esito appena deciso dall'Aula sullo stesso identico indicatore.
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
-    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno });
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno, tallyHtml: lawVoteRes ? lawTallyHtml(lawVoteRes) + lawScrutinioHtml(lawVoteRes) : null });
     recordPolicyOutcome("Legge", topic.title, passed, "Il tuo partito", topic.metric);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua legge è passata in Aula" : "La tua proposta di legge è stata respinta",
-      cat: "Proposta di Legge", title: topic.title, brief: engageVoteBoardHtml(passed, topic.acceptProb + constLawBonus(isGoverno), topic.pact) + announceHtml + esito + " Come reagisce il tuo partito?",
+      cat: "Proposta di Legge", title: topic.title, brief: engageVoteBoardHtml(passed, lawVoteRes ? lawVoteRes.estimate / 100 : topic.acceptProb + constLawBonus(isGoverno), topic.pact) + announceHtml + esito + " Come reagisce il tuo partito?",
       choices: choices
     };
   }
@@ -24943,11 +24947,12 @@
   // sui sondaggi, la probabilità dipende da chi governa davvero, e il voto del gruppo del giocatore la
   // sposta un po' in un verso o nell'altro. Effetti più forti delle mozioni, perché è una legge vera.
   var CPU_LEGGE_COOLDOWN_TURNS = 25;
-  function buildCpuLeggeDossier() {
+  function buildCpuLeggeDossier(forcedProposer, pact) {
     var pool = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 1; });
-    if (!pool.length) return null;
+    if (!pool.length && !forcedProposer) return null;
     var weighted = pool.map(function (pt) { return { pt: pt, w: Math.max(0.5, state.parties[pt.id] || 0.5) }; });
-    var proposer = pickWeighted(weighted, function (e) { return e.w; }).pt;
+    var proposer = forcedProposer || pickWeighted(weighted, function (e) { return e.w; }).pt;
+    if (!pact) pact = ensureLawPacts().filter(function (x) { return x.partyId === proposer.id && x.status === "aperto"; })[0] || null;
     var isGovProposer = !!(state.govEntity && state.govEntity.memberIds.indexOf(proposer.id) !== -1);
     var topicPool = proposer.familyId ? lawTopicsForFamily(proposer.familyId) : [];
     if (!topicPool.length) topicPool = lawTopicsGeneral();
@@ -24971,11 +24976,17 @@
       : proposer.name + " deposita in Parlamento una proposta di legge su " + topic.noun +
         (isGovProposer ? ", forte dei numeri della maggioranza di governo." : ", cercando il sostegno delle altre forze parlamentari.") +
         " Come si schiera il tuo gruppo sul voto finale?";
+    if (pact) brief = "<strong>Il conto del patto:</strong> " + proposer.name + " ti aveva dato i voti sulla tua legge «" + fxEsc(pact.lawTitle) + "». Ora chiede quelli del tuo gruppo. " + brief;
+    if (!state.regime) {
+      var cpuLaw = { title: topic.title, proposerId: proposer.id, proposerFamily: proposer.familyId };
+      var cpuCount = lawVoteCount(cpuLaw, "astenuto");
+      brief += '<p class="ci-hint" style="margin-top:0.5rem"><strong>Come votano gli altri gruppi</strong> (dichiarazioni di voto): ' + cpuCount.si + ' sì, ' + cpuCount.no + ' no, ' + cpuCount.astenuti + ' astenuti, senza contare il tuo gruppo.</p>' + lawVoteRowsHtml({ rows: cpuCount.rows.filter(function (r) { return !r.isPlayer; }) }, false);
+    }
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
       eyebrow: (isGovProposer ? "Proposta di legge della maggioranza di governo" : "Proposta di legge di un partito d'opposizione") + " — vota anche il tuo gruppo",
       cat: "Proposta di Legge", title: (picked.isRevisit ? topic.title + " — Nuovo Intervento" : topic.title) + " (" + proposer.short + ")", brief: brief,
-      cpuLeggeMeta: { proposerId: proposer.id, proposerName: proposer.name, metric: topic.metric, noun: topic.noun, baseProb: baseProb, isGovProposer: isGovProposer, isRevisit: picked.isRevisit },
+      cpuLeggeMeta: { proposerId: proposer.id, proposerName: proposer.name, proposerFamily: proposer.familyId, lawTitle: topic.title, metric: topic.metric, noun: topic.noun, baseProb: baseProb, isGovProposer: isGovProposer, isRevisit: picked.isRevisit, pact: pact ? { partyId: pact.partyId, sinceTurn: pact.sinceTurn } : null },
       choices: [
         { label: "Vota a favore", mozioneVote: "favore", effects: {}, result: "" },
         { label: "Vota contro", mozioneVote: "contro", effects: {}, result: "" },
@@ -24987,7 +24998,11 @@
     var p = state.player;
     var meta = dossier.cpuLeggeMeta || {};
     var prob = clamp(cpuProposalPassChance(meta, choice.mozioneVote, 0.3) + constLawBonus(meta.isGovProposer), 0.02, 0.98);
-    var passed = Math.random() < prob;
+    // l'esito nasce dai seggi dei gruppi, compreso il voto del tuo (vedi lawVoteResolve)
+    var cpuVoteRes = (state.regime || !meta.proposerFamily) ? null : lawVoteResolve({ title: meta.lawTitle || dossier.title, proposerId: meta.proposerId, proposerFamily: meta.proposerFamily },
+      choice.mozioneVote === "favore" ? "si" : choice.mozioneVote === "contro" ? "no" : "astenuto", constLawBonus(meta.isGovProposer) * 0.5);
+    var passed = cpuVoteRes ? cpuVoteRes.passed : Math.random() < prob;
+    var pactNote = meta.pact ? lawSettlePact(meta.pact, choice.mozioneVote) : "";
     var delta = passed ? rand(0.4, 0.9) : rand(-0.08, 0.08);
     if (meta.metric) state.countryProfile[meta.metric] = clamp(state.countryProfile[meta.metric] + delta, 1, 10);
     if (meta.proposerId && state.partyRelations && state.partyRelations[meta.proposerId] !== undefined) {
@@ -25023,9 +25038,11 @@
         if (leggeProposer && leggeProposer.familyId) applyIndirectFiscalNudge(leggeProposer.familyId, 1);
       }
     }
+    if (cpuVoteRes) esito += " " + lawScrutinioText(cpuVoteRes);
+    esito += pactNote;
     state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
     var leggeProposerParty = partyById(meta.proposerId);
-    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", proposerFamily: leggeProposerParty ? leggeProposerParty.familyId : undefined });
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", tallyHtml: cpuVoteRes ? lawTallyHtml(cpuVoteRes) + lawScrutinioHtml(cpuVoteRes) : null, proposerFamily: leggeProposerParty ? leggeProposerParty.familyId : undefined });
     recordPolicyOutcome("Legge", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
     state.resultData = { resultText: announceHtml + esito, headlines: [] };
   }
@@ -25308,7 +25325,7 @@
     var symbolic = !p.inParliament;
     // Stesso trattamento simbolico delle mozioni (vedi renderMozioniPanel e proposeSymbolicLegge).
     if (!symbolic && p.pendingLegge) {
-      html += '<p class="ci-hint">Proposta di legge depositata su <strong>' + p.pendingLegge.title + '</strong>: il voto finale in Aula arriverà tra qualche settimana, dopo il passaggio in commissione.</p></details></section>';
+      html += '<p class="ci-hint">Proposta di legge depositata su <strong>' + p.pendingLegge.title + '</strong>: il voto finale in Aula arriverà tra qualche settimana, dopo il passaggio in commissione.</p>' + (state.regime ? "" : lawVotePanelHtml(p.pendingLegge)) + '</details></section>';
       return html;
     }
     var weeksLeft = (p.leggeCooldownTurn || 0) - state.turn;
@@ -28597,7 +28614,7 @@
   var OBSTRUCTION_TOPICS = ["la riforma della giustizia", "il decreto sicurezza", "la legge di bilancio", "il ddl sull'autonomia differenziata", "il decreto energia", "la riforma del lavoro", "il decreto sulle concessioni", "la riforma della RAI", "il premierato", "il decreto sull'immigrazione"];
   function engageBuildVigilia() {
     var p = state.player, L = p.pendingLegge;
-    var est = clamp(Math.round((L.acceptProb + constLawBonus(p.parliamentRole === "governo")) * 100), 3, 97);
+    var est = state.regime ? clamp(Math.round((L.acceptProb + constLawBonus(p.parliamentRole === "governo")) * 100), 3, 97) : lawVoteCount(lawFromPending(L), "si").estimate;
     return { id: "ai_dynamic", kind: "situazione", localDynamic: false, engageKind: "vigilia", eyebrow: "Parlamento — vigilia del voto", cat: "Parlamento",
       title: "Vigilia del voto in Aula: " + L.title,
       brief: "Domani l'Aula vota la tua proposta di legge su " + L.noun + ". I pallottolieri dei capigruppo danno il " + est + "% di possibilità di farcela" + (est < 50 ? ": mancano voti." : ": ma con il voto segreto non si sa mai.") + " Come passi le ultime ore?",
@@ -28624,9 +28641,16 @@
     var p = state.player, g = choice.engage;
     if (g.vigilia && p.pendingLegge) {
       var L = p.pendingLegge;
-      if (g.vigilia === "patto") { L.acceptProb = Math.min(0.97, L.acceptProb + 0.18); L.pact = true; }
-      if (g.vigilia === "piazza") L.acceptProb = Math.min(0.97, L.acceptProb + 0.06);
-      if (g.vigilia === "rinvio") { L.acceptProb = Math.min(0.97, L.acceptProb + 0.08); L.resolveTurn = state.turn + 2; }
+      if (g.vigilia === "patto") {
+        L.acceptProb = Math.min(0.97, L.acceptProb + 0.18); L.pact = true;
+        // trattativa notturna: il gruppo non ancora favorevole più disposto a trattare cambia voto
+        lawFromPending(L);
+        var cands = lawVoteCount(L, "si").rows.filter(function (r) { return !r.isPlayer && r.vote !== "si" && !L.deals[r.id]; })
+          .sort(function (x, y) { return lawDealChance(y.id) - lawDealChance(x.id); });
+        if (cands.length) lawMakeDeal(L, partyById(cands[0].id));
+      }
+      if (g.vigilia === "piazza") { L.acceptProb = Math.min(0.97, L.acceptProb + 0.06); L.pressure = (L.pressure || 0) + 0.08; }
+      if (g.vigilia === "rinvio") { L.acceptProb = Math.min(0.97, L.acceptProb + 0.08); L.pressure = (L.pressure || 0) + 0.04; L.resolveTurn = state.turn + 2; }
     }
     if (g.ostruzionismo === "maratona" && state.consensoGoverno !== undefined) state.consensoGoverno = clamp(state.consensoGoverno - rand(1, 2.5), 0, 100);
   }
@@ -46440,6 +46464,201 @@
   }  // dopo ogni scelta: eventuale "conto aperto" che tornerà settimane dopo (vedi engageAfterChoice)
   var engageOrigResolveDossierChoice = resolveDossierChoice;
   resolveDossierChoice = function (dossier, choice) { engageOrigResolveDossierChoice(dossier, choice); try { engageAfterChoice(dossier, choice); } catch (err) { /* mai bloccare il turno */ } };
+  // ---------- Voto in Aula partito per partito e trattative sulle leggi ----------
+  // Richiesto da un giocatore: sapere come vota ogni gruppo su una legge, vedere lo scrutinio finale
+  // partito per partito e poter trattare con gli altri gruppi per farsi votare la propria legge, in cambio
+  // del sostegno a una loro legge futura. Come nella realtà, prima del voto si conosce l'orientamento che
+  // i gruppi annunciano nelle dichiarazioni di voto; il voto finale può riservare sorprese (franchi
+  // tiratori), ma l'esito ora nasce dai seggi di chi vota sì e di chi vota no.
+  // L'orientamento di un gruppo dipende da: distanza ideologica dal proponente, maggioranza/opposizione
+  // (chi governa difficilmente vota le leggi dell'opposizione), rapporti con il giocatore, accordi presi.
+  function lawHash(s) { var h = 2166136261; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return ((h >>> 0) % 1000) / 1000; }
+  function lawGovIds() { return (state.govEntity && state.govEntity.memberIds) || []; }
+  function lawCameraSeats() {
+    var real = state.parliamentSeats && state.parliamentSeats.camera;
+    return real && Object.keys(real).length ? real : projectSeats(400);
+  }
+  // Orientamento (-1 contro … +1 a favore) di un gruppo su una legge.
+  function lawPartyStance(pt, law) {
+    var p = state.player;
+    if (pt.id === law.proposerId) return 2;
+    var propFam = law.proposerFamily, a = LEFT_RIGHT_POSITION[pt.familyId], b = LEFT_RIGHT_POSITION[propFam];
+    var d = (a === undefined || b === undefined) ? 2 : Math.abs(a - b);
+    var s = 0.9 - 0.45 * d;
+    var gov = lawGovIds();
+    var propGov = law.proposerId === "player" ? p.parliamentRole === "governo" : gov.indexOf(law.proposerId) !== -1;
+    var ptGov = gov.indexOf(pt.id) !== -1;
+    if (propGov && ptGov) s += 0.55; else if (propGov && !ptGov) s -= 0.25; else if (!propGov && ptGov) s -= 0.45;
+    if (law.proposerId === "player") {
+      var rel = state.partyRelations && state.partyRelations[pt.id];
+      if (rel !== undefined) s += (rel - 50) / 120;
+    }
+    s += (lawHash((law.title || "") + "|" + pt.id) - 0.5) * 0.36;
+    s += law.pressure || 0;
+    var deal = law.deals && law.deals[pt.id];
+    if (deal === "si") s = Math.max(s, 0.6);
+    return s;
+  }
+  function lawStanceVote(s) { return s >= 0.2 ? "si" : s <= -0.15 ? "no" : "astenuto"; }
+  // playerVote: "si" | "no" | "astenuto" (per le leggi del giocatore è sempre "si").
+  function lawVoteCount(law, playerVote) {
+    var p = state.player, seats = lawCameraSeats();
+    var rows = activeParties().map(function (pt) {
+      var st = lawPartyStance(pt, law);
+      return { id: pt.id, name: pt.name, short: pt.short || pt.name, color: pt.color, seats: seats[pt.id] || 0, stance: st, vote: lawStanceVote(st) };
+    }).filter(function (r) { return r.seats > 0; });
+    if (p && p.inParliament) rows.push({ id: "player", name: p.name, short: p.short || p.name, color: p.color, seats: p.seatsCamera || seats.player || 0, stance: 2, vote: playerVote || "si", isPlayer: true });
+    rows.sort(function (x, y) { return y.seats - x.seats; });
+    var t = { si: 0, no: 0, astenuto: 0 };
+    rows.forEach(function (r) { t[r.vote] += r.seats; });
+    var margin = (t.si - t.no) / Math.max(1, t.si + t.no);
+    return { rows: rows, si: t.si, no: t.no, astenuti: t.astenuto, margin: margin, estimate: clamp(Math.round(50 + margin * 160), 3, 97) };
+  }
+  // Voto finale: i seggi decidono, il voto segreto sposta qualche deputato (franchi tiratori).
+  function lawVoteResolve(law, playerVote, bonus) {
+    var c = lawVoteCount(law, playerVote);
+    var total = c.si + c.no + c.astenuti;
+    var swing = Math.round(total * rand(-0.035, 0.035));
+    c.si = Math.max(0, c.si + swing); c.no = Math.max(0, c.no - swing);
+    c.passed = c.si + total * (bonus || 0) > c.no;
+    return c;
+  }
+  var LAW_VOTE_LABEL = { si: "Sì", no: "No", astenuto: "Astenuti" };
+  var LAW_VOTE_ICON = { si: "🟢", no: "🔴", astenuto: "⚪" };
+  function lawVoteRowsHtml(c, withContact, law) {
+    return '<div class="party-directory" style="margin-top:0.4rem">' + c.rows.map(function (r) {
+      var btn = "";
+      if (withContact && !r.isPlayer && r.vote !== "si" && !(law.contacted && law.contacted[r.id])) {
+        var ch = lawDealChance(r.id);
+        btn = ch >= 0.12 ? '<button type="button" class="save-bar-btn" data-law-contact="' + r.id + '">Contatta · accordo ' + lawChanceLabel(ch) + '</button>'
+          : '<span class="chip neutral">Troppo lontano: non tratta</span>';
+      } else if (withContact && law.deals && law.deals[r.id] === "si") btn = '<span class="chip good">Accordo fatto</span>';
+      else if (withContact && law.contacted && law.contacted[r.id]) btn = '<span class="chip neutral">Ha detto no</span>';
+      return '<div class="party-row"><div class="party-row-body" style="width:100%"><div class="party-row-head"><strong style="color:' + (r.color || "inherit") + '">' + fxEsc(r.short) + (r.isPlayer ? " (tu)" : "") + '</strong>' +
+        '<span class="chip">' + r.seats + ' deputati</span><span class="chip ' + (r.vote === "si" ? "good" : r.vote === "no" ? "critical" : "neutral") + '">' + LAW_VOTE_ICON[r.vote] + " " + LAW_VOTE_LABEL[r.vote] + '</span></div>' + btn + '</div></div>';
+    }).join("") + '</div>';
+  }
+  function lawTallyHtml(c) {
+    return '<div class="vote-tally" style="display:flex;gap:0.6rem;margin:0.5rem 0 0.4rem;flex-wrap:wrap">' +
+      '<span class="chip good">Favorevoli ' + c.si + '</span><span class="chip critical">Contrari ' + c.no + '</span><span class="chip neutral">Astenuti ' + c.astenuti + '</span></div>';
+  }
+  function lawScrutinioText(c) {
+    var by = { si: [], no: [], astenuto: [] };
+    c.rows.forEach(function (r) { by[r.vote].push(r.isPlayer ? r.short + " (tu)" : r.short); });
+    return ["si", "no", "astenuto"].filter(function (k) { return by[k].length; }).map(function (k) { return (k === "si" ? "Hanno votato sì: " : k === "no" ? "Hanno votato no: " : "Si sono astenuti: ") + by[k].join(", "); }).join(". ") + ".";
+  }
+  function lawScrutinioHtml(c) {
+    return '<div style="margin:0 0 10px"><strong>Lo scrutinio, gruppo per gruppo</strong>' + lawVoteRowsHtml(c, false) + '</div>';
+  }
+  // La legge in attesa del giocatore come oggetto votabile.
+  function lawFromPending(L) {
+    if (!L.deals) L.deals = {};
+    if (!L.contacted) L.contacted = {};
+    return Object.assign(L, { proposerId: "player", proposerFamily: state.player.family });
+  }
+  // ---- Trattative ----
+  function ensureLawPacts() {
+    if (!state.lawPacts) state.lawPacts = [];
+    if (!state.lawDealBetrayals) state.lawDealBetrayals = {};
+    return state.lawPacts;
+  }
+  function lawDealChance(partyId) {
+    var p = state.player, pt = partyById(partyId);
+    if (!pt) return 0;
+    ensureLawPacts();
+    var a = LEFT_RIGHT_POSITION[pt.familyId], b = LEFT_RIGHT_POSITION[p.family];
+    var d = (a === undefined || b === undefined) ? 2.5 : Math.abs(a - b);
+    var rel = state.partyRelations && state.partyRelations[partyId] !== undefined ? state.partyRelations[partyId] : 50;
+    var ch = 0.85 - 0.28 * d + (rel - 50) / 150;
+    var gov = lawGovIds();
+    if (gov.indexOf(partyId) !== -1 && p.parliamentRole !== "governo") ch -= 0.2;
+    var mine = state.lawDealBetrayals[partyId] || 0;
+    var all = Object.keys(state.lawDealBetrayals).reduce(function (s, k) { return s + state.lawDealBetrayals[k]; }, 0);
+    ch -= 0.3 * mine + 0.08 * (all - mine);
+    var open = state.lawPacts.filter(function (x) { return x.partyId === partyId && x.status === "aperto"; }).length;
+    ch -= 0.15 * open;
+    return clamp(ch, 0.02, 0.9);
+  }
+  function lawChanceLabel(ch) { return ch >= 0.6 ? "probabile" : ch >= 0.35 ? "possibile" : ch >= 0.12 ? "difficile" : "quasi impossibile"; }
+  function lawMakeDeal(L, pt) {
+    L.deals[pt.id] = "si";
+    ensureLawPacts().push({ partyId: pt.id, partyName: pt.name, lawTitle: L.title, sinceTurn: state.turn, dueTurn: state.turn + 6 + Math.floor(Math.random() * 10), status: "aperto" });
+  }
+  function lawContactParty(partyId) {
+    var p = state.player, L = p.pendingLegge, pt = partyById(partyId);
+    if (!L || !pt) return;
+    lawFromPending(L);
+    if (L.contacted[partyId] || L.deals[partyId]) return;
+    var ok = Math.random() < lawDealChance(partyId);
+    var text;
+    if (ok) {
+      lawMakeDeal(L, pt);
+      text = (pt.leader || pt.name) + " accetta: " + pt.name + " voterà la tua legge su " + L.noun + ". In cambio vuole i voti del tuo gruppo sulla sua prossima proposta di legge. Se non li dai, lo considererà un tradimento.";
+    } else {
+      L.contacted[partyId] = true;
+      if (state.partyRelations && state.partyRelations[partyId] !== undefined) state.partyRelations[partyId] = clamp(state.partyRelations[partyId] - 2, 0, 100);
+      text = pt.name + " dice no: troppo lontani sulla linea politica, o poca fiducia nel tuo gruppo. Il suo voto resta quello annunciato.";
+    }
+    state.log.unshift({ week: state.turn, title: "Trattativa con " + pt.name, choiceLabel: ok ? "Accordo raggiunto" : "Nessun accordo", result: text, headlines: [], type: "mozione", cat: "Parlamento" });
+    showSaveStatus(ok ? "Accordo con " + pt.short + ": voterà la tua legge." : pt.short + " rifiuta l'accordo.", !ok);
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest && e.target.closest("[data-law-contact]");
+    if (!b) return;
+    lawContactParty(b.getAttribute("data-law-contact"));
+    save(); render();
+  });
+  function lawVotePanelHtml(L) {
+    var law = lawFromPending(L), c = lawVoteCount(law, "si");
+    var gap = c.no - c.si;
+    return '<p class="ci-hint" style="margin-top:0.6rem"><strong>Come voteranno i gruppi</strong> (orientamento annunciato nelle dichiarazioni di voto): oggi ' + c.si + ' sì, ' + c.no + ' no, ' + c.astenuti + ' astenuti. ' +
+      (gap >= 0 ? "Per passare servono almeno " + (gap + 1) + " voti in più: puoi contattare gli altri gruppi. Chi è più vicino alla tua linea accetta più facilmente, ma vorrà i tuoi voti su una sua legge." : "Sulla carta la maggioranza c'è, ma nel voto segreto qualcuno può tradire.") + '</p>' +
+      lawVoteRowsHtml(c, true, law);
+  }
+  // ---- Il conto: la legge dell'alleato ----
+  function lawDuePact() {
+    var p = state.player;
+    if (!p || !p.inParliament) return null;
+    var list = ensureLawPacts();
+    for (var i = 0; i < list.length; i++) {
+      var x = list[i];
+      if (x.status !== "aperto") continue;
+      if (!partyById(x.partyId) || (state.dissolvedPartyIds || []).indexOf(x.partyId) !== -1) { x.status = "scaduto"; continue; }
+      if (state.turn >= x.dueTurn) return x;
+    }
+    return null;
+  }
+  var lawOrigEngageDue = engageDueDossier;
+  engageDueDossier = function () {
+    var x = lawDuePact();
+    if (x) {
+      var d = buildCpuLeggeDossier(partyById(x.partyId), x);
+      if (d) { state.aiDynamicDossier = d; state.currentDossierId = "ai_dynamic"; state.phase = "building"; return true; }
+      x.dueTurn = state.turn + 3;
+    }
+    return lawOrigEngageDue();
+  };
+  // Esito del patto quando il giocatore vota la legge dell'alleato.
+  function lawSettlePact(pactRef, vote) {
+    var list = ensureLawPacts();
+    var x = list.filter(function (y) { return y.partyId === pactRef.partyId && y.sinceTurn === pactRef.sinceTurn && y.status === "aperto"; })[0];
+    if (!x) return "";
+    var rel = state.partyRelations || (state.partyRelations = {});
+    var cur = rel[x.partyId] !== undefined ? rel[x.partyId] : 50;
+    if (vote === "favore") {
+      x.status = "rispettato"; rel[x.partyId] = clamp(cur + 12, 0, 100);
+      state.player.reputazione = clamp(state.player.reputazione + 1, 0, 100);
+      return " Hai mantenuto la parola data a " + x.partyName + ": il rapporto tra i due gruppi migliora, e la prossima volta trattare sarà più facile.";
+    }
+    if (vote === "astensione") {
+      x.status = "a metà"; rel[x.partyId] = clamp(cur - 6, 0, 100);
+      return " Ti sei astenuto invece di votare sì come promesso a " + x.partyName + ": mezza parola mantenuta, e il rapporto si raffredda.";
+    }
+    x.status = "tradito"; rel[x.partyId] = clamp(cur - 25, 0, 100);
+    state.lawDealBetrayals[x.partyId] = (state.lawDealBetrayals[x.partyId] || 0) + 1;
+    state.player.reputazione = clamp(state.player.reputazione - 3, 0, 100);
+    return " Hai tradito il patto con " + x.partyName + ": in Aula se lo ricorderanno, e d'ora in poi tutti i gruppi saranno più restii a trattare con te.";
+  }
 
 
   function bindInteractions() {
