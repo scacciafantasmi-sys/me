@@ -31059,6 +31059,7 @@
     // vinto, con quanti seggi), e solo DOPO, proseguendo, la svolta storica — non l'una al posto
     // dell'altra.
     state.phase = "election_result";
+    state.electionNight = { turn: state.turn, stage: 0 };
   }
   // Stima la fiducia iniziale che il governo avrebbe SE le trattative si chiudessero adesso, con la
   // composizione attuale di state.pendingGovFormationNegotiation — stessa identica formula di
@@ -43710,10 +43711,10 @@
         return renderPartyDirectory() + renderPartyRelations() + renderPartyDossier();
       } },
     { id: "dichiarazioni", label: "Dichiarazioni — stampa, TV e social", icon: "📰", nav: "Stampa", render: function () {
-        return renderDichiarazioniPage();
+        return renderPrimePagine() + renderDichiarazioniPage();
       } },
     { id: "diario", label: "Diario di Partito — registro completo", icon: "📓", nav: "Diario", render: function () {
-        return renderLog();
+        return renderImmDiario() + renderLog();
       } },
     { id: "storia", label: "Storia del Partito — riepilogo di carriera", icon: "🏆", nav: "Storia", render: function () {
         return renderCareerSummary() + renderElectionHistoryPanel();
@@ -44514,6 +44515,13 @@
     if (state.phase === "president_epilogue") { renderPresidentEpilogue(); return; }
 
     if (state.phase === "election_result") {
+      // la notte elettorale: exit poll e proiezioni prima del dato definitivo
+      if (state.electionNight && state.electionNight.turn === state.turn && state.electionNight.stage < 2 && state.player) {
+        app.innerHTML = immElectionNightHtml();
+        var nightBtn = document.getElementById("election-night-next");
+        if (nightBtn) nightBtn.addEventListener("click", function () { state.electionNight.stage++; save(); render(); window.scrollTo(0, 0); });
+        return;
+      }
       app.innerHTML = renderElectionResult();
       var continueBtn = document.getElementById("election-continue-btn");
       continueBtn.addEventListener("click", async function () {
@@ -46684,6 +46692,278 @@
     state.player.reputazione = clamp(state.player.reputazione - 3, 0, 100);
     return " Hai tradito il patto con " + x.partyName + ": in Aula se lo ricorderanno, e d'ora in poi tutti i gruppi saranno più restii a trattare con te.";
   }
+  // ---------- Immersione: telefono del leader, persone intorno a te, prime pagine, diario, direzione,
+  // giro elettorale, notte elettorale e discorsi scritti a mano ----------
+  // Richiesto dal creatore del gioco per far vivere di più la partita in prima persona. Tutto il materiale
+  // nasce da quello che sta davvero succedendo (sondaggi, fondi, leggi, alleanze, ultime scelte).
+  function immPick(a) { return a[Math.floor(Math.random() * a.length)]; }
+  function immCity() { return (ITALY_LOCATIONS[Math.floor(Math.random() * ITALY_LOCATIONS.length)] || { name: "Roma" }).name; }
+  function ensureImm(p) {
+    p = p || state.player;
+    if (!p) return null;
+    if (!p.imm) p.imm = { phone: [], journal: [], nextDirezioneTurn: state.turn + 5 + Math.floor(Math.random() * 3), lastJournalTurn: state.turn, grudges: {} };
+    var im = p.imm;
+    if (!im.cast) {
+      // le persone fisse intorno al leader: se nello staff c'è già qualcuno con quel ruolo, è lui/lei
+      var staffName = function (role) { var s = (p.staff || []).filter(function (x) { return x && x.id === role && x.name; })[0]; return s ? s.name : generateStaffName(); };
+      im.cast = {
+        portavoce: { name: staffName("portavoce"), role: "il portavoce" },
+        tesoriere: { name: staffName("tesoriere"), role: "il tesoriere" },
+        capogruppo: { name: generateStaffName(), role: "il capogruppo" },
+        organizzatore: { name: staffName("organizzatore"), role: "il responsabile organizzazione" },
+        critico: { name: generateStaffName(), role: "il capo della minoranza interna" }
+      };
+    }
+    return im;
+  }
+  function immLastChoice(p) {
+    var l = (state.log || []).filter(function (x) { return x.type === "dossier" && x.choiceLabel && x.week >= state.turn - 8; })[0];
+    return l ? l.title : null;
+  }
+  function immPollTrend(p, weeks) {
+    var h = p.sondaggiHistory || [];
+    if (h.length < 2) return 0;
+    var back = h[Math.max(0, h.length - 1 - (weeks || 4))];
+    return p.sondaggi - back;
+  }
+  // ---- 1. Il telefono del leader ----
+  function immPhoneTemplates(p, im) {
+    var c = im.cast, out = [], trend = immPollTrend(p, 4), last = immLastChoice(p);
+    if (p.inParliament) out.push({ from: c.capogruppo, text: "Domani in Aula mancano tre dei nostri. Faccio slittare il voto o andiamo sotto?", r: [["Fallo slittare", { trust: 1, rep: -0.5 }, "Il voto slitta di una settimana. In Transatlantico qualcuno sorride."], ["Si vota: chi manca ne risponde", { trust: -1, rep: 1 }, "Si va al voto. Il messaggio ai tuoi deputati è chiaro."]] });
+    if (p.fondi < 4000) out.push({ from: c.tesoriere, text: "Siamo quasi a secco: in cassa restano " + fmtEuro(p.fondi) + ". Lancio una sottoscrizione tra gli iscritti o taglio le spese della sede?", r: [["Sottoscrizione tra gli iscritti", { fondi: 700, iscritti: -4 }, "La sottoscrizione parte: arrivano piccoli versamenti da tutta Italia."], ["Taglia le spese della sede", { fondi: 400, trust: -1 }, "Via le utenze inutili e un affitto di troppo. Qualcuno si lamenta."]] });
+    if (p.fondi > 60000) out.push({ from: c.tesoriere, text: "Per una volta i conti sorridono: " + fmtEuro(p.fondi) + " in cassa. Ti preparo un piano per aprire nuove sezioni?", r: [["Sì, prepara il piano", { trust: 1 }, "Il tesoriere si mette al lavoro con un entusiasmo mai visto."], ["Teniamoli da parte per la campagna", { rep: 0.5 }, "Prudenza: i soldi restano in cassa per quando serviranno."]] });
+    if (trend <= -0.8) out.push({ from: c.portavoce, text: "Brutte notizie: " + fmt1(trend).replace("-", "−") + " punti in un mese nei sondaggi. Stasera ti vogliono in uno studio televisivo, ci vai?", r: [["Ci vado e ci metto la faccia", { vis: 3, rep: Math.random() < 0.5 ? 1 : -1 }, "Vai in studio. Qualcuno apprezza il coraggio, qualcuno no."], ["Meglio stare zitti per qualche giorno", { trust: -0.5 }, "Silenzio stampa. Il portavoce non è convinto."]] });
+    if (trend >= 0.8) out.push({ from: c.portavoce, text: "Saliamo! +" + fmt1(trend) + " punti in un mese. Faccio uscire un'intervista lunga su un quotidiano nazionale?", r: [["Sì, battiamo il ferro finché è caldo", { vis: 3, rep: 0.5 }, "L'intervista esce domenica: tre pagine, foto in prima."], ["No, restiamo con i piedi per terra", { trust: 0.5 }, "Niente trionfalismi: la base apprezza la sobrietà."]] });
+    if (last) out.push({ from: c.critico, text: "Sulla scelta di «" + last + "» non ero d'accordo, e non sono l'unico. Ne parliamo prima della prossima direzione?", r: [["Certo, ti ascolto", { trust: 1.5 }, "Un caffè lungo. Non vi siete convinti a vicenda, ma vi siete parlati."], ["La linea l'ha decisa il partito", { trust: -1.5, rep: 0.5 }, "La risposta è secca. La minoranza interna prende nota."]] });
+    out.push({ from: { name: "Mamma", role: "" }, text: immPick(["Ti ho visto al telegiornale, eri stanco. Mangi abbastanza?", "Tua zia dice che in paese ti votano tutti. Io non ci credo, ma lei ci tiene a dirtelo.", "Domenica vieni a pranzo o hai di nuovo un comizio?"]), r: [["Sì mamma, tutto bene", {}, "«Ti preparo le lasagne, allora.»"], ["Scusa, sono in riunione", {}, "«Va bene, ma chiamami stasera.»"]] });
+    var city = immCity();
+    out.push({ from: { name: generateStaffName(), role: "segretaria della sezione di " + city }, text: "Siamo in dodici ma teniamo aperta la sezione tutte le sere. Ci servirebbe un proiettore per le assemblee: ci date una mano?", r: [["Ve lo paghiamo noi", { fondi: -150, iscritti: 8 }, "Il proiettore arriva in settimana: la sezione di " + city + " ti manda una foto della prima assemblea."], ["Per ora arrangiatevi", { iscritti: -3 }, "«Capito.» La risposta è corta."]] });
+    var outlet = OUTLETS[Math.floor(Math.random() * OUTLETS.length)];
+    out.push({ from: { name: generateStaffName(), role: "cronista di " + outlet.name }, text: "Domani esco con un pezzo sulle tensioni dentro il vostro partito. Vuoi dirmi qualcosa prima?", r: [["Ti do una frase da virgolettare", { vis: 1.5, rep: 0.5 }, "La tua frase finisce nel titolo. Poteva andare peggio."], ["No comment", { rep: -0.5 }, "L'articolo esce lo stesso, con un «il leader non ha voluto commentare»."], ["Smentisco tutto, scrivilo pure", { trust: 1, rep: -0.5 }, "La smentita rassicura i tuoi, un po' meno i giornalisti."]] });
+    var close = activeParties().filter(function (pt) { var a = LEFT_RIGHT_POSITION[pt.familyId], b = LEFT_RIGHT_POSITION[p.family]; return a !== undefined && b !== undefined && Math.abs(a - b) <= 1.5 && pt.leader; });
+    if (close.length && p.inParliament) {
+      var pt = immPick(close);
+      out.push({ from: { name: pt.leader, role: "leader di " + pt.name }, text: "Ci prendiamo un caffè lontano dalle telecamere? Ho una cosa da proporti.", r: [["Volentieri", { rel: [pt.id, 4] }, "Un caffè in un bar dietro Montecitorio. Nessuna promessa, ma un rapporto migliore."], ["Non è il momento", { rel: [pt.id, -2] }, "Rimandate. Dall'altra parte non la prendono benissimo."]] });
+    }
+    var g = Object.keys(im.grudges || {}).filter(function (k) { return im.grudges[k] > 0; })[0];
+    if (g) out.push({ from: { name: g, role: "dirigente del partito" }, text: "Alla direzione mi hai lasciato solo. Te lo dico da amico: in tanti la pensano come me.", r: [["Hai ragione, la prossima volta ne parliamo prima", { trust: 1.5 }, "La tensione si scioglie un poco."], ["Il segretario sono io", { trust: -1 }, "Il messaggio viene letto, nessuna risposta."]], grudge: g });
+    return out;
+  }
+  function immPhoneTick(p) {
+    var im = ensureImm(p);
+    if (!im || p.formationComplete === false) return;
+    if (Math.random() > 0.38) return;
+    var pool = immPhoneTemplates(p, im);
+    var recent = im.phone.slice(0, 4).map(function (m) { return m.text; });
+    pool = pool.filter(function (m) { return recent.indexOf(m.text) === -1; });
+    if (!pool.length) return;
+    var m = immPick(pool);
+    im.phone.unshift({ week: state.turn, from: m.from.name, role: m.from.role, text: m.text, replies: m.r, answered: null, grudge: m.grudge || null });
+    if (im.phone.length > 30) im.phone.length = 30;
+  }
+  function immApplyEff(p, e) {
+    if (!e) return;
+    if (e.trust) p.leaderTrust = clamp((p.leaderTrust === undefined ? 65 : p.leaderTrust) + e.trust, 0, 100);
+    if (e.rep) p.reputazione = clamp(p.reputazione + e.rep, 0, 100);
+    if (e.vis) p.visibilita = clamp((p.visibilita || 0) + e.vis, 0, 100);
+    if (e.fondi) p.fondi += e.fondi;
+    if (e.iscritti) p.iscritti = Math.max(0, p.iscritti + e.iscritti);
+    if (e.rel && state.partyRelations && state.partyRelations[e.rel[0]] !== undefined) state.partyRelations[e.rel[0]] = clamp(state.partyRelations[e.rel[0]] + e.rel[1], 0, 100);
+  }
+  function immPhoneReply(i, k) {
+    var p = state.player, im = ensureImm(p), m = im && im.phone[i];
+    if (!m || m.answered !== null || !m.replies[k]) return;
+    m.answered = k;
+    immApplyEff(p, m.replies[k][1]);
+    if (m.grudge && k === 0 && im.grudges) im.grudges[m.grudge] = 0;
+  }
+  // ---- 4. Il diario del leader, una volta al mese ----
+  function immJournalTick(p) {
+    var im = ensureImm(p);
+    if (!im || state.turn - im.lastJournalTurn < 4) return;
+    im.lastJournalTurn = state.turn;
+    var trend = immPollTrend(p, 4);
+    var events = (state.log || []).filter(function (x) { return x.week > state.turn - 4 && x.title && x.type !== "cronaca"; }).slice(0, 3).map(function (x) { return x.title; });
+    var mood = trend >= 0.6 ? immPick(["Settimane buone. Per la prima volta da tempo sento che la gente ci ascolta.", "Il vento gira dalla nostra parte, e si sente anche nelle sezioni.", "Mese da ricordare: in giro c'è più gente ai nostri banchetti."])
+      : trend <= -0.6 ? immPick(["Mese duro. I sondaggi scendono e in sede si respira nervosismo.", "Non è stato un buon mese: qualcuno comincia a guardarmi storto.", "Ho dormito poco. I numeri non vanno, e lo sappiamo tutti."])
+      : immPick(["Un mese senza scossoni, di lavoro paziente.", "Settimane di trincea: si costruisce, piano.", "Né bene né male. Ma la strada è lunga."]);
+    var txt = mood + " Siamo al " + fmt1(p.sondaggi) + "% e abbiamo " + fmtInt(p.iscritti) + " iscritti.";
+    if (events.length) txt += " Di questo mese mi resteranno soprattutto: " + events.join("; ") + ".";
+    txt += " " + ((p.leaderTrust || 65) < 45 ? "Il partito mi segue meno di prima: devo ricucire." : (p.leaderTrust || 65) > 75 ? "Il partito è con me, e non è poco." : "Il partito mi segue, ma va tenuto unito.");
+    im.journal.unshift({ week: state.turn, text: txt });
+    if (im.journal.length > 24) im.journal.length = 24;
+  }
+  function renderImmDiario() {
+    var p = state.player, im = p && ensureImm(p);
+    if (!im) return "";
+    var html = '<section aria-label="Telefono del leader"><h3>📱 Il tuo telefono</h3>';
+    if (!im.phone.length) html += '<p class="ci-hint">Nessun messaggio, per ora. Arriveranno.</p>';
+    html += im.phone.slice(0, 12).map(function (m, i) {
+      var r = m.answered !== null && m.replies[m.answered];
+      return '<div class="party-row" style="display:block"><div class="party-row-head"><strong>' + fxEsc(m.from) + '</strong>' + (m.role ? '<span class="ci-hint" style="margin:0 0 0 6px">' + fxEsc(m.role) + '</span>' : "") + '<span class="chip">sett. ' + m.week + '</span></div>' +
+        '<p style="margin:6px 0">«' + fxEsc(m.text) + '»</p>' +
+        (r ? '<p class="ci-hint" style="margin:0">Tu: «' + fxEsc(r[0]) + '». ' + fxEsc(r[2]) + '</p>'
+           : '<div class="choices">' + m.replies.map(function (rr, k) { return '<button type="button" class="save-bar-btn" data-phone-reply="' + i + ':' + k + '">' + fxEsc(rr[0]) + '</button>'; }).join(" ") + '</div>') + '</div>';
+    }).join("") + '</section>';
+    html += '<section aria-label="Diario del leader"><h3>✍️ Il diario del leader</h3>' +
+      (im.journal.length ? im.journal.slice(0, 6).map(function (j) { return '<p style="margin:0 0 10px"><span class="chip">sett. ' + j.week + '</span> <em>' + fxEsc(j.text) + '</em></p>'; }).join("") : '<p class="ci-hint">Una volta al mese il leader scrive due righe su come sta andando.</p>') + '</section>';
+    return html;
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest && e.target.closest("[data-phone-reply]");
+    if (!b) return;
+    var a = b.getAttribute("data-phone-reply").split(":");
+    immPhoneReply(+a[0], +a[1]); save(); render();
+  });
+  // ---- 3. Le prime pagine della settimana ----
+  function renderPrimePagine() {
+    var p = state.player;
+    if (!p) return "";
+    // la notizia della settimana: l'ultima scelta del partito su un tema pubblico (non le vicende personali)
+    var story = (state.log || []).filter(function (x) { return x.title && x.week >= state.turn - 3 && (x.type === "dossier" || x.type === "mozione") && !/\b(te|ti|tuo|tua|tuoi)\b/i.test(x.title) && x.title.length < 70; })[0];
+    var subj = p.short || p.name;
+    var lean = function (o) { try { return outletRelationToPlayer(o.lean, p.family); } catch (e) { return "neutro"; } };
+    var friends = OUTLETS.filter(function (o) { return lean(o) === "amico"; }), foes = OUTLETS.filter(function (o) { return lean(o) === "avversario"; }), mid = OUTLETS.filter(function (o) { return lean(o) === "neutro"; });
+    var seed = state.turn;
+    var pickO = function (arr, k) { return arr.length ? arr[(seed + k) % arr.length] : null; };
+    var papers = [pickO(friends, 0), pickO(mid, 1), pickO(foes, 2)].filter(Boolean);
+    if (papers.length < 3) OUTLETS.forEach(function (o) { if (papers.length < 3 && papers.indexOf(o) === -1) papers.push(o); });
+    var t = story ? "«" + story.title + "»" : "la settimana politica";
+    var H = {
+      amico: [subj + ", la scelta su " + t + " che parla al Paese", "Su " + t + " " + subj + " tiene il punto", t + ": la mossa di " + subj + " spiazza gli avversari"],
+      ostile: [subj + ", passo falso su " + t, "Su " + t + " " + subj + " si contraddice ancora", t + ": dubbi e polemiche intorno a " + subj],
+      neutro: [t + ", la linea di " + subj + " divide", "Cosa c'è dietro la mossa di " + subj + " su " + t, subj + " e " + t + ": le reazioni dei partiti"]
+    };
+    var world = state.worldNews && state.worldNews[0] ? state.worldNews[0].text : null;
+    var html = '<section aria-label="Prime pagine"><h3>🗞️ Le prime pagine della settimana</h3><p class="ci-hint">La stessa settimana raccontata da tre giornali diversi.</p><div class="party-directory">';
+    html += papers.map(function (o, k) {
+      var rel = lean(o); var arr = H[rel === "amico" ? "amico" : rel === "avversario" ? "ostile" : "neutro"];
+      var title = story ? arr[(seed + k) % arr.length] : (world || "Settimana di attesa nei palazzi della politica");
+      return '<div class="party-row" style="display:block;font-family:Georgia,serif"><div class="ci-hint" style="margin:0;letter-spacing:1px;text-transform:uppercase">' + fxEsc(o.name) + '</div><div style="font-weight:800;font-size:1.05rem;line-height:1.25;margin:4px 0">' + fxEsc(title) + '</div>' +
+        (story && world && k === 1 ? '<div class="ci-hint" style="margin:0">In taglio basso: ' + fxEsc(world) + '</div>' : "") + '</div>';
+    }).join("") + '</div></section>';
+    return html;
+  }
+  // ---- 5. La direzione nazionale, una volta al mese ----
+  function immDirezioneDossier(p) {
+    var im = ensureImm(p), c = im.cast, trend = immPollTrend(p, 4), issues = [];
+    if (trend <= -0.5) issues.push({ who: c.critico, say: "Così perdiamo voti. Serve una svolta, e serve adesso: più piazza e meno palazzo." });
+    if (trend >= 0.5) issues.push({ who: c.organizzatore, say: "Il vento è a favore: è il momento di osare, di aprire sezioni dove non siamo mai stati." });
+    if (p.fondi < 5000) issues.push({ who: c.tesoriere, say: "I conti non reggono: o tagliamo, o troviamo nuovi finanziatori. Non possiamo andare avanti così." });
+    if (p.pendingLegge) issues.push({ who: c.capogruppo, say: "La nostra legge su " + p.pendingLegge.noun + " rischia: dobbiamo cercare voti fuori dal nostro gruppo, anche a costo di concedere qualcosa." });
+    if (p.allianceId) issues.push({ who: c.critico, say: "L'alleanza con " + ((coalitionById(p.allianceId) || {}).label || "i nostri alleati") + " ci sta snaturando: la nostra gente non capisce." });
+    else issues.push({ who: c.organizzatore, say: "Da soli non andiamo da nessuna parte: serve un'alleanza prima del voto." });
+    if (state.nextElectionTurn - state.turn <= 26 && state.nextElectionTurn > state.turn) issues.push({ who: c.portavoce, say: "Mancano pochi mesi al voto: le liste vanno chiuse, e vanno messe facce nuove in prima fila." });
+    var city = immCity();
+    issues.push({ who: { name: generateStaffName(), role: "segretario della federazione di " + city }, say: "Da " + city + " vi dico che sul territorio manca il partito: la gente ci vede solo in televisione." });
+    var seenWho = {};
+    issues = issues.sort(function () { return Math.random() - 0.5; }).filter(function (x) { if (seenWho[x.who.name]) return false; seenWho[x.who.name] = 1; return true; }).slice(0, 3);
+    var brief = "Si riunisce la direzione nazionale, come ogni mese. Prendono la parola:" + issues.map(function (x) { return '<p style="margin:8px 0 0"><strong>' + fxEsc(x.who.name) + '</strong>' + (x.who.role ? ", " + fxEsc(x.who.role) : "") + ': «' + fxEsc(x.say) + '»</p>'; }).join("") +
+      '<p style="margin-top:10px">Tocca a te chiudere la discussione.</p>';
+    var choices = issues.slice(0, 2).map(function (x) {
+      return { label: "Dai ragione a " + x.who.name, hint: "Chi viene ascoltato si sente forte, gli altri meno", effects: {}, result: "Fai tua la linea di " + x.who.name + ". Una parte della direzione applaude, l'altra resta in silenzio.", imm: { kind: "direzione", trust: 1.5, rep: 0.5, side: x.who.name, others: issues.filter(function (y) { return y !== x; }).map(function (y) { return y.who.name; }) } };
+    });
+    choices.push({ label: "Fai sintesi tra le posizioni", hint: "Tieni unito il partito, senza strappi", effects: {}, result: "Trovi una formula che tiene insieme tutti. Nessuno è entusiasta, ma il partito esce unito.", imm: { kind: "direzione", trust: 3, rep: -0.5 } });
+    choices.push({ label: "Chiudi tu: la linea la dà il segretario", hint: "Più autorità, meno fiducia interna", effects: {}, result: "Chiudi la riunione in dieci minuti. Fuori, i giornalisti scrivono di un leader deciso; dentro, qualcuno mugugna.", imm: { kind: "direzione", trust: -3, rep: 1.5, others: issues.map(function (y) { return y.who.name; }) } });
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Partito — riunione della direzione nazionale", cat: "Vita di partito", title: "La direzione nazionale del mese", brief: brief, choices: choices };
+  }
+  // ---- 9. Il giro elettorale delle ultime settimane ----
+  var IMM_GIRI = [
+    ["Il Nord delle fabbriche: Milano, Torino, Brescia", "Lavoro, imprese, salari"],
+    ["Il Centro: Roma, Firenze, Bologna", "Servizi, sanità, città"],
+    ["Il Sud: Napoli, Bari, Palermo", "Lavoro che manca, infrastrutture"],
+    ["Le province dimenticate e le aree interne", "Paesi che si svuotano, treni che non arrivano"]
+  ];
+  function immGiroDossier(p, weeksLeft) {
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Campagna elettorale — mancano " + weeksLeft + " settimane al voto", cat: "Campagna elettorale",
+      title: weeksLeft === 3 ? "Il giro d'Italia: la prima settimana" : "Il giro d'Italia: la settimana decisiva",
+      brief: "Il pullman della campagna è pronto, i sondaggisti aggiornano i numeri ogni sera. Questa settimana puoi battere una sola parte del Paese: comizi, mercati, fabbriche, piazze. Dove vai?",
+      choices: IMM_GIRI.map(function (g) { return { label: g[0], hint: g[1], effects: { fondi: -1500, visibilita: 3, sondaggi: +(0.15 + Math.random() * 0.4).toFixed(2) }, result: "Una settimana di tappe: " + g[0].split(": ")[1] + ". Piazze piene in due città su tre, una contestazione, tanti selfie. I sondaggisti registrano il movimento.", imm: { kind: "giro" } }; }) };
+  }
+  // ---- 11. I discorsi scritti a mano ----
+  var IMM_SPEECH = {
+    chiusura: ["Il comizio di chiusura della campagna", "Ultimo comizio prima del silenzio elettorale. La piazza è piena, le telecamere accese. Cosa dici agli italiani?"],
+    insediamento: ["Il primo discorso nella nuova legislatura", "Si apre la nuova legislatura. Per la prima volta prendi la parola in Aula a nome del tuo gruppo. Cosa dici?"],
+    congresso: ["Il discorso al congresso fondativo", "La sala è piena di delegati arrivati da tutta Italia: il partito è appena nato e aspetta le tue parole. Cosa dici?"]
+  };
+  function immSpeechDossier(kind) {
+    var s = IMM_SPEECH[kind];
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Il tuo discorso", cat: "Discorso", title: s[0], immSpeechKind: kind,
+      brief: s[1] + '<textarea id="imm-speech-input" class="autogrow-textarea" rows="6" style="width:100%;margin-top:10px" placeholder="Scrivi qui il tuo discorso. Il gioco legge tema e tono, come per le dichiarazioni, ma un discorso pesa di più."></textarea>' +
+        '<p class="ci-hint">Puoi anche saltarlo: nessun effetto, né positivo né negativo.</p>',
+      choices: [
+        { label: "Pronuncia il discorso", hint: "Tema e tono decidono come va", effects: {}, result: "", imm: { kind: "speech", go: true } },
+        { label: "Salta il discorso", hint: "Nessun effetto", effects: {}, result: "Lasci parlare altri. Nessuno se ne ricorderà, nel bene o nel male.", imm: { kind: "speech", go: false } }
+      ] };
+  }
+  function immResolveSpeech(dossier, choice) {
+    var p = state.player, el = document.getElementById("imm-speech-input");
+    var text = el ? (el.value || "").trim() : "";
+    if (!choice.imm.go || text.length < 20) {
+      state.resultData = { resultText: text.length && text.length < 20 ? "Due parole e poco più: troppo poco per lasciare il segno. Nessun effetto." : choice.result || "Nessun effetto.", headlines: [] };
+      return;
+    }
+    var cl = classifyStatement(text);
+    var eff = buildFreeTextStatementEffects(text, cl.tone, text.length > 400 ? 5 : 4);
+    applyChoice({ title: dossier.title, cat: "Discorso" }, { effects: eff });
+    var toneTxt = { aggressivo: "Un discorso di battaglia: chi è con te si alza in piedi, chi è contro trova parole da citare contro di te.", istituzionale: "Un discorso misurato, da uomo o donna delle istituzioni: piace agli osservatori, scalda meno la piazza.", positivo: "Un discorso pieno di speranza: la sala applaude a lungo.", neutro: "Un discorso ordinato, senza picchi: arriva, ma non trascina." }[cl.tone] || "";
+    var res = "«" + (text.length > 180 ? text.slice(0, 177) + "…" : text) + "» " + toneTxt + (cl.themeMetric ? " Il tema che resta in testa è " + cl.topicLabel.toLowerCase() + "." : "");
+    if (dossier.immSpeechKind === "congresso" || dossier.immSpeechKind === "chiusura") p.leaderTrust = clamp((p.leaderTrust === undefined ? 65 : p.leaderTrust) + (cl.tone === "aggressivo" ? 1 : 2), 0, 100);
+    state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: "Discorso", result: res, headlines: [], type: "dossier", cat: "Discorso" });
+    state.resultData = { resultText: res, headlines: [] };
+  }
+  // ---- Quando arrivano i momenti "nostri" ----
+  function immDueDossier() {
+    var p = state.player, im = ensureImm(p);
+    if (!im || p.formationComplete === false || state.regime) return null;
+    if (im.pendingSpeech) { var k = im.pendingSpeech; im.pendingSpeech = null; return immSpeechDossier(k); }
+    var left = state.nextElectionTurn - state.turn;
+    if (left === 1 && im.lastClosingTurn !== state.turn) { im.lastClosingTurn = state.turn; return immSpeechDossier("chiusura"); }
+    if ((left === 3 || left === 2) && im.lastGiroTurn !== state.turn) { im.lastGiroTurn = state.turn; return immGiroDossier(p, left); }
+    if (p.inParliament && (state.lastElectionTurn || 0) > 0 && (im.inaugElection || -1) !== state.lastElectionTurn && state.turn >= state.lastElectionTurn + 1) { im.inaugElection = state.lastElectionTurn; return immSpeechDossier("insediamento"); }
+    if (state.turn >= im.nextDirezioneTurn) { im.nextDirezioneTurn = state.turn + 4 + Math.floor(Math.random() * 2); return immDirezioneDossier(p); }
+    return null;
+  }
+  var immOrigEngageDue = engageDueDossier;
+  engageDueDossier = function () {
+    try {
+      var d = immDueDossier();
+      if (d) { state.aiDynamicDossier = d; state.currentDossierId = "ai_dynamic"; state.phase = "building"; return true; }
+    } catch (err) { if (window.console) console.error(err); }
+    return immOrigEngageDue();
+  };
+  var immOrigResolve = resolveDossierChoice;
+  resolveDossierChoice = function (dossier, choice) {
+    var speech = choice && choice.imm && choice.imm.kind === "speech";
+    if (!speech) immOrigResolve(dossier, choice);
+    try {
+      var p = state.player, im = p && ensureImm(p);
+      if (speech) { immResolveSpeech(dossier, choice); return; }
+      if (dossier && dossier.id === CONGRESSO_DOSSIER.id && im) im.pendingSpeech = "congresso";
+      if (choice && choice.imm && choice.imm.kind === "direzione") {
+        immApplyEff(p, { trust: choice.imm.trust, rep: choice.imm.rep });
+        (choice.imm.others || []).forEach(function (n) { if (Math.random() < 0.5) im.grudges[n] = 1; });
+      }
+    } catch (err) { if (window.console) console.error(err); }
+  };
+  // ---- 10. La notte elettorale ----
+  function immElectionNightHtml() {
+    var p = state.player, n = state.electionNight;
+    var rows = activeParties().map(function (pt) { return { label: pt.short, val: state.parties[pt.id] || 0, color: pt.color, id: pt.id }; });
+    rows.push({ label: p.short || p.name, val: p.sondaggi, color: p.color, id: "player" });
+    rows.sort(function (a, b) { return b.val - a.val; });
+    rows = rows.filter(function (r, i) { return i < 6 || r.id === "player"; });
+    var spread = n.stage === 0 ? 2 : 0.8;
+    var fork = function (r) { var off = (lawHash(r.id + "|" + n.turn + "|" + n.stage) - 0.5) * spread; var c = Math.max(0.2, r.val + off); return fmt1(Math.max(0, c - spread / 2)) + " – " + fmt1(c + spread / 2) + "%"; };
+    var title = n.stage === 0 ? "Ore 23:00 — gli exit poll" : "Ore 1:30 — le prime proiezioni";
+    var mine = rows.filter(function (r) { return r.id === "player"; })[0];
+    var prev = p.sondaggiHistory && p.sondaggiHistory.length > 2 ? p.sondaggiHistory[p.sondaggiHistory.length - 3] : p.sondaggi;
+    var mood = p.sondaggi >= prev + 0.5 ? "Nella sede del partito parte un applauso. Qualcuno stappa una bottiglia, il tesoriere dice di aspettare." : p.sondaggi <= prev - 0.5 ? "Nella sede cala il silenzio. Qualcuno guarda il telefono, qualcuno esce a fumare." : "In sede nessuno si sbilancia: si aspettano i dati veri.";
+    return '<section class="election-card"><p class="eyebrow">Notte elettorale</p><h2>' + title + '</h2><p class="lead">' + (n.stage === 0 ? "Chiudono i seggi. Gli istituti di sondaggio diffondono le prime forchette: dati da prendere con le molle." : "Arrivano le prime proiezioni sul voto reale: le forchette si stringono.") + '</p>' +
+      '<div class="party-directory">' + rows.map(function (r) { return '<div class="party-row"><div class="party-row-body" style="width:100%"><div class="party-row-head"><strong style="color:' + r.color + '">' + fxEsc(r.label) + (r.id === "player" ? " (tu)" : "") + '</strong><span class="chip">' + fork(r) + '</span></div></div></div>'; }).join("") + '</div>' +
+      '<p style="margin-top:12px"><em>' + mood + '</em></p>' +
+      '<div class="choices"><button type="button" class="choice-btn" id="election-night-next"><span class="clabel">' + (n.stage === 0 ? "Aspetta le prime proiezioni" : "Il dato definitivo") + '</span></button></div></section>';
+  }
 
 
   function bindInteractions() {
@@ -48163,6 +48443,7 @@
   // giustamente, differire molto dai sondaggi della vigilia.
   var WEEKLY_SWING_HARD_CAP = 2.2;
   async function advanceTurnLogic() {
+    try { if (state.player && state.mode !== "president" && state.mode !== "regional_president") { immPhoneTick(state.player); immJournalTick(state.player); } } catch (immErr) { if (window.console) console.error(immErr); }
     var capBefore = {
       lastElectionTurn: state.lastElectionTurn,
       playerSondaggi: state.player ? state.player.sondaggi : null,
