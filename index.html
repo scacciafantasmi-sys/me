@@ -24378,9 +24378,8 @@
     var esito = passed
       ? "La proposta di legge del tuo partito viene approvata in via definitiva dall'Aula: " + topic.noun + " diventa legge dello Stato."
       : "La proposta di legge del tuo partito viene respinta in Aula" + (isGoverno ? "" : ", con la maggioranza di governo compatta contro") + ": " + topic.noun + " resta senza una legge dedicata, anche se il tema resta acceso nel dibattito pubblico.";
-    if (lawVoteRes) esito += " " + lawScrutinioText(lawVoteRes);
     state.log.unshift({
-      week: state.turn, title: topic.title, choiceLabel: "Esito del voto finale in Aula", result: esito,
+      week: state.turn, title: topic.title, choiceLabel: "Esito del voto finale in Aula", result: esito + (lawVoteRes ? " " + lawScrutinioText(lawVoteRes) : ""),
       headlines: [], type: "mozione", cat: "Proposta di Legge"
     });
     if (passed) {
@@ -24406,11 +24405,11 @@
     // reazione del partito resta (reputazione/iscritti/visibilità), ma non rimette più in discussione
     // l'esito appena deciso dall'Aula sullo stesso identico indicatore.
     var choices = buildSituationChoices({ noun: "l'esito di questo voto finale in Aula", city: city, rivalName: rival.name, rivalId: rival.id, coherent: true, themeId: METRIC_TO_THEME_ID[topic.metric], inParliament: !!p.inParliament }, 5);
-    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno, tallyHtml: lawVoteRes ? lawTallyHtml(lawVoteRes) + lawScrutinioHtml(lawVoteRes) : null });
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: isGoverno, tallyHtml: lawVoteRes ? lawTallyHtml(lawVoteRes) : null });
     recordPolicyOutcome("Legge", topic.title, passed, "Il tuo partito", topic.metric);
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: passed ? "La tua legge è passata in Aula" : "La tua proposta di legge è stata respinta",
-      cat: "Proposta di Legge", title: topic.title, brief: engageVoteBoardHtml(passed, lawVoteRes ? lawVoteRes.estimate / 100 : topic.acceptProb + constLawBonus(isGoverno), topic.pact) + announceHtml + esito + " Come reagisce il tuo partito?",
+      cat: "Proposta di Legge", title: topic.title, brief: engageVoteBoardHtml(passed, lawVoteRes ? lawVoteRes.estimate / 100 : topic.acceptProb + constLawBonus(isGoverno), topic.pact) + announceHtml + esito + " Come reagisce il tuo partito?" + (lawVoteRes ? lawScrutinioHtml(lawVoteRes) : ""),
       choices: choices
     };
   }
@@ -24980,7 +24979,7 @@
     if (!state.regime) {
       var cpuLaw = { title: topic.title, proposerId: proposer.id, proposerFamily: proposer.familyId };
       var cpuCount = lawVoteCount(cpuLaw, "astenuto");
-      brief += '<p class="ci-hint" style="margin-top:0.5rem"><strong>Come votano gli altri gruppi</strong> (dichiarazioni di voto): ' + cpuCount.si + ' sì, ' + cpuCount.no + ' no, ' + cpuCount.astenuti + ' astenuti, senza contare il tuo gruppo.</p>' + lawVoteRowsHtml({ rows: cpuCount.rows.filter(function (r) { return !r.isPlayer; }) }, false);
+      brief += lawRumorHtml(cpuCount, cpuLaw, false);
     }
     return {
       id: "ai_dynamic", kind: "situazione", localDynamic: false,
@@ -25038,13 +25037,12 @@
         if (leggeProposer && leggeProposer.familyId) applyIndirectFiscalNudge(leggeProposer.familyId, 1);
       }
     }
-    if (cpuVoteRes) esito += " " + lawScrutinioText(cpuVoteRes);
     esito += pactNote;
-    state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito, headlines: [], type: "mozione", cat: "Proposta di Legge" });
+    state.log.unshift({ week: state.turn, title: dossier.title, choiceLabel: choice.label, result: esito + (cpuVoteRes ? " " + lawScrutinioText(cpuVoteRes) : ""), headlines: [], type: "mozione", cat: "Proposta di Legge" });
     var leggeProposerParty = partyById(meta.proposerId);
-    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", tallyHtml: cpuVoteRes ? lawTallyHtml(cpuVoteRes) + lawScrutinioHtml(cpuVoteRes) : null, proposerFamily: leggeProposerParty ? leggeProposerParty.familyId : undefined });
+    var announceHtml = buildEnactmentAnnouncement({ passed: passed, kindLabel: "Legge", repDelta: repDelta, isGoverno: p.parliamentRole === "governo", tallyHtml: cpuVoteRes ? lawTallyHtml(cpuVoteRes) : null, proposerFamily: leggeProposerParty ? leggeProposerParty.familyId : undefined });
     recordPolicyOutcome("Legge", dossier.title.split(" (")[0], passed, meta.proposerName, meta.metric);
-    state.resultData = { resultText: announceHtml + esito, headlines: [] };
+    state.resultData = { resultText: announceHtml + esito + (cpuVoteRes ? lawScrutinioHtml(cpuVoteRes) : ""), headlines: [] };
   }
   // Stessa logica di resolveCpuMozioneSilently sopra, applicata alle proposte di legge: il Parlamento
   // continua a votare leggi vere anche quando il partito del giocatore non ha seggi per parteciparvi.
@@ -28617,7 +28615,7 @@
     var est = state.regime ? clamp(Math.round((L.acceptProb + constLawBonus(p.parliamentRole === "governo")) * 100), 3, 97) : lawVoteCount(lawFromPending(L), "si").estimate;
     return { id: "ai_dynamic", kind: "situazione", localDynamic: false, engageKind: "vigilia", eyebrow: "Parlamento — vigilia del voto", cat: "Parlamento",
       title: "Vigilia del voto in Aula: " + L.title,
-      brief: "Domani l'Aula vota la tua proposta di legge su " + L.noun + ". I pallottolieri dei capigruppo danno il " + est + "% di possibilità di farcela" + (est < 50 ? ": mancano voti." : ": ma con il voto segreto non si sa mai.") + " Come passi le ultime ore?",
+      brief: "Domani l'Aula vota la tua proposta di legge su " + L.noun + ". Le voci di corridoio" + (est < 40 ? " dicono che mancano voti" : est > 60 ? " la danno per favorita, ma con il voto segreto non si sa mai" : " parlano di una partita apertissima") + ". Come passi le ultime ore?",
       choices: [
         { label: "Tratti con un altro gruppo: voti in cambio di un favore", hint: "Più probabilità, ma il conto arriverà", effects: { reputazione: -1 }, engage: { vigilia: "patto" }, result: "La trattativa notturna porta voti in più. In cambio, hai promesso un favore che ti verrà chiesto presto." },
         { label: "Porti la piazza davanti a Montecitorio", hint: "Pressione dal basso, costa", effects: { fondi: -400, visibilita: 5, iscritti: 8 }, engage: { vigilia: "piazza" }, result: "Migliaia di persone sotto il Parlamento: qualche indeciso ci ripensa." },
@@ -46548,7 +46546,7 @@
     return ["si", "no", "astenuto"].filter(function (k) { return by[k].length; }).map(function (k) { return (k === "si" ? "Hanno votato sì: " : k === "no" ? "Hanno votato no: " : "Si sono astenuti: ") + by[k].join(", "); }).join(". ") + ".";
   }
   function lawScrutinioHtml(c) {
-    return '<div style="margin:0 0 10px"><strong>Lo scrutinio, gruppo per gruppo</strong>' + lawVoteRowsHtml(c, false) + '</div>';
+    return '<details class="log" style="margin-top:0.8rem"><summary>Lo scrutinio, gruppo per gruppo<span>▾</span></summary>' + lawVoteRowsHtml(c, false) + '</details>';
   }
   // La legge in attesa del giocatore come oggetto votabile.
   function lawFromPending(L) {
@@ -46608,12 +46606,39 @@
     lawContactParty(b.getAttribute("data-law-contact"));
     save(); render();
   });
+  // Prima del voto non si conoscono i numeri: solo le voci di corridoio sulle intenzioni dei gruppi, che
+  // possono anche sbagliare (richiesto: niente conteggi precisi prima dello scrutinio).
+  function lawRumorLabel(r, law) {
+    if (law.deals && law.deals[r.id] === "si") return { t: "Ha promesso il sì", k: "good" };
+    var s = r.stance + (lawHash((law.title || "") + "|" + r.id + "|voci") - 0.5) * 0.5;
+    if (s >= 0.45) return { t: "Verso il sì", k: "good" };
+    if (s <= -0.4) return { t: "Verso il no", k: "critical" };
+    return { t: "Incerto", k: "neutral" };
+  }
+  function lawRumorOverall(c, law) {
+    var m = c.margin + (lawHash((law.title || "") + "|clima") - 0.5) * 0.25;
+    return m > 0.12 ? "nei corridoi si dà la legge per favorita" : m < -0.12 ? "nei corridoi si dà la legge per sfavorita" : "nei corridoi la partita viene data per aperta";
+  }
+  function lawRumorHtml(c, law, withContact) {
+    var gov = lawGovIds();
+    var groups = [["Maggioranza di governo", c.rows.filter(function (r) { return !r.isPlayer && gov.indexOf(r.id) !== -1; })],
+                  ["Opposizione", c.rows.filter(function (r) { return !r.isPlayer && gov.indexOf(r.id) === -1; })]];
+    return '<p class="ci-hint" style="margin-top:0.6rem"><strong>Voci di corridoio a Montecitorio</strong>: ' + lawRumorOverall(c, law) + '. Sono solo intenzioni di voto che girano nel Palazzo, non numeri: allo scrutinio potrebbero non essere attendibili.</p>' +
+      groups.filter(function (g) { return g[1].length; }).map(function (g) {
+        return '<p class="eyebrow" style="margin:0.6rem 0 0.2rem">' + g[0] + '</p><div class="party-directory">' + g[1].map(function (r) {
+          var lab = lawRumorLabel(r, law), btn = "";
+          if (withContact && !(law.deals && law.deals[r.id]) && !(law.contacted && law.contacted[r.id]) && lab.t !== "Verso il sì") {
+            var ch = lawDealChance(r.id);
+            btn = ch >= 0.12 ? '<button type="button" class="save-bar-btn" data-law-contact="' + r.id + '">Contatta · accordo ' + lawChanceLabel(ch) + '</button>' : '<span class="chip neutral">Troppo lontano: non tratta</span>';
+          } else if (withContact && law.contacted && law.contacted[r.id]) btn = '<span class="chip neutral">Ha detto no</span>';
+          return '<div class="party-row"><div class="party-row-body" style="width:100%"><div class="party-row-head"><strong style="color:' + (r.color || "inherit") + '">' + fxEsc(r.short) + '</strong><span class="chip ' + lab.k + '">' + lab.t + '</span></div>' + btn + '</div></div>';
+        }).join("") + '</div>';
+      }).join("");
+  }
   function lawVotePanelHtml(L) {
     var law = lawFromPending(L), c = lawVoteCount(law, "si");
-    var gap = c.no - c.si;
-    return '<p class="ci-hint" style="margin-top:0.6rem"><strong>Come voteranno i gruppi</strong> (orientamento annunciato nelle dichiarazioni di voto): oggi ' + c.si + ' sì, ' + c.no + ' no, ' + c.astenuti + ' astenuti. ' +
-      (gap >= 0 ? "Per passare servono almeno " + (gap + 1) + " voti in più: puoi contattare gli altri gruppi. Chi è più vicino alla tua linea accetta più facilmente, ma vorrà i tuoi voti su una sua legge." : "Sulla carta la maggioranza c'è, ma nel voto segreto qualcuno può tradire.") + '</p>' +
-      lawVoteRowsHtml(c, true, law);
+    return lawRumorHtml(c, law, true) +
+      '<p class="ci-hint" style="margin-top:0.5rem">Puoi contattare gli altri gruppi per farti votare la legge: chi è più vicino alla tua linea accetta più facilmente, ma vorrà i tuoi voti su una sua legge futura.</p>';
   }
   // ---- Il conto: la legge dell'alleato ----
   function lawDuePact() {
