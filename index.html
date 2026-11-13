@@ -38795,7 +38795,7 @@
 
     activeParties().forEach(function (party) {
       var val = state.parties[party.id];
-      var before = prevSnapshot ? prevSnapshot.parties[party.id] : val;
+      var before = prevSnapshot && typeof prevSnapshot.parties[party.id] === "number" ? prevSnapshot.parties[party.id] : val;
       html += '<div class="poll-tile"><div class="name"><span class="swatch" style="background:' + party.color + '"></span>' + party.short + "</div>" +
         '<div class="value">' + fmt1(val) + "%</div>" + deltaLabel(before, val, "pt") + "</div>";
     });
@@ -43810,6 +43810,7 @@
   function nsEnterFullGovernance(ns) {
     var p = state.player;
     state.nsCountry = { name: ns.name, capital: ns.capital, since: state.turn };
+    nsMoveSections(ns);
     // fuori i partiti italiani, dentro quelli del nuovo Stato
     var locals = nsLocalParties(ns, p.family);
     state.dissolvedPartyIds = PARTIES.map(function (pt) { return pt.id; }).concat((state.dynamicParties || []).map(function (d) { return d.id; }));
@@ -43827,6 +43828,7 @@
     state.dynamicCoalitions = [];
     // il tuo partito governa il nuovo Stato
     p.sondaggi = mine; p.sondaggiHistory = [mine]; p.baselineSondaggi = mine;
+    state.prevSnapshot = null;
     p.inParliament = true; p.everElected = true; p.parliamentRole = "governo"; p.allianceId = null;
     p.seatsCamera = Math.round(400 * mine / 100 * 1.25); p.seatsSenato = Math.round(200 * mine / 100 * 1.25);
     p.pendingLegge = null; p.pendingMozione = null;
@@ -43858,6 +43860,116 @@
     addDiaryEntry("Il primo governo di " + ns.name, "Oggi giura il primo governo di " + ns.name + ". Non c'è più l'Italia sopra di noi: adesso tocca a noi.");
   }
   // ogni settimana: riconoscimenti internazionali e rapporti con l'Italia continuano a muoversi
+  // ---------- La geografia del nuovo Stato ----------
+  // Richiesto dall'autore: nel nuovo Stato devono comparire solo le sue città e le sezioni al suo interno.
+  // Tutto il gioco pesca città e regioni da ITALY_LOCATIONS / ITALIAN_REGIONS (sezioni, mappa, elezioni
+  // locali e regionali, consigli comunali, scioperi, telefono...): finché esiste il nuovo Stato quegli
+  // elenchi vengono ristretti alle sue regioni (più altri comuni reali, perché una o due regioni da sole
+  // avrebbero poche città), e tornano completi altrimenti. Così ogni parte del gioco si adatta da sola.
+  var NS_EXTRA_CITIES = {
+    "Lazio": ["Frosinone", "Rieti", "Guidonia Montecelio", "Fiumicino", "Aprilia", "Civitavecchia", "Tivoli"],
+    "Lombardia": ["Monza", "Varese", "Pavia", "Cremona", "Mantova", "Lecco", "Lodi", "Sondrio"],
+    "Campania": ["Avellino", "Benevento", "Torre del Greco", "Pozzuoli", "Giugliano in Campania", "Castellammare di Stabia"],
+    "Piemonte": ["Asti", "Cuneo", "Biella", "Vercelli", "Verbania", "Moncalieri"],
+    "Emilia-Romagna": ["Reggio Emilia", "Rimini", "Ferrara", "Forlì", "Piacenza", "Cesena", "Imola"],
+    "Toscana": ["Arezzo", "Prato", "Lucca", "Pistoia", "Grosseto", "Massa"],
+    "Puglia": ["Andria", "Barletta", "Trani", "Altamura", "Molfetta"],
+    "Veneto": ["Treviso", "Rovigo", "Belluno", "Chioggia", "Bassano del Grappa", "Jesolo"],
+    "Liguria": ["Imperia", "Sanremo", "Rapallo", "Chiavari", "Ventimiglia"],
+    "Sicilia": ["Agrigento", "Caltanissetta", "Enna", "Ragusa", "Marsala", "Gela"],
+    "Sardegna": ["Olbia", "Alghero", "Carbonia", "Quartu Sant'Elena", "Iglesias", "Tempio Pausania"],
+    "Marche": ["Ascoli Piceno", "Fermo", "Fano", "Senigallia", "Urbino", "Civitanova Marche"],
+    "Umbria": ["Foligno", "Spoleto", "Città di Castello", "Gubbio", "Orvieto", "Assisi"],
+    "Abruzzo": ["Teramo", "Montesilvano", "Avezzano", "Lanciano", "Vasto", "Sulmona"],
+    "Basilicata": ["Melfi", "Policoro", "Pisticci", "Rionero in Vulture", "Lavello"],
+    "Calabria": ["Crotone", "Lamezia Terme", "Rossano", "Rende", "Gioia Tauro"],
+    "Trentino-Alto Adige": ["Rovereto", "Merano", "Bressanone", "Riva del Garda", "Pergine Valsugana", "Brunico"],
+    "Friuli-Venezia Giulia": ["Gorizia", "Monfalcone", "Sacile", "Codroipo", "Cervignano del Friuli", "Tolmezzo"],
+    "Molise": ["Termoli", "Venafro", "Bojano", "Larino", "Agnone"],
+    "Valle d'Aosta": ["Saint-Vincent", "Châtillon", "Sarre", "Pont-Saint-Martin", "Courmayeur", "Saint-Pierre"]
+  };
+  var NS_GEO_ALL = null, nsGeoKey = null;
+  function nsStateCities(ns) {
+    var all = NS_GEO_ALL ? NS_GEO_ALL.loc : ITALY_LOCATIONS;
+    var out = [], seen = {};
+    function add(l) { if (!seen[l.name]) { seen[l.name] = 1; out.push(l); } }
+    // la capitale per prima
+    all.forEach(function (l) { if (l.name === ns.capital) add(l); });
+    all.forEach(function (l) { if (ns.regions.indexOf(l.region) !== -1) add(l); });
+    ns.regions.forEach(function (r) { (NS_EXTRA_CITIES[r] || []).forEach(function (c) { add({ name: c, region: r }); }); });
+    if (!seen[ns.capital]) out.unshift({ name: ns.capital, region: ns.regions[0] });
+    return out;
+  }
+  function nsApplyGeography() {
+    if (!NS_GEO_ALL) NS_GEO_ALL = { loc: ITALY_LOCATIONS, reg: ITALIAN_REGIONS, strike: STRIKE_CITIES, upr: UPRISING_CITIES };
+    var ns = state && state.nsCountry && state.newState && !state.newState.over ? state.newState : null;
+    var key = ns ? ns.name + "|" + ns.regions.join(",") : "";
+    if (key === nsGeoKey) return;
+    nsGeoKey = key;
+    if (!ns) {
+      ITALY_LOCATIONS = NS_GEO_ALL.loc; ITALIAN_REGIONS = NS_GEO_ALL.reg; STRIKE_CITIES = NS_GEO_ALL.strike; UPRISING_CITIES = NS_GEO_ALL.upr;
+      return;
+    }
+    var cities = nsStateCities(ns), names = cities.map(function (l) { return l.name; });
+    ITALY_LOCATIONS = cities;
+    ITALIAN_REGIONS = NS_GEO_ALL.reg.filter(function (r) { return ns.regions.indexOf(r.id) !== -1; });
+    STRIKE_CITIES = names.slice(0, 8);
+    UPRISING_CITIES = names.slice();
+  }
+  // Alla nascita dello Stato: le sezioni fuori dai nuovi confini restano all'Italia (non sono più del
+  // partito), quelle dentro restano, la sede nazionale va nella capitale; il numero di sezioni si
+  // ridimensiona sulla popolazione del nuovo Stato, ma chi è radicato nelle sue regioni conserva tutto.
+  function nsMoveSections(ns) {
+    var p = state.player;
+    if (!p || ns.geo) return null;
+    // le sezioni com'erano con la geografia italiana completa
+    var keep = state.nsCountry; state.nsCountry = null; nsApplyGeography();
+    var oldOpen = openNuclei();
+    state.nsCountry = keep; nsApplyGeography();
+    var before = Math.floor(p.sezioni || 0);
+    var inside = oldOpen.filter(function (l) { return ns.regions.indexOf(l.region) !== -1; });
+    var cities = ITALY_LOCATIONS;
+    var share = clamp((ns.pop || 3) / 59, 0.02, 1);
+    var target = Math.max(inside.length + 1, Math.round(before * share * 3), Math.min(3, cities.length));
+    target = Math.min(target, Math.max(before, 1), cities.length + 10);
+    var capital = cities[0];
+    var kept = [capital].concat(inside.filter(function (l) { return l.name !== capital.name; }).map(function (l) { return { name: l.name, region: l.region }; }));
+    p.sezioniLocations = kept.slice(0, Math.max(1, target));
+    p.fallbackLocationOrder = null;
+    p.sezioni = Math.max(target, p.sezioniLocations.length);
+    if (p.sezioniCoalizioni) Object.keys(p.sezioniCoalizioni).forEach(function (c) { if (!cities.some(function (l) { return l.name === c; })) delete p.sezioniCoalizioni[c]; });
+    // ogni città del nuovo Stato ha il suo umore nella scheda della sua regione
+    try { ensureRegionsInit(); } catch (e0) {}
+    if (state.regions) ns.regions.forEach(function (rid) {
+      var reg = state.regions[rid]; if (!reg) return;
+      if (!reg.cities) reg.cities = [];
+      var pool = regionAllThemeIds();
+      cities.forEach(function (l) { if (l.region === rid && !reg.cities.some(function (c) { return c.name === l.name; })) reg.cities.push({ name: l.name, satisfaction: Math.round(40 + Math.random() * 30), focusThemeId: pool[Math.floor(Math.random() * pool.length)] }); });
+    });
+    // le regioni rimaste all'Italia non sono più governate dal partito
+    if (state.regions) Object.keys(state.regions).forEach(function (rid) { if (ns.regions.indexOf(rid) === -1) { state.regions[rid].playerGoverns = false; state.regions[rid].playerIsGovernor = false; } });
+    ns.geo = true;
+    if (before !== p.sezioni) state.log.unshift({ week: state.turn, title: "Le sezioni del nuovo Stato", choiceLabel: "Territorio", result: "Con i nuovi confini il partito conserva " + p.sezioni + " sezioni dentro " + ns.name + " (erano " + before + " in tutta Italia). La sede nazionale si sposta a " + capital.name + ".", headlines: [], type: "istituzioni", cat: "Territorio" });
+    return { before: before, after: p.sezioni };
+  }
+  // Le città del nuovo Stato, una per una: sezione del partito sì o no, e come se la passa (dal
+  // gradimento della città nella scheda regionale, se c'è). Apri una sezione da qui nelle città scoperte.
+  function renderNsCitiesPanel() {
+    var ns = state.newState, p = state.player;
+    if (!ns || !state.nsCountry || !p) return "";
+    var open = {}; openNuclei().forEach(function (l) { open[l.name] = true; });
+    var sat = {};
+    ns.regions.forEach(function (r) { var reg = state.regions && state.regions[r]; (reg && reg.cities || []).forEach(function (c) { sat[c.name] = c.satisfaction; }); });
+    var cities = ITALY_LOCATIONS, covered = cities.filter(function (l) { return open[l.name]; }).length;
+    var rows = cities.map(function (l, i) {
+      var s = sat[l.name];
+      var mood = s === undefined ? "" : s >= 60 ? " · 🙂 soddisfatta" : s >= 40 ? " · 😐 tiepida" : " · 😠 scontenta";
+      return '<span class="nucleo-pill' + (open[l.name] ? " capital" : "") + '" style="' + (open[l.name] ? "" : "opacity:.6") + '"><span class="sw" style="background:' + (open[l.name] ? p.color : "#555") + '"></span>' + fxEsc(l.name) + (i === 0 ? " ★" : "") +
+        '<span class="region">' + (open[l.name] ? "sezione aperta" : "nessuna sezione") + mood + "</span></span>";
+    }).join("");
+    return '<section aria-label="Le città del nuovo Stato"><h3>Le città di ' + fxEsc(ns.name) + '</h3><p class="ci-hint">Il partito è presente in ' + covered + " città su " + cities.length + ". Le nuove sezioni si aprono solo dentro i confini (scheda Territorio); ★ è la capitale.</p>" +
+      '<div class="nuclei-grid">' + rows + "</div></section>";
+  }
   function nsFullTick() {
     var ns = state.newState;
     if (!ns || !ns.full || !state.nsCountry) return;
@@ -43904,7 +44016,7 @@
       } },
     { id: "nuovostato", label: "Il nuovo Stato — riconoscimenti e scelte fondative", icon: "🏳️", nav: "Nuovo Stato",
       visible: function () { return !!(state.nsCountry && state.newState); },
-      render: function () { return renderNsCountryPage(); } },
+      render: function () { return renderNsCountryPage() + renderNsCitiesPanel(); } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", icon: "🗺️", nav: "Territorio", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
@@ -44662,6 +44774,7 @@
     });
   }
   function render() {
+    try { nsApplyGeography(); if (state.nsCountry && state.newState && !state.newState.geo) nsMoveSections(state.newState); } catch (geoErr) { if (window.console) console.error(geoErr); }
     var navScrollSaved = null;
     try { navScrollSaved = navBarsScroll(); } catch (e) {}
     try {
@@ -47067,6 +47180,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "13 novembre 2026", m: "partito", t: "Nuovo Stato: solo le sue città", x: "Nel nuovo Stato compaiono solo le sue città e le sue regioni: sezioni, elezioni locali e regionali, consigli comunali, scioperi e notizie. Alla nascita dello Stato il partito tiene le sezioni dentro i confini e sposta la sede nazionale nella capitale; nella scheda «Nuovo Stato» c'è l'elenco delle città con sezioni e umore." },
     { d: "13 novembre 2026", m: "partito", t: "Il nuovo Stato si governa come l'Italia", x: "Dopo l'indipendenza la partita continua con il gioco completo: dossier, Parlamento con i suoi partiti locali, leggi e trattative, elezioni, governo, Scheda Paese, stampa e telefono. Una nuova scheda «Nuovo Stato» raccoglie riconoscimenti internazionali, rapporti con l'Italia e scelte fondative. Le partite già nel nuovo Stato passano da sole al nuovo sistema." },
     { d: "13 novembre 2026", m: "partito", t: "Correzione: pagina Territorio", x: "Risolto l'errore «Qualcosa è andato storto» che bloccava la partita quando non restava nessun altro partito in gioco da proporre come alleato locale." },
     { d: "13 novembre 2026", m: "tutte", t: "Barra delle schede", x: "Toccando un'icona della barra delle schede, la barra resta dov'era invece di tornare all'inizio." },
@@ -48725,6 +48839,7 @@
   // giustamente, differire molto dai sondaggi della vigilia.
   var WEEKLY_SWING_HARD_CAP = 2.2;
   async function advanceTurnLogic() {
+    try { nsApplyGeography(); } catch (geoErr2) { if (window.console) console.error(geoErr2); }
     try { if (state.player && state.mode !== "president" && state.mode !== "regional_president") { immPhoneTick(state.player); immJournalTick(state.player); } if (state.annexed && state.annexed.length) annexTick(); nsFullTick(); } catch (immErr) { if (window.console) console.error(immErr); }
     var capBefore = {
       lastElectionTurn: state.lastElectionTurn,
