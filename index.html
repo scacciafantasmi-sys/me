@@ -2451,6 +2451,7 @@
   }
   function nationIsWarTarget(n) {
     if (n.id === "svizzera") return false;
+    if (isAnnexed(n.id)) return false;
     if (nationIsEU(n) && !state.leftEu) return false;
     if (nationInNato(n.id) && !state.leftNato) return false;
     return true;
@@ -2483,7 +2484,7 @@
     return clamp(p, 0.02, 0.9);
   }
   function playerWarAllyCandidates(targetId) {
-    return WORLD_NATIONS.filter(function (n) { return n.id !== targetId && n.id !== "svizzera" && italyRelation(n.id) >= 55; })
+    return WORLD_NATIONS.filter(function (n) { return n.id !== targetId && n.id !== "svizzera" && !isAnnexed(n.id) && italyRelation(n.id) >= 55; })
       .sort(function (a, b) { return italyRelation(b.id) - italyRelation(a.id); }).slice(0, 8);
   }
   // Chi si schiera con il paese attaccato: il suo blocco, e chi ha pessimi rapporti con l'Italia; più la
@@ -2524,10 +2525,13 @@
     res.text = res.parts.join(" · ");
     return res;
   }
-  function declarePlayerWar(targetId, motiveId, allyIds) {
+  function declarePlayerWar(targetId, motiveId, allyIds, goal) {
     var p = state.player, can = canDeclareWar();
     var target = nationById(targetId), motive = playerWarMotiveById(motiveId);
     if (!can.ok || !target || !motive || !nationIsWarTarget(target) || !playerWarMotiveCheck(motive, targetId).ok) return null;
+    // Obiettivo dichiarato di annessione: la guerra diventa molto meno credibile (Parlamento, alleati, mondo)
+    var annexGoal = goal === "annessione" || motive.id === "espansione";
+    if (annexGoal && motive.id !== "espansione") motive = Object.assign({}, motive, { legit: Math.max(0, motive.legit - 0.35), label: motive.label + ", con l'obiettivo di annettere il paese" });
     if (!state.foreignRelations) state.foreignRelations = {};
     if (!state.activeConflicts) state.activeConflicts = [];
     var vote = playerWarParliamentVote(motive);
@@ -2550,6 +2554,7 @@
     };
     var support = Math.round(clamp(20 + motive.legit * 55 + rand(-6, 6), 5, 85));
     war.italyPoll = { a: support, b: Math.round((100 - support) * 0.25), n: 100 - support - Math.round((100 - support) * 0.25) };
+    war.goal = annexGoal ? "annessione" : "vittoria";
     state.playerWar = war;
     state.activeConflicts.push({
       id: war.id, playerWar: true, region: conflictRegionFor(target), sideA: "Italia", sideB: target.name, sideAId: "italia", sideBId: targetId,
@@ -2572,7 +2577,7 @@
     state.italyMilitaryStance = "belligerante";
     var names = function (ids) { return ids.map(function (id) { var n = nationById(id); return n ? n.name : id; }).join(", "); };
     text = (vote.parts ? "Il Parlamento approva la deliberazione dello stato di guerra (" + vote.text + ") e il Presidente della Repubblica la dichiara. " : vote.text + " ") +
-      "L'Italia è in guerra con " + target.name + ": " + motive.label.toLowerCase() + ". " +
+      "L'Italia è in guerra con " + target.name + ": " + motive.label.toLowerCase() + ". " + (annexGoal ? "L'obiettivo dichiarato è annettere " + target.name + " all'Italia: nel mondo la notizia fa scalpore. " : "") +
       (allies.length ? "Al tuo fianco: " + names(allies) + ". " : "Nessun paese entra in guerra al tuo fianco. ") +
       (refused.length ? "Hanno detto no: " + names(refused) + ". " : "") +
       (enemies.length ? "Con " + target.name + " si schierano: " + enemies.map(function (e) { return e.name + (e.mode === "guerra" ? " (in guerra)" : " (armi e soldi)"); }).join(", ") + "." : "");
@@ -2630,6 +2635,7 @@
       w.allies.forEach(function (id) { state.foreignRelations[id] = clamp(italyRelation(id) + 6, 0, 100); });
       text = (nationPower(w.targetId) >= 60 ? w.targetName + " accetta una pace alle condizioni dell'Italia dopo " + weeks + " settimane: è una vittoria, con riparazioni per 12 miliardi."
         : w.targetName + " si arrende dopo " + weeks + " settimane: l'Italia vince la guerra e ottiene riparazioni per 12 miliardi.") + (w.legit < 0.5 ? " Ma nel mondo in molti la ricorderanno come una guerra che non andava fatta." : "");
+      if (w.goal === "annessione") text = annexNation(w, weeks);
     } else if (kind === "sconfitta" || kind === "resa") {
       var k = kind === "resa" ? 0.55 : 1;
       cp.economia = clamp(cp.economia - 1.5 * k, 1, 10); cp.felicita = clamp(cp.felicita - 1.5 * k, 1, 10);
@@ -2757,6 +2763,11 @@
         var chk = playerWarMotiveCheck(m, tId);
         return '<button type="button" class="option-card' + (warDraft.motive === m.id ? " selected" : "") + '" data-war-motive="' + m.id + '"' + (chk.ok ? "" : " disabled") + '><span class="olabel">' + m.label + '</span><span class="odesc">' + m.desc + " Credibilità: " + Math.round(m.legit * 100) + "%." + (chk.why ? " " + chk.why : "") + "</span></button>";
       }).join("") + "</div>";
+      var annexOnly = warDraft.motive === "espansione";
+      var goalSel = annexOnly ? "annessione" : (warDraft.goal || "vittoria");
+      html += '<p class="eyebrow" style="margin:.6rem 0 .3rem">Obiettivo della guerra</p><div class="option-grid">' +
+        '<button type="button" class="option-card' + (goalSel === "vittoria" ? " selected" : "") + '" data-war-goal="vittoria"' + (annexOnly ? " disabled" : "") + '><span class="olabel">Vincere e ottenere riparazioni</span><span class="odesc">Il paese resta indipendente e paga i danni di guerra.</span></button>' +
+        '<button type="button" class="option-card' + (goalSel === "annessione" ? " selected" : "") + '" data-war-goal="annessione"><span class="olabel">Conquistare il paese</span><span class="odesc">Se vinci, ' + tgt.name + ' diventa parte dell\'Italia. Una guerra di conquista: meno voti in Parlamento, meno alleati, il mondo contro, e dopo la vittoria resistenza e sanzioni da gestire.</span></button></div>';
       var cands = playerWarAllyCandidates(tId);
       if (cands.length) {
         var mot = playerWarMotiveById(warDraft.motive) || PLAYER_WAR_MOTIVES[1];
@@ -2769,6 +2780,92 @@
         (playerRulesAsRegime() ? "Sotto il regime decidi da solo." : "Servono i sì della maggioranza di Camera e Senato: con una motivazione poco credibile anche i tuoi possono votare contro.") + "</span></button></div>";
     }
     return html + "</details></section>";
+  }
+  // ---------- Annessione dei paesi conquistati ----------
+  // Richiesto da un giocatore: se l'Italia vince una guerra iniziata con l'obiettivo dichiarato di
+  // conquistare il paese, quel paese diventa parte dell'Italia. Con conseguenze: il mondo reagisce
+  // (rapporti, sanzioni, tensione), in casa il Paese si divide, e nei territori annessi c'è una
+  // resistenza da gestire nel tempo, con costi e rivolte, fino alla possibilità di ridare l'indipendenza.
+  var ANNEX_NATIONALIST = { sovranista: 1, nazionalpopolare: 1, fascista: 1, monarchico: 1 };
+  function isAnnexed(id) { return (state.annexed || []).some(function (a) { return a.id === id; }); }
+  function annexNation(w, weeks) {
+    var p = state.player, cp = state.countryProfile, target = nationById(w.targetId) || { name: w.targetName, id: w.targetId };
+    if (!state.annexed) state.annexed = [];
+    if (isAnnexed(w.targetId)) return w.targetName + " è già parte dell'Italia.";
+    var pow = nationPower(w.targetId) || 30;
+    state.annexed.push({ id: w.targetId, name: w.targetName, since: state.turn, resistance: clamp(45 + pow * 0.4, 45, 90), lastRevoltTurn: state.turn });
+    var nat = !!ANNEX_NATIONALIST[p.family];
+    // il mondo reagisce: chi sta nello stesso blocco del paese conquistato più di tutti
+    var bloc = nationBloc(w.targetId);
+    WORLD_NATIONS.forEach(function (n) {
+      if (n.id === w.targetId) return;
+      state.foreignRelations[n.id] = clamp(italyRelation(n.id) - (nationBloc(n.id) === bloc ? 22 : 8), 0, 100);
+    });
+    cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche - 2, 1, 10);
+    cp.commercio = clamp(cp.commercio - (state.leftEu ? 0.5 : 1.1), 1, 10);
+    cp.sicurezza = clamp(cp.sicurezza - 0.5, 1, 10);
+    cp.difesa = clamp(cp.difesa + 0.5, 1, 10);
+    cp.economia = clamp(cp.economia + 0.25, 1, 10);
+    cp.energia = clamp(cp.energia + 0.3, 1, 10);
+    cp.felicita = clamp(cp.felicita + (nat ? 0.3 : -0.4), 1, 10);
+    if (!state.leftEu) state.spreadBps = clamp((state.spreadBps || 100) + 90, 40, 600);
+    state.geopoliticalTension = clamp((state.geopoliticalTension || 30) + 20, 0, 100);
+    state.consensoGoverno = clamp((state.consensoGoverno || 50) + (nat ? 6 : -4), 0, 100);
+    p.reputazione = clamp(p.reputazione + (nat ? -1 : -6), 0, 100);
+    p.sondaggi = clamp(p.sondaggi + (nat ? 1.5 : -1), 0, 40);
+    if (state.bilancioStato) state.bilancioStato.entrate += 4;
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Politica Estera", text: "L'Italia annette " + w.targetName + ": condanna dell'ONU, sanzioni allo studio." });
+    return w.targetName + " si arrende dopo " + weeks + " settimane ed entra a far parte dell'Italia, come era l'obiettivo della guerra. Il tricolore sventola sui palazzi del governo, ma il mondo condanna: " +
+      (state.leftEu ? "rapporti in picchiata con quasi tutti i paesi" : "l'Unione Europea prepara sanzioni, lo spread vola") + ", e nelle città annesse cresce la resistenza. " +
+      (nat ? "In Italia la tua base esulta." : "In Italia il Paese si divide, e anche tra i tuoi qualcuno non ci sta.");
+  }
+  // ogni settimana: la resistenza cala piano, ma costa e pesa sulla sicurezza
+  function annexTick() {
+    (state.annexed || []).forEach(function (a) {
+      a.resistance = clamp(a.resistance - 0.35 + rand(-0.4, 0.4), 5, 100);
+      if (state.bilancioStato) state.bilancioStato.uscite += 0.08 + a.resistance / 400;
+      state.countryProfile.sicurezza = clamp(state.countryProfile.sicurezza - a.resistance / 9000, 1, 10);
+      if (a.resistance >= 30 && state.turn - a.lastRevoltTurn >= 9 && Math.random() < 0.14) a.revoltDue = true;
+    });
+  }
+  function annexRevoltDossier() {
+    var a = (state.annexed || []).filter(function (x) { return x.revoltDue; })[0];
+    if (!a) return null;
+    a.revoltDue = false; a.lastRevoltTurn = state.turn;
+    var city = a.name;
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Territori annessi — " + a.name, cat: "Politica Estera",
+      title: "Rivolta in " + a.name, annexId: a.id,
+      brief: "Nella capitale del territorio annesso (" + city + ") migliaia di persone scendono in piazza contro l'annessione: barricate, scontri, un posto di polizia dato alle fiamme. La resistenza è a " + Math.round(a.resistance) + " su 100. Come risponde il governo?",
+      choices: [
+        { label: "Pugno di ferro: esercito e coprifuoco", hint: "La rivolta si spegne, il mondo protesta", effects: { reputazione: -3, national: { sicurezza: 0.15, relazioniDiplomatiche: -0.3 } }, result: "Coprifuoco, arresti, carri armati nelle piazze: la rivolta si spegne. Le immagini fanno il giro del mondo.", annex: { id: a.id, res: -12 } },
+        { label: "Autonomia speciale: lingua, scuole e governo locale", hint: "Calma la piazza, scontenta i falchi", effects: { reputazione: 1 }, result: "Uno statuto speciale, come per l'Alto Adige: la piazza si svuota piano piano.", annex: { id: a.id, res: -8 } },
+        { label: "Investimenti: strade, ospedali, lavoro", hint: "Lento, costoso, ma funziona", effects: { national: { economia: -0.15 } }, result: "Un piano di investimenti miliardario: cantieri aperti e posti di lavoro. Qualcuno comincia a cambiare idea.", annex: { id: a.id, res: -6 } },
+        { label: "Concedi l'indipendenza", hint: "Fine dell'annessione: sollievo nel mondo, rabbia dei nazionalisti", effects: { reputazione: ANNEX_NATIONALIST[state.player.family] ? -5 : 2 }, result: a.name + " torna indipendente. Il mondo tira un sospiro di sollievo, i nazionalisti gridano al tradimento.", annex: { id: a.id, free: true } }
+      ] };
+  }
+  function annexResolve(choice) {
+    var x = choice && choice.annex;
+    if (!x) return;
+    var a = (state.annexed || []).filter(function (y) { return y.id === x.id; })[0];
+    if (!a) return;
+    if (x.free) {
+      state.annexed = state.annexed.filter(function (y) { return y.id !== x.id; });
+      WORLD_NATIONS.forEach(function (n) { state.foreignRelations[n.id] = clamp(italyRelation(n.id) + 5, 0, 100); });
+      state.foreignRelations[x.id] = 30;
+      state.geopoliticalTension = clamp((state.geopoliticalTension || 30) - 10, 0, 100);
+      return;
+    }
+    a.resistance = clamp(a.resistance + x.res, 5, 100);
+  }
+  function renderAnnexedPanel() {
+    var list = state.annexed || [];
+    if (!list.length) return "";
+    return '<section aria-label="Territori annessi"><h3>🇮🇹 Territori annessi</h3><p class="ci-hint">Paesi conquistati in guerra e diventati parte dell\'Italia. Finché la resistenza resta alta costano ogni settimana, pesano sulla sicurezza e possono ribellarsi.</p>' +
+      list.map(function (a) {
+        return '<div class="stat-tile" style="margin-bottom:8px"><div class="label">' + fxEsc(a.name) + ' · annesso da ' + (state.turn - a.since) + ' settimane</div><div class="row"><span class="value">Resistenza ' + Math.round(a.resistance) + '/100</span></div>' +
+          '<div class="gauge"><span style="width:' + Math.round(a.resistance) + '%;background:' + (a.resistance >= 60 ? "var(--critical)" : a.resistance >= 30 ? "var(--warning)" : "var(--good)") + '"></span></div></div>';
+      }).join("") + '</section>';
   }
   var WORLD_WAR_TENSION_THRESHOLD = 88;
   var WORLD_WAR_MIN_ACTIVE_CONFLICTS = 2;
@@ -43694,7 +43791,7 @@
       visible: function () { return !!(state.player && state.playerMinistry && state.cabinet && state.cabinet.premierId !== "player"); },
       render: function () { return renderMinisteroPage(); } },
     { id: "europa", label: "Europa e Mondo — Geopolitica", icon: "🌍", nav: "Estero", render: function () {
-        return renderGeopoliticalTensionPanel() + renderPlayerWarPanel() + renderReaccessionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations() + renderTransnationalWorks();
+        return renderGeopoliticalTensionPanel() + renderAnnexedPanel() + renderPlayerWarPanel() + renderReaccessionPanel() + renderEuInitiatives() + renderGeopolitica() + renderEuHemicycle() + renderEuParliament() + renderForeignRelations() + renderInternationalOrganizations() + renderTransnationalWorks();
       } },
     { id: "coalizioni", label: "Coalizioni e Alleanze", icon: "🤝", nav: "Alleanze", render: function () {
         return renderReunificationPanel() + renderCoalitionPanel();
@@ -46915,6 +47012,8 @@
   // ---- Quando arrivano i momenti "nostri" ----
   function immDueDossier() {
     var p = state.player, im = ensureImm(p);
+    var annexD = annexRevoltDossier();
+    if (annexD) return annexD;
     if (!im || p.formationComplete === false || state.regime) return null;
     if (im.pendingSpeech) { var k = im.pendingSpeech; im.pendingSpeech = null; return immSpeechDossier(k); }
     var left = state.nextElectionTurn - state.turn;
@@ -46940,6 +47039,7 @@
       var p = state.player, im = p && ensureImm(p);
       if (speech) { immResolveSpeech(dossier, choice); return; }
       if (dossier && dossier.id === CONGRESSO_DOSSIER.id && im) im.pendingSpeech = "congresso";
+      if (choice && choice.annex) annexResolve(choice);
       if (choice && choice.imm && choice.imm.kind === "direzione") {
         immApplyEff(p, { trust: choice.imm.trust, rep: choice.imm.rep });
         (choice.imm.others || []).forEach(function (n) { if (Math.random() < 0.5) im.grudges[n] = 1; });
@@ -48014,7 +48114,10 @@
       });
     });
     var warTargetSel = document.getElementById("war-target");
-    if (warTargetSel) warTargetSel.addEventListener("change", function () { warDraft = { target: warTargetSel.value, motive: "", allies: {} }; render(); });
+    if (warTargetSel) warTargetSel.addEventListener("change", function () { warDraft = { target: warTargetSel.value, motive: "", allies: {}, goal: "vittoria" }; render(); });
+    app.querySelectorAll("[data-war-goal]").forEach(function (btn) {
+      btn.addEventListener("click", function () { if (btn.disabled) return; warDraft.goal = btn.getAttribute("data-war-goal"); render(); });
+    });
     app.querySelectorAll("[data-war-motive]").forEach(function (btn) {
       btn.addEventListener("click", function () { if (btn.disabled) return; warDraft.motive = btn.getAttribute("data-war-motive"); render(); });
     });
@@ -48026,7 +48129,7 @@
       if (warBtn.disabled) return;
       var tgt = nationById(warDraft.target);
       if (!tgt || !window.confirm("Vuoi davvero portare l'Italia in guerra contro " + tgt.name + "? Non si torna indietro.")) return;
-      var out = declarePlayerWar(warDraft.target, warDraft.motive, Object.keys(warDraft.allies).filter(function (k) { return warDraft.allies[k]; }));
+      var out = declarePlayerWar(warDraft.target, warDraft.motive, Object.keys(warDraft.allies).filter(function (k) { return warDraft.allies[k]; }), warDraft.goal);
       if (!out) return;
       warDraft = { target: "", motive: "", allies: {} };
       state.resultData = out;
@@ -48443,7 +48546,7 @@
   // giustamente, differire molto dai sondaggi della vigilia.
   var WEEKLY_SWING_HARD_CAP = 2.2;
   async function advanceTurnLogic() {
-    try { if (state.player && state.mode !== "president" && state.mode !== "regional_president") { immPhoneTick(state.player); immJournalTick(state.player); } } catch (immErr) { if (window.console) console.error(immErr); }
+    try { if (state.player && state.mode !== "president" && state.mode !== "regional_president") { immPhoneTick(state.player); immJournalTick(state.player); } if (state.annexed && state.annexed.length) annexTick(); } catch (immErr) { if (window.console) console.error(immErr); }
     var capBefore = {
       lastElectionTurn: state.lastElectionTurn,
       playerSondaggi: state.player ? state.player.sondaggi : null,
