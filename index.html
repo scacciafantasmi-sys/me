@@ -3009,6 +3009,7 @@
   var EU_REJOIN_COOLDOWN_TURNS = 50;
   var EU_REJOIN_MIN_RELAZIONI = 4;
   function renderReaccessionPanel() {
+    if (state.nsCountry) return "";
     var p = state.player;
     if (!p || state.regime || (!state.leftNato && !state.leftEu)) return "";
     if (p.parliamentRole !== "governo" && !state.leftEu) return "";
@@ -25879,6 +25880,7 @@
     return html;
   }
   function renderEuInitiatives() {
+    if (state.nsCountry) return "";
     var p = state.player;
     if (!p || !p.seggiEuropei) return "";
     if (!p.euInitiativeCooldownTurn) p.euInitiativeCooldownTurn = 0;
@@ -31425,7 +31427,7 @@
       mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
     } else if (state.player) {
       mastheadTitle.textContent = state.player.name;
-      mastheadTagline.textContent = state.player.formationComplete
+      mastheadTagline.textContent = state.nsCountry ? "Al governo di " + state.nsCountry.name + " · capitale " + state.nsCountry.capital : state.player.formationComplete
         ? familyById(state.player.family).label + " · " + leadershipById(state.player.leadership).label
         : "Comitato Promotore — in formazione";
       mastheadMeta.innerHTML = '<div class="week">Settimana ' + state.turn + '</div><div class="date">' + weekLabel(state.turn) + '</div>';
@@ -38133,6 +38135,7 @@
     return applyChoice(dossier, choice);
   }
   function renderEuCampaignPanel() {
+    if (state.nsCountry) return "";
     var p = state.player;
     if (!p || !inEuCampaignWindow()) return "";
     if (!p.euCampaignCooldowns) p.euCampaignCooldowns = {};
@@ -42429,6 +42432,7 @@
   // seggi VERI usciti dall'ultima elezione europea (state.euParliamentSeats) quando ci sono già stati,
   // altrimenti una proiezione sui sondaggi di oggi, per mostrare sempre qualcosa fin da subito.
   function renderEuHemicycle() {
+    if (state.nsCountry) return "";
     var seats = state.euParliamentSeats;
     var isReal = !!(seats && seats.byParty);
     var byParty = isReal ? seats.byParty : projectEuSeatsByParty();
@@ -42457,6 +42461,7 @@
         '<p class="ci-hint">Classifica completa dei partiti, percentuali sui voti validi e seggi conquistati (soglia ' + EU_THRESHOLD + '%).</p>' + renderEuElectionStandings(false) + "</details></section>" : "");
   }
   function renderEuParliament() {
+    if (state.nsCountry) return "";
     var p = state.player;
     var weeksToEU = state.nextEuropeanElectionTurn - state.turn;
     var weeksToLocal = state.nextLocalElectionTurn - state.turn;
@@ -43397,8 +43402,7 @@
     ns.diary.unshift({ week: state.turn, title: "Nasce " + ns.name, text: "Oggi a " + ns.capital + " è stata proclamata l'indipendenza. " + nsListAnd(ns.regions) + (ns.regions.length > 1 ? " formano" : " forma") + " da oggi " + ns.name + ", " + fmt1(ns.pop) + " milioni di abitanti." + (agreed ? " L'Italia riconosce il risultato del referendum." : " Roma non riconosce il voto: la strada sarà in salita.") });
     state.indep.founding = null;
     state.indep.done = true;
-    state.phase = "nuovostato";
-    nsGenerateDossiers(ns);
+    nsEnterFullGovernance(ns);
     save();
     render();
   }
@@ -43778,10 +43782,129 @@
   // lunghissima. "icon" e "nav" sono usati solo da quella barra: "icon" è il mini logo del pulsante
   // rotondo, "nav" l'etichetta breve sotto (il "label" completo resta il tooltip e il testo per chi
   // usa uno screen reader).
+  // ---------- Il nuovo Stato si governa come l'Italia ----------
+  // Segnalato da un giocatore: dopo l'indipendenza la partita "finiva", con poche azioni ripetitive.
+  // Ora, nato il nuovo Stato, si torna al gioco completo (dossier, Parlamento, leggi e trattative,
+  // elezioni, governo, Scheda Paese, stampa, telefono, direzione...) con il nuovo Stato al posto
+  // dell'Italia: un Parlamento tutto suo, partiti locali, il tuo partito al governo. Restano le cose
+  // proprie di uno Stato appena nato: riconoscimenti internazionali, rapporti con l'Italia, scelte fondative.
+  var NS_LOCAL_LABELS = [{ l: "Unione", g: "f" }, { l: "Alleanza", g: "f" }, { l: "Movimento", g: "m" }, { l: "Partito", g: "m" }, { l: "Fronte", g: "m" }, { l: "Lista", g: "f" }, { l: "Rinascita", g: "f" }];
+  var NS_LOCAL_FAMILIES = ["progressista", "sovranista", "liberale", "movimentista", "cattolico", "sinistra", "europeista"];
+  function nsLocalParties(ns, playerFamily) {
+    var fams = NS_LOCAL_FAMILIES.filter(function (f) { return f !== playerFamily; }).slice(0, 6);
+    var used = {};
+    return fams.map(function (fid, i) {
+      var fam = familyById(fid) || { id: fid, label: fid };
+      var lab = NS_LOCAL_LABELS[(i + ns.name.length) % NS_LOCAL_LABELS.length];
+      var word = pickFamilyPartyWord(fid, lab.g);
+      var name = lab.l + " " + word + (i % 2 === 0 ? " di " + ns.name : "");
+      if (used[name]) name += " " + (i + 1);
+      used[name] = 1;
+      return {
+        id: "nsp_" + fid, name: name, short: name.split(" ").filter(function (w) { return w.length > 2; }).map(function (w) { return w[0]; }).join("").toUpperCase().slice(0, 4),
+        color: SWATCHES[(i + 1) % SWATCHES.length], coalition: "opposizione", dynamic: true, nsLocal: true, parentId: null, familyId: fid,
+        leader: generateStaffName(), famiglia: fam.label, corrente: "Partito nato in " + ns.name + " dopo l'indipendenza, area " + String(fam.label).toLowerCase()
+      };
+    });
+  }
+  function nsEnterFullGovernance(ns) {
+    var p = state.player;
+    state.nsCountry = { name: ns.name, capital: ns.capital, since: state.turn };
+    // fuori i partiti italiani, dentro quelli del nuovo Stato
+    var locals = nsLocalParties(ns, p.family);
+    state.dissolvedPartyIds = PARTIES.map(function (pt) { return pt.id; }).concat((state.dynamicParties || []).map(function (d) { return d.id; }));
+    state.dynamicParties = (state.dynamicParties || []).concat(locals);
+    var mine = clamp(Math.round((ns.m.consenso * 0.55) * 10) / 10, 22, 45);
+    var rest = 100 - mine - 4, weights = locals.map(function () { return 0.5 + Math.random(); }), tw = weights.reduce(function (a, b) { return a + b; }, 0);
+    state.parties = {};
+    locals.forEach(function (pt, i) { state.parties[pt.id] = Math.round(rest * weights[i] / tw * 10) / 10; });
+    state.indecisi = 4;
+    state.partyBaselines = {};
+    locals.forEach(function (pt) { state.partyBaselines[pt.id] = state.parties[pt.id]; });
+    state.partyRelations = {};
+    locals.forEach(function (pt) { state.partyRelations[pt.id] = partyRelationRestPoint(p, pt); });
+    Object.keys(COALITIONS).forEach(function (k) { COALITIONS[k].members = []; });
+    state.dynamicCoalitions = [];
+    // il tuo partito governa il nuovo Stato
+    p.sondaggi = mine; p.sondaggiHistory = [mine]; p.baselineSondaggi = mine;
+    p.inParliament = true; p.everElected = true; p.parliamentRole = "governo"; p.allianceId = null;
+    p.seatsCamera = Math.round(400 * mine / 100 * 1.25); p.seatsSenato = Math.round(200 * mine / 100 * 1.25);
+    p.pendingLegge = null; p.pendingMozione = null;
+    state.govEntity = { id: "player", memberIds: ["player"], premierName: p.leaderName || p.name, formedTurn: state.turn, minority: p.seatsCamera < 201 };
+    state.cabinet = { turn: state.turn, premierId: "player", ministries: {}, assignments: {} };
+    state.parliamentSeats = null;
+    state.consensoGoverno = clamp(ns.m.consenso, 30, 80);
+    state.president = { name: generateStaffName(), leaning: "centro", background: "primo Presidente di " + ns.name, electedTurn: state.turn, popular: false, termCount: 1, isPlayer: false };
+    state.nextPresidentElectionTurn = state.turn + 364;
+    state.nextElectionTurn = ns.nextElection || state.turn + 156;
+    state.lastElectionTurn = state.turn;
+    state.nextEuropeanElectionTurn = 99999;
+    state.playerWar = null;
+    state.phase = "building";
+    state.uiPage = "nuovostato";
+    state.aiDynamicDossier = {
+      id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Il primo governo di " + ns.name, cat: "Governo",
+      title: "Si insedia il primo governo di " + ns.name,
+      brief: "A " + ns.capital + " giura il primo governo del nuovo Stato, guidato da " + (p.leaderName || p.name) + ". Da oggi " + ns.name + " ha un Parlamento tutto suo, partiti nuovi, una Scheda Paese da far crescere e un mondo da convincere. Qual è la prima priorità?",
+      choices: [
+        { label: "Economia e lavoro: rassicurare imprese e mercati", hint: "Crescita e fiducia", effects: { reputazione: 2, national: { economia: 0.4, aziende: 0.3 } }, result: "Il primo decreto è per le imprese: i mercati tirano un sospiro di sollievo." },
+        { label: "Servizi: scuole, ospedali, trasporti", hint: "Consenso popolare", effects: { visibilita: 3, national: { sanita: 0.3, scuola: 0.2, trasporti: 0.2 } }, result: "Il governo parte dai servizi: ai cittadini piace." },
+        { label: "Diplomazia: farsi riconoscere nel mondo", hint: "Rapporti internazionali", effects: { reputazione: 1, national: { relazioniDiplomatiche: 0.5 } }, result: "Il ministro degli Esteri parte per un lungo giro di capitali.", nsDiplo: true }
+      ]
+    };
+    state.currentDossierId = "ai_dynamic";
+    ns.full = true;
+    ns.diary.unshift({ week: state.turn, title: "Comincia il governo", text: "Il nuovo Stato si governa come un paese vero: Parlamento, leggi, elezioni, partiti." });
+    addDiaryEntry("Il primo governo di " + ns.name, "Oggi giura il primo governo di " + ns.name + ". Non c'è più l'Italia sopra di noi: adesso tocca a noi.");
+  }
+  // ogni settimana: riconoscimenti internazionali e rapporti con l'Italia continuano a muoversi
+  function nsFullTick() {
+    var ns = state.newState;
+    if (!ns || !ns.full || !state.nsCountry) return;
+    var m = ns.m, cp = state.countryProfile;
+    m.rapportiItalia = clamp(m.rapportiItalia + (40 - m.rapportiItalia) * 0.01 + (cp.relazioniDiplomatiche - 5) * 0.05 + rand(-0.5, 0.5), 0, 100);
+    m.riconoscimento = clamp(m.riconoscimento + (m.rapportiItalia > 50 ? 0.06 : -0.03) + (cp.relazioniDiplomatiche - 5) * 0.03 + rand(-0.3, 0.3), 0, 100);
+    var italyOk = ns.recognized.indexOf("Italia") !== -1;
+    var notYet = NS_RECOGNIZERS.filter(function (c) { return ns.recognized.indexOf(c) === -1 && c !== "Italia" && (italyOk || m.riconoscimento >= 75 || NS_EU_MEMBERS.indexOf(c) === -1); });
+    if (!italyOk && m.rapportiItalia >= 60 && m.riconoscimento >= 40) notYet.unshift("Italia");
+    if (notYet.length) {
+      var next = notYet[0], chance = next === "Italia" ? 0.025 : m.riconoscimento / 2200 * (italyOk ? 2 : 1);
+      if (Math.random() < chance) {
+        ns.recognized.push(next);
+        m.riconoscimento = clamp(m.riconoscimento + 1, 0, 100);
+        state.log.unshift({ week: state.turn, title: next + " riconosce " + ns.name, choiceLabel: "Diplomazia", result: next + " stabilisce relazioni diplomatiche ufficiali con " + ns.name + ".", headlines: [], type: "istituzioni", cat: "Politica Estera" });
+      }
+    }
+  }
+  function renderNsCountryPage() {
+    var ns = state.newState;
+    if (!ns || !state.nsCountry) return "";
+    var m = ns.m;
+    var html = '<section aria-label="Il nuovo Stato"><div class="setup-card" style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">' + nsFlagHtml(ns, 88) +
+      '<div><p class="eyebrow">Stato indipendente dal ' + weekLabel(ns.foundedTurn).replace(/^.*– /, "") + '</p><h2 style="margin:.2rem 0">' + fxEsc(ns.name) + '</h2><p class="ci-hint" style="margin:0">Capitale ' + fxEsc(ns.capital) + ' · ' + nsListAnd(ns.regions) + '</p></div></div>' +
+      '<div class="stat-grid">' + careerGauge("Riconoscimento internazionale", m.riconoscimento, 25) + careerGauge("Rapporti con l'Italia", m.rapportiItalia, 25) + '</div>' +
+      '<p class="ci-hint">' + (ns.recognized.length ? "Vi riconoscono " + ns.recognized.length + " paesi: " + ns.recognized.join(", ") + "." : "Ancora nessun paese vi riconosce ufficialmente.") + ' Le relazioni diplomatiche della Scheda Paese aiutano i riconoscimenti; quello dell\'Italia arriva solo con rapporti buoni.</p></section>';
+    var todo = NS_FOUNDING.filter(function (f) { return !ns.founding[f.id]; });
+    html += '<section aria-label="Scelte fondative"><h3>Le scelte fondative</h3>' + NS_FOUNDING.map(function (f) {
+      if (ns.founding[f.id]) return '<div class="stat-tile"><div class="label">' + f.title + '</div><div class="row"><span class="value" style="font-size:1rem">' + ns.founding[f.id] + '</span></div></div>';
+      return '<div class="dossier"><span class="chip neutral cat">Fondazione</span><h2>' + f.title + '</h2><p class="brief">' + f.text + '</p><div class="choices">' + f.opts.map(function (o, j) {
+        return '<button type="button" class="choice-btn" data-ns-found="' + f.id + '" data-ns-opt="' + j + '"><span class="clabel">' + o[0] + '</span>' + (o[3] ? '<span class="chint">Riuscita incerta</span>' : "") + '</button>';
+      }).join("") + '</div></div>';
+    }).join("") + (todo.length ? "" : '<p class="ci-hint">Tutte le scelte fondative sono fatte.</p>') + '</section>';
+    return html;
+  }
+  if (typeof document !== "undefined") document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest && e.target.closest("[data-ns-found]");
+    if (!b || state.phase === "nuovostato") return;
+    nsResolveFounding(b.getAttribute("data-ns-found"), parseInt(b.getAttribute("data-ns-opt"), 10));
+  });
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", icon: "🏛️", nav: "Partito", render: function () {
         return renderIndependencePanel() + renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderEuCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
       } },
+    { id: "nuovostato", label: "Il nuovo Stato — riconoscimenti e scelte fondative", icon: "🏳️", nav: "Nuovo Stato",
+      visible: function () { return !!(state.nsCountry && state.newState); },
+      render: function () { return renderNsCountryPage(); } },
     { id: "territorio", label: "Territorio — sezioni e cronaca locale", icon: "🗺️", nav: "Territorio", render: function () {
         return renderLocalSectionPanel() + renderItalyMap() + renderRegionsPanel() + renderNucleiUpdates() + renderWorldNews();
       } },
@@ -44631,6 +44754,7 @@
 
     if (state.phase === "setup") { renderSetup(); return; }
     if (state.phase === "career") { renderCareerDashboard(); return; }
+    if (state.phase === "nuovostato" && state.newState && !state.newState.over && state.player) { nsEnterFullGovernance(state.newState); save(); renderMasthead(); }
     if (state.phase === "nuovostato" && state.newState) { renderNuovoStato(); return; }
     if (state.player && state.indep && state.indep.founding) { renderIndepFounding(); return; }
     if (state.player && state.indep && state.indep.pendingResult) { renderIndepResult(); return; }
@@ -46943,6 +47067,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "13 novembre 2026", m: "partito", t: "Il nuovo Stato si governa come l'Italia", x: "Dopo l'indipendenza la partita continua con il gioco completo: dossier, Parlamento con i suoi partiti locali, leggi e trattative, elezioni, governo, Scheda Paese, stampa e telefono. Una nuova scheda «Nuovo Stato» raccoglie riconoscimenti internazionali, rapporti con l'Italia e scelte fondative. Le partite già nel nuovo Stato passano da sole al nuovo sistema." },
     { d: "13 novembre 2026", m: "partito", t: "Correzione: pagina Territorio", x: "Risolto l'errore «Qualcosa è andato storto» che bloccava la partita quando non restava nessun altro partito in gioco da proporre come alleato locale." },
     { d: "13 novembre 2026", m: "tutte", t: "Barra delle schede", x: "Toccando un'icona della barra delle schede, la barra resta dov'era invece di tornare all'inizio." },
     { d: "13 novembre 2026", m: "partito", t: "Guerre di conquista", x: "Quando dichiari guerra scegli anche l'obiettivo: se scegli di conquistare il paese e vinci, diventa parte dell'Italia. Con sanzioni, tensione internazionale e una resistenza da gestire nei territori annessi." },
@@ -47027,9 +47152,9 @@
   ];
   function immGiroDossier(p, weeksLeft) {
     return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Campagna elettorale — mancano " + weeksLeft + " settimane al voto", cat: "Campagna elettorale",
-      title: weeksLeft === 3 ? "Il giro d'Italia: la prima settimana" : "Il giro d'Italia: la settimana decisiva",
+      title: (state.nsCountry ? "Il giro di " + state.nsCountry.name : "Il giro d'Italia") + (weeksLeft === 3 ? ": la prima settimana" : ": la settimana decisiva"),
       brief: "Il pullman della campagna è pronto, i sondaggisti aggiornano i numeri ogni sera. Questa settimana puoi battere una sola parte del Paese: comizi, mercati, fabbriche, piazze. Dove vai?",
-      choices: IMM_GIRI.map(function (g) { return { label: g[0], hint: g[1], effects: { fondi: -1500, visibilita: 3, sondaggi: +(0.15 + Math.random() * 0.4).toFixed(2) }, result: "Una settimana di tappe: " + g[0].split(": ")[1] + ". Piazze piene in due città su tre, una contestazione, tanti selfie. I sondaggisti registrano il movimento.", imm: { kind: "giro" } }; }) };
+      choices: (state.nsCountry && state.newState ? state.newState.regions.map(function (r) { return [r + ": " + (r === state.nsCountry.capital ? "la capitale" : "città e paesi di " + r), "Comizi, mercati, fabbriche"]; }).concat([["La capitale: " + state.nsCountry.capital, "Palazzi, media, uffici"], ["Le valli e le aree interne: paesi che si svuotano", "Servizi che mancano"]]) : IMM_GIRI).map(function (g) { return { label: g[0], hint: g[1], effects: { fondi: -1500, visibilita: 3, sondaggi: +(0.15 + Math.random() * 0.4).toFixed(2) }, result: "Una settimana di tappe: " + g[0].split(": ")[1] + ". Piazze piene in due città su tre, una contestazione, tanti selfie. I sondaggisti registrano il movimento.", imm: { kind: "giro" } }; }) };
   }
   // ---- 11. I discorsi scritti a mano ----
   var IMM_SPEECH = {
@@ -48600,7 +48725,7 @@
   // giustamente, differire molto dai sondaggi della vigilia.
   var WEEKLY_SWING_HARD_CAP = 2.2;
   async function advanceTurnLogic() {
-    try { if (state.player && state.mode !== "president" && state.mode !== "regional_president") { immPhoneTick(state.player); immJournalTick(state.player); } if (state.annexed && state.annexed.length) annexTick(); } catch (immErr) { if (window.console) console.error(immErr); }
+    try { if (state.player && state.mode !== "president" && state.mode !== "regional_president") { immPhoneTick(state.player); immJournalTick(state.player); } if (state.annexed && state.annexed.length) annexTick(); nsFullTick(); } catch (immErr) { if (window.console) console.error(immErr); }
     var capBefore = {
       lastElectionTurn: state.lastElectionTurn,
       playerSondaggi: state.player ? state.player.sondaggi : null,
