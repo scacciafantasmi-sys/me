@@ -32288,6 +32288,69 @@
     { delta: -4, text: "La nuova riforma del voto in condotta voluta dal governo {party} divide gli studenti e accende le assemblee." }
   ];
   // Richiesto da un giocatore: anche da studente si deve poter vedere lo stato del paese e chi governa.
+  // ---------- Carriera: il lavoro del governo e del Parlamento ----------
+  // Ogni 3-5 settimane il governo in carica porta in Aula una legge o un decreto (e ogni tanto l'opposizione
+  // una mozione): passa o no secondo i numeri e la fiducia, e ha conseguenze sulla Scheda Paese, un po'
+  // subito e il resto nei mesi successivi. Tutto finisce nell'archivio di «L'Italia oggi».
+  var CAREER_GOV_BILLS = [
+    ["La legge di bilancio", "economia", "felicita"], ["Il decreto sicurezza", "sicurezza", "giustizia"], ["La riforma della giustizia", "giustizia"], ["Il decreto energia", "energia", "ambientalismo"],
+    ["La riforma del lavoro", "disoccupazione", "salari"], ["Il piano casa", "casa"], ["La riforma della scuola", "scuola"], ["Il decreto sulle liste d'attesa", "sanita"],
+    ["La riforma fiscale", "economia", "welfare"], ["Il decreto flussi", "immigrazione"], ["Il piano infrastrutture", "trasporti", "ambientalismo"], ["La legge sul salario minimo", "salari", "aziende"],
+    ["Il decreto per le imprese", "aziende"], ["La riforma delle pensioni", "welfare", "economia"], ["La legge sul clima", "ambientalismo", "aziende"], ["Il decreto anticorruzione", "corruzione"],
+    ["Il piano per la ricerca", "ricercaSviluppo"], ["Il decreto export", "commercio"], ["Il piano per la difesa", "difesa", "economia"], ["Il decreto contro il caro prezzi", "inflazione"]
+  ];
+  function careerGovWorkTick() {
+    var ge = state.govEntity;
+    if (!ge) return;
+    if (!state.careerGovActs) state.careerGovActs = [];
+    if (state.careerGovNext === undefined) state.careerGovNext = state.turn + 2 + Math.floor(Math.random() * 3);
+    // gli effetti che maturano nel tempo
+    (state.careerGovFx || []).forEach(function (f) { try { applyCountryMetricDelta(f.k, f.per); } catch (e) {} f.weeks--; });
+    state.careerGovFx = (state.careerGovFx || []).filter(function (f) { return f.weeks > 0; });
+    if (state.turn < state.careerGovNext) return;
+    state.careerGovNext = state.turn + 3 + Math.floor(Math.random() * 3);
+    var lead = partyById(leadingGovPartyId());
+    var fromOpp = Math.random() < 0.22;
+    var bill = CAREER_GOV_BILLS[Math.floor(Math.random() * CAREER_GOV_BILLS.length)];
+    var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 55;
+    var pPass = fromOpp ? 0.15 : clamp(0.62 + (cg - 50) / 120 - (ge.minority ? 0.2 : 0), 0.25, 0.9);
+    var passed = Math.random() < pPass;
+    var by = fromOpp ? "Opposizione" : (lead ? lead.name : "Governo");
+    var title = fromOpp ? "Mozione dell'opposizione su " + bill[0].replace(/^(La|Il|Lo|L') /, "").toLowerCase() : bill[0];
+    var lbl = function (k) { return (METRIC_LABELS[k] || k).replace(/^(il|la|lo|l'|i|gli|le) ?/i, ""); };
+    var fmtD = function (k, v) { var t = lbl(k); return t.charAt(0).toUpperCase() + t.slice(1) + " " + (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1).replace(".", ","); };
+    var now = [], later = [];
+    if (passed) {
+      var d0 = rand(0.05, 0.15); try { applyCountryMetricDelta(bill[1], d0); } catch (e) {} now.push(fmtD(bill[1], d0));
+      if (bill[2] && !fromOpp) { var c0 = -rand(0.05, 0.15); try { applyCountryMetricDelta(bill[2], c0); } catch (e) {} now.push(fmtD(bill[2], c0)); }
+      var q = Math.random() < 0.18 ? -1 : 1, tot = q * rand(0.2, 0.5), wk = 20 + Math.floor(rand(0, 30));
+      if (!state.careerGovFx) state.careerGovFx = [];
+      state.careerGovFx.push({ k: bill[1], per: tot / wk, weeks: wk });
+      later.push(fmtD(bill[1], tot) + " entro " + Math.round(wk / 4.3) + " mesi" + (q < 0 ? " (non come promesso)" : ""));
+      if (!fromOpp) state.consensoGoverno = clamp(cg + rand(0.5, 2), 0, 100);
+    } else if (!fromOpp) {
+      state.consensoGoverno = clamp(cg - rand(1.5, 3.5), 0, 100); now.push("Fiducia nel governo in calo");
+    }
+    var yes = passed ? 201 + Math.floor(Math.random() * 60) : 140 + Math.floor(Math.random() * 55);
+    state.careerGovActs.unshift({ turn: state.turn, title: title, by: by, passed: passed, tally: "Camera: " + yes + " sì, " + (400 - yes - 6) + " no", fxNow: now.join(" · "), fxLater: later.join(" · "), premier: ge.premierName || (lead && lead.leader) || "" });
+    if (state.careerGovActs.length > 300) state.careerGovActs.length = 300;
+  }
+  function renderCareerGovWork() {
+    var acts = state.careerGovActs || [];
+    var html = '<section aria-label="Il lavoro del governo"><h3>Il lavoro del governo e del Parlamento</h3>';
+    if (!acts.length) return html + '<p class="ci-hint">Il Parlamento non ha ancora votato nulla di rilevante in questa legislatura. Le prime leggi arriveranno a breve.</p></section>';
+    var ok = acts.filter(function (a) { return a.passed; }).length;
+    html += '<p class="ci-hint">' + acts.length + " voti in archivio: " + ok + " approvati, " + (acts.length - ok) + " respinti. Ogni legge approvata cambia la Scheda Paese, un po' subito e il resto nei mesi successivi.</p>";
+    var years = {}; acts.forEach(function (a) { var y = +weekLabel(a.turn).slice(-4); (years[y] = years[y] || []).push(a); });
+    Object.keys(years).sort(function (a, b) { return b - a; }).forEach(function (y, i) {
+      var list = years[y], okY = list.filter(function (a) { return a.passed; }).length;
+      html += '<details class="log"' + (i === 0 ? " open" : "") + "><summary>" + y + " — " + okY + " approvati, " + (list.length - okY) + " respinti<span>▾</span></summary><ul class=\"enacted-policy-list\">" + list.map(function (a) {
+        return "<li>" + (a.passed ? "✔ <strong>Approvato</strong>" : "✖ <strong>Respinto</strong>") + " — " + fxEsc(a.title) + ' <span class="ci-hint">(' + fxEsc(a.by) + " · " + a.tally + ")</span>" +
+          (a.fxNow || a.fxLater ? '<br><span class="ci-hint">' + (a.fxNow ? "Subito: " + a.fxNow : "") + (a.fxLater ? (a.fxNow ? " · " : "") + "Nel tempo: " + a.fxLater : "") + "</span>" : "") + "</li>";
+      }).join("") + "</ul></details>";
+    });
+    return html + "</section>";
+  }
   function renderCareerCountryTab() {
     var ge = state.govEntity;
     var lead = partyById(leadingGovPartyId());
@@ -32323,6 +32386,7 @@
         return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + (e.title === "Cronaca politica" && e.choiceLabel ? e.choiceLabel : e.title) + "</strong><br>" + (e.result || "") + "</div>";
       }).join("") + "</section>";
     }
+    html += renderCareerGovWork();
     html += renderPresidentCard();
     html += renderCountryProfile().replace('<details class="log">', '<details class="log" open>');
     html += renderPopulationPanel();
@@ -36077,6 +36141,7 @@
       } else careerResolveElection(c, "politiche");
     }
     careerNationalPolitics(c);
+    try { careerGovWorkTick(); } catch (gErr) { if (window.console) console.error(gErr); }
     careerCountryDrift();
     if (polBefore !== state.careerNextPolitiche && c.office && c.office.id === "ministro") {
       if (!careerPartyInGov(c) || Math.random() < 0.5) { addCareerDiaryEntry("Nuovo governo", "Il nuovo esecutivo non ti conferma al ministero."); c.office = null; }
@@ -37019,7 +37084,7 @@
     var L = c.local[key];
     if (L) return L;
     var h = localHash(key);
-    var legStart = kind !== "partito" && c.office && c.office.since !== undefined ? c.office.since : state.turn;
+    var legStart = kind !== "partito" && c.office && c.office.since !== undefined && localKindOf(c) === kind ? c.office.since : state.turn - (kind === "partito" ? 0 : localHash(kind + place) % 200);
     L = c.local[key] = { kind: kind, place: place, legStart: legStart, legNo: (kind === "comune" ? 10 : kind === "partito" ? 3 : 9) + h % 5, metrics: {}, prev: {}, snapTurn: state.turn, atti: [], nextBg: state.turn + 3 + h % 4 };
     localMetricDefs(kind).forEach(function (m, i) { L.metrics[m[0]] = Math.round((4 + ((h >> i) % 31) / 10 + rand(-0.4, 0.4)) * 10) / 10; });
     L.metrics.gradimento = Math.round((4.5 + (h % 25) / 10) * 10) / 10;
@@ -37078,6 +37143,18 @@
     for (var i = 0; i < LOCAL_TOPIC_TO_METRIC.length; i++) if (LOCAL_TOPIC_TO_METRIC[i][0].test(txt || "")) { var m = LOCAL_TOPIC_TO_METRIC[i][1]; if (L.metrics[m] !== undefined) return m; }
     return localDefaultMetric(L.kind);
   }
+  // Segnalato dall'autore: la CPU «non lavorava» se il giocatore non aveva incarichi. Ora la tua città e la
+  // tua regione hanno sempre la loro scheda viva (Giunta, atti, conseguenze); se hai un incarico in un altro
+  // Comune o in un'altra Regione, la scheda segue quell'incarico.
+  function localPlaceFor(c, kind) {
+    if (localKindOf(c) === kind) return localPlaceName(c, kind);
+    return kind === "comune" ? c.city : careerRegion(c);
+  }
+  function localFor(c, kind) {
+    if (localKindOf(c) === kind) return localCurrent(c);
+    return localEnsure(c, kind, localPlaceFor(c, kind));
+  }
+  function localHoldsHere(c, L) { return !!(c.office && localKindOf(c) === L.kind && localPlaceName(c, L.kind) === L.place); }
   function localCurrent(c) { var kind = localKindOf(c); if (!kind) return null; var L = localEnsure(c, kind, localPlaceName(c, kind)); localBackfill(c, L); return L; }
   // Segnalato dall'autore: le proposte fatte prima che esistesse l'archivio non comparivano negli atti.
   // Si recuperano dallo storico della carriera (c.atti, gli ultimi atti presentati), una volta sola.
@@ -37122,12 +37199,14 @@
     }
   }
   function localTick(c) {
-    var L = localCurrent(c); if (L) localTickL(c, L);
+    if (c.stage !== "adulto") return;
+    var LC = localFor(c, "comune"), LR = localFor(c, "regione");
+    localTickL(c, LC); if (LR !== LC) localTickL(c, LR);
     var P = partyOrgCurrent(c); if (P) localTickL(c, P);
   }
   function localTickL(c, L) {
     // fine del mandato: si apre una nuova consiliatura/legislatura
-    if (L.kind !== "partito" && c.office && c.office.since !== undefined && c.office.since > L.legStart + 200) L.legStart = c.office.since, L.legNo = localLegOf(L, c.office.since);
+    if (L.kind !== "partito" && localHoldsHere(c, L) && c.office.since !== undefined && c.office.since > L.legStart + 200) L.legStart = c.office.since, L.legNo = localLegOf(L, c.office.since);
     if (state.turn >= L.nextBg) { localAddBackground(c, L, localPool(L.kind), state.turn); L.nextBg = state.turn + 4 + Math.floor(rand(0, 4)); }
     // gli effetti che maturano nel tempo
     (L.fx || []).forEach(function (f) { var step = Math.abs(f.per) > Math.abs(f.left) ? f.left : f.per; localMove(L, f.k, step); f.left -= step; f.weeks--; if (f.weeks <= 0 || Math.abs(f.left) < 0.001) { f.done = true; L.atti.forEach(function (a) { if (a.turn + "|" + a.title === f.act) a.fxDone = true; }); } });
@@ -37156,7 +37235,7 @@
     if (L.giunte[n] && n !== cur) return L.giunte[n];
     var head = L.kind === "comune" ? "sindaco/a" : "presidente";
     var g = L.giunte[n] || {};
-    if (n === cur && c.office) {
+    if (n === cur && localHoldsHere(c, L)) {
       var party = careerParty(c), coal = careerCoalitionOf(c.partyId);
       var mineLabel = coal ? careerBlocLabel(coal) : (party ? party.name : "Lista civica");
       var isHead = c.office.id === "sindaco" || c.office.id === "presidente_regione";
@@ -37183,13 +37262,13 @@
   }
   function localVerdict(v) { return v >= 8 ? "Ottimo" : v >= 6.5 ? "Buono" : v >= 5.5 ? "Sufficiente" : v >= 4 ? "Insufficiente" : "Grave"; }
   function renderCareerLocalTab(c, kind) {
-    var L = kind === "partito" ? partyOrgCurrent(c) : localCurrent(c);
+    var L = kind === "partito" ? partyOrgCurrent(c) : localFor(c, kind);
     if (!L || L.kind !== kind) return '<section><p class="ci-hint">Questa scheda si apre quando hai un incarico ' + (kind === "comune" ? "in Comune" : "in Regione") + ".</p></section>";
     var defs = localMetricDefs(kind), avg = defs.reduce(function (s, m) { return s + L.metrics[m[0]]; }, 0) / defs.length;
     var arrow = function (k) { var d = L.metrics[k] - (L.prev[k] === undefined ? L.metrics[k] : L.prev[k]); return Math.abs(d) < 0.05 ? '<span class="delta flat">=</span>' : '<span class="delta ' + (d > 0 ? "up" : "down") + '">' + (d > 0 ? "▲ +" : "▼ ") + d.toFixed(1).replace(".", ",") + "</span>"; };
     var curLeg = localLegOf(L, state.turn);
     var html = '<section aria-label="Scheda ' + kind + '"><div class="setup-card"><p class="eyebrow">' + (kind === "comune" ? "Scheda del Comune" : kind === "partito" ? "Scheda del partito" : "Scheda della Regione") + "</p><h2>" + (kind === "partito" ? fxEsc(partyOrgTitle(c, L)) : (kind === "comune" ? "Comune di " : "Regione ") + L.place) + "</h2>" +
-      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + (kind === "partito" ? CAREER_PARTY_LADDER[c.partyRank || 0].label : careerOfficeLabel(c)) + '</p><p class="ci-hint" style="margin:.3rem 0 0">' + fxEsc(localGiuntaText(c, L, curLeg)) + "</p></div>";
+      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + (kind === "partito" ? CAREER_PARTY_LADDER[c.partyRank || 0].label : localHoldsHere(c, L) ? careerOfficeLabel(c) : "Segui i lavori da cittadino/a") + '</p><p class="ci-hint" style="margin:.3rem 0 0">' + fxEsc(localGiuntaText(c, L, curLeg)) + "</p></div>";
     html += '<h3>Valutazioni della scheda</h3><p class="ci-hint">Giudizio complessivo: <strong>' + localVerdict(avg) + " (" + avg.toFixed(1).replace(".", ",") + "/10)</strong> · gradimento " + (kind === "comune" ? "della Giunta" : kind === "partito" ? "della segreteria" : "della Giunta regionale") + ": " + L.metrics.gradimento.toFixed(1).replace(".", ",") + "/10 " + arrow("gradimento") + ". Le frecce confrontano con un anno fa.</p>" +
       '<div class="stat-grid">' + defs.map(function (m) { return '<div class="stat-tile"><div class="label">' + m[1] + '</div><div class="row"><span class="value">' + L.metrics[m[0]].toFixed(1).replace(".", ",") + "</span>" + arrow(m[0]) + '</div><div class="gauge"><span style="width:' + (L.metrics[m[0]] * 10) + "%;background:" + (L.metrics[m[0]] < 4 ? "var(--critical)" : L.metrics[m[0]] < 6 ? "var(--warning)" : "var(--good)") + '"></span></div></div>'; }).join("") + "</div>";
     // storico per consiliatura/legislatura e per anno
@@ -37339,9 +37418,9 @@
     { id: "elezioni", label: "Elezioni", icon: "🗳️", nav: "Elezioni" },
     { id: "carriera", label: "Carriera", icon: "🎓", nav: "Carriera" },
     { id: "azioni", label: "Azioni", icon: "⚡", nav: "Azioni" },
-    { id: "comune", label: "Scheda del Comune", icon: "🏙️", nav: "Comune", visible: function (c) { return localKindOf(c) === "comune"; } },
-    { id: "regione", label: "Scheda della Regione", icon: "🗺️", nav: "Regione", visible: function (c) { return localKindOf(c) === "regione"; } },
-    { id: "partito_org", label: "Scheda del partito", icon: "🚩", get nav() { var l = state.career && partyOrgLevel(state.career); return l === "regionale" ? (localKindOf(state.career) === "regione" ? "Fed. reg." : "Regione") : l === "nazionale" ? "Nazionale" : "Provincia"; }, visible: function (c) { return !!partyOrgLevel(c); } },
+    { id: "comune", label: "Scheda del Comune", icon: "🏙️", nav: "Comune", visible: function (c) { return c.stage === "adulto"; } },
+    { id: "regione", label: "Scheda della Regione", icon: "🗺️", nav: "Regione", visible: function (c) { return c.stage === "adulto"; } },
+    { id: "partito_org", label: "Scheda del partito", icon: "🚩", get nav() { var l = state.career && partyOrgLevel(state.career); return l === "regionale" ? "Fed. reg." : l === "nazionale" ? "Nazionale" : "Provincia"; }, visible: function (c) { return !!partyOrgLevel(c); } },
     { id: "social", label: "Social", icon: "📱", nav: "Social" },
     { id: "paese", label: "L'Italia oggi", icon: "🇮🇹", nav: "Paese" },
     { id: "diario", label: "Diario", icon: "📔", nav: "Diario" },
@@ -47637,6 +47716,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "carriera", t: "La CPU lavora sempre", x: "In Carriera il mondo va avanti anche senza di te: la tua città e la tua regione hanno sempre la loro scheda (Giunta, delibere, leggi, conseguenze e valutazioni), anche se non hai incarichi. E il governo porta in Parlamento leggi e decreti ogni poche settimane, con effetti sulla Scheda Paese e sulla fiducia: l'archivio anno per anno è in «L'Italia oggi»." },
     { d: "14 novembre 2026", m: "carriera", t: "Indagini meno casuali", x: "In Carriera le indagini non arrivano più dal nulla: i rapporti con le correnti non creano ombre, e la cena con gli imprenditori solo quando succede qualcosa di poco chiaro. Un avviso di garanzia parte solo con ombre sopra 30 e una causa concreta negli ultimi tre anni, che l'avviso nomina. Nel profilo vedi sempre le tue ombre e da dove vengono." },
     { d: "14 novembre 2026", m: "carriera", t: "Scheda del partito per i dirigenti", x: "In Carriera, dal grado di membro della direzione provinciale in su, compare la scheda del partito (Provincia, Regione o Nazionale a seconda del grado): valutazioni della federazione, l'archivio delle decisioni della direzione con le loro conseguenze, le proposte scritte di pugno (ordine del giorno, documento politico, regolamento) e una riunione della direzione ogni 6-8 settimane in cui votare con o contro la segreteria." },
     { d: "14 novembre 2026", m: "partito", t: "Correzioni: congresso e Question Time", x: "Se prendi il comando di un partito che esiste già, all'inizio c'è il congresso straordinario, non quello fondativo, e il discorso non dice più che il partito è appena nato. Nel Question Time non compaiono più nomi tecnici come «ForzaSindacale»." },
