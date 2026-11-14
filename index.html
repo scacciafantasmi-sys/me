@@ -32312,6 +32312,12 @@
     var lead = partyById(leadingGovPartyId());
     var fromOpp = Math.random() < 0.22;
     var bill = CAREER_GOV_BILLS[Math.floor(Math.random() * CAREER_GOV_BILLS.length)];
+    var cc = state.career;
+    if (cc && !fromOpp && cc.pending && careerInParliament(cc) && !cc.pending.some(function (d) { return d.id === "voto_aula"; })) {
+      cc.pending.push(careerParlGovBillDossier(cc, { title: bill[0], metric: bill[1] }));
+      state.careerGovActs.unshift({ turn: state.turn, title: bill[0], by: lead ? lead.name : "Governo", passed: null, tally: "in Aula, con il tuo voto", fxNow: "", fxLater: "", premier: ge.premierName || "" });
+      return;
+    }
     var cg = state.consensoGoverno !== undefined ? state.consensoGoverno : 55;
     var pPass = fromOpp ? 0.15 : clamp(0.62 + (cg - 50) / 120 - (ge.minority ? 0.2 : 0), 0.25, 0.9);
     var passed = Math.random() < pPass;
@@ -32345,12 +32351,206 @@
     Object.keys(years).sort(function (a, b) { return b - a; }).forEach(function (y, i) {
       var list = years[y], okY = list.filter(function (a) { return a.passed; }).length;
       html += '<details class="log"' + (i === 0 ? " open" : "") + "><summary>" + y + " — " + okY + " approvati, " + (list.length - okY) + " respinti<span>▾</span></summary><ul class=\"enacted-policy-list\">" + list.map(function (a) {
-        return "<li>" + (a.passed ? "✔ <strong>Approvato</strong>" : "✖ <strong>Respinto</strong>") + " — " + fxEsc(a.title) + ' <span class="ci-hint">(' + fxEsc(a.by) + " · " + a.tally + ")</span>" +
+        return "<li>" + (a.passed === null ? "🗳️ <strong>Al voto</strong>" : a.passed ? "✔ <strong>Approvato</strong>" : "✖ <strong>Respinto</strong>") + " — " + fxEsc(a.title) + ' <span class="ci-hint">(' + fxEsc(a.by) + " · " + a.tally + ")</span>" +
           (a.fxNow || a.fxLater ? '<br><span class="ci-hint">' + (a.fxNow ? "Subito: " + a.fxNow : "") + (a.fxLater ? (a.fxNow ? " · " : "") + "Nel tempo: " + a.fxLater : "") + "</span>" : "") + "</li>";
       }).join("") + "</ul></details>";
     });
     return html + "</section>";
   }
+  // ---------- Carriera: il Parlamento ----------
+  // Richiesto dall'autore: in Carriera, da deputato/a, da segretario/a di un partito con parlamentari, da
+  // premier o ministro, ci devono essere le funzioni del Parlamento della modalità partito (senza perdere
+  // nulla della Carriera). Il tuo partito resta un partito «vero» del gioco, quindi le funzioni sono
+  // ricostruite qui: composizione della Camera, proposte di legge con il voto partito per partito e le
+  // trattative, mozioni, interrogazioni, e i voti in Aula sulle leggi del governo.
+  var CAREER_PARL_TOPICS = CAREER_GOV_BILLS.concat([
+    ["La legge sul fine vita", "giustizia"], ["Il congedo di paternità obbligatorio", "welfare"], ["La riforma della RAI", "corruzione"], ["Il piano per il Mezzogiorno", "economia"],
+    ["La legge sulla cittadinanza", "immigrazione"], ["La settimana corta sperimentale", "salari", "aziende"], ["Il piano per le aree interne", "trasporti"], ["La legge sull'intelligenza artificiale", "ricercaSviluppo"]
+  ]);
+  function careerPartyLeanOf(id) { var pt = partyById(id); return pt && LEFT_RIGHT_POSITION[pt.familyId] !== undefined ? LEFT_RIGHT_POSITION[pt.familyId] : 0; }
+  function careerSeatMap() {
+    if (state.careerSeats && state.careerSeats.camera) return state.careerSeats;
+    var ge = state.govEntity;
+    return careerComputeSeats(ge ? (ge.memberIds || []) : []);
+  }
+  function careerComputeSeats(winMembers) {
+    var parties = activeParties().filter(function (pt) { return (state.parties[pt.id] || 0) >= 1; });
+    var tot = parties.reduce(function (s, pt) { return s + (state.parties[pt.id] || 0); }, 0) || 1;
+    var win = parties.filter(function (pt) { return winMembers.indexOf(pt.id) !== -1; });
+    var winShare = win.reduce(function (s, pt) { return s + (state.parties[pt.id] || 0); }, 0) / tot;
+    var winSeats = win.length ? Math.round(400 * Math.max(winShare, Math.min(0.56, winShare + 0.08))) : 0;
+    var cam = {};
+    var alloc = function (list, seats, minShare) {
+      list = list.filter(function (pt) { return (state.parties[pt.id] || 0) >= minShare; });
+      var t = list.reduce(function (s, pt) { return s + (state.parties[pt.id] || 0); }, 0) || 1, used = 0;
+      list.forEach(function (pt, i) { var n = i === list.length - 1 ? seats - used : Math.round(seats * (state.parties[pt.id] || 0) / t); cam[pt.id] = Math.max(0, n); used += cam[pt.id]; });
+    };
+    alloc(win, winSeats, 1);
+    alloc(parties.filter(function (pt) { return winMembers.indexOf(pt.id) === -1; }), 400 - winSeats, 3);
+    return { turn: state.turn, camera: cam };
+  }
+  function careerStoreSeats(winMembers) { state.careerSeats = careerComputeSeats(winMembers || []); }
+  function careerInParliament(c) {
+    if (!c || !c.partyId && !(c.office && c.office.id === "deputato")) return false;
+    if (c.office && (c.office.id === "deputato" || c.office.id === "presidente_consiglio" || c.office.id === "ministro")) return true;
+    return !!(c.partySecretary && (careerSeatMap().camera[c.partyId] || 0) > 0);
+  }
+  function careerParlRoleText(c) {
+    var seats = careerSeatMap().camera[c.partyId] || 0;
+    var gov = careerPartyInGov(c);
+    var bits = [];
+    if (c.office && c.office.id === "presidente_consiglio") bits.push("Presidente del Consiglio");
+    else if (c.office && c.office.id === "ministro") bits.push("Ministro/a " + c.office.ministry);
+    if (c.office && c.office.id === "deputato") bits.push("Deputato/a");
+    if (c.partySecretary) bits.push("segretario/a del partito");
+    return (bits.join(", ") || "Osservatore") + (c.partyId ? " · gruppo " + c.partyName + " (" + seats + " deputati, " + (gov ? "maggioranza" : "opposizione") + ")" : "");
+  }
+  // posizione di un gruppo su una proposta: governo/opposizione, distanza politica, accordi presi
+  function careerStance(pid, law) {
+    var ge = state.govEntity, govIds = ge ? (ge.memberIds || []) : [];
+    if (law.promised && law.promised[pid] === "si") return 0.95;
+    if (pid === law.proposerId) return 0.99;
+    var inGov = govIds.indexOf(pid) !== -1, proposerGov = govIds.indexOf(law.proposerId) !== -1;
+    var base = law.government ? (inGov ? 0.88 : 0.18) : proposerGov ? (inGov ? 0.62 : 0.3) : (inGov ? 0.22 : 0.55);
+    var dist = Math.abs(careerPartyLeanOf(pid) - careerPartyLeanOf(law.proposerId));
+    var v = base - dist * 0.12 + ((law.salt * 7 + pid.length * 13) % 10 - 5) / 100;
+    if (law.promised && law.promised[pid] === "no") v -= 0.15;
+    return clamp(v, 0.02, 0.98);
+  }
+  function careerStanceLabel(v) { return v >= 0.65 ? "favorevole" : v <= 0.35 ? "contrario" : "incerto"; }
+  function careerVoteLaw(law, overrideGroup) {
+    var cam = careerSeatMap().camera, yes = 0, no = 0, rows = [];
+    Object.keys(cam).forEach(function (pid) {
+      var n = cam[pid]; if (!n) return;
+      var vote = overrideGroup && overrideGroup[pid] ? overrideGroup[pid] : (Math.random() < careerStance(pid, law) ? "si" : "no");
+      if (vote === "si") yes += n; else if (vote === "no") no += n;
+      var pt = partyById(pid); rows.push({ name: pt ? pt.short || pt.name : pid, seats: n, vote: vote });
+    });
+    return { passed: yes >= CAMERA_MAJORITY_SEATS || yes > no + 20, yes: yes, no: no, rows: rows };
+  }
+  function careerParlState(c) { if (!c.parl) c.parl = { archive: [], lawCd: 0, motCd: 0, qtCd: 0 }; return c.parl; }
+  function careerParlPropose(c, kind, topicIdx, customTitle) {
+    var P = careerParlState(c);
+    if (!careerInParliament(c)) return;
+    if (kind === "legge" && (P.law || state.turn < P.lawCd)) return;
+    if (kind === "mozione" && (P.mot || state.turn < P.motCd)) return;
+    var topics = P.topics || []; var t = topics[topicIdx] || CAREER_PARL_TOPICS[0];
+    var title = (customTitle || "").trim() ? customTitle.trim() : t[0];
+    var gov = !!(c.office && (c.office.id === "presidente_consiglio" || c.office.id === "ministro"));
+    var law = { kind: kind, title: (kind === "mozione" ? "Mozione su " : "") + title, metric: t[1], side: t[2], proposerId: c.partyId, government: gov && kind === "legge", promised: {}, contacted: {}, salt: state.turn % 97, start: state.turn, resolveTurn: state.turn + (kind === "legge" ? 5 : 2) };
+    if (kind === "legge") { P.law = law; P.lawCd = state.turn + 10; } else { P.mot = law; P.motCd = state.turn + 5; }
+    P.topics = null; P.sel = 0;
+    addCareerDiaryEntry(kind === "legge" ? "Proposta di legge" : "Mozione", "Depositi alla Camera: «" + law.title + "». Il voto in Aula è atteso tra " + (law.resolveTurn - state.turn) + " settimane.");
+    showSaveStatus("Depositata: «" + law.title + "».", false);
+  }
+  function careerParlContact(c, kind, pid) {
+    var P = careerParlState(c), law = kind === "legge" ? P.law : P.mot;
+    if (!law || law.contacted[pid]) return;
+    law.contacted[pid] = true;
+    var dist = Math.abs(careerPartyLeanOf(pid) - careerPartyLeanOf(law.proposerId));
+    var ok = Math.random() < clamp(0.62 - dist * 0.22 + (c.rete || 0) / 300 + (c.partySecretary ? 0.1 : 0), 0.05, 0.9);
+    law.promised[pid] = ok ? "si" : "no";
+    var pt = partyById(pid);
+    showSaveStatus(ok ? (pt ? pt.name : pid) + " ti promette il sì." : (pt ? pt.name : pid) + " resta contrario.", !ok);
+  }
+  function careerParlResolve(c) {
+    var P = careerParlState(c);
+    ["law", "mot"].forEach(function (k) {
+      var law = P[k]; if (!law || state.turn < law.resolveTurn) return;
+      P[k] = null;
+      var r = careerVoteLaw(law);
+      var now = [], later = [];
+      if (r.passed) {
+        if (law.kind === "legge") {
+          var d0 = rand(0.08, 0.18); try { applyCountryMetricDelta(law.metric, d0); } catch (e) {}
+          var tot = rand(0.25, 0.55), wk = 20 + Math.floor(rand(0, 25)); if (!state.careerGovFx) state.careerGovFx = []; state.careerGovFx.push({ k: law.metric, per: tot / wk, weeks: wk });
+          var lb = (METRIC_LABELS[law.metric] || law.metric); now.push(lb + " +" + d0.toFixed(1).replace(".", ",")); later.push(lb + " +" + tot.toFixed(1).replace(".", ",") + " entro " + Math.round(wk / 4.3) + " mesi");
+          careerAdultApply(c, { rep: rand(2, 4), trust: rand(2, 4), cons: rand(1, 3) });
+        } else careerAdultApply(c, { rep: rand(1, 2), trust: 1 });
+      } else careerAdultApply(c, { rep: -rand(0.5, 1.5) });
+      var tally = r.yes + " sì, " + r.no + " no";
+      P.archive.unshift({ turn: state.turn, title: law.title, kind: law.kind, passed: r.passed, tally: tally, rows: r.rows, own: true, fxNow: now.join(" · "), fxLater: later.join(" · ") });
+      addCareerDiaryEntry("Voto alla Camera", "«" + law.title + "»: " + (r.passed ? "approvata" : "respinta") + " (" + tally + ").");
+      if (c.pending) c.pending.push({ id: "esito_aula", cat: "Parlamento", title: (r.passed ? "Approvata: " : "Respinta: ") + law.title, brief: "La Camera ha votato: " + tally + ". " + r.rows.map(function (x) { return x.name + " " + (x.vote === "si" ? "sì" : "no"); }).join(" · ") + ".", choices: [{ label: "Avanti", eff: {}, result: r.passed ? "Una vittoria che porta la tua firma." : "Questa volta i numeri non c'erano." }] });
+    });
+  }
+  // i voti in Aula sulle leggi del governo: un dossier per chi siede in Parlamento
+  function careerParlGovBillDossier(c, act) {
+    var seats = careerSeatMap().camera[c.partyId] || 0;
+    var gov = careerPartyInGov(c);
+    var asSec = !!c.partySecretary;
+    return { id: "voto_aula", cat: "Parlamento", aulaAct: act.title, aulaMetric: act.metric, title: "Voto in Aula: " + act.title,
+      brief: "Il governo porta alla Camera " + act.title.toLowerCase() + ". " + (asSec ? "Da segretario/a decidi come vota il gruppo di " + c.partyName + " (" + seats + " deputati)." : "Il tuo gruppo " + (gov ? "sostiene il governo" : "è all'opposizione") + ": come voti?"),
+      choices: [
+        { label: asSec ? "Il gruppo vota sì" : "Voti sì", eff: gov ? { trust: 1 } : { trust: -3, rep: 0.5 }, result: "", aulaVote: "si" },
+        { label: asSec ? "Il gruppo vota no" : "Voti no", eff: gov ? { trust: -4, rep: 0.5 } : { trust: 1 }, result: "", aulaVote: "no" },
+        { label: asSec ? "Il gruppo si astiene" : "Ti astieni", eff: { trust: -1 }, result: "", aulaVote: "astenuto" }
+      ] };
+  }
+  function careerParlResolveGovBill(c, d, ch) {
+    var law = { title: d.aulaAct, metric: d.aulaMetric, proposerId: leadingGovPartyId(), government: true, promised: {}, salt: state.turn % 97 };
+    var ov = {}; if (c.partySecretary && c.partyId) ov[c.partyId] = ch.aulaVote;
+    var r = careerVoteLaw(law, ov);
+    if (r.passed) { try { applyCountryMetricDelta(d.aulaMetric, rand(0.05, 0.15)); } catch (e) {} state.consensoGoverno = clamp((state.consensoGoverno || 55) + rand(0.5, 1.5), 0, 100); }
+    else state.consensoGoverno = clamp((state.consensoGoverno || 55) - rand(1.5, 3), 0, 100);
+    if (c.partySecretary && careerPartyInGov(c) && ch.aulaVote === "no") state.consensoGoverno = clamp(state.consensoGoverno - 2, 0, 100);
+    ch.result = "La Camera " + (r.passed ? "approva" : "respinge") + " (" + r.yes + " sì, " + r.no + " no). " + (ch.aulaVote === "si" ? "Hai votato sì." : ch.aulaVote === "no" ? "Hai votato no." : "Ti sei astenuto/a.");
+    careerParlState(c).archive.unshift({ turn: state.turn, title: d.aulaAct, kind: "governo", passed: r.passed, tally: r.yes + " sì, " + r.no + " no", rows: r.rows, vote: ch.aulaVote });
+  }
+  function careerParlQT(c) {
+    var P = careerParlState(c); if (state.turn < P.qtCd || careerPartyInGov(c)) return;
+    P.qtCd = state.turn + 3;
+    var good = Math.random() < 0.5 + (c.intelletto || 40) / 300;
+    careerAdultApply(c, good ? { rep: rand(1, 2.5), cons: rand(1, 2) } : { rep: -rand(0, 1) });
+    var t = CAREER_PARL_TOPICS[Math.floor(Math.random() * CAREER_PARL_TOPICS.length)][0].toLowerCase();
+    var txt = good ? "Interroghi il governo su " + t + ": la risposta del ministro è evasiva e il tuo intervento fa il giro dei telegiornali." : "Interroghi il governo su " + t + ", ma il ministro ti risponde punto per punto.";
+    P.archive.unshift({ turn: state.turn, title: "Interrogazione su " + t, kind: "interrogazione", passed: good, tally: "" });
+    addCareerDiaryEntry("Question time", txt); showSaveStatus(txt, !good);
+  }
+  function renderCareerParliament(c) {
+    var P = careerParlState(c), map = careerSeatMap(), cam = map.camera, ge = state.govEntity, govIds = ge ? (ge.memberIds || []) : [];
+    var entries = Object.keys(cam).filter(function (id) { return cam[id] > 0; }).map(function (id) { var pt = partyById(id); return { id: id, label: pt ? pt.short || pt.name : id, seats: cam[id], color: pt ? pt.color : "#888", gov: govIds.indexOf(id) !== -1 }; })
+      .sort(function (a, b) { return careerPartyLeanOf(a.id) - careerPartyLeanOf(b.id); });
+    var govSeats = entries.filter(function (e) { return e.gov; }).reduce(function (s, e) { return s + e.seats; }, 0);
+    var html = '<section aria-label="Parlamento"><h3>La Camera dei deputati</h3>' + renderHemicycleSvg(entries) + '<div class="hemicycle-legend">' + hemicycleLegend(entries) + "</div>" +
+      '<p class="ci-hint">Maggioranza di governo: <strong>' + govSeats + " seggi su 400</strong> (" + (govSeats >= CAMERA_MAJORITY_SEATS ? "maggioranza assoluta" : "governo di minoranza") + ")" + (ge && ge.premierName ? " · Presidente del Consiglio: " + fxEsc(ge.premierName) : "") + ".</p>";
+    if (!careerInParliament(c)) return html + '<p class="ci-hint">Non siedi in Parlamento: per proporre leggi, mozioni e interrogazioni devi essere eletto/a deputato/a, guidare il governo o un partito con dei deputati.</p></section>';
+    html += '<p class="ci-hint"><strong>' + fxEsc(careerParlRoleText(c)) + "</strong></p>";
+    // proposte in corso
+    var pend = function (law, kind) {
+      if (!law) return "";
+      var rows = entries.filter(function (e) { return e.id !== law.proposerId; }).map(function (e) {
+        var st = careerStanceLabel(careerStance(e.id, law)), pr = law.promised[e.id];
+        return '<li><strong>' + fxEsc(e.label) + "</strong> (" + e.seats + ") — " + (pr === "si" ? "✔ ha promesso il sì" : pr === "no" ? "✖ resta contrario" : st) + (law.contacted[e.id] ? "" : ' <button type="button" class="staff-btn" data-parl-contact="' + kind + ":" + e.id + '">Tratta</button>') + "</li>";
+      }).join("");
+      return '<div class="stat-tile" style="margin:.6rem 0"><div class="label">In discussione: ' + fxEsc(law.title) + " · voto alla settimana " + law.resolveTurn + '</div><p class="ci-hint" style="margin:.3rem 0">Voci di corridoio sui gruppi. Puoi trattare con ciascun gruppo una volta: più è vicino, più è facile che prometta il sì.</p><ul class="enacted-policy-list">' + rows + "</ul></div>";
+    };
+    html += pend(P.law, "legge") + pend(P.mot, "mozione");
+    if (!P.topics) { var pool = CAREER_PARL_TOPICS.slice(); for (var i = pool.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = pool[i]; pool[i] = pool[j]; pool[j] = t; } P.topics = pool.slice(0, 6); }
+    var lw = P.law ? "c'è già una tua legge in discussione" : state.turn < P.lawCd ? "di nuovo tra " + (P.lawCd - state.turn) + " settimane" : "";
+    var mw = P.mot ? "c'è già una tua mozione in discussione" : state.turn < P.motCd ? "di nuovo tra " + (P.motCd - state.turn) + " settimane" : "";
+    html += '<h3 style="margin-top:1rem">Proponi</h3><p class="ci-hint">Scegli il tema (o scrivi un titolo tuo), poi deposita una proposta di legge (voto dopo 5 settimane) o una mozione (dopo 2).</p><div class="option-grid">' +
+      P.topics.map(function (t, k) { return '<button type="button" class="option-card' + ((P.sel || 0) === k ? " selected" : "") + '" data-parl-topic="' + k + '"><span class="olabel">' + fxEsc(t[0]) + '</span><span class="odesc">' + fxEsc(METRIC_LABELS[t[1]] || t[1]) + "</span></button>"; }).join("") + "</div>" +
+      '<input type="text" id="parl-custom-title" maxlength="80" placeholder="Oppure scrivi il titolo della tua proposta (facoltativo)" style="width:100%;margin-top:.5rem">' +
+      '<div class="choices"><button type="button" class="choice-btn" data-parl-propose="legge"' + (lw ? " disabled" : "") + '><span class="clabel">Deposita la proposta di legge</span><span class="chint">' + (lw || "Una ogni 10 settimane") + '</span></button>' +
+      '<button type="button" class="choice-btn" data-parl-propose="mozione"' + (mw ? " disabled" : "") + '><span class="clabel">Presenta una mozione</span><span class="chint">' + (mw || "Impegna il governo, una ogni 5 settimane") + "</span></button>" +
+      (careerPartyInGov(c) ? "" : '<button type="button" class="choice-btn" data-parl-qt="1"' + (state.turn < P.qtCd ? " disabled" : "") + '><span class="clabel">Interroga il governo (question time)</span><span class="chint">' + (state.turn < P.qtCd ? "di nuovo tra " + (P.qtCd - state.turn) + " settimane" : "Dall'opposizione, una ogni 3 settimane") + "</span></button>") + "</div>";
+    if (P.archive.length) html += '<h3 style="margin-top:1rem">La tua attività in Aula</h3><ul class="enacted-policy-list">' + P.archive.slice(0, 20).map(function (a) {
+      return "<li>" + (a.passed ? "✔ " : "✖ ") + "<strong>" + fxEsc(a.title) + '</strong> <span class="ci-hint">(' + (a.kind === "governo" ? "legge del governo · tuo voto: " + (a.vote === "si" ? "sì" : a.vote === "no" ? "no" : "astensione") : a.kind) + (a.tally ? " · " + a.tally : "") + " · " + weekLabel(a.turn).replace(/^.*– /, "") + ")</span>" + (a.fxNow ? '<br><span class="ci-hint">Subito: ' + a.fxNow + (a.fxLater ? " · Nel tempo: " + a.fxLater : "") + "</span>" : "") + "</li>";
+    }).join("") + "</ul>";
+    return html + "</section>";
+  }
+  if (typeof document !== "undefined") document.addEventListener("click", function (e) {
+    var c = state && state.career; if (!c || state.mode !== "career") return;
+    var el = e.target && e.target.closest && e.target.closest("[data-parl-topic],[data-parl-propose],[data-parl-contact],[data-parl-qt]");
+    if (!el || el.disabled) return;
+    var P = careerParlState(c);
+    if (el.hasAttribute("data-parl-topic")) P.sel = +el.getAttribute("data-parl-topic");
+    else if (el.hasAttribute("data-parl-propose")) { var inp = document.getElementById("parl-custom-title"); careerParlPropose(c, el.getAttribute("data-parl-propose"), P.sel || 0, inp ? inp.value : ""); }
+    else if (el.hasAttribute("data-parl-contact")) { var v = el.getAttribute("data-parl-contact").split(":"); careerParlContact(c, v[0], v[1]); }
+    else if (el.hasAttribute("data-parl-qt")) careerParlQT(c);
+    save(); render();
+  });
   function renderCareerCountryTab() {
     var ge = state.govEntity;
     var lead = partyById(leadingGovPartyId());
@@ -35252,6 +35452,7 @@
       var win = blocs[0], second = blocs[1] || { id: "", v: 0 };
       var winner = win.id, cd = win.v, cl = second.v;
       state.govEntity = { id: winner, memberIds: win.members.slice(), formedTurn: state.turn };
+      try { careerStoreSeats(win.members); } catch (seatErr) {}
       var lead = partyById(leadingGovPartyId());
       if (lead) { state.govEntity.premierName = lead.leader; state.govEntity.premierPartyId = lead.id; }
       state.consensoGoverno = rand(52, 62);
@@ -36199,6 +36400,7 @@
     }
     careerNationalPolitics(c);
     try { careerGovWorkTick(); } catch (gErr) { if (window.console) console.error(gErr); }
+    try { careerParlResolve(c); } catch (pErr2) { if (window.console) console.error(pErr2); }
     careerCountryDrift();
     if (polBefore !== state.careerNextPolitiche && c.office && c.office.id === "ministro") {
       if (!careerPartyInGov(c) || Math.random() < 0.5) { addCareerDiaryEntry("Nuovo governo", "Il nuovo esecutivo non ti conferma al ministero."); c.office = null; }
@@ -37034,6 +37236,7 @@
     careerAdultApply(c, eff);
     if (d.id === "seduta_consiglio" || d.id === "riunione_giunta") { try { localRecordSession(c, d, ch, outcome); } catch (lErr2) { if (window.console) console.error(lErr2); } }
     if (d.id === "direzione_partito") { try { partyRecordSession(c, d, ch); } catch (lErr3) { if (window.console) console.error(lErr3); } }
+    if (d.id === "voto_aula") { try { careerParlResolveGovBill(c, d, ch); var ga = (state.careerGovActs || []).filter(function (x) { return x.title === d.aulaAct && x.passed === null; })[0]; if (ga) { var lastA = careerParlState(c).archive[0]; ga.passed = lastA.passed; ga.tally = lastA.tally + " · tuo voto: " + (ch.aulaVote === "si" ? "sì" : ch.aulaVote === "no" ? "no" : "astensione"); } } catch (lErr4) { if (window.console) console.error(lErr4); } }
     if (eff.campagna && c.candidacy) c.candidacy.campagna += eff.campagna;
     var resultText = outcome.result;
     var bridge = null;
@@ -37620,6 +37823,7 @@
     { id: "comune", label: "Scheda del Comune", icon: "🏙️", nav: "Comune", visible: function (c) { return c.stage === "adulto"; } },
     { id: "regione", label: "Scheda della Regione", icon: "🗺️", nav: "Regione", visible: function (c) { return c.stage === "adulto"; } },
     { id: "partito_org", label: "Scheda del partito", icon: "🚩", get nav() { var l = state.career && partyOrgLevel(state.career); return l === "regionale" ? "Fed. reg." : l === "nazionale" ? "Nazionale" : "Provincia"; }, visible: function (c) { return !!partyOrgLevel(c); } },
+    { id: "parlamento", label: "Parlamento", icon: "⚖️", nav: "Parlamento", visible: function (c) { return careerInParliament(c) || (c.partyRank || 0) >= 8 || !!(c.office && c.office.id === "deputato"); } },
     { id: "social", label: "Social", icon: "📱", nav: "Social" },
     { id: "paese", label: "L'Italia oggi", icon: "🇮🇹", nav: "Paese" },
     { id: "diario", label: "Diario", icon: "📔", nav: "Diario" },
@@ -38110,6 +38314,7 @@
     else if (c.ui === "paese") html += renderCareerCountryTab();
     else if (c.ui === "comune" || c.ui === "regione") html += renderCareerLocalTab(c, c.ui);
     else if (c.ui === "partito_org") html += renderCareerLocalTab(c, "partito");
+    else if (c.ui === "parlamento") html += renderCareerParliament(c);
     else if (c.ui === "novita") html += renderGameUpdates();
     else html += renderCareerPartyHistory(c) + '<section aria-label="Diario politico"><h3>Diario politico</h3><div class="log-entries">' + c.diario.slice(0, 60).map(function (e) {
       return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
@@ -47916,6 +48121,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "15 novembre 2026", m: "carriera", t: "Il Parlamento nella Carriera", x: "In Carriera, da deputato/a, da segretario/a di un partito con dei deputati, da premier o da ministro c'è la scheda «Parlamento»: l'emiciclo della Camera con governo e opposizione, le tue proposte di legge e mozioni con il voto in Aula partito per partito e le trattative per convincere gli altri gruppi, le interrogazioni al governo, e i voti sulle leggi del governo (da segretario/a decidi il voto di tutto il gruppo). Le leggi approvate cambiano la Scheda Paese." },
     { d: "14 novembre 2026", m: "carriera", t: "Segretario/a senza lasciare la Carriera", x: "Vincendo le primarie resti in Carriera: diventi Segretario/a nazionale e il partito ha te come leader, mentre incarichi, Comune, Regione e professione restano. Nella scheda «Nazionale» c'è la tua segreteria: campagne nazionali, correnti, programma, alleanze con gli altri partiti, la direzione che vota le tue proposte. Se il partito guida il governo diventi Presidente del Consiglio. Se la fiducia del partito resta troppo bassa la direzione ti sfiducia. Chi vuole può passare alla modalità partito con un pulsante." },
     { d: "14 novembre 2026", m: "carriera", t: "Nuovi indicatori in Comune e Regione", x: "La scheda del Comune ha 8 indicatori in più (lavoro e commercio, servizi sociali, rifiuti, periferie, servizi digitali, sport, turismo, trasparenza) e quella della Regione altri 8 (formazione, agricoltura, energia, edilizia pubblica, digitale, protezione civile, aree interne, trasparenza). Ognuno ha i suoi atti e le sue conseguenze; nelle partite già iniziate compaiono da subito." },
     { d: "14 novembre 2026", m: "carriera", t: "Lo storico dei tuoi partiti", x: "Nel Diario della Carriera c'è lo storico dei partiti a cui hai aderito: da quando a quando, il grado più alto raggiunto e come è finita (tessera restituita, cambio di partito, partito sciolto). Nelle partite già iniziate viene ricostruito dalle voci del Diario." },
