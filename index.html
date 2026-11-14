@@ -24830,24 +24830,41 @@
     var p = state.player;
     if (!p || !p.amendmentDraft) return "";
     var topic = p.amendmentDraft;
-    var opts = amendmentOptionsFor(topic);
+    var opts = amendmentOptionsFor(topic), sym = !p.inParliament;
     var html = '<section id="amendment-draft" aria-label="Scegli la modifica"><p class="eyebrow">Modifica di legge</p><div class="dossier">' +
       "<h2>" + topic.title + "</h2>" +
-      '<p class="brief">Cosa vuoi cambiare, esattamente? Scegli una delle tre modifiche: ognuna ha uno scopo diverso, effetti diversi sulla Scheda Paese e probabilità diverse di passare in Aula. Costo del deposito: ' + fmtInt(AMENDMENT_PROPOSAL_COST) + " €.</p><div class=\"choices\">";
+      (sym ? '<p class="brief">Fuori dal Parlamento è un\'iniziativa simbolica: scegli quale modifica proporre pubblicamente. Gratis, nessun effetto reale sulla legge, solo visibilità.</p>' : "") +
+      (sym ? "" : '<p class="brief">Cosa vuoi cambiare, esattamente? Scegli una delle tre modifiche: ognuna ha uno scopo diverso, effetti diversi sulla Scheda Paese e probabilità diverse di passare in Aula. Costo del deposito: ' + fmtInt(AMENDMENT_PROPOSAL_COST) + " €.</p><div class=\"choices\">");
     opts.forEach(function (o) {
       var prob = Math.round(amendmentOptionAcceptProbability(p, o) * 100);
       var coh = amendmentOptionCoherence(p, o);
       html += '<button type="button" class="choice-btn" data-amendment-option="' + o.idx + '"><span class="clabel">' + o.label + "</span>" +
         '<span class="chint" style="display:block">' + o.desc + "</span>" +
-        '<span class="chint" style="display:block;margin-top:.35rem"><strong>Effetti se approvata:</strong> ' + amendmentEffectsLabel(o.effects) + "</span>" +
-        '<span class="chint" style="display:block;margin-top:.25rem"><strong>Probabilità di approvazione:</strong> circa ' + prob + "%" + (coh > 0 ? " · coerente con la tua linea" : coh < 0 ? " · lontana dalla tua linea: la base potrebbe non gradire" : "") + "</span></button>";
+        (sym ? "" : '<span class="chint" style="display:block;margin-top:.35rem"><strong>Effetti se approvata:</strong> ' + amendmentEffectsLabel(o.effects) + "</span>" +
+        '<span class="chint" style="display:block;margin-top:.25rem"><strong>Probabilità di approvazione:</strong> circa ' + prob + "%" + (coh > 0 ? " · coerente con la tua linea" : coh < 0 ? " · lontana dalla tua linea: la base potrebbe non gradire" : "") + "</span>") + "</button>";
     });
     html += '</div><button type="button" class="staff-btn" data-amendment-cancel="1">← Scegli un\'altra legge</button></div></section>';
     return html;
   }
+  function proposeSymbolicAmendment(topic) {
+    var p = state.player;
+    if (state.turn < (p.amendmentCooldownTurn || 0)) return null;
+    p.amendmentCooldownTurn = state.turn + AMENDMENT_COOLDOWN_TURNS;
+    p.amendmentCandidates = null;
+    p.amendmentSelectedCat = null;
+    p.reputazione = clamp(p.reputazione + rand(0.4, 1), 0, 100);
+    p.visibilita = clamp(p.visibilita + rand(1.5, 4), 0, 100);
+    var noun = topic.noun || String(topic.title || "").toLowerCase();
+    state.log.unshift({
+      week: state.turn, title: "Iniziativa simbolica", choiceLabel: topic.title,
+      result: "Senza seggi in Parlamento, il partito non può depositare una vera proposta di modifica: la presenta comunque pubblicamente su " + noun + ". Nessun effetto reale sulla legge, solo un ritorno d'immagine.",
+      headlines: [], type: "legge", cat: "Iniziativa Simbolica"
+    });
+    return { resultText: "Hai presentato pubblicamente la tua proposta di modifica su " + noun + ": un'iniziativa simbolica, senza un vero iter parlamentare.", headlines: [] };
+  }
   function proposeAmendment(topic, opt) {
     var p = state.player;
-    if (!p.inParliament) return null;
+    if (!p.inParliament) return proposeSymbolicAmendment(topic);
     if (state.turn < (p.amendmentCooldownTurn || 0)) return null;
     if (p.pendingAmendment) return null;
     if (p.fondi < AMENDMENT_PROPOSAL_COST) return null;
@@ -25536,8 +25553,11 @@
 
   function renderAmendmentPanel() {
     var p = state.player;
-    if (!p.inParliament) return "";
-    var html = '<section aria-label="Proposte di Modifica di Legge"><details class="log" open><summary>Proposte di Modifica di Legge<span>▾</span></summary>';
+    // Segnalato dall'autore: fuori dal Parlamento il pannello spariva del tutto, mentre mozioni e leggi
+    // restano disponibili come iniziative simboliche. Ora vale lo stesso anche per le modifiche di legge.
+    var symbolicAmend = !p.inParliament;
+    var html = '<section aria-label="Proposte di Modifica di Legge"><details class="log" open><summary>Proposte di Modifica di Legge<span>▾</span></summary>' +
+      (symbolicAmend ? '<p class="ci-hint">Senza seggi in Parlamento la modifica non ha un vero iter: la presenti come proposta pubblica, gratis, per farti conoscere. Nessun effetto reale sulla legge.</p>' : "");
     if (p.pendingAmendment) {
       html += '<p class="ci-hint">Proposta di modifica depositata su <strong>' + p.pendingAmendment.title + '</strong>: il voto finale in Aula arriverà tra qualche settimana, dopo il passaggio in commissione.</p></details></section>';
       return html;
@@ -25565,7 +25585,7 @@
     }
     if (!p.amendmentSelectedCat) {
       var amendSections = legislativeSectionsWithTopics(allAmendmentTopics(p));
-      html += '<p class="ci-hint">Non una legge nuova, ma un intervento su una legge già in vigore: aperta sia all\'opposizione sia al Governo (compreso il giocatore se governa). Presentabile una volta ogni ' + AMENDMENT_COOLDOWN_TURNS + ' settimane, costa ' + fmtEuro(AMENDMENT_PROPOSAL_COST) + ' (hai ' + fmtEuro(p.fondi) + '). Scegli una categoria:</p><div class="option-grid">';
+      html += '<p class="ci-hint">Non una legge nuova, ma un intervento su una legge già in vigore: aperta sia all\'opposizione sia al Governo (compreso il giocatore se governa). Presentabile una volta ogni ' + AMENDMENT_COOLDOWN_TURNS + ' settimane' + (symbolicAmend ? ', gratis come iniziativa simbolica' : ', costa ' + fmtEuro(AMENDMENT_PROPOSAL_COST) + ' (hai ' + fmtEuro(p.fondi) + ')') + '. Scegli una categoria:</p><div class="option-grid">';
       amendSections.forEach(function (s) {
         html += '<button type="button" class="option-card" data-select-amendment-cat="' + s.id + '">' +
           '<span class="olabel">' + s.label + '</span><span class="odesc">' + s.count + ' legg' + (s.count === 1 ? "e" : "i") + ' disponibil' + (s.count === 1 ? "e" : "i") + '</span></button>';
@@ -45652,7 +45672,7 @@
       }
       // la scelta delle tre modifiche concrete di una legge, appena il giocatore ha scelto quale legge
       if (state.player && state.player.amendmentDraft && state.phase !== "coup") {
-        if (state.player.pendingAmendment || !state.player.inParliament) state.player.amendmentDraft = null;
+        if (state.player.pendingAmendment) state.player.amendmentDraft = null;
         else dossierSection += renderAmendmentDraft();
       }
       if (state.player && !state.player.formationComplete) dossierSection += renderFormationSocialPanel();
@@ -47238,6 +47258,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "partito", t: "Modifiche di legge anche fuori dal Parlamento", x: "Le Proposte di Modifica di Legge non spariscono più quando il partito non ha seggi: come mozioni e proposte di legge, puoi presentarle gratis come iniziativa simbolica, per farti conoscere." },
     { d: "14 novembre 2026", m: "partito", t: "Emiciclo più fluido", x: "L'emiciclo colorato della scheda Parlamento non anima più i seggi uno per uno: entra tutto insieme, senza scatti, anche sul telefono." },
     { d: "14 novembre 2026", m: "partito", t: "Animazioni delle coalizioni", x: "Quando si scioglie una coalizione di cui non fai parte l'animazione dice «Una coalizione si scioglie» e ne mostra il nome. Se un solo partito esce da una coalizione compare un'animazione dedicata («… esce da …», con il nome della coalizione), non più quella dello scioglimento." },
     { d: "14 novembre 2026", m: "partito", t: "Si può tornare alla Repubblica parlamentare", x: "Con il presidenzialismo in vigore, tra le Riforme Costituzionali (scheda Parlamento) c'è «Ritorno alla Repubblica parlamentare». Se passa e il Presidente eletto dal popolo sei tu, lasci il Quirinale ma resti a capo del governo come Presidente del Consiglio, e il Parlamento elegge un nuovo Capo dello Stato di garanzia." },
@@ -48148,7 +48169,7 @@
         var p = state.player;
         var topic = p.amendmentCandidates && p.amendmentCandidates[idx];
         if (!topic) return;
-        if (!p.inParliament || p.pendingAmendment || state.turn < (p.amendmentCooldownTurn || 0)) { showSaveStatus("Non puoi ancora depositare una proposta di modifica (tempo di recupero o proposta già in corso).", true); return; }
+        if (p.pendingAmendment || state.turn < (p.amendmentCooldownTurn || 0)) { showSaveStatus("Non puoi ancora depositare una proposta di modifica (tempo di recupero o proposta già in corso).", true); return; }
         p.amendmentDraft = { title: topic.title, brief: topic.brief, metric: topic.metric, noun: topic.noun, cat: topic.cat, shapeId: topic.shapeId };
         save();
         render();
@@ -48161,7 +48182,7 @@
         if (!draft) return;
         var opt = amendmentOptionsFor(draft)[parseInt(btn.getAttribute("data-amendment-option"), 10)];
         if (!opt) return;
-        if (p.fondi < AMENDMENT_PROPOSAL_COST) { showSaveStatus("Servono " + fmtInt(AMENDMENT_PROPOSAL_COST) + " € per depositare la modifica.", true); return; }
+        if (p.inParliament && p.fondi < AMENDMENT_PROPOSAL_COST) { showSaveStatus("Servono " + fmtInt(AMENDMENT_PROPOSAL_COST) + " € per depositare la modifica.", true); return; }
         var res = proposeAmendment(draft, opt);
         if (!res) { showSaveStatus("Non puoi ancora depositare una proposta di modifica (tempo di recupero o proposta già in corso).", true); return; }
         p.amendmentDraft = null;
