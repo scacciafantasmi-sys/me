@@ -35360,7 +35360,11 @@
     if (eff.trust && c.partyId) c.partyTrust = clamp(c.partyTrust + eff.trust * mult * (eff.trust > 0 ? clamp((105 - c.partyTrust) / 60, 0.12, 1.2) : 1), 0, 100);
     if (eff.intel) c.intelletto = clamp(c.intelletto + eff.intel * mult, 0, 100);
     if (eff.merito && c.track) c.track.merito = clamp(c.track.merito + eff.merito * mult, 0, 100);
-    if (eff.ombre) c.ombre = clamp(c.ombre + eff.ombre * (careerTraitHas("integerrimo") && eff.ombre > 0 ? 0.6 : 1), 0, 100);
+    if (eff.ombre) {
+      c.ombre = clamp(c.ombre + eff.ombre * (careerTraitHas("integerrimo") && eff.ombre > 0 ? 0.6 : 1), 0, 100);
+      if (eff.ombre > 0) { if (!c.ombreLog) c.ombreLog = []; c.ombreLog.unshift({ turn: state.turn, v: eff.ombre, why: careerOmbreWhy || "una scelta poco trasparente" }); if (c.ombreLog.length > 20) c.ombreLog.length = 20; }
+    }
+    careerOmbreWhy = null;
     if (eff.prep && c.uni && !c.uni.laureato) c.uni.prep = clamp(c.uni.prep + eff.prep, 0, 100);
   }
   function careerAdultSummary(eff) {
@@ -35915,8 +35919,10 @@
   function careerSpecialDossiersBase(c) {
     var out = [];
     // indagini: le «ombre» accumulate con scelte opache prima o poi chiedono il conto
-    if (!c.processo && c.ombre > 25 && Math.random() < (c.ombre - 25) / 700) {
-      out.push({ id: "avviso_garanzia", cat: "Giustizia", title: "Avviso di garanzia", brief: "La Procura di " + c.city + " ti iscrive nel registro degli indagati per " + pickText(["abuso d'ufficio", "turbativa d'asta", "finanziamento illecito", "traffico di influenze", "corruzione"]) + ". La notizia è su tutti i siti locali.",
+    var ombraCausa = (c.ombreLog || []).filter(function (o) { return o.v >= 1 && state.turn - o.turn <= 156; })[0];
+    if (!c.processo && c.ombre > 30 && ombraCausa && Math.random() < (c.ombre - 30) / 600) {
+      var reato = /costruttor|appalt|gara/i.test(ombraCausa.why) ? "turbativa d'asta" : /loggia/i.test(ombraCausa.why) ? "associazione segreta" : /soldi|finanz|fondi|donazion/i.test(ombraCausa.why) ? "finanziamento illecito" : pickText(["abuso d'ufficio", "traffico di influenze", "corruzione"]);
+      out.push({ id: "avviso_garanzia", cat: "Giustizia", title: "Avviso di garanzia", brief: "La Procura di " + c.city + " ti iscrive nel registro degli indagati per " + reato + ". All\x27origine dell\x27indagine: " + ombraCausa.why + " (" + weekLabel(ombraCausa.turn).replace(/^.*– /, "") + "). La notizia è su tutti i siti locali.",
         choices: [
           { label: "Ti autosospendi da ogni incarico", act: "indagato", susp: true, eff: { rep: -3, trust: 2, cons: -3 }, result: "Un gesto che molti apprezzano, anche se ti costa." },
           { label: "Resti al tuo posto: «Ho fiducia nella magistratura»", act: "indagato", eff: { rep: -5, cons: -6 }, result: "La frase di rito non basta a spegnere le polemiche." },
@@ -36901,6 +36907,7 @@
       }
     }
     var eff = outcome.eff || {};
+    if (eff.ombre > 0) careerOmbreWhy = "«" + (d.title || "una scelta") + "»: " + String(ch.label || "").toLowerCase();
     careerAdultApply(c, eff);
     if (d.id === "seduta_consiglio" || d.id === "riunione_giunta") { try { localRecordSession(c, d, ch, outcome); } catch (lErr2) { if (window.console) console.error(lErr2); } }
     if (d.id === "direzione_partito") { try { partyRecordSession(c, d, ch); } catch (lErr3) { if (window.console) console.error(lErr3); } }
@@ -36952,11 +36959,16 @@
     { id: "a_talk", label: "Ospitata in un talk show nazionale", desc: "Alto rischio, alta visibilità. Serve reputazione 30.", cooldown: 4, can: function (c) { return c.reputazione >= 30; },
       run: function (c) { var ok = Math.random() < 0.5 + c.intelletto / 300; return { eff: ok ? { rep: rand(2.5, 5), cons: rand(1, 2) } : { rep: -rand(1.5, 4) }, text: ok ? "La tua clip è la più condivisa della serata." : "Un dato sbagliato in diretta: il fact-checking ti massacra." }; } },
     { id: "a_cena", label: "Cena con imprenditori e professionisti", desc: "I contatti che contano. Qualche ombra.", cooldown: 3, can: function () { return true; },
-      run: function () { return { eff: { rete: rand(2.5, 4.5), ombre: rand(0.3, 1.2) }, text: pickText(["Una cena elegante: biglietti da visita e promesse di sostegno.", "Si parla di tutto, soprattutto di quello che si potrebbe fare «insieme».", "Un costruttore ti prende da parte: «Quando avrai bisogno, chiamami»."]) }; } },
+      run: function () {
+        // Segnalato dall'autore: le indagini arrivavano «a caso». Ora la cena crea ombre solo quando succede
+        // qualcosa di poco chiaro, e lo dice.
+        if (Math.random() < 0.25) { careerOmbreWhy = "la cena con un costruttore che chiedeva favori"; return { eff: { rete: rand(3, 5), ombre: rand(1.5, 2.5) }, text: "Un costruttore ti prende da parte: «Quando avrai bisogno, chiamami». Ti lascia un biglietto, e qualcuno vi ha visti insieme. (Ombre in aumento)" }; }
+        return { eff: { rete: rand(2.5, 4.5) }, text: pickText(["Una cena elegante: biglietti da visita e promesse di sostegno.", "Si parla di tutto, soprattutto di quello che si potrebbe fare «insieme».", "Professionisti, piccoli imprenditori, un paio di primari: contatti utili, niente di strano."]) };
+      } },
     { id: "a_partito", label: "Lavoro nel partito", desc: "Riunioni, feste, sezioni. La fiducia si costruisce così.", cooldown: 1, can: function (c) { return !!c.partyId; },
       run: function () { return { eff: { trust: rand(1, 2.5), rete: rand(0.5, 1.5) }, text: pickText(["Tre riunioni in una settimana e una festa di sezione da organizzare.", "Porti le sedie, monti il palco, chiudi il bilancio della festa: il partito vede.", "Una lunga notte di direzione provinciale: parli poco ma bene."]) }; } },
     { id: "a_correnti", label: "Tessi rapporti con le correnti", desc: "Le promozioni si decidono anche così.", cooldown: 3, can: function (c) { return !!c.partyId && c.partyRank >= 2; },
-      run: function () { return { eff: { trust: rand(1.5, 3.5), rete: rand(1.5, 3), ombre: rand(0, 1) }, text: "Caffè, telefonate, cene: costruisci un piccolo patrimonio di alleanze interne." }; } },
+      run: function () { return { eff: { trust: rand(1.5, 3.5), rete: rand(1.5, 3) }, text: "Caffè, telefonate, cene: costruisci un piccolo patrimonio di alleanze interne." }; } },
     { id: "a_territorio", label: "Ascolta i cittadini sul territorio", desc: "Ricevimento, sopralluoghi, quartieri.", cooldown: 1, can: function (c) { return !!c.office; },
       run: function () { return { eff: { cons: rand(2.5, 4.5), rete: rand(0.5, 1.5) }, text: pickText(["Una mattina in un quartiere dimenticato: ti segni dieci problemi.", "Ricevimento aperto: una fila di persone con richieste vere.", "Un sopralluogo con i residenti: il problema lo vedi con i tuoi occhi."]) }; } },
     { id: "a_campagna", label: "Giornata di campagna elettorale", desc: "Solo da candidato/a.", cooldown: 1, can: function (c) { return !!c.candidacy; },
@@ -36968,7 +36980,7 @@
     { id: "a_lavoro", label: "Straordinari e incarichi extra", desc: "Il merito nel tuo percorso professionale.", cooldown: 1, can: function (c) { return !!c.track; },
       run: function () { return { eff: { merito: rand(3, 5) }, text: "Ti carichi di lavoro extra: i superiori se ne accorgono." }; } },
     { id: "a_tornata", label: "Partecipa a una tornata della loggia", desc: "Contatti riservati, ombre comprese.", cooldown: 3, can: function (c) { return !!c.loggia; },
-      run: function () { return { eff: { rete: rand(2, 3.5), ombre: rand(1, 2) }, text: "Una sera di riti e strette di mano significative." }; } }
+      run: function () { careerOmbreWhy = "le frequentazioni della loggia"; return { eff: { rete: rand(2, 3.5), ombre: rand(1, 2) }, text: "Una sera di riti e strette di mano significative." }; } }
   ];
 
   // --- Interfaccia della vita adulta ---
@@ -37347,11 +37359,16 @@
     if (!bits.length) bits.push("Cittadino/a impegnato/a");
     return bits.join(" · ");
   }
+  var careerOmbreWhy = null;
   function renderCareerAdultProfile(c) {
     var html = '<div class="stat-grid">' + careerGauge("Reputazione nazionale", c.reputazione, 10) + careerGauge("Rete di contatti", c.rete, 10) +
       careerGauge("Consenso", c.consenso, 25) + (c.partyId ? careerGauge("Fiducia del partito", c.partyTrust, 30) : "") +
       careerGauge("Intelletto", c.intelletto, 20) + (c.track ? careerGauge("Merito professionale", c.track.merito, 25) : "") + "</div>";
-    if (c.ombre >= 15) html += '<p class="ci-hint"><strong>Ombre: ' + Math.round(c.ombre) + '/100.</strong> Favori, soldi in nero e amicizie sbagliate si accumulano: più sono alte, più è probabile un\'indagine.</p>';
+    if (c.ombre >= 1) {
+      var recentOmbre = (c.ombreLog || []).filter(function (o) { return state.turn - o.turn <= 156; }).slice(0, 4);
+      html += '<p class="ci-hint"><strong>Ombre: ' + Math.round(c.ombre) + '/100.</strong> Favori, soldi in nero e amicizie sbagliate si accumulano e calano piano col tempo. Sopra 30, e solo se c\'è una causa concreta negli ultimi tre anni, può partire un\'indagine.' +
+        (recentOmbre.length ? " Da dove vengono: " + recentOmbre.map(function (o) { return o.why + " (" + weekLabel(o.turn).replace(/^.*– /, "") + ")"; }).join("; ") + "." : " Nessuna causa recente: nessun rischio di indagine per ora.") + "</p>";
+    }
     if (c.processo) html += '<p class="ci-hint"><strong>' + (c.processo.interdetto ? "Interdetto/a dai pubblici uffici" : "Sei indagato/a: la sentenza è attesa intorno alla settimana " + c.processo.endTurn) + ".</strong></p>";
     html += '<section aria-label="Percorso"><h3>Il tuo percorso</h3><ul class="enacted-policy-list">' +
       (c.diploma ? "<li>Diploma " + (c.diploma.school ? careerAlSchool(c.diploma.school) : "") + " con " + c.diploma.voto + "/100" + (c.diploma.lode ? " e lode" : "") + "</li>" : "") +
@@ -47620,6 +47637,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "carriera", t: "Indagini meno casuali", x: "In Carriera le indagini non arrivano più dal nulla: i rapporti con le correnti non creano ombre, e la cena con gli imprenditori solo quando succede qualcosa di poco chiaro. Un avviso di garanzia parte solo con ombre sopra 30 e una causa concreta negli ultimi tre anni, che l'avviso nomina. Nel profilo vedi sempre le tue ombre e da dove vengono." },
     { d: "14 novembre 2026", m: "carriera", t: "Scheda del partito per i dirigenti", x: "In Carriera, dal grado di membro della direzione provinciale in su, compare la scheda del partito (Provincia, Regione o Nazionale a seconda del grado): valutazioni della federazione, l'archivio delle decisioni della direzione con le loro conseguenze, le proposte scritte di pugno (ordine del giorno, documento politico, regolamento) e una riunione della direzione ogni 6-8 settimane in cui votare con o contro la segreteria." },
     { d: "14 novembre 2026", m: "partito", t: "Correzioni: congresso e Question Time", x: "Se prendi il comando di un partito che esiste già, all'inizio c'è il congresso straordinario, non quello fondativo, e il discorso non dice più che il partito è appena nato. Nel Question Time non compaiono più nomi tecnici come «ForzaSindacale»." },
     { d: "14 novembre 2026", m: "carriera", t: "Chi governa in Comune e in Regione", x: "Nelle schede del Comune e della Regione ogni consiliatura e legislatura mostra quale partito o coalizione era in Giunta e chi era sindaco o presidente. Quella in corso segue la tua posizione: Giunta tua se sei sindaco, assessore o presidente, oppure la parte avversa se sei all'opposizione." },
