@@ -35102,7 +35102,8 @@
     presidente_regione: { label: "Presidente di Regione", act: "Legge regionale della Giunta", level: 5 },
     deputato: { label: "Deputato/a", act: "Proposta di legge", level: 4 },
     ministro: { label: "Ministro/a", act: "Disegno di legge o decreto ministeriale", level: 6 },
-    eurodeputato: { label: "Parlamentare europeo/a", act: "Emendamento o interrogazione al Parlamento europeo", level: 4 }
+    eurodeputato: { label: "Parlamentare europeo/a", act: "Emendamento o interrogazione al Parlamento europeo", level: 4 },
+    presidente_consiglio: { label: "Presidente del Consiglio", act: "Disegno di legge del governo", level: 7 }
   };
   var CAREER_TRACK_ACTS = { sindacato: "Piattaforma rivendicativa", militare: "Proposta di riforma allo Stato Maggiore", magistratura: "Proposta organizzativa al CSM", carcere: "Regolamento interno dell'istituto", avvocato: "Esposto o parere pubblico" };
 
@@ -35409,6 +35410,7 @@
   function careerCheckPartyAlive(c) {
     if (!c.partyId) return;
     if ((state.dissolvedPartyIds || []).indexOf(c.partyId) === -1) return;
+    if (c.partySecretary) careerLoseSecretary(c, "Il partito che guidavi non esiste più.");
     var name = c.partyName;
     c.lastPartyRank = Math.max(c.lastPartyRank || 0, c.partyRank || 0);
     c.partyId = null; c.partyName = null; c.partyColor = null; c.partyRank = 0; c.partyTrust = 50;
@@ -35630,6 +35632,7 @@
   }
   function careerLeaveParty(c) {
     if (!c.partyId) return;
+    if (c.partySecretary) { c.secPartyId = c.partyId; careerLoseSecretary(c, "Lasci il partito che guidavi: la segreteria passa ad altri."); }
     addCareerDiaryEntry("Lasci il partito", "Restituisci la tessera di " + c.partyName + (c.partyRank ? ", da " + CAREER_PARTY_LADDER[c.partyRank].label.toLowerCase() : "") + ". " + (c.office ? "Resti in carica, ma ora come indipendente." : ""));
     careerAdultApply(c, { rep: -1.5, cons: c.office ? -3 : 0 });
     c.lastPartyRank = Math.max(c.lastPartyRank || 0, c.partyRank || 0);
@@ -35639,6 +35642,7 @@
   }
   function careerPromoCheck(c) {
     if (!c.partyId) return "Non sei tesserato/a.";
+    if (c.partySecretary) return "Sei il segretario/a nazionale: guidi il partito.";
     var next = CAREER_PARTY_LADDER[c.partyRank + 1];
     if (!next) return "Sei già ai vertici del partito: resta solo la sfida per la segreteria.";
     if (state.turn - c.partyRankTurn < next.weeks) return "Servono ancora " + (next.weeks - (state.turn - c.partyRankTurn)) + " settimane nel ruolo attuale.";
@@ -35664,7 +35668,7 @@
   function careerPrimariesDossier(c) {
     var p = careerParty(c);
     var base = clamp(0.06 + (c.reputazione - 60) / 75 + (c.partyTrust - 60) / 110 + c.rete / 320 + c.consenso / 400, 0.04, 0.72);
-    return { id: "primarie_segreteria", cat: "Primarie", title: "Primarie per la segreteria di " + (p ? p.name : c.partyName), brief: "Hai deciso: sfidi " + (p ? p.leader : "il segretario") + " alle primarie per guidare il partito. Se vinci, il partito è tuo (e il gioco passa alla modalità partito). Se perdi, resti dove sei, ma più solo/a.",
+    return { id: "primarie_segreteria", cat: "Primarie", title: "Primarie per la segreteria di " + (p ? p.name : c.partyName), brief: "Hai deciso: sfidi " + (p ? p.leader : "il segretario") + " alle primarie per guidare il partito. Se vinci, il partito è tuo e la carriera continua da segretario/a. Se perdi, resti dove sei, ma più solo/a.",
       choices: [
         { label: "Campagna di rinnovamento: «una nuova generazione»", chance: clamp(base + (careerAge(c) < 40 ? 0.08 : -0.04), 0.03, 0.8), act: "primarie", eff: { rep: 3 }, result: "Il messaggio del rinnovamento sfonda tra gli iscritti.", fail: { eff: { trust: -15, rep: 1 }, result: "Il partito sceglie la continuità." } },
         { label: "Campagna identitaria: tornare alle radici", chance: clamp(base + 0.03, 0.03, 0.8), act: "primarie", eff: { trust: 3 }, result: "La base ti riconosce come la vera anima del partito.", fail: { eff: { trust: -15 }, result: "Gli iscritti ti trovano troppo radicale." } },
@@ -35925,7 +35929,7 @@
     var hasAction = /(istitui|finanzia|stanzia|modifica|abroga|introduce|prevede|impegna|rifare|apre|aprire|assume|costruire|ridurre|aumentare|vietare|stop)/.test(t);
     var concrete = hasNumber || hasAction;
     var outOfScope = careerIsComuneRole(c) && CAREER_COMUNE_OUT_OF_SCOPE.some(function (k) { return t.indexOf(k) !== -1; });
-    var base = { consigliere_comunale: 0.3, assessore: 0.6, sindaco: 0.65, consigliere_regionale: 0.25, presidente_regione: 0.6, deputato: careerPartyInGov(c) ? 0.3 : 0.08, ministro: 0.55, eurodeputato: 0.2 }[c.office ? c.office.id : ""];
+    var base = { consigliere_comunale: 0.3, assessore: 0.6, sindaco: 0.65, consigliere_regionale: 0.25, presidente_regione: 0.6, deputato: careerPartyInGov(c) ? 0.3 : 0.08, ministro: 0.55, eurodeputato: 0.2, presidente_consiglio: 0.6 }[c.office ? c.office.id : ""];
     if (base === undefined) base = { sindacato: 0.35 + c.track.rank * 0.04, militare: 0.2 + c.track.rank * 0.05, magistratura: 0.25 + (c.csm ? 0.2 : 0), carcere: 0.45 + c.track.rank * 0.04, avvocato: 0.5 }[c.track.id];
     if (base === undefined && c.track) base = (CAREER_TRACK_ACT_BASE[c.track.id] || 0.4) + c.track.rank * 0.04;
     if (c.office && c.office.id === "consigliere_comunale") base += careerCityMajority(c) ? 0.12 : -0.08;
@@ -36201,6 +36205,7 @@
       else { c.office.termEnd = state.careerNextPolitiche; addCareerDiaryEntry("Riconferma", "Resti Ministro/a " + c.office.ministry + " anche nel nuovo governo."); }
     }
     careerCheckPartyAlive(c);
+    try { careerSecretaryTick(c); } catch (sErr) { if (window.console) console.error(sErr); }
     careerPollTick();
   }
   // --- Dossier della vita adulta ---
@@ -37059,9 +37064,9 @@
     addCareerDiaryEntry(d.title, resultText + (summary ? " (" + summary + ")" : ""));
     showSaveStatus(resultText, false);
     if (bridge === "primarie_vinte") {
-      addCareerDiaryEntry("Segretario/a nazionale", "Vinci le primarie: da oggi guidi " + c.partyName + ".");
+      careerBecomeSecretary(c);
       save();
-      careerBridgeToPartyMode(c, { partyId: c.partyId });
+      render();
       return;
     }
     save();
@@ -37335,7 +37340,7 @@
     var arrow = function (k) { var d = L.metrics[k] - (L.prev[k] === undefined ? L.metrics[k] : L.prev[k]); return Math.abs(d) < 0.05 ? '<span class="delta flat">=</span>' : '<span class="delta ' + (d > 0 ? "up" : "down") + '">' + (d > 0 ? "▲ +" : "▼ ") + d.toFixed(1).replace(".", ",") + "</span>"; };
     var curLeg = localLegOf(L, state.turn);
     var html = '<section aria-label="Scheda ' + kind + '"><div class="setup-card"><p class="eyebrow">' + (kind === "comune" ? "Scheda del Comune" : kind === "partito" ? "Scheda del partito" : "Scheda della Regione") + "</p><h2>" + (kind === "partito" ? fxEsc(partyOrgTitle(c, L)) : (kind === "comune" ? "Comune di " : "Regione ") + L.place) + "</h2>" +
-      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + (kind === "partito" ? CAREER_PARTY_LADDER[c.partyRank || 0].label : localHoldsHere(c, L) ? careerOfficeLabel(c) : "Segui i lavori da cittadino/a") + '</p><p class="ci-hint" style="margin:.3rem 0 0">' + fxEsc(localGiuntaText(c, L, curLeg)) + "</p></div>";
+      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + (kind === "partito" ? careerPartyRankLabel(c) : localHoldsHere(c, L) ? careerOfficeLabel(c) : "Segui i lavori da cittadino/a") + '</p><p class="ci-hint" style="margin:.3rem 0 0">' + fxEsc(localGiuntaText(c, L, curLeg)) + "</p></div>";
     html += '<h3>Valutazioni della scheda</h3><p class="ci-hint">Giudizio complessivo: <strong>' + localVerdict(avg) + " (" + avg.toFixed(1).replace(".", ",") + "/10)</strong> · gradimento " + (kind === "comune" ? "della Giunta" : kind === "partito" ? "della segreteria" : "della Giunta regionale") + ": " + L.metrics.gradimento.toFixed(1).replace(".", ",") + "/10 " + arrow("gradimento") + ". Le frecce confrontano con un anno fa.</p>" +
       '<div class="stat-grid">' + defs.map(function (m) { return '<div class="stat-tile"><div class="label">' + m[1] + '</div><div class="row"><span class="value">' + L.metrics[m[0]].toFixed(1).replace(".", ",") + "</span>" + arrow(m[0]) + '</div><div class="gauge"><span style="width:' + (L.metrics[m[0]] * 10) + "%;background:" + (L.metrics[m[0]] < 4 ? "var(--critical)" : L.metrics[m[0]] < 6 ? "var(--warning)" : "var(--good)") + '"></span></div></div>'; }).join("") + "</div>";
     // storico per consiliatura/legislatura e per anno
@@ -37343,7 +37348,7 @@
     L.atti.forEach(function (a) { var n = localLegOf(L, a.turn); (byLeg[n] = byLeg[n] || []).push(a); });
     var legs = Object.keys(byLeg).map(Number).sort(function (a, b) { return b - a; });
     var tot = L.atti.length, ok = L.atti.filter(function (a) { return a.passed; }).length, mine = L.atti.filter(function (a) { return a.own; }).length;
-    if (kind === "partito") html += renderPartyOrgPropose(c, L);
+    if (kind === "partito") html += renderCareerSecretaryPanel(c) + renderPartyOrgPropose(c, L);
     html += "<h3>" + (kind === "comune" ? "Delibere e mozioni" : kind === "partito" ? "Le decisioni della direzione" : "Leggi regionali") + ' negli anni</h3><p class="ci-hint">' + tot + " atti in archivio: " + ok + " approvati, " + (tot - ok) + " respinti" + (mine ? " · " + mine + " portano la tua firma" : "") + ".</p>";
     legs.forEach(function (n) {
       var list = byLeg[n].slice().sort(function (a, b) { return b.turn - a.turn; });
@@ -37386,7 +37391,7 @@
   function partyOrgSegreteriaText(c, L, n) {
     if (!L.segr) L.segr = {};
     var cur = localLegOf(L, state.turn), r = c.partyRank || 0;
-    var mineHead = (L.lvl === "provinciale" && r === 5) || (L.lvl === "regionale" && r === 7);
+    var mineHead = (L.lvl === "provinciale" && r === 5) || (L.lvl === "regionale" && r === 7) || (L.lvl === "nazionale" && !!c.partySecretary);
     if (!L.segr[n]) L.segr[n] = { name: generateStaffName() };
     var name = n === cur && mineHead ? c.name + " (tu)" : L.segr[n].name;
     var curr = careerMyCurrent(c);
@@ -37458,6 +37463,16 @@
     c.partyDirNextTurn = state.turn + 6 + Math.floor(Math.random() * 3);
     var it = PARTY_ORG_ATTI[Math.floor(Math.random() * PARTY_ORG_ATTI.length)];
     var lbl = partyOrgDirezioneLabel(c);
+    if (c.partySecretary && L.lvl === "nazionale") {
+      out.push({ id: "direzione_partito", cat: lbl, partyItem: it[0], title: "Direzione nazionale: la tua proposta su " + it[0].toLowerCase(),
+        brief: "Da segretario/a porti in direzione la tua proposta su " + it[0].toLowerCase() + ". Le minoranze interne chiedono di essere ascoltate.",
+        choices: [
+          { label: "Tiri dritto: la linea la dà il segretario", eff: { trust: -1, rep: 1 }, result: "La proposta passa così com'è. ", partyVote: "no" },
+          { label: "Cerchi la mediazione con le minoranze", eff: { trust: 3 }, result: "Una mediazione lunga, ma il partito vota compatto.", partyVote: "modifica" },
+          { label: "Rinvii la decisione", eff: { trust: -1 }, result: "Rinvii: nessuno si arrabbia, ma qualcuno parla di immobilismo.", partyVote: "astenuto" }
+        ] });
+      return out;
+    }
     out.push({ id: "direzione_partito", cat: lbl, partyItem: it[0], title: "Riunione della " + lbl.toLowerCase() + ": " + it[0].toLowerCase(),
       brief: "All'ordine del giorno: " + it[0].toLowerCase() + ". La segreteria ha preparato una proposta e chiede il voto della direzione. " + (careerMyCurrent(c) ? "La tua corrente aspetta di capire da che parte stai." : "Il tuo voto conta, e qualcuno se lo ricorderà."),
       choices: [
@@ -37472,13 +37487,130 @@
   function partyRecordSession(c, d, ch) {
     var L = partyOrgCurrent(c); if (!L) return;
     var def = PARTY_ORG_ATTI.filter(function (x) { return x[0] === d.partyItem; })[0] || ["Proposta della segreteria", "unita"];
-    var passed = ch.partyVote === "no" ? Math.random() < 0.6 : true;
-    if (ch.partyVote === "no") ch.result = (ch.result || "") + (passed ? "La proposta passa lo stesso, ma la tua dissidenza è agli atti." : "Con il tuo voto la segreteria va sotto: la proposta è respinta.");
+    var isSec = !!c.partySecretary && L.lvl === "nazionale";
+    var passed = ch.partyVote === "no" ? Math.random() < (isSec ? 0.8 : 0.6) : true;
+    if (ch.partyVote === "no") ch.result = (ch.result || "") + (isSec ? (passed ? "Le minoranze protestano, ma la maggioranza ti segue." : "Una parte della maggioranza ti abbandona: la proposta è respinta.") : passed ? "La proposta passa lo stesso, ma la tua dissidenza è agli atti." : "Con il tuo voto la segreteria va sotto: la proposta è respinta.");
     var yes = passed ? 31 + Math.floor(Math.random() * 18) : 22 + Math.floor(Math.random() * 7), abst = Math.floor(Math.random() * 4);
-    var a = { turn: state.turn, title: def[0], metric: def[1], by: ch.partyVote === "modifica" ? "Segreteria (con la tua modifica)" : "Segreteria", own: ch.partyVote === "modifica", passed: passed, tally: yes + " sì, " + Math.max(0, 60 - yes - abst) + " no, " + abst + " astenuti", vote: ch.label };
+    var a = { turn: state.turn, title: def[0], metric: def[1], by: isSec ? "Tu (segreteria)" : ch.partyVote === "modifica" ? "Segreteria (con la tua modifica)" : "Segreteria", own: isSec || ch.partyVote === "modifica", passed: passed, tally: yes + " sì, " + Math.max(0, 60 - yes - abst) + " no, " + abst + " astenuti", vote: ch.label };
     localConsequences(L, a, def[2], false);
     L.atti.push(a);
   }
+  // ---------- Carriera: segretario/a nazionale senza lasciare la carriera ----------
+  // Richiesto da un giocatore e dall'autore: vincendo le primarie la carriera non deve finire. Ora si resta
+  // in Carriera come Segretario/a nazionale, con tutto il resto (incarichi, scheda del Comune e della
+  // Regione, professione): il partito ha te come leader, la scheda «Nazionale» diventa la tua segreteria
+  // (campagne, correnti, alleanze, direzione), e se il partito guida il governo dopo le politiche diventi
+  // Presidente del Consiglio. Se la fiducia del partito crolla, la direzione può sfiduciarti. Chi vuole può
+  // comunque passare alla modalità partito con un pulsante.
+  function careerPartyRankLabel(c) { return c.partySecretary ? "Segretario/a nazionale" : (CAREER_PARTY_LADDER[c.partyRank || 0] || CAREER_PARTY_LADDER[0]).label; }
+  function careerBecomeSecretary(c) {
+    var p = careerParty(c);
+    if (!state.partyLeaderOverrides) state.partyLeaderOverrides = {};
+    c.secPrevLeader = p ? p.leader : null;
+    state.partyLeaderOverrides[c.partyId] = c.name;
+    c.partySecretary = { since: state.turn, lowWeeks: 0 };
+    c.partyRank = CAREER_PARTY_LADDER.length - 1;
+    c.partyTrust = clamp(c.partyTrust + 10, 0, 100);
+    if (state.govEntity && state.govEntity.premierPartyId === c.partyId) state.govEntity.premierName = c.name;
+    addCareerDiaryEntry("Segretario/a nazionale", "Vinci le primarie: da oggi guidi " + c.partyName + ". La carriera continua: ora sei tu il volto del partito.");
+    fxPush({ type: "big", theme: "gold", emoji: "🏛️", eyebrow: c.partyName, title: "Sei il nuovo segretario/a", sub: "Vinci le primarie e resti in Carriera: ora guidi il partito." });
+  }
+  function careerLoseSecretary(c, why) {
+    if (!c.partySecretary) return;
+    var pid = c.partyId || c.secPartyId;
+    if (state.partyLeaderOverrides && pid) state.partyLeaderOverrides[pid] = generateStaffName();
+    c.partySecretary = null;
+    if (c.office && c.office.id === "presidente_consiglio") { c.office = null; }
+    addCareerDiaryEntry("Non sei più segretario/a", why);
+  }
+  function careerSecretaryTick(c) {
+    if (!c.partySecretary) return;
+    if (!c.partyId) { careerLoseSecretary(c, "Senza tessera non puoi guidare un partito."); return; }
+    // la tua reputazione pesa sui sondaggi del partito
+    if (state.parties[c.partyId] !== undefined) state.parties[c.partyId] = Math.max(0.3, state.parties[c.partyId] + (c.reputazione - 50) / 50 * 0.012);
+    // fiducia del partito troppo bassa per troppo tempo: la direzione ti sfiducia
+    if (c.partyTrust < 25) c.partySecretary.lowWeeks++; else c.partySecretary.lowWeeks = 0;
+    if (c.partySecretary.lowWeeks >= 10) { careerLoseSecretary(c, "La direzione nazionale ti sfiducia: dieci settimane di fiducia sotto il 25% sono troppe. Torni nella direzione nazionale."); c.partyRank = 8; return; }
+    // Presidente del Consiglio se il partito guida il governo (il leader del partito sei tu)
+    var ge = state.govEntity, lead = partyById(leadingGovPartyId());
+    var premierMine = !!(ge && lead && lead.id === c.partyId);
+    if (premierMine && (!c.office || c.office.id !== "presidente_consiglio")) {
+      if (ge) ge.premierName = c.name;
+      if (c.office) addCareerDiaryEntry("Lasci l'incarico", "Lasci l'incarico di " + careerOfficeLabel(c) + " per guidare il governo.");
+      c.office = { id: "presidente_consiglio", since: state.turn, termEnd: state.careerNextPolitiche || state.turn + 260, lowWeeks: 0 };
+      if (!c.officesHeld) c.officesHeld = [];
+      if (c.officesHeld.indexOf("presidente_consiglio") === -1) c.officesHeld.push("presidente_consiglio");
+      careerAdultApply(c, { rep: 8, cons: 5 });
+      addCareerDiaryEntry("Presidente del Consiglio", "Il tuo partito guida il governo: giuri al Quirinale come Presidente del Consiglio, restando segretario/a di " + c.partyName + ".");
+      fxPush({ type: "big", theme: "gold", emoji: "🇮🇹", eyebrow: "Palazzo Chigi", title: "Presidente del Consiglio", sub: c.name + " guida il governo." });
+    } else if (!premierMine && c.office && c.office.id === "presidente_consiglio") {
+      c.office = null;
+      addCareerDiaryEntry("Fine del governo", "Il tuo partito non guida più il governo: lasci Palazzo Chigi, ma resti segretario/a.");
+    }
+  }
+  var CAREER_SEC_ACTIONS = [
+    { id: "campagna", label: "Campagna nazionale del partito", desc: "Manifesti, piazze e TV in tutta Italia: i sondaggi salgono.", cd: 4 },
+    { id: "correnti", label: "Riunisci le correnti", desc: "Una cena, una mediazione, qualche posto in segreteria: il partito si ricompatta.", cd: 6 },
+    { id: "programma", label: "Presenta il programma di governo", desc: "Una conferenza programmatica: credibilità e reputazione.", cd: 10 }
+  ];
+  function careerSecAction(c, id, target) {
+    var s = c.partySecretary; if (!s) return;
+    if (!s.cd) s.cd = {};
+    if (id !== "alleanza" && id !== "rompi" && state.turn < (s.cd[id] || 0)) return;
+    var msg = "";
+    if (id === "campagna") { s.cd[id] = state.turn + 4; var g = rand(0.2, 0.6); state.parties[c.partyId] = (state.parties[c.partyId] || 0) + g; careerAdultApply(c, { rep: 1 }); msg = c.partyName + " in tutte le piazze d'Italia: +" + g.toFixed(1).replace(".", ",") + " punti nei sondaggi."; }
+    else if (id === "correnti") { s.cd[id] = state.turn + 6; careerAdultApply(c, { trust: rand(3, 6) }); var P = partyOrgCurrent(c); if (P) localMove(P, "unita", rand(0.3, 0.6)); msg = "Le correnti tornano a parlarsi: il partito è più unito."; }
+    else if (id === "programma") { s.cd[id] = state.turn + 10; careerAdultApply(c, { rep: rand(2, 4), cons: 2 }); msg = "La conferenza programmatica va bene: il partito appare pronto a governare."; }
+    else if (id === "alleanza") {
+      if (state.turn < (s.cd.alleanza || 0)) return;
+      s.cd.alleanza = state.turn + 8;
+      var other = partyById(target); if (!other) return;
+      var mine = partyById(c.partyId);
+      var dist = Math.abs((LEFT_RIGHT_POSITION[other.familyId] || 0) - (LEFT_RIGHT_POSITION[mine && mine.familyId] || 0));
+      var ok = Math.random() < clamp(0.75 - dist * 0.3 + c.rete / 400, 0.05, 0.9);
+      if (ok) {
+        var coalId = careerCoalitionOf(c.partyId);
+        var otherCoal = careerCoalitionOf(target);
+        if (otherCoal && otherCoal !== coalId) { var oc = coalitionById(otherCoal); if (oc && oc.members) oc.members = oc.members.filter(function (m) { return m !== target; }); }
+        if (coalId) { var co = coalitionById(coalId); if (co && co.members && co.members.indexOf(target) === -1) co.members.push(target); msg = other.name + " entra nella tua coalizione."; }
+        else { if (!state.dynamicCoalitions) state.dynamicCoalitions = []; state.dynamicCoalitions.push({ id: "dyn_coal_career_" + state.turn, label: (mine ? mine.name : c.partyName) + " – " + other.name, familyId: mine ? mine.familyId : null, members: [c.partyId, target] }); msg = "Nasce l'alleanza tra " + c.partyName + " e " + other.name + "."; }
+        careerAdultApply(c, { rep: 1, trust: 1 });
+      } else { careerAdultApply(c, { rep: -0.5 }); msg = other.name + " rifiuta l'alleanza: troppa distanza politica."; }
+    } else if (id === "rompi") {
+      var cid = careerCoalitionOf(c.partyId), cc = cid && coalitionById(cid);
+      if (!cc) return;
+      cc.members = cc.members.filter(function (m) { return m !== c.partyId; });
+      careerAdultApply(c, { trust: -2, rep: 0.5 });
+      msg = c.partyName + " esce da " + cc.label + ": correrà da solo.";
+    }
+    if (msg) { addCareerDiaryEntry("Segreteria", msg); showSaveStatus(msg, false); }
+  }
+  function renderCareerSecretaryPanel(c) {
+    var s = c.partySecretary; if (!s) return "";
+    if (!s.cd) s.cd = {};
+    var mine = partyById(c.partyId), coalId = careerCoalitionOf(c.partyId), coal = coalId && coalitionById(coalId);
+    var html = '<section aria-label="La tua segreteria"><h3>🏛️ La tua segreteria</h3><p class="ci-hint">Guidi ' + fxEsc(c.partyName) + " dalla settimana " + s.since + ". Sondaggi del partito: <strong>" + fmt1(state.parties[c.partyId] || 0) + "%</strong>" +
+      (coal ? " · coalizione: " + fxEsc(coal.label) : " · il partito corre da solo") + (c.office && c.office.id === "presidente_consiglio" ? " · sei Presidente del Consiglio" : "") +
+      (s.lowWeeks ? ' · <strong style="color:var(--critical)">fiducia sotto il 25% da ' + s.lowWeeks + " settimane: a 10 la direzione ti sfiducia</strong>" : "") + ".</p><div class=\"choices\">" +
+      CAREER_SEC_ACTIONS.map(function (a) { var w = (s.cd[a.id] || 0) - state.turn; return '<button type="button" class="choice-btn" data-sec-act="' + a.id + '"' + (w > 0 ? " disabled" : "") + '><span class="clabel">' + a.label + (w > 0 ? " (tra " + w + " settimane)" : "") + '</span><span class="chint">' + a.desc + "</span></button>"; }).join("") + "</div>";
+    var others = activeParties().filter(function (pt) { return pt.id !== c.partyId && (!coal || (coal.members || []).indexOf(pt.id) === -1); })
+      .sort(function (a, b) { return (state.parties[b.id] || 0) - (state.parties[a.id] || 0); }).slice(0, 8);
+    var wa = (s.cd.alleanza || 0) - state.turn;
+    html += '<p class="ci-hint" style="margin-top:.6rem"><strong>Alleanze:</strong> proponi a un partito di correre con te' + (wa > 0 ? " (di nuovo tra " + wa + " settimane)" : "") + ". Più è vicino, più è facile che accetti.</p><div class=\"option-grid\">" +
+      others.map(function (pt) { return '<button type="button" class="option-card" data-sec-ally="' + pt.id + '"' + (wa > 0 ? " disabled" : "") + '><span class="olabel">' + fxEsc(pt.name) + '</span><span class="odesc">' + fmt1(state.parties[pt.id] || 0) + "% · " + fxEsc(pt.leader || "") + "</span></button>"; }).join("") + "</div>";
+    if (coal) html += '<div class="choices"><button type="button" class="choice-btn" data-sec-act="rompi"><span class="clabel">Esci da ' + fxEsc(coal.label) + '</span><span class="chint">Il partito correrà da solo alle prossime elezioni</span></button></div>';
+    html += '<details class="log" style="margin-top:.8rem"><summary>Vuoi giocare da leader a tempo pieno?<span>▾</span></summary><p class="ci-hint">Puoi passare alla modalità partito, con la stessa persona e lo stesso partito: la carriera si chiude e si gioca solo da leader. Non è obbligatorio.</p><div class="choices"><button type="button" class="choice-btn" id="sec-to-party-btn"><span class="clabel">Passa alla modalità partito</span><span class="chint">Scelta definitiva per questa partita</span></button></div></details></section>';
+    return html;
+  }
+  if (typeof document !== "undefined") document.addEventListener("click", function (e) {
+    var c = state && state.career; if (!c || !c.partySecretary) return;
+    var a = e.target && e.target.closest && e.target.closest("[data-sec-act]");
+    if (a && !a.disabled) { careerSecAction(c, a.getAttribute("data-sec-act")); save(); render(); return; }
+    var al = e.target && e.target.closest && e.target.closest("[data-sec-ally]");
+    if (al && !al.disabled) { careerSecAction(c, "alleanza", al.getAttribute("data-sec-ally")); save(); render(); return; }
+    var tp = e.target && e.target.closest && e.target.closest("#sec-to-party-btn");
+    if (tp) { if (!window.confirm("Passare alla modalità partito? La carriera si chiude e giochi solo da leader di " + c.partyName + ".")) return; save(); careerBridgeToPartyMode(c, { partyId: c.partyId }); }
+  });
   var CAREER_ADULT_TABS = [
     { id: "profilo", label: "Profilo", icon: "👤", nav: "Profilo" },
     { id: "partito", label: "Partito", icon: "🏛️", nav: "Partito" },
@@ -37499,7 +37631,7 @@
     if (c.office) bits.push(careerOfficeLabel(c));
     if (c.track) bits.push(careerTrackRankLabel(c) + (c.track.id === "sindacato" ? " (" + (CAREER_UNIONS.filter(function (u) { return u.id === c.track.union; })[0] || {}).label + ")" : c.track.id === "militare" ? " (" + CAREER_MIL_BRANCHES[c.track.branch].label + ")" : ""));
     if (c.csm) bits.push("Membro del CSM");
-    if (c.partyId) bits.push(CAREER_PARTY_LADDER[c.partyRank].label + " di " + c.partyName);
+    if (c.partyId) bits.push(careerPartyRankLabel(c) + " di " + c.partyName);
     if (c.partyLawyer) bits.push("Avvocato/a del partito");
     if (c.uni && !c.uni.laureato) bits.push("Studente/ssa di " + careerFacultyById(c.uni.faculty).label);
     if (!bits.length) bits.push("Cittadino/a impegnato/a");
@@ -37573,9 +37705,10 @@
       }).join("") + '<li>' + (c.partyRank >= 8 ? "➤ " : "") + "Segretario/a nazionale (primarie)</li></ol>";
       var why = careerPromoCheck(c);
       html += '<div class="choices">' + (CAREER_PARTY_LADDER[c.partyRank + 1] ? '<button type="button" class="choice-btn" id="career-congress-btn"' + (why ? " disabled" : "") + '><span class="clabel">Candidati a ' + CAREER_PARTY_LADDER[c.partyRank + 1].label.toLowerCase() + '</span><span class="chint">' + (why || "Si apre un congresso: puoi vincere o perdere.") + "</span></button>" : "");
-      if (c.partyRank >= 8) {
+      if (c.partySecretary) html += '<p class="ci-hint"><strong>Sei il segretario/a nazionale.</strong> La tua segreteria (campagne, correnti, alleanze, direzione) è nella scheda «Nazionale».</p>';
+      else if (c.partyRank >= 8) {
         var pw = c.reputazione < 60 ? "Serve reputazione nazionale 60." : state.turn < (c.primariesCooldown || 0) ? "Hai perso le ultime primarie: riprova più avanti." : null;
-        html += '<button type="button" class="choice-btn" id="career-primaries-btn"' + (pw ? " disabled" : "") + '><span class="clabel">Sfida il segretario alle primarie</span><span class="chint">' + (pw || "Se vinci, guidi il partito e il gioco passa alla modalità partito.") + "</span></button>";
+        html += '<button type="button" class="choice-btn" id="career-primaries-btn"' + (pw ? " disabled" : "") + '><span class="clabel">Sfida il segretario alle primarie</span><span class="chint">' + (pw || "Se vinci, guidi il partito e resti in Carriera da segretario/a.") + "</span></button>";
       }
       html += '</div></section>' + renderCareerCurrents(c) + renderCareerCurrentFound(c) + '<section><div class="choices">';
       html += '<button type="button" class="choice-btn" id="career-leave-party-btn"><span class="clabel">Lascia il partito</span><span class="chint">Perdi il ruolo conquistato. Per tesserarti altrove dovrai aspettare qualche mese.</span></button></div></section>';
@@ -47783,6 +47916,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "carriera", t: "Segretario/a senza lasciare la Carriera", x: "Vincendo le primarie resti in Carriera: diventi Segretario/a nazionale e il partito ha te come leader, mentre incarichi, Comune, Regione e professione restano. Nella scheda «Nazionale» c'è la tua segreteria: campagne nazionali, correnti, programma, alleanze con gli altri partiti, la direzione che vota le tue proposte. Se il partito guida il governo diventi Presidente del Consiglio. Se la fiducia del partito resta troppo bassa la direzione ti sfiducia. Chi vuole può passare alla modalità partito con un pulsante." },
     { d: "14 novembre 2026", m: "carriera", t: "Nuovi indicatori in Comune e Regione", x: "La scheda del Comune ha 8 indicatori in più (lavoro e commercio, servizi sociali, rifiuti, periferie, servizi digitali, sport, turismo, trasparenza) e quella della Regione altri 8 (formazione, agricoltura, energia, edilizia pubblica, digitale, protezione civile, aree interne, trasparenza). Ognuno ha i suoi atti e le sue conseguenze; nelle partite già iniziate compaiono da subito." },
     { d: "14 novembre 2026", m: "carriera", t: "Lo storico dei tuoi partiti", x: "Nel Diario della Carriera c'è lo storico dei partiti a cui hai aderito: da quando a quando, il grado più alto raggiunto e come è finita (tessera restituita, cambio di partito, partito sciolto). Nelle partite già iniziate viene ricostruito dalle voci del Diario." },
     { d: "14 novembre 2026", m: "carriera", t: "La CPU lavora sempre", x: "In Carriera il mondo va avanti anche senza di te: la tua città e la tua regione hanno sempre la loro scheda (Giunta, delibere, leggi, conseguenze e valutazioni), anche se non hai incarichi. E il governo porta in Parlamento leggi e decreti ogni poche settimane, con effetti sulla Scheda Paese e sulla fiducia: l'archivio anno per anno è in «L'Italia oggi»." },
