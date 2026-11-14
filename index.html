@@ -1089,7 +1089,11 @@
   .fx-firework i { position: absolute; width: 4px; height: 4px; border-radius: 50%; transform: rotate(var(--a)) translateY(0); box-shadow: 0 0 6px currentColor; animation: fxSpark 1.6s ease-out infinite; animation-delay: inherit; }
   @keyframes fxFwShow { 0% { opacity: 0; } 5% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
   @keyframes fxSpark { from { transform: rotate(var(--a)) translateY(0); opacity: 1; } to { transform: rotate(var(--a)) translateY(-70px); opacity: 0; } }
-  html.fx #app.fx-enter .hemicycle circle { animation: fxDot 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both; transform-box: fill-box; transform-origin: center; }
+  /* Segnalato dall'autore: l'emiciclo laggava. Prima si animavano uno per uno centinaia di pallini SVG
+     (non accelerati dalla GPU) a ogni ingresso nella scheda; ora si anima l'emiciclo intero, una volta sola,
+     con proprietà che il browser compone senza ridisegnare i pallini. */
+  html.fx #app.fx-enter .hemicycle { animation: fxHemi 0.7s cubic-bezier(0.2, 1.1, 0.4, 1) both; transform-origin: 50% 90%; }
+  @keyframes fxHemi { from { opacity: 0; transform: scale(0.92) translateY(6px); } to { opacity: 1; transform: none; } }
   html.fx #app.fx-enter svg polyline { stroke-dasharray: 2000; animation: fxDraw 1.6s ease-out both; }
   @keyframes fxDraw { from { stroke-dashoffset: 2000; } to { stroke-dashoffset: 0; } }
   html.fx #app.fx-enter .result-panel, html.fx #app.fx-enter .outcome { animation: fxPopIn 0.6s cubic-bezier(0.2, 1.3, 0.4, 1) both; }
@@ -20070,7 +20074,7 @@
         : leaver.solo
           ? leaver.pt.name + " lascia " + c.label + ": forte dei sondaggi, il partito è convinto di superare lo sbarramento da solo e correrà per conto proprio."
           : leaver.pt.name + " lascia " + c.label + " dopo settimane di liti su candidature e posti in lista: correrà da solo.";
-      state.log.unshift({ week: state.turn, title: "Un partito lascia una coalizione", choiceLabel: leaver.pt.name, result: text, headlines: [], type: "cronaca", cat: "Strategia Elettorale" });
+      state.log.unshift({ week: state.turn, title: "Un partito lascia una coalizione", choiceLabel: leaver.pt.name, coalition: c.label, result: text, headlines: [], type: "cronaca", cat: "Strategia Elettorale" });
       if (!state.worldNews) state.worldNews = [];
       state.worldNews.unshift({ cat: "Strategia Elettorale", text: text });
       if (state.worldNews.length > 6) state.worldNews.length = 6;
@@ -31416,12 +31420,16 @@
     var w = 320, h = 132, cx = w / 2, cy = 118, innerR = 30, outerR = 102;
     var positions = hemicycleSeatPositions(total, innerR, outerR, cx, cy);
     var dotR = total > 300 ? 2.0 : total > 150 ? 2.6 : total > 60 ? 3.4 : 4.6;
+    // un gruppo per partito (colore e didascalia una volta sola) invece di un <title> per ogni pallino
     var dots = "", idx = 0;
     entries.forEach(function (e) {
+      if (!e.seats) return;
+      var g = "";
       for (var i = 0; i < e.seats && idx < positions.length; i++, idx++) {
         var pos = positions[idx];
-        dots += '<circle cx="' + pos.x.toFixed(1) + '" cy="' + pos.y.toFixed(1) + '" r="' + dotR + '" fill="' + e.color + '"><title>' + e.label + " — " + e.seats + " seggi</title></circle>";
+        g += '<circle cx="' + pos.x.toFixed(1) + '" cy="' + pos.y.toFixed(1) + '" r="' + dotR + '"/>';
       }
+      dots += '<g fill="' + e.color + '"><title>' + e.label + " — " + e.seats + " seggi</title>" + g + "</g>";
     });
     return '<svg class="hemicycle" viewBox="0 0 ' + w + " " + h + '" role="img" aria-label="Composizione dell\'assemblea, ' + total + ' seggi">' + dots + "</svg>";
   }
@@ -41181,7 +41189,7 @@
     if (state.dynamicCoalitions) state.dynamicCoalitions = state.dynamicCoalitions.filter(function (c) { return c.id !== id; });
     var dissolveText = reasonText || ("La fiducia reciproca dentro " + label + " crolla sotto il livello di guardia: la coalizione si scioglie.");
     state.log.unshift({
-      week: state.turn, title: "La coalizione si scioglie", choiceLabel: label,
+      week: state.turn, title: wasPlayerAlliance ? "La coalizione si scioglie" : "Una coalizione si scioglie", choiceLabel: label, coalition: label,
       result: dissolveText, headlines: [], type: "dossier", cat: "Strategia Elettorale"
     });
     // Richiesto da un giocatore: quando un'alleanza si scioglie (quella del giocatore o una tutta tra
@@ -41331,7 +41339,7 @@
     }
     var allyParty = partyById(allyId);
     state.log.unshift({
-      week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : allyId,
+      week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : allyId, coalition: coal.label,
       result: reasonText, headlines: [], type: "cronaca", cat: "Strategia Elettorale"
     });
     if (!state.worldNews) state.worldNews = [];
@@ -44264,8 +44272,6 @@
       })(t0);
     });
     if (entered && !FX_REDUCED) {
-      var dots = app.querySelectorAll(".hemicycle circle");
-      if (dots.length && dots.length <= 800) dots.forEach(function (d, i) { d.style.animationDelay = (i * (1.2 / dots.length)).toFixed(3) + "s"; });
     }
     fxMaybeCelebrate();
     fxDecorateDossiers();
@@ -44373,7 +44379,11 @@
       var newLogs = [];
       for (var i = 0; i < Math.min(6, state.log.length) && state.log[i] !== was.log0; i++) newLogs.push(state.log[i]);
       newLogs.reverse().forEach(function (l) {
-        if (/coalizione si scioglie|lascia la maggioranza|lascia la coalizione|lascia una coalizione/i.test(l.title)) ev.push({ type: "rottura", title: l.title, text: l.result });
+        // Richiesto dall'autore: lo scioglimento di una coalizione altrui dice «una coalizione», e l'uscita
+        // di un solo partito ha la sua animazione (con il nome della coalizione), non quella dello scioglimento.
+        if (/coalizione si scioglie/i.test(l.title)) ev.push({ type: "rottura", title: l.title, coalition: l.coalition || l.choiceLabel, text: l.result });
+        else if (/lascia la coalizione|lascia una coalizione/i.test(l.title)) ev.push({ type: "uscita", party: l.choiceLabel, coalition: l.coalition || null, text: l.result });
+        else if (/lascia la maggioranza/i.test(l.title)) ev.push({ type: "uscita", party: l.choiceLabel, coalition: "la maggioranza di governo", text: l.result });
         else if (/Nasce una nuova coalizione|entra in una coalizione|aderisce a un blocco/i.test(l.title)) ev.push({ type: "alleanza", title: l.title, text: l.result });
         else if (/Rivoluzione Popolare|golpe|colpo di stato/i.test(l.title)) ev.push({ type: "caduta", text: l.result });
         else { var ls = fxLogScene(l); if (ls) ev.push(ls); }
@@ -44462,8 +44472,14 @@
         return '<div class="fx-race-row"><span class="fx-race-l">' + fxEsc(r.label) + '</span><span class="fx-race-b" style="--w:' + (r.v / max * 100).toFixed(1) + '%;animation-delay:' + (0.2 + i * 0.15) + 's"></span><b><span data-fx-count="' + r.v.toFixed(1) + '" data-fx-dec="1">0</span>%</b></div>';
       }).join("") + "</div>";
     }
+    if (e.type === "uscita") {
+      var who = e.party || "Un partito";
+      var fromTxt = e.coalition ? (/^la /.test(e.coalition) ? e.coalition : fxEsc(e.coalition)) : "una coalizione";
+      return '<p class="fx-eyebrow">Strategia elettorale · ' + (e.coalition ? fxEsc(e.coalition) : "coalizioni") + '</p><div class="fx-hands fx-split"><span>🚪</span></div><h2>' + fxEsc(who) + " esce da " + fromTxt + '</h2><p class="fx-sub">' + fxEsc(e.text || "").slice(0, 200) + "</p>";
+    }
     if (e.type === "rottura" || e.type === "alleanza") {
       var split = e.type === "rottura";
+      if (split && e.coalition) return '<p class="fx-eyebrow">Strategia elettorale · ' + fxEsc(e.coalition) + '</p><div class="fx-hands fx-split"><span>🤝</span></div><h2>' + fxEsc(e.title) + '</h2><p class="fx-sub"><strong>' + fxEsc(e.coalition) + "</strong> — " + fxEsc(e.text || "").slice(0, 180) + "</p>";
       return '<p class="fx-eyebrow">' + (split ? "Strategia elettorale · rottura" : "Strategia elettorale · nuova alleanza") + '</p><div class="fx-hands ' + (split ? "fx-split" : "fx-join") + '"><span>🤝</span></div><h2>' + fxEsc(e.title) + '</h2><p class="fx-sub">' + fxEsc(e.text || "").slice(0, 200) + "</p>";
     }
     if (e.type === "scuola") {
@@ -47222,6 +47238,8 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "partito", t: "Emiciclo più fluido", x: "L'emiciclo colorato della scheda Parlamento non anima più i seggi uno per uno: entra tutto insieme, senza scatti, anche sul telefono." },
+    { d: "14 novembre 2026", m: "partito", t: "Animazioni delle coalizioni", x: "Quando si scioglie una coalizione di cui non fai parte l'animazione dice «Una coalizione si scioglie» e ne mostra il nome. Se un solo partito esce da una coalizione compare un'animazione dedicata («… esce da …», con il nome della coalizione), non più quella dello scioglimento." },
     { d: "14 novembre 2026", m: "partito", t: "Si può tornare alla Repubblica parlamentare", x: "Con il presidenzialismo in vigore, tra le Riforme Costituzionali (scheda Parlamento) c'è «Ritorno alla Repubblica parlamentare». Se passa e il Presidente eletto dal popolo sei tu, lasci il Quirinale ma resti a capo del governo come Presidente del Consiglio, e il Parlamento elegge un nuovo Capo dello Stato di garanzia." },
     { d: "13 novembre 2026", m: "partito", t: "Nuovo Stato: solo le sue città", x: "Nel nuovo Stato compaiono solo le sue città e le sue regioni: sezioni, elezioni locali e regionali, consigli comunali, scioperi e notizie. Alla nascita dello Stato il partito tiene le sezioni dentro i confini e sposta la sede nazionale nella capitale; nella scheda «Nuovo Stato» c'è l'elenco delle città con sezioni e umore." },
     { d: "13 novembre 2026", m: "partito", t: "Il nuovo Stato si governa come l'Italia", x: "Dopo l'indipendenza la partita continua con il gioco completo: dossier, Parlamento con i suoi partiti locali, leggi e trattative, elezioni, governo, Scheda Paese, stampa e telefono. Una nuova scheda «Nuovo Stato» raccoglie riconoscimenti internazionali, rapporti con l'Italia e scelte fondative. Le partite già nel nuovo Stato passano da sole al nuovo sistema." },
