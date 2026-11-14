@@ -36832,6 +36832,7 @@
   function careerAdultGenerateDossiers(c) {
     careerSpecialDossiers(c).forEach(function (d) { c.pending.push(d); });
     careerComuneSessionDossiers(c).forEach(function (d) { c.pending.push(d); });
+    try { partySessionDossiers(c).forEach(function (d) { c.pending.push(d); }); } catch (pErr) { if (window.console) console.error(pErr); }
     if (c.partyId) careerCurrentsTick(c);
     // sessioni d'esame e tesi
     if (c.uni && !c.uni.laureato) {
@@ -36902,6 +36903,7 @@
     var eff = outcome.eff || {};
     careerAdultApply(c, eff);
     if (d.id === "seduta_consiglio" || d.id === "riunione_giunta") { try { localRecordSession(c, d, ch, outcome); } catch (lErr2) { if (window.console) console.error(lErr2); } }
+    if (d.id === "direzione_partito") { try { partyRecordSession(c, d, ch); } catch (lErr3) { if (window.console) console.error(lErr3); } }
     if (eff.campagna && c.candidacy) c.candidacy.campagna += eff.campagna;
     var resultText = outcome.result;
     var bridge = null;
@@ -36996,42 +36998,44 @@
   function localHash(s) { var h = 7; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 100000; return h; }
   function localKindOf(c) { return careerIsComuneRole(c) ? "comune" : c.office && (c.office.id === "consigliere_regionale" || c.office.id === "presidente_regione") ? "regione" : null; }
   function localPlaceName(c, kind) { return kind === "comune" ? c.office.place : (c.office.place || careerRegion(c)); }
-  function localMetricDefs(kind) { return kind === "comune" ? LOCAL_COMUNE_METRICS : LOCAL_REGIONE_METRICS; }
+  function localMetricDefs(kind) { return kind === "comune" ? LOCAL_COMUNE_METRICS : kind === "partito" ? PARTY_ORG_METRICS : LOCAL_REGIONE_METRICS; }
+  function localPool(kind) { return kind === "comune" ? LOCAL_COMUNE_ATTI : kind === "partito" ? PARTY_ORG_ATTI : LOCAL_REGIONE_ATTI; }
+  function localDefaultMetric(kind) { return kind === "comune" ? "servizi" : kind === "partito" ? "radicamento" : "sociale"; }
   function localEnsure(c, kind, place) {
     if (!c.local) c.local = {};
     var key = kind + ":" + place;
     var L = c.local[key];
     if (L) return L;
     var h = localHash(key);
-    var legStart = c.office && c.office.since !== undefined ? c.office.since : state.turn;
-    L = c.local[key] = { kind: kind, place: place, legStart: legStart, legNo: (kind === "comune" ? 10 : 9) + h % 5, metrics: {}, prev: {}, snapTurn: state.turn, atti: [], nextBg: state.turn + 3 + h % 4 };
+    var legStart = kind !== "partito" && c.office && c.office.since !== undefined ? c.office.since : state.turn;
+    L = c.local[key] = { kind: kind, place: place, legStart: legStart, legNo: (kind === "comune" ? 10 : kind === "partito" ? 3 : 9) + h % 5, metrics: {}, prev: {}, snapTurn: state.turn, atti: [], nextBg: state.turn + 3 + h % 4 };
     localMetricDefs(kind).forEach(function (m, i) { L.metrics[m[0]] = Math.round((4 + ((h >> i) % 31) / 10 + rand(-0.4, 0.4)) * 10) / 10; });
     L.metrics.gradimento = Math.round((4.5 + (h % 25) / 10) * 10) / 10;
     L.prev = Object.assign({}, L.metrics);
     // storico: due mandati prima di questo, più quanto già trascorso del mandato attuale
-    var pool = kind === "comune" ? LOCAL_COMUNE_ATTI : LOCAL_REGIONE_ATTI;
+    var pool = localPool(kind);
     for (var t = legStart - 520 + (h % 5); t < state.turn; t += 5 + Math.floor(rand(0, 4))) localAddBackground(c, L, pool, t);
     return L;
   }
   function localLegOf(L, turn) { return L.legNo + Math.floor((turn - L.legStart) / 260); }
   function localLegLabel(L, n) {
     var y0 = localYear(L.legStart + (n - L.legNo) * 260), y1 = y0 + 5;
-    return localRoman(n) + (L.kind === "comune" ? " consiliatura" : " legislatura regionale") + " (" + y0 + "–" + y1 + ")";
+    return localRoman(n) + (L.kind === "comune" ? " consiliatura" : L.kind === "partito" ? " mandato congressuale" : " legislatura regionale") + " (" + y0 + "–" + y1 + ")";
   }
   function localAddBackground(c, L, pool, turn) {
     var it = pool[Math.floor(Math.random() * pool.length)];
     var who = Math.random();
-    var by = who < 0.45 ? (L.kind === "comune" ? "Giunta" : "Giunta regionale") : who < 0.8 ? "Maggioranza" : "Opposizione";
-    var p = by === "Opposizione" ? 0.22 : by === "Maggioranza" ? 0.74 : 0.86;
+    var by = L.kind === "partito" ? (who < 0.45 ? "Segreteria" : who < 0.8 ? "Maggioranza interna" : "Minoranza interna") : who < 0.45 ? (L.kind === "comune" ? "Giunta" : "Giunta regionale") : who < 0.8 ? "Maggioranza" : "Opposizione";
+    var p = /Opposizione|Minoranza/.test(by) ? 0.22 : /Maggioranza/.test(by) ? 0.74 : 0.86;
     var passed = Math.random() < p;
-    var seats = L.kind === "comune" ? CAREER_COMUNE_COUNCIL_SEATS : 50, half = Math.floor(seats / 2);
+    var seats = L.kind === "comune" ? CAREER_COMUNE_COUNCIL_SEATS : L.kind === "partito" ? 60 : 50, half = Math.floor(seats / 2);
     var yes = passed ? half + 1 + Math.floor(Math.random() * 6) : half - 1 - Math.floor(Math.random() * 7), abst = Math.floor(Math.random() * 3);
     var a = { turn: turn, title: it[0], metric: it[1], by: by, passed: passed, tally: yes + " sì, " + Math.max(0, seats - yes - abst) + " no, " + abst + " astenuti" };
     localConsequences(L, a, it[2], turn < state.turn);
     L.atti.push(a);
   }
   function localMove(L, metric, d) {
-    if (L.metrics[metric] === undefined) metric = L.kind === "comune" ? "servizi" : "sociale";
+    if (L.metrics[metric] === undefined) metric = localDefaultMetric(L.kind);
     L.metrics[metric] = Math.round(clamp(L.metrics[metric] + d, 1, 10) * 100) / 100;
     L.metrics.gradimento = Math.round(clamp(L.metrics.gradimento + d * 0.25, 1, 10) * 100) / 100;
   }
@@ -37039,7 +37043,7 @@
   // nel tempo. Approvato: un primo effetto subito (a volte un costo: tasse, conti, malumori) e l'effetto
   // vero che matura in 6-12 mesi (non sempre come promesso). Respinto: chi lo aveva proposto paga in
   // gradimento, un bilancio bocciato fa danni seri, e il problema che l'atto voleva risolvere resta.
-  function localLabel(L, k) { if (k === "gradimento") return "Gradimento"; var d = localMetricDefs(L.kind).filter(function (m) { return m[0] === k; })[0]; return d ? d[1].replace(/^\S+ /, "") : k; }
+  function localLabel(L, k) { if (k === "gradimento") return L.kind === "partito" ? "Gradimento della segreteria" : "Gradimento"; var d = localMetricDefs(L.kind).filter(function (m) { return m[0] === k; })[0]; return d ? d[1].replace(/^\S+ /, "") : k; }
   function localFmt(L, k, v) { return localLabel(L, k) + " " + (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1).replace(".", ","); }
   function localConsequences(L, a, side, historic) {
     var now = [], later = [];
@@ -37053,14 +37057,14 @@
       if (q < 0) a.flop = true;
     } else {
       if (/bilancio di previsione/i.test(a.title)) { apply("bilancio", -rand(0.4, 0.8)); apply("gradimento", -rand(0.3, 0.6)); }
-      else if (a.by !== "Opposizione") apply("gradimento", -rand(0.1, 0.25));
+      else if (!/Opposizione|Minoranza/.test(a.by)) apply("gradimento", -rand(0.1, 0.25));
       if (Math.random() < 0.6) delay(a.metric, -rand(0.1, 0.3), 26 + Math.floor(rand(0, 27)));
     }
     a.fxNow = now.join(" · "); a.fxLater = later.join(" · "); a.fxDone = !!historic;
   }
   function localMetricFromTopic(L, txt) {
     for (var i = 0; i < LOCAL_TOPIC_TO_METRIC.length; i++) if (LOCAL_TOPIC_TO_METRIC[i][0].test(txt || "")) { var m = LOCAL_TOPIC_TO_METRIC[i][1]; if (L.metrics[m] !== undefined) return m; }
-    return L.kind === "comune" ? "servizi" : "sociale";
+    return localDefaultMetric(L.kind);
   }
   function localCurrent(c) { var kind = localKindOf(c); if (!kind) return null; var L = localEnsure(c, kind, localPlaceName(c, kind)); localBackfill(c, L); return L; }
   // Segnalato dall'autore: le proposte fatte prima che esistesse l'archivio non comparivano negli atti.
@@ -37106,10 +37110,13 @@
     }
   }
   function localTick(c) {
-    var L = localCurrent(c); if (!L) return;
+    var L = localCurrent(c); if (L) localTickL(c, L);
+    var P = partyOrgCurrent(c); if (P) localTickL(c, P);
+  }
+  function localTickL(c, L) {
     // fine del mandato: si apre una nuova consiliatura/legislatura
-    if (c.office && c.office.since !== undefined && c.office.since > L.legStart + 200) L.legStart = c.office.since, L.legNo = localLegOf(L, c.office.since);
-    if (state.turn >= L.nextBg) { localAddBackground(c, L, L.kind === "comune" ? LOCAL_COMUNE_ATTI : LOCAL_REGIONE_ATTI, state.turn); L.nextBg = state.turn + 4 + Math.floor(rand(0, 4)); }
+    if (L.kind !== "partito" && c.office && c.office.since !== undefined && c.office.since > L.legStart + 200) L.legStart = c.office.since, L.legNo = localLegOf(L, c.office.since);
+    if (state.turn >= L.nextBg) { localAddBackground(c, L, localPool(L.kind), state.turn); L.nextBg = state.turn + 4 + Math.floor(rand(0, 4)); }
     // gli effetti che maturano nel tempo
     (L.fx || []).forEach(function (f) { var step = Math.abs(f.per) > Math.abs(f.left) ? f.left : f.per; localMove(L, f.k, step); f.left -= step; f.weeks--; if (f.weeks <= 0 || Math.abs(f.left) < 0.001) { f.done = true; L.atti.forEach(function (a) { if (a.turn + "|" + a.title === f.act) a.fxDone = true; }); } });
     L.fx = (L.fx || []).filter(function (f) { return !f.done; });
@@ -37158,26 +37165,28 @@
     return g;
   }
   function localGiuntaText(c, L, n) {
+    if (L.kind === "partito") return partyOrgSegreteriaText(c, L, n);
     var g = localGiunta(c, L, n);
     return (L.kind === "comune" ? "Giunta: " : "Giunta regionale: ") + g.label + (g.mine ? " (la tua parte)" : "") + " · " + g.headLabel + " " + (g.headMine ? g.head + " (tu)" : g.head);
   }
   function localVerdict(v) { return v >= 8 ? "Ottimo" : v >= 6.5 ? "Buono" : v >= 5.5 ? "Sufficiente" : v >= 4 ? "Insufficiente" : "Grave"; }
   function renderCareerLocalTab(c, kind) {
-    var L = localCurrent(c);
+    var L = kind === "partito" ? partyOrgCurrent(c) : localCurrent(c);
     if (!L || L.kind !== kind) return '<section><p class="ci-hint">Questa scheda si apre quando hai un incarico ' + (kind === "comune" ? "in Comune" : "in Regione") + ".</p></section>";
     var defs = localMetricDefs(kind), avg = defs.reduce(function (s, m) { return s + L.metrics[m[0]]; }, 0) / defs.length;
     var arrow = function (k) { var d = L.metrics[k] - (L.prev[k] === undefined ? L.metrics[k] : L.prev[k]); return Math.abs(d) < 0.05 ? '<span class="delta flat">=</span>' : '<span class="delta ' + (d > 0 ? "up" : "down") + '">' + (d > 0 ? "▲ +" : "▼ ") + d.toFixed(1).replace(".", ",") + "</span>"; };
     var curLeg = localLegOf(L, state.turn);
-    var html = '<section aria-label="Scheda ' + kind + '"><div class="setup-card"><p class="eyebrow">' + (kind === "comune" ? "Scheda del Comune" : "Scheda della Regione") + "</p><h2>" + (kind === "comune" ? "Comune di " : "Regione ") + L.place + "</h2>" +
-      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + careerOfficeLabel(c) + '</p><p class="ci-hint" style="margin:.3rem 0 0">' + fxEsc(localGiuntaText(c, L, curLeg)) + "</p></div>";
-    html += '<h3>Valutazioni della scheda</h3><p class="ci-hint">Giudizio complessivo: <strong>' + localVerdict(avg) + " (" + avg.toFixed(1).replace(".", ",") + "/10)</strong> · gradimento " + (kind === "comune" ? "della Giunta" : "della Giunta regionale") + ": " + L.metrics.gradimento.toFixed(1).replace(".", ",") + "/10 " + arrow("gradimento") + ". Le frecce confrontano con un anno fa.</p>" +
+    var html = '<section aria-label="Scheda ' + kind + '"><div class="setup-card"><p class="eyebrow">' + (kind === "comune" ? "Scheda del Comune" : kind === "partito" ? "Scheda del partito" : "Scheda della Regione") + "</p><h2>" + (kind === "partito" ? fxEsc(partyOrgTitle(c, L)) : (kind === "comune" ? "Comune di " : "Regione ") + L.place) + "</h2>" +
+      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + (kind === "partito" ? CAREER_PARTY_LADDER[c.partyRank || 0].label : careerOfficeLabel(c)) + '</p><p class="ci-hint" style="margin:.3rem 0 0">' + fxEsc(localGiuntaText(c, L, curLeg)) + "</p></div>";
+    html += '<h3>Valutazioni della scheda</h3><p class="ci-hint">Giudizio complessivo: <strong>' + localVerdict(avg) + " (" + avg.toFixed(1).replace(".", ",") + "/10)</strong> · gradimento " + (kind === "comune" ? "della Giunta" : kind === "partito" ? "della segreteria" : "della Giunta regionale") + ": " + L.metrics.gradimento.toFixed(1).replace(".", ",") + "/10 " + arrow("gradimento") + ". Le frecce confrontano con un anno fa.</p>" +
       '<div class="stat-grid">' + defs.map(function (m) { return '<div class="stat-tile"><div class="label">' + m[1] + '</div><div class="row"><span class="value">' + L.metrics[m[0]].toFixed(1).replace(".", ",") + "</span>" + arrow(m[0]) + '</div><div class="gauge"><span style="width:' + (L.metrics[m[0]] * 10) + "%;background:" + (L.metrics[m[0]] < 4 ? "var(--critical)" : L.metrics[m[0]] < 6 ? "var(--warning)" : "var(--good)") + '"></span></div></div>'; }).join("") + "</div>";
     // storico per consiliatura/legislatura e per anno
     var byLeg = {};
     L.atti.forEach(function (a) { var n = localLegOf(L, a.turn); (byLeg[n] = byLeg[n] || []).push(a); });
     var legs = Object.keys(byLeg).map(Number).sort(function (a, b) { return b - a; });
     var tot = L.atti.length, ok = L.atti.filter(function (a) { return a.passed; }).length, mine = L.atti.filter(function (a) { return a.own; }).length;
-    html += "<h3>" + (kind === "comune" ? "Delibere e mozioni" : "Leggi regionali") + ' negli anni</h3><p class="ci-hint">' + tot + " atti in archivio: " + ok + " approvati, " + (tot - ok) + " respinti" + (mine ? " · " + mine + " portano la tua firma" : "") + ".</p>";
+    if (kind === "partito") html += renderPartyOrgPropose(c, L);
+    html += "<h3>" + (kind === "comune" ? "Delibere e mozioni" : kind === "partito" ? "Le decisioni della direzione" : "Leggi regionali") + ' negli anni</h3><p class="ci-hint">' + tot + " atti in archivio: " + ok + " approvati, " + (tot - ok) + " respinti" + (mine ? " · " + mine + " portano la tua firma" : "") + ".</p>";
     legs.forEach(function (n) {
       var list = byLeg[n].slice().sort(function (a, b) { return b.turn - a.turn; });
       var okN = list.filter(function (a) { return a.passed; }).length;
@@ -37193,6 +37202,125 @@
     });
     return html + "</section>";
   }
+  // ---------- Carriera: la scheda della federazione per i dirigenti di partito ----------
+  // Segnalato dall'autore: da membro della direzione regionale (e in generale con un grado di partito) non
+  // c'era né una scheda né atti da scrivere: «non ho gioco». Ora dal grado di membro della direzione
+  // provinciale in su c'è la scheda della federazione (provinciale, regionale o nazionale, a seconda del
+  // grado), con le valutazioni, l'archivio delle decisioni della direzione con le loro conseguenze, le
+  // proposte scritte di pugno e le riunioni periodiche della direzione.
+  var PARTY_ORG_METRICS = [["organizzazione", "🏗️ Organizzazione e circoli"], ["finanze", "💶 Finanze della federazione"], ["unita", "🤝 Unità interna"], ["radicamento", "📍 Radicamento sul territorio"], ["comunicazione", "📣 Comunicazione"], ["giovani", "🧑‍🎓 Giovani e nuovi iscritti"]];
+  var PARTY_ORG_ATTI = [
+    ["Piano di tesseramento", "giovani"], ["Candidature per le prossime elezioni", "unita", "unita"], ["Alleanze per le amministrative", "radicamento", "unita"], ["Bilancio della federazione", "finanze"],
+    ["Apertura di nuovi circoli", "organizzazione", "finanze"], ["Festa del partito", "finanze"], ["Documento sulla sanità", "comunicazione"], ["Regolamento delle primarie", "unita"],
+    ["Commissariamento di un circolo", "organizzazione", "unita"], ["Campagna di ascolto nei territori", "radicamento"], ["Scuola di formazione politica", "giovani", "finanze"], ["Mozione sulla linea nazionale", "unita"],
+    ["Piano di comunicazione", "comunicazione", "finanze"], ["Raccolta firme per una legge di iniziativa popolare", "radicamento"], ["Conferenza programmatica", "comunicazione"], ["Riorganizzazione delle sedi", "organizzazione", "radicamento"]
+  ];
+  var PARTY_ORG_TOPICS = [[/tessera|iscritt|giovan|universit|student/i, "giovani"], [/circol|sezion|sede|sedi|organizz|segreter/i, "organizzazione"], [/soldi|finanz|fondi|bilanc|autofinanz|donazion|cena/i, "finanze"], [/unit|corrent|congress|minoranz|regolament|primarie/i, "unita"], [/territor|quartier|ascolto|paes|provinc|comun/i, "radicamento"], [/social|comunicaz|stampa|giornal|tv|campagna/i, "comunicazione"]];
+  function partyOrgLevel(c) { if (!c || !c.partyId) return null; var r = c.partyRank || 0; return r >= 8 ? "nazionale" : r >= 6 ? "regionale" : r >= 3 ? "provinciale" : null; }
+  function partyOrgCurrent(c) {
+    var lvl = partyOrgLevel(c); if (!lvl) return null;
+    var placeName = lvl === "nazionale" ? "Italia" : lvl === "regionale" ? careerRegion(c) : c.city;
+    var L = localEnsure(c, "partito", (c.partyId || "") + ":" + lvl + ":" + placeName);
+    L.lvl = lvl; L.placeName = placeName;
+    return L;
+  }
+  function partyOrgTitle(c, L) { return L.lvl === "nazionale" ? "Direzione nazionale · " + c.partyName : "Federazione " + L.lvl + " · " + c.partyName + " · " + L.placeName; }
+  function partyOrgSegreteriaText(c, L, n) {
+    if (!L.segr) L.segr = {};
+    var cur = localLegOf(L, state.turn), r = c.partyRank || 0;
+    var mineHead = (L.lvl === "provinciale" && r === 5) || (L.lvl === "regionale" && r === 7);
+    if (!L.segr[n]) L.segr[n] = { name: generateStaffName() };
+    var name = n === cur && mineHead ? c.name + " (tu)" : L.segr[n].name;
+    var curr = careerMyCurrent(c);
+    return "Segreteria " + L.lvl + ": segretario/a " + name + (n === cur && curr ? " · la tua corrente: " + curr.label : "");
+  }
+  function partyOrgDirezioneLabel(c) { var l = partyOrgLevel(c); return l === "nazionale" ? "Direzione nazionale" : "Direzione " + l; }
+  // le proposte scritte di pugno alla direzione
+  var PARTY_ORG_KINDS = [
+    { id: "odg", label: "Ordine del giorno", desc: "Impegna la direzione su un punto preciso: passa più facilmente.", bonus: 0.08 },
+    { id: "documento", label: "Documento politico", desc: "Una proposta di linea: pesa di più, ma divide.", bonus: -0.05 },
+    { id: "regolamento", label: "Proposta di regolamento", desc: "Cambia le regole interne (primarie, tesseramento, circoli).", bonus: 0 }
+  ];
+  function partyOrgPropose(c, text, kindId) {
+    var L = partyOrgCurrent(c); if (!L) return;
+    if (text.length < 15) { showSaveStatus("Scrivi un testo un po' più articolato.", true); return; }
+    if (state.turn - (c.partyActTurn || -99) < 3) { showSaveStatus("Hai presentato una proposta da poco: aspetta qualche settimana.", true); return; }
+    var kind = PARTY_ORG_KINDS.filter(function (k) { return k.id === kindId; })[0] || PARTY_ORG_KINDS[0];
+    var t = text.toLowerCase();
+    var ideo = { left: 0, right: 0, center: 0 };
+    Object.keys(CAREER_IDEOLOGY_KEYS).forEach(function (side) { CAREER_IDEOLOGY_KEYS[side].forEach(function (k) { if (t.indexOf(k) !== -1) ideo[side]++; }); });
+    var side = ideo.left > ideo.right && ideo.left > ideo.center ? "left" : ideo.right > ideo.left && ideo.right > ideo.center ? "right" : ideo.center > 0 ? "center" : null;
+    var fit = careerIdeologyFit(side);
+    var hasNumber = /\d/.test(text), hasAction = /(propon|istitui|organizz|apri|aprire|lanci|avvi|chied|impegna|nomin|convoc|raccogli|stanzia|modific|introduc|prevede)/.test(t);
+    var hasDeadline = /(entro|mesi|settiman|anno|giorni|prima del congresso|prima delle elezioni)/.test(t);
+    var curr = careerMyCurrent(c), currW = curr && curr.share !== undefined ? curr.share : 25;
+    var base = L.lvl === "provinciale" ? 0.45 : L.lvl === "regionale" ? 0.4 : 0.32;
+    var chance = clamp(base + kind.bonus + (c.partyTrust || 50) / 250 - 0.2 + (c.rete || 0) / 400 + (hasNumber ? 0.05 : 0) + (hasDeadline ? 0.05 : 0) + (hasAction ? 0.05 : -0.08) + fit * 0.05 + (currW - 25) / 200, 0.08, 0.9);
+    var passed = Math.random() < chance;
+    c.partyActTurn = state.turn;
+    careerAdultApply(c, passed ? { trust: rand(2, 5) + fit, rep: rand(0.5, 1.5) + (L.lvl === "nazionale" ? 1 : 0), rete: rand(1, 3) } : { trust: -rand(1, 3) + fit, rep: -rand(0, 0.5) });
+    var metric = "radicamento";
+    for (var i = 0; i < PARTY_ORG_TOPICS.length; i++) if (PARTY_ORG_TOPICS[i][0].test(text)) { metric = PARTY_ORG_TOPICS[i][1]; break; }
+    var seats = 60, half = 30, yes = passed ? half + 1 + Math.floor(Math.random() * 12) : half - 1 - Math.floor(Math.random() * 12), abst = Math.floor(Math.random() * 4);
+    var a = { turn: state.turn, title: kind.label + ": «" + text.slice(0, 90) + (text.length > 90 ? "…" : "") + "»", metric: metric, by: "Tu", own: true, passed: passed, tally: yes + " sì, " + Math.max(0, seats - yes - abst) + " no, " + abst + " astenuti" };
+    localConsequences(L, a, null, false);
+    L.atti.push(a);
+    var verdict = passed ? pickText(["approvata", "approvata con qualche modifica", "approvata dopo una lunga discussione"]) : pickText(["respinta", "bocciata dalla maggioranza interna", "rinviata a una commissione", "messa in minoranza"]);
+    L.lastProp = { text: text, passed: passed, verdict: verdict, chance: Math.round(chance * 100), checks: [
+      [hasAction, hasAction ? "Dice cosa fare" : "Non dice cosa fare in concreto"],
+      [hasNumber || hasDeadline, hasNumber || hasDeadline ? "Ci sono cifre o tempi" : "Mancano cifre e tempi"],
+      [fit >= 0, fit > 0 ? "Coerente con la linea del partito" : fit < 0 ? "Lontana dalla linea del partito" : "Neutra rispetto alla linea"],
+      [!!curr && currW >= 25, curr ? "La tua corrente pesa il " + Math.round(currW) + "%" : "Non hai una corrente che ti sostenga"]
+    ] };
+    addCareerDiaryEntry(partyOrgDirezioneLabel(c), kind.label + " «" + text.slice(0, 100) + (text.length > 100 ? "…" : "") + "»: " + verdict + " (" + a.tally + ").");
+    showSaveStatus(kind.label + ": " + verdict + ".", !passed);
+  }
+  function renderPartyOrgPropose(c, L) {
+    var wait = 3 - (state.turn - (c.partyActTurn || -99));
+    var kindSel = c.partyActKind || "odg";
+    var html = '<h3>Proponi alla ' + partyOrgDirezioneLabel(c).toLowerCase() + '</h3><p class="ci-hint">Scrivi tu la proposta: passa più facilmente se dice cosa fare, con cifre e tempi, se è coerente con la linea e se la tua corrente pesa. Una proposta ogni 3 settimane.</p>' +
+      '<div class="option-grid">' + PARTY_ORG_KINDS.map(function (k) { return '<button type="button" class="option-card' + (k.id === kindSel ? " selected" : "") + '" data-party-kind="' + k.id + '"><span class="olabel">' + k.label + '</span><span class="odesc">' + k.desc + "</span></button>"; }).join("") + "</div>" +
+      '<textarea id="party-org-input" class="autogrow-textarea" rows="4" style="width:100%;margin-top:.6rem" placeholder="Es. Propongo di aprire entro tre mesi 5 nuovi circoli nei quartieri periferici, finanziati con una festa provinciale."></textarea>' +
+      '<div class="choices"><button type="button" class="primary-btn" id="party-org-btn"' + (wait > 0 ? " disabled" : "") + ">" + (wait > 0 ? "Di nuovo tra " + wait + " settiman" + (wait === 1 ? "a" : "e") : "Presenta la proposta") + "</button></div>";
+    if (L.lastProp) html += '<div class="stat-tile" style="margin-top:.6rem"><div class="label">Ultima proposta: ' + (L.lastProp.passed ? "✔ " : "✖ ") + L.lastProp.verdict + " (probabilità stimata " + L.lastProp.chance + '%)</div><ul class="enacted-policy-list">' + L.lastProp.checks.map(function (x) { return "<li>" + (x[0] ? "✔ " : "✖ ") + x[1] + "</li>"; }).join("") + "</ul></div>";
+    return html;
+  }
+  if (typeof document !== "undefined") document.addEventListener("click", function (e) {
+    var k = e.target && e.target.closest && e.target.closest("[data-party-kind]");
+    if (k && state.career) { state.career.partyActKind = k.getAttribute("data-party-kind"); save(); render(); return; }
+    var b = e.target && e.target.closest && e.target.closest("#party-org-btn");
+    if (b && !b.disabled && state.career) { var inp = document.getElementById("party-org-input"); partyOrgPropose(state.career, ((inp && inp.value) || "").trim(), state.career.partyActKind || "odg"); save(); render(); }
+  });
+  // le riunioni della direzione, ogni 6-8 settimane
+  function partySessionDossiers(c) {
+    var out = [], L = partyOrgCurrent(c);
+    if (!L) return out;
+    if (c.partyDirNextTurn === undefined) c.partyDirNextTurn = state.turn + 2 + Math.floor(Math.random() * 3);
+    if (state.turn < c.partyDirNextTurn || c.pending.some(function (d) { return d.id === "direzione_partito"; })) return out;
+    c.partyDirNextTurn = state.turn + 6 + Math.floor(Math.random() * 3);
+    var it = PARTY_ORG_ATTI[Math.floor(Math.random() * PARTY_ORG_ATTI.length)];
+    var lbl = partyOrgDirezioneLabel(c);
+    out.push({ id: "direzione_partito", cat: lbl, partyItem: it[0], title: "Riunione della " + lbl.toLowerCase() + ": " + it[0].toLowerCase(),
+      brief: "All'ordine del giorno: " + it[0].toLowerCase() + ". La segreteria ha preparato una proposta e chiede il voto della direzione. " + (careerMyCurrent(c) ? "La tua corrente aspetta di capire da che parte stai." : "Il tuo voto conta, e qualcuno se lo ricorderà."),
+      choices: [
+        { label: "Voti con la segreteria", eff: { trust: 2 }, result: "La proposta passa. In segreteria prendono nota della tua lealtà.", partyVote: "si" },
+        { label: "Intervieni a sostegno della proposta", eff: { trust: 2, rep: 1, rete: 1 }, result: "Il tuo intervento convince gli indecisi: la proposta passa con un margine largo.", partyVote: "si" },
+        { label: "Proponi una modifica", eff: { rete: 2, rep: 1 }, result: "La modifica viene accolta: il testo finale porta anche la tua firma.", partyVote: "modifica" },
+        { label: "Voti contro la segreteria", eff: { trust: -4, rep: 1 }, result: "Il tuo no fa rumore. ", partyVote: "no" },
+        { label: "Ti astieni", eff: {}, result: "Ti astieni: nessuno si arrabbia, nessuno se lo ricorda.", partyVote: "astenuto" }
+      ] });
+    return out;
+  }
+  function partyRecordSession(c, d, ch) {
+    var L = partyOrgCurrent(c); if (!L) return;
+    var def = PARTY_ORG_ATTI.filter(function (x) { return x[0] === d.partyItem; })[0] || ["Proposta della segreteria", "unita"];
+    var passed = ch.partyVote === "no" ? Math.random() < 0.6 : true;
+    if (ch.partyVote === "no") ch.result = (ch.result || "") + (passed ? "La proposta passa lo stesso, ma la tua dissidenza è agli atti." : "Con il tuo voto la segreteria va sotto: la proposta è respinta.");
+    var yes = passed ? 31 + Math.floor(Math.random() * 18) : 22 + Math.floor(Math.random() * 7), abst = Math.floor(Math.random() * 4);
+    var a = { turn: state.turn, title: def[0], metric: def[1], by: ch.partyVote === "modifica" ? "Segreteria (con la tua modifica)" : "Segreteria", own: ch.partyVote === "modifica", passed: passed, tally: yes + " sì, " + Math.max(0, 60 - yes - abst) + " no, " + abst + " astenuti", vote: ch.label };
+    localConsequences(L, a, def[2], false);
+    L.atti.push(a);
+  }
   var CAREER_ADULT_TABS = [
     { id: "profilo", label: "Profilo", icon: "👤", nav: "Profilo" },
     { id: "partito", label: "Partito", icon: "🏛️", nav: "Partito" },
@@ -37201,6 +37329,7 @@
     { id: "azioni", label: "Azioni", icon: "⚡", nav: "Azioni" },
     { id: "comune", label: "Scheda del Comune", icon: "🏙️", nav: "Comune", visible: function (c) { return localKindOf(c) === "comune"; } },
     { id: "regione", label: "Scheda della Regione", icon: "🗺️", nav: "Regione", visible: function (c) { return localKindOf(c) === "regione"; } },
+    { id: "partito_org", label: "Scheda del partito", icon: "🚩", get nav() { var l = state.career && partyOrgLevel(state.career); return l === "regionale" ? (localKindOf(state.career) === "regione" ? "Fed. reg." : "Regione") : l === "nazionale" ? "Nazionale" : "Provincia"; }, visible: function (c) { return !!partyOrgLevel(c); } },
     { id: "social", label: "Social", icon: "📱", nav: "Social" },
     { id: "paese", label: "L'Italia oggi", icon: "🇮🇹", nav: "Paese" },
     { id: "diario", label: "Diario", icon: "📔", nav: "Diario" },
@@ -37684,6 +37813,7 @@
     else if (c.ui === "social") html += renderDichiarazioniPage();
     else if (c.ui === "paese") html += renderCareerCountryTab();
     else if (c.ui === "comune" || c.ui === "regione") html += renderCareerLocalTab(c, c.ui);
+    else if (c.ui === "partito_org") html += renderCareerLocalTab(c, "partito");
     else if (c.ui === "novita") html += renderGameUpdates();
     else html += '<section aria-label="Diario politico"><h3>Diario politico</h3><div class="log-entries">' + c.diario.slice(0, 60).map(function (e) {
       return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
@@ -47490,6 +47620,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "carriera", t: "Scheda del partito per i dirigenti", x: "In Carriera, dal grado di membro della direzione provinciale in su, compare la scheda del partito (Provincia, Regione o Nazionale a seconda del grado): valutazioni della federazione, l'archivio delle decisioni della direzione con le loro conseguenze, le proposte scritte di pugno (ordine del giorno, documento politico, regolamento) e una riunione della direzione ogni 6-8 settimane in cui votare con o contro la segreteria." },
     { d: "14 novembre 2026", m: "partito", t: "Correzioni: congresso e Question Time", x: "Se prendi il comando di un partito che esiste già, all'inizio c'è il congresso straordinario, non quello fondativo, e il discorso non dice più che il partito è appena nato. Nel Question Time non compaiono più nomi tecnici come «ForzaSindacale»." },
     { d: "14 novembre 2026", m: "carriera", t: "Chi governa in Comune e in Regione", x: "Nelle schede del Comune e della Regione ogni consiliatura e legislatura mostra quale partito o coalizione era in Giunta e chi era sindaco o presidente. Quella in corso segue la tua posizione: Giunta tua se sei sindaco, assessore o presidente, oppure la parte avversa se sei all'opposizione." },
     { d: "14 novembre 2026", m: "carriera", t: "Correzione: atti nella scheda del Comune", x: "Nella scheda del Comune e della Regione compaiono anche le proposte fatte prima dell'arrivo dell'archivio. Da assessore o sindaco, le proposte della tua Giunta votate in Consiglio risultano come «La tua Giunta» e contano tra gli atti con la tua firma." },
