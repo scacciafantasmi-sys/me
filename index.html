@@ -21389,6 +21389,40 @@
     state.worldNews.unshift({ cat: "Istituzioni", text: text });
     if (state.worldNews.length > 6) state.worldNews.length = 6;
   }
+  // Ritorno alla Repubblica parlamentare: il presidenzialismo esce dalla Costituzione. Il governo in
+  // carica resta, ma da qui in poi lo guida un Presidente del Consiglio e dipende dalla fiducia delle
+  // Camere. Se il Presidente eletto dal popolo era il giocatore, lascia il Colle e resta a Palazzo Chigi
+  // come Presidente del Consiglio: il Parlamento elegge subito un nuovo Capo dello Stato di garanzia.
+  // Se era un altro, resta al Colle fino a fine mandato, ma solo come garante.
+  function onPresidentialismRepealed() {
+    if (state.constitution) { delete state.constitution.presidenzialismo; delete state.constitution.parlamentare; }
+    if (state.passedNationalReferendumIds) state.passedNationalReferendumIds = state.passedNationalReferendumIds.filter(function (id) { return id !== "presidenzialismo"; });
+    state.presidentialEnactedTurn = null;
+    state.pendingPresidentialRunoff = null;
+    var pres = state.president, ge = state.govEntity, text;
+    if (ge) ge.presidential = false;
+    if (pres && pres.executive && pres.isPlayer) {
+      pres.executive = false; pres.popular = false;
+      if (state.cabinet) state.cabinet.premierId = "player";
+      state.player.parliamentRole = "governo";
+      state.nextPresidentElectionTurn = state.turn + 1;
+      text = "Il presidenzialismo esce dalla Costituzione: torna la Repubblica parlamentare. Lasci il Quirinale ma non il governo: da oggi lo guidi come Presidente del Consiglio, con la fiducia delle Camere. La prossima settimana il Parlamento in seduta comune elegge un nuovo Presidente della Repubblica, di garanzia.";
+      addDiaryEntry("Di nuovo a Palazzo Chigi", "Ho restituito al Parlamento quello che era suo. Resto alla guida del governo, ma adesso ogni voto di fiducia conta.");
+    } else if (pres && pres.executive) {
+      pres.executive = false; pres.popular = false;
+      if (state.cabinet && pres.partyId && state.cabinet.premierId !== "player") state.cabinet.premierId = pres.partyId;
+      state.nextPresidentElectionTurn = Math.max(state.nextPresidentElectionTurn || 0, state.turn + 26);
+      text = "Il presidenzialismo esce dalla Costituzione: torna la Repubblica parlamentare. " + pres.name + " resta al Quirinale fino a fine mandato, ma solo come garante: il governo ora dipende dalla fiducia delle Camere.";
+    } else {
+      text = "Il presidenzialismo esce dalla Costituzione prima ancora delle prime elezioni dirette: resta la Repubblica parlamentare, con il Presidente eletto dal Parlamento.";
+      if ((state.nextPresidentElectionTurn || 0) < state.turn + 26 && state.president) state.nextPresidentElectionTurn = state.turn + 26;
+    }
+    state.log.unshift({ week: state.turn, title: "Torna la Repubblica parlamentare", choiceLabel: "Riforma costituzionale", result: text, headlines: [], type: "istituzioni", cat: "Istituzioni" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ cat: "Istituzioni", text: text });
+    if (state.worldNews.length > 6) state.worldNews.length = 6;
+    return text;
+  }
   // Elezioni politiche in una repubblica presidenziale: si rinnova solo il Parlamento, il governo resta.
   function presidentialLegislativeAftermath() {
     var p = state.player;
@@ -23350,6 +23384,10 @@
       effect: "Governi più stabili: crisi e uscite degli alleati diventano molto più rare, e ogni nuovo governo parte con più fiducia." },
     { id: "presidenzialismo", label: "Presidenzialismo: elezione diretta del Presidente della Repubblica", lean: 2.2, minSondaggi: 18,
       effect: "Repubblica presidenziale: il Presidente è eletto dai cittadini a doppio turno, ogni 5 anni (massimo due mandati), e guida il governo. Niente più fiducia né crisi parlamentari, ma con un Parlamento contrario si governa a fatica. Sostituisce il premierato." },
+    // Richiesto da un giocatore che aveva approvato il presidenzialismo senza accorgersi che il Presidente
+    // diventa anche capo del governo: ora si può tornare indietro, con lo stesso iter delle altre riforme.
+    { id: "parlamentare", label: "Ritorno alla Repubblica parlamentare", lean: 0, minSondaggi: 10,
+      effect: "Abolisce il presidenzialismo: il Presidente della Repubblica torna a essere eletto dal Parlamento come figura di garanzia, e il governo torna a essere guidato da un Presidente del Consiglio che dipende dalla fiducia delle Camere." },
     { id: "senato_regioni", label: "Fine del bicameralismo paritario: nasce il Senato delle Regioni", lean: -0.3, minSondaggi: 12,
       effect: "Leggi più rapide: ogni proposta di legge ha più probabilità di essere approvata in via definitiva." },
     { id: "sfiducia_costruttiva", label: "Sfiducia costruttiva sul modello tedesco", lean: 0.2, minSondaggi: 6,
@@ -23418,6 +23456,7 @@
     if (constitutionHas(reform.id)) return false;
     if (reform.id === "presidenzialismo" && isPresidentialSystem()) return false;
     if (reform.id === "premierato" && isPresidentialSystem()) return false;
+    if (reform.id === "parlamentare" && !isPresidentialSystem()) return false;
     if (p.sondaggi < reform.minSondaggi || p.fondi < CONST_REFORM_COST) return false;
     var retry = state.constReformRetry && state.constReformRetry[reform.id];
     return !(retry && state.turn < retry);
@@ -23585,6 +23624,8 @@
       if (!state.passedNationalReferendumIds) state.passedNationalReferendumIds = [];
       if (state.passedNationalReferendumIds.indexOf("presidenzialismo") === -1) state.passedNationalReferendumIds.push("presidenzialismo");
       onPresidentialismEnacted();
+    } else if (reform.id === "parlamentare") {
+      onPresidentialismRepealed();
     } else if (reform.id === "pareggio_bilancio") {
       state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -1, 12);
       state.spreadBps = clamp(state.spreadBps - rand(8, 20), 40, 500);
@@ -23622,6 +23663,7 @@
     }
     html += '<div class="option-grid">';
     CONST_REFORMS.forEach(function (rf) {
+      if (rf.id === "parlamentare" && !isPresidentialSystem()) return;
       var inForce = constitutionHas(rf.id) || (rf.id === "presidenzialismo" && isPresidentialSystem());
       var ok = canProposeConstReform(rf);
       var retry = state.constReformRetry && state.constReformRetry[rf.id] && state.turn < state.constReformRetry[rf.id];
@@ -47180,6 +47222,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "partito", t: "Si può tornare alla Repubblica parlamentare", x: "Con il presidenzialismo in vigore, tra le Riforme Costituzionali (scheda Parlamento) c'è «Ritorno alla Repubblica parlamentare». Se passa e il Presidente eletto dal popolo sei tu, lasci il Quirinale ma resti a capo del governo come Presidente del Consiglio, e il Parlamento elegge un nuovo Capo dello Stato di garanzia." },
     { d: "13 novembre 2026", m: "partito", t: "Nuovo Stato: solo le sue città", x: "Nel nuovo Stato compaiono solo le sue città e le sue regioni: sezioni, elezioni locali e regionali, consigli comunali, scioperi e notizie. Alla nascita dello Stato il partito tiene le sezioni dentro i confini e sposta la sede nazionale nella capitale; nella scheda «Nuovo Stato» c'è l'elenco delle città con sezioni e umore." },
     { d: "13 novembre 2026", m: "partito", t: "Il nuovo Stato si governa come l'Italia", x: "Dopo l'indipendenza la partita continua con il gioco completo: dossier, Parlamento con i suoi partiti locali, leggi e trattative, elezioni, governo, Scheda Paese, stampa e telefono. Una nuova scheda «Nuovo Stato» raccoglie riconoscimenti internazionali, rapporti con l'Italia e scelte fondative. Le partite già nel nuovo Stato passano da sole al nuovo sistema." },
     { d: "13 novembre 2026", m: "partito", t: "Correzione: pagina Territorio", x: "Risolto l'errore «Qualcosa è andato storto» che bloccava la partita quando non restava nessun altro partito in gioco da proporre come alleato locale." },
