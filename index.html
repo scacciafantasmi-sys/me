@@ -37119,6 +37119,46 @@
     if (state.turn - L.snapTurn >= 52) { L.prev = Object.assign({}, L.metrics); L.snapTurn = state.turn; }
     if (L.atti.length > 400) L.atti = L.atti.slice(-400);
   }
+  // Richiesto dall'autore: per ogni consiliatura/legislatura, chi governa (partito o coalizione in Giunta
+  // e sindaco o presidente). Quella in corso segue la tua posizione (Giunta tua se sei sindaco/assessore o
+  // presidente; se sei consigliere, la tua coalizione solo se sei in maggioranza); le passate si alternano.
+  function localBlocOptions() {
+    var out = [];
+    ["centrodestra", "campolargo"].forEach(function (id) { var co = coalitionById(id); if (co && careerCoalitionMembers(id).length) out.push(co.label); });
+    (state.dynamicCoalitions || []).forEach(function (dc) { if (dc.members && dc.members.length > 1) out.push(dc.label); });
+    if (!out.length) out = ["Centrodestra", "Centrosinistra"];
+    return out;
+  }
+  function localGiunta(c, L, n) {
+    if (!L.giunte) L.giunte = {};
+    var cur = localLegOf(L, state.turn);
+    if (L.giunte[n] && n !== cur) return L.giunte[n];
+    var head = L.kind === "comune" ? "sindaco/a" : "presidente";
+    var g = L.giunte[n] || {};
+    if (n === cur && c.office) {
+      var party = careerParty(c), coal = careerCoalitionOf(c.partyId);
+      var mineLabel = coal ? careerBlocLabel(coal) : (party ? party.name : "Lista civica");
+      var isHead = c.office.id === "sindaco" || c.office.id === "presidente_regione";
+      var inGiunta = isHead || careerCityMajority(c);
+      if (inGiunta) { g.label = mineLabel; g.mine = true; g.head = isHead ? c.name : (g.mine && g.head && g.headMine ? g.head : generateStaffName()); g.headMine = isHead; }
+      else if (!g.label || g.mine) { var opts = localBlocOptions().filter(function (x) { return x !== mineLabel; }); g.label = opts.length ? opts[Math.floor(Math.random() * opts.length)] : "Lista civica"; g.mine = false; g.head = generateStaffName(); g.headMine = false; }
+      if (L.kind === "regione" && !inGiunta && state.regions && state.regions[L.place] && state.regions[L.place].governorPartyId) {
+        var gp = partyById(state.regions[L.place].governorPartyId); if (gp) { var gc = careerCoalitionOf(gp.id); g.label = gc ? careerBlocLabel(gc) : gp.name; }
+      }
+    } else if (!g.label) {
+      var all = localBlocOptions().concat(["Lista civica"]), prev = L.giunte[n + 1];
+      var pick = all[Math.floor(Math.random() * all.length)];
+      if (prev && Math.random() < 0.45) pick = prev.label;
+      g.label = pick; g.head = generateStaffName(); g.mine = false;
+    }
+    g.headLabel = head;
+    L.giunte[n] = g;
+    return g;
+  }
+  function localGiuntaText(c, L, n) {
+    var g = localGiunta(c, L, n);
+    return (L.kind === "comune" ? "Giunta: " : "Giunta regionale: ") + g.label + (g.mine ? " (la tua parte)" : "") + " · " + g.headLabel + " " + (g.headMine ? g.head + " (tu)" : g.head);
+  }
   function localVerdict(v) { return v >= 8 ? "Ottimo" : v >= 6.5 ? "Buono" : v >= 5.5 ? "Sufficiente" : v >= 4 ? "Insufficiente" : "Grave"; }
   function renderCareerLocalTab(c, kind) {
     var L = localCurrent(c);
@@ -37127,7 +37167,7 @@
     var arrow = function (k) { var d = L.metrics[k] - (L.prev[k] === undefined ? L.metrics[k] : L.prev[k]); return Math.abs(d) < 0.05 ? '<span class="delta flat">=</span>' : '<span class="delta ' + (d > 0 ? "up" : "down") + '">' + (d > 0 ? "▲ +" : "▼ ") + d.toFixed(1).replace(".", ",") + "</span>"; };
     var curLeg = localLegOf(L, state.turn);
     var html = '<section aria-label="Scheda ' + kind + '"><div class="setup-card"><p class="eyebrow">' + (kind === "comune" ? "Scheda del Comune" : "Scheda della Regione") + "</p><h2>" + (kind === "comune" ? "Comune di " : "Regione ") + L.place + "</h2>" +
-      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + careerOfficeLabel(c) + "</p></div>";
+      '<p class="lead" style="margin:0">' + localLegLabel(L, curLeg) + " · " + careerOfficeLabel(c) + '</p><p class="ci-hint" style="margin:.3rem 0 0">' + fxEsc(localGiuntaText(c, L, curLeg)) + "</p></div>";
     html += '<h3>Valutazioni della scheda</h3><p class="ci-hint">Giudizio complessivo: <strong>' + localVerdict(avg) + " (" + avg.toFixed(1).replace(".", ",") + "/10)</strong> · gradimento " + (kind === "comune" ? "della Giunta" : "della Giunta regionale") + ": " + L.metrics.gradimento.toFixed(1).replace(".", ",") + "/10 " + arrow("gradimento") + ". Le frecce confrontano con un anno fa.</p>" +
       '<div class="stat-grid">' + defs.map(function (m) { return '<div class="stat-tile"><div class="label">' + m[1] + '</div><div class="row"><span class="value">' + L.metrics[m[0]].toFixed(1).replace(".", ",") + "</span>" + arrow(m[0]) + '</div><div class="gauge"><span style="width:' + (L.metrics[m[0]] * 10) + "%;background:" + (L.metrics[m[0]] < 4 ? "var(--critical)" : L.metrics[m[0]] < 6 ? "var(--warning)" : "var(--good)") + '"></span></div></div>'; }).join("") + "</div>";
     // storico per consiliatura/legislatura e per anno
@@ -37141,6 +37181,7 @@
       var okN = list.filter(function (a) { return a.passed; }).length;
       var years = {}; list.forEach(function (a) { var y = localYear(a.turn); (years[y] = years[y] || []).push(a); });
       html += '<details class="log"' + (n === curLeg ? " open" : "") + "><summary>" + localLegLabel(L, n) + (n === curLeg ? " · in corso" : "") + " — " + okN + " approvati, " + (list.length - okN) + " respinti<span>▾</span></summary>" +
+        '<p class="ci-hint" style="margin:.4rem 0">🏛️ ' + fxEsc(localGiuntaText(c, L, n)) + "</p>" +
         Object.keys(years).sort(function (a, b) { return b - a; }).map(function (y) {
           return '<p class="eyebrow" style="margin:.8rem 0 .3rem">' + y + '</p><ul class="enacted-policy-list">' + years[y].map(function (a) {
             return "<li>" + (a.passed ? "✔ <strong>Approvato</strong>" : "✖ <strong>Respinto</strong>") + " — " + fxEsc(a.title) + ' <span class="ci-hint">(' + a.by + (a.tally ? " · " + a.tally : "") + (a.vote ? " · tuo voto: " + fxEsc(a.vote.toLowerCase()) : "") + ")</span>" +
@@ -47447,6 +47488,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "carriera", t: "Chi governa in Comune e in Regione", x: "Nelle schede del Comune e della Regione ogni consiliatura e legislatura mostra quale partito o coalizione era in Giunta e chi era sindaco o presidente. Quella in corso segue la tua posizione: Giunta tua se sei sindaco, assessore o presidente, oppure la parte avversa se sei all'opposizione." },
     { d: "14 novembre 2026", m: "carriera", t: "Correzione: atti nella scheda del Comune", x: "Nella scheda del Comune e della Regione compaiono anche le proposte fatte prima dell'arrivo dell'archivio. Da assessore o sindaco, le proposte della tua Giunta votate in Consiglio risultano come «La tua Giunta» e contano tra gli atti con la tua firma." },
     { d: "14 novembre 2026", m: "carriera", t: "Schede del Comune e della Regione", x: "In Carriera, quando hai un incarico in Comune o in Regione compare la sua scheda: valutazioni (conti, servizi, trasporti, sicurezza, ambiente…) con il confronto sull'anno prima e l'archivio di delibere e leggi approvate o respinte, anno per anno e consiliatura per consiliatura. Ogni atto ha le sue conseguenze, positive o negative, subito e nel tempo: alcuni costano qualcosa subito e rendono dopo, altri deludono le promesse, e un bilancio bocciato fa danni seri." },
     { d: "14 novembre 2026", m: "partito", t: "Modifiche di legge anche fuori dal Parlamento", x: "Le Proposte di Modifica di Legge non spariscono più quando il partito non ha seggi: come mozioni e proposte di legge, puoi presentarle gratis come iniziativa simbolica, per farti conoscere." },
