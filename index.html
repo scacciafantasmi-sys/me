@@ -34833,7 +34833,7 @@
       var diaryItems = c.diario.slice(0, 60).map(function (e) {
         return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
       }).join("");
-      html += '<section aria-label="Diario politico"><h3>Diario politico</h3><div class="log-entries">' + diaryItems + "</div></section>";
+      html += renderCareerPartyHistory(c) + '<section aria-label="Diario politico"><h3>Diario politico</h3><div class="log-entries">' + diaryItems + "</div></section>";
     }
     html += '<div class="choices"><button type="button" class="advance-btn" id="career-advance-btn"' + (c.pending.length ? " disabled" : "") + ">" +
       (c.pending.length ? "Affronta prima i dossier della settimana" : "Passa alla settimana successiva") + "</button></div>";
@@ -36094,8 +36094,54 @@
   }
 
   // --- Avanzamento settimanale della vita adulta ---
+  // ---------- Carriera: lo storico dei partiti ----------
+  // Richiesto dall'autore: nel Diario, lo storico dei partiti a cui si è aderito (quando, fino a quando,
+  // il grado più alto raggiunto, come è finita). Per i salvataggi già avviati si ricostruisce dalle voci
+  // del Diario; da qui in poi si aggiorna da solo.
+  function careerPartyHistory(c) {
+    if (!c.partyHistory) {
+      c.partyHistory = [];
+      (c.diario || []).slice().reverse().forEach(function (e) {
+        var open = c.partyHistory.filter(function (h) { return !h.to; })[0];
+        var m = /Prendi la tessera di (.+?)(,| dopo|\.|:)/.exec(e.result || "");
+        if (e.title === "Tesseramento" && m) {
+          if (open) { open.to = e.week; open.why = "hai cambiato partito"; }
+          var pt = activeParties().filter(function (x) { return x.name === m[1]; })[0];
+          c.partyHistory.push({ id: pt ? pt.id : null, name: m[1], color: pt ? pt.color : null, from: e.week, rankMax: 0 });
+        } else if (open && (e.title === "Lasci il partito" || e.title === "Restituisci la tessera")) { open.to = e.week; open.why = e.title === "Lasci il partito" ? "hai restituito la tessera" : "sei entrato/a in un corpo dello Stato"; }
+        else if (open && e.title === "Il tuo partito non esiste più") { open.to = e.week; open.why = "il partito si è sciolto"; }
+      });
+    }
+    var H = c.partyHistory, open = H.filter(function (h) { return !h.to; })[0];
+    if (c.partyId) {
+      if (open && open.id !== c.partyId && open.name !== c.partyName) { open.to = state.turn; open.why = open.why || "hai cambiato partito"; open = null; }
+      if (!open) { open = { id: c.partyId, name: c.partyName, color: c.partyColor, from: c.partyJoinedTurn || state.turn, rankMax: c.partyRank || 0 }; H.push(open); }
+      open.id = c.partyId; open.name = c.partyName; open.color = c.partyColor || open.color;
+      open.rankMax = Math.max(open.rankMax || 0, c.partyRank || 0);
+    } else if (open) {
+      open.to = state.turn;
+      open.rankMax = Math.max(open.rankMax || 0, c.lastPartyRank || 0);
+      open.why = (state.dissolvedPartyIds || []).indexOf(open.id) !== -1 ? "il partito si è sciolto" : c.track && careerExclusiveTrack(c) ? "sei entrato/a in un corpo dello Stato" : "hai restituito la tessera";
+    }
+    return H;
+  }
+  function renderCareerPartyHistory(c) {
+    var H = careerPartyHistory(c);
+    var d = function (t) { return weekLabel(t).replace(/^.*– /, ""); };
+    var html = '<section aria-label="I tuoi partiti"><h3>I partiti della tua vita politica</h3>';
+    if (!H.length) return html + '<p class="ci-hint">Non hai ancora preso nessuna tessera.</p></section>';
+    html += '<ul class="enacted-policy-list">' + H.slice().reverse().map(function (h) {
+      var weeks = (h.to || state.turn) - h.from, yrs = Math.floor(weeks / 52), mo = Math.round((weeks % 52) / 4.3);
+      var dur = yrs ? yrs + (yrs === 1 ? " anno" : " anni") + (mo ? " e " + mo + (mo === 1 ? " mese" : " mesi") : "") : Math.max(1, mo) + (mo === 1 ? " mese" : " mesi");
+      var rank = (CAREER_PARTY_LADDER[h.rankMax || 0] || CAREER_PARTY_LADDER[0]).label;
+      return '<li><span class="sw" style="display:inline-block;width:.7rem;height:.7rem;border-radius:50%;margin-right:.35rem;background:' + (h.color || "#888") + '"></span><strong>' + fxEsc(h.name || "Partito") + "</strong>" + (h.to ? "" : " · <em>oggi</em>") +
+        '<br><span class="ci-hint">Dal ' + d(h.from) + (h.to ? " al " + d(h.to) : " a oggi") + " (" + dur + ") · grado più alto: " + rank.toLowerCase() + (h.to && h.why ? " · " + h.why : "") + "</span></li>";
+    }).join("") + "</ul></section>";
+    return html;
+  }
   function careerAdultTick(c) {
     try { careerUniPolTick(c); } catch (e) {}
+    try { careerPartyHistory(c); } catch (e) { if (window.console) console.error(e); }
     try { localTick(c); } catch (e) { if (window.console) console.error(e); }
     try { careerErasmusTick(c); } catch (e) {}
     var studyShare = (100 - c.focus) / 100;
@@ -37911,7 +37957,7 @@
     else if (c.ui === "comune" || c.ui === "regione") html += renderCareerLocalTab(c, c.ui);
     else if (c.ui === "partito_org") html += renderCareerLocalTab(c, "partito");
     else if (c.ui === "novita") html += renderGameUpdates();
-    else html += '<section aria-label="Diario politico"><h3>Diario politico</h3><div class="log-entries">' + c.diario.slice(0, 60).map(function (e) {
+    else html += renderCareerPartyHistory(c) + '<section aria-label="Diario politico"><h3>Diario politico</h3><div class="log-entries">' + c.diario.slice(0, 60).map(function (e) {
       return '<div class="log-entry"><span class="lw">S' + e.week + "</span><strong>" + e.title + "</strong><br>" + e.result + "</div>";
     }).join("") + "</div></section>";
     html += '<div class="choices"><button type="button" class="advance-btn" id="career-advance-btn"' + (c.pending.length ? " disabled" : "") + ">" +
@@ -47716,6 +47762,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "carriera", t: "Lo storico dei tuoi partiti", x: "Nel Diario della Carriera c'è lo storico dei partiti a cui hai aderito: da quando a quando, il grado più alto raggiunto e come è finita (tessera restituita, cambio di partito, partito sciolto). Nelle partite già iniziate viene ricostruito dalle voci del Diario." },
     { d: "14 novembre 2026", m: "carriera", t: "La CPU lavora sempre", x: "In Carriera il mondo va avanti anche senza di te: la tua città e la tua regione hanno sempre la loro scheda (Giunta, delibere, leggi, conseguenze e valutazioni), anche se non hai incarichi. E il governo porta in Parlamento leggi e decreti ogni poche settimane, con effetti sulla Scheda Paese e sulla fiducia: l'archivio anno per anno è in «L'Italia oggi»." },
     { d: "14 novembre 2026", m: "carriera", t: "Indagini meno casuali", x: "In Carriera le indagini non arrivano più dal nulla: i rapporti con le correnti non creano ombre, e la cena con gli imprenditori solo quando succede qualcosa di poco chiaro. Un avviso di garanzia parte solo con ombre sopra 30 e una causa concreta negli ultimi tre anni, che l'avviso nomina. Nel profilo vedi sempre le tue ombre e da dove vengono." },
     { d: "14 novembre 2026", m: "carriera", t: "Scheda del partito per i dirigenti", x: "In Carriera, dal grado di membro della direzione provinciale in su, compare la scheda del partito (Provincia, Regione o Nazionale a seconda del grado): valutazioni della federazione, l'archivio delle decisioni della direzione con le loro conseguenze, le proposte scritte di pugno (ordine del giorno, documento politico, regolamento) e una riunione della direzione ogni 6-8 settimane in cui votare con o contro la segreteria." },
