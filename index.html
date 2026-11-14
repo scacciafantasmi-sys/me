@@ -37060,7 +37060,21 @@
     for (var i = 0; i < LOCAL_TOPIC_TO_METRIC.length; i++) if (LOCAL_TOPIC_TO_METRIC[i][0].test(txt || "")) { var m = LOCAL_TOPIC_TO_METRIC[i][1]; if (L.metrics[m] !== undefined) return m; }
     return L.kind === "comune" ? "servizi" : "sociale";
   }
-  function localCurrent(c) { var kind = localKindOf(c); return kind ? localEnsure(c, kind, localPlaceName(c, kind)) : null; }
+  function localCurrent(c) { var kind = localKindOf(c); if (!kind) return null; var L = localEnsure(c, kind, localPlaceName(c, kind)); localBackfill(c, L); return L; }
+  // Segnalato dall'autore: le proposte fatte prima che esistesse l'archivio non comparivano negli atti.
+  // Si recuperano dallo storico della carriera (c.atti, gli ultimi atti presentati), una volta sola.
+  function localBackfill(c, L) {
+    if (L.backfilled || !c.atti || !c.atti.length) { L.backfilled = true; return; }
+    L.backfilled = true;
+    var re = L.kind === "comune" ? /consiglio comunale|giunta|ordinanz|sindaco|mozione|interrogazione|delibera/i : /regional|giunta regionale/i;
+    c.atti.forEach(function (x) {
+      if (!re.test(x.label || "") || x.turn < L.legStart - 520) return;
+      if (L.atti.some(function (a) { return a.own && a.turn === x.turn; })) return;
+      var a = { turn: x.turn, title: x.label + ": «" + String(x.text || "").slice(0, 90) + (String(x.text || "").length > 90 ? "…" : "") + "»", metric: localMetricFromTopic(L, (x.topic || "") + " " + x.text), by: "Tu", own: true, passed: !!x.passed, tally: "" };
+      localConsequences(L, a, null, true);
+      L.atti.push(a);
+    });
+  }
   // i tuoi atti (mozioni, delibere, ordinanze, proposte di legge regionale)
   function localRecordOwnAct(c, label, text, topic, passed, tally) {
     var L = localCurrent(c); if (!L) return;
@@ -37078,7 +37092,8 @@
       var passed = !/rinviat|numero legale|respint|bocciat|affossat/i.test(res);
       var def = LOCAL_COMUNE_ATTI.filter(function (x) { return x[0].toLowerCase().indexOf(item.toLowerCase().slice(0, 10)) === 0; })[0] || [0, "servizi"];
       var tl = (res.match(/(\d+ sì, \d+ no, \d+ astenuti)/) || [])[1] || "";
-      var a = { turn: state.turn, title: item, metric: def[1], by: "Giunta", passed: passed, tally: tl, vote: ch.label };
+      var mine = c.office && c.office.id !== "consigliere_comunale";
+      var a = { turn: state.turn, title: item, metric: def[1], by: mine ? "La tua Giunta" : "Giunta", own: mine, passed: passed, tally: tl, vote: ch.label };
       localConsequences(L, a, def[2], false);
       L.atti.push(a);
     } else if (d.id === "riunione_giunta") {
@@ -47432,6 +47447,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "14 novembre 2026", m: "carriera", t: "Correzione: atti nella scheda del Comune", x: "Nella scheda del Comune e della Regione compaiono anche le proposte fatte prima dell'arrivo dell'archivio. Da assessore o sindaco, le proposte della tua Giunta votate in Consiglio risultano come «La tua Giunta» e contano tra gli atti con la tua firma." },
     { d: "14 novembre 2026", m: "carriera", t: "Schede del Comune e della Regione", x: "In Carriera, quando hai un incarico in Comune o in Regione compare la sua scheda: valutazioni (conti, servizi, trasporti, sicurezza, ambiente…) con il confronto sull'anno prima e l'archivio di delibere e leggi approvate o respinte, anno per anno e consiliatura per consiliatura. Ogni atto ha le sue conseguenze, positive o negative, subito e nel tempo: alcuni costano qualcosa subito e rendono dopo, altri deludono le promesse, e un bilancio bocciato fa danni seri." },
     { d: "14 novembre 2026", m: "partito", t: "Modifiche di legge anche fuori dal Parlamento", x: "Le Proposte di Modifica di Legge non spariscono più quando il partito non ha seggi: come mozioni e proposte di legge, puoi presentarle gratis come iniziativa simbolica, per farti conoscere." },
     { d: "14 novembre 2026", m: "partito", t: "Emiciclo più fluido", x: "L'emiciclo colorato della scheda Parlamento non anima più i seggi uno per uno: entra tutto insieme, senza scatti, anche sul telefono." },
