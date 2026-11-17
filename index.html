@@ -48866,6 +48866,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "18 novembre 2026", m: "partito", t: "Prima Repubblica: elezioni anticipate e governi liberi", x: "In Prima Repubblica, quando le Camere vengono sciolte (una sfiducia passata, una crisi senza maggioranza) si vota davvero alla data annunciata: prima le elezioni restavano sempre bloccate sul calendario storico. Dopo un voto anticipato la nuova legislatura dura fino a cinque anni. I governi non sono più quelli della storia imposti dall'alto: nascono e cadono in base a come va la tua partita, ai seggi e alle alleanze. Il nome storico del premier compare solo se a guidare il governo è lo stesso partito di allora." },
     { d: "18 novembre 2026", m: "partito", t: "Prima Repubblica fino al 1992", x: "La Prima Repubblica ora va dal 1946 al 1° gennaio 1992, quando arriva Mani Pulite: oltre 70 nuovi eventi storici (Ungheria, boom, Vajont, centro-sinistra, Sessantotto, piazza Fontana, divorzio, compromesso storico, Moro, Bologna, Craxi, Sigonella, il Muro, la nascita del PDS…), i referendum veri in cui fai campagna, le elezioni alle loro date, i partiti che nascono e cambiano nome (Radicali, PSIUP, PSU, DP, Verdi, Lega, Rifondazione, Rete), i leader e i presidenti del Consiglio dell'epoca. Nuovi pannelli: «Il Palazzo» (sottogoverno, tessere gonfiate, lottizzazione RAI, Tribuna politica, preferenze, finanziamenti in nero: tutto torna con Mani Pulite), le spinte separatiste (Sicilia, Alto Adige, Sardegna, Valle d'Aosta, Lega) e la politica estera tra i due blocchi con i leader mondiali veri. Dossier settimanali per ogni decennio e leggi in vigore aggiornate fino al 1991." },
     { d: "17 novembre 2026", m: "partito", t: "Prima Repubblica: le leggi del dopoguerra", x: "In Prima Repubblica le leggi in vigore che puoi modificare sono quelle vere dell'epoca (Codice Rocco, Codice Civile del 1942, Patti Lateranensi, proporzionale del 1946, decreti Gullo…), ciascuna solo da quando è entrata in vigore; le proposte di legge e le mozioni sono i temi veri del Parlamento di allora (riforma agraria, proposta Merlin, Cassa per il Mezzogiorno, piano INA-Casa, Regioni, Corte costituzionale…). Spariti Unione Europea, Parlamento Europeo, Regioni prima del 1970, NATO prima del 1949 e le leggi di oggi; il referendum abrogativo e le revisioni costituzionali non esistono ancora." },
     { d: "17 novembre 2026", m: "tutte", t: "Sfiducia come nella realtà, consigli comunali chiari, interrogazioni con risposta", x: "Quando la fiducia nel governo scende sotto il 40%, chi è all'opposizione può presentare una mozione di sfiducia come prevede la Costituzione: servono le firme di un decimo della Camera o del Senato, si vota la settimana dopo per appello nominale, partito per partito, e se passa il governo si dimette e si aprono le consultazioni. La CPU può fare lo stesso contro il tuo governo, e tu puoi ricompattare gli alleati, trattare un'astensione o dimetterti prima del voto. In ogni seduta del consiglio comunale (e nelle schede Comune e Regione della Carriera) vedi quanti consiglieri ha ogni partito e chi sta in maggioranza, e i voti in aula si contano su quei numeri. Le interrogazioni ora ricevono una risposta in aula da un assessore o da un ministro con nome e incarico: replichi dicendo se sei soddisfatto, e se prendono un impegno, alla scadenza scopri se l'hanno mantenuto." },
@@ -50532,10 +50533,23 @@
   };
   var prEraOrigClamp = prClampElections;
   prClampElections = function () {
-    prEraOrigClamp.apply(this, arguments);
     if (!isPR() || !state.player) return;
+    var first = prTurnOf("1948-04-18");
+    // Camere sciolte in partita (sfiducia, crisi senza maggioranza): si vota davvero, alla data fissata dal gioco
+    if (state.snapElectionPending && state.turn >= first - 8) {
+      state.prFreeCalendar = true;
+      if (state.nextElectionTurn === undefined || state.nextElectionTurn < state.turn) state.nextElectionTurn = state.turn + 8;
+      return;
+    }
+    if (state.snapElectionPending && state.turn < first - 8) { state.snapElectionPending = false; state.nextElectionTurn = first; return; }
+    if (state.prFreeCalendar) {
+      // dopo un voto anticipato la legislatura dura al massimo cinque anni dalle ultime elezioni
+      var cap = (state.lastElectionTurn || state.turn) + 260;
+      if (state.nextElectionTurn === undefined || state.nextElectionTurn > cap) state.nextElectionTurn = cap;
+      return;
+    }
     var want = prMinElectionTurn();
-    if (state.nextElectionTurn !== want) { state.nextElectionTurn = want; state.snapElectionPending = false; }
+    if (state.nextElectionTurn !== want) state.nextElectionTurn = want;
   };
   function prEraWorldTick() {
     if (!isPR() || !state.player || state.player.formationComplete === false) return;
@@ -50560,13 +50574,11 @@
     var playerLeads = ge && (playerPremier || (ge.premierPartyId === "player" && pid !== "dc"));
     var f = prLatest(PR_FORMULAS);
     var dcLeads = ge && ((ge.memberIds || [])[0] === "dc" || (pid === "dc" && state.player.parliamentRole === "governo") || ge.premierPartyId === "dc");
-    if (ge && f && !playerLeads && dcLeads && state.prFormulaApplied !== f[0]) {
-      state.prFormulaApplied = f[0];
-      var ids = f[1].filter(function (id) { return prAlive(id) || id === pid; });
-      prGovSet(ids.length ? ids : ["dc"]);
-    }
+    void f; void dcLeads;
     var inGov = function (id) { return (ge.memberIds || []).indexOf(id) !== -1 || (id === pid && state.player.parliamentRole === "governo"); };
-    if (ge && pm && !playerLeads && (prAlive(pm[2]) || pm[2] === pid) && inGov(pm[2])) { ge.premierName = pm[1]; ge.premierPartyId = pm[2]; }
+    // il nome storico del premier e' solo colore: lo usiamo se nel gioco guida lo stesso partito della storia
+    var leadId = ge && (ge.premierPartyId || (ge.memberIds || [])[0]); var flKey = pm && (pm[0] + "|" + (ge && ge.formedTurn));
+    if (ge && pm && !ge.tecnico && !playerLeads && leadId === pm[2] && inGov(pm[2]) && pm[2] !== pid && state.prPremierFlavor !== flKey) { state.prPremierFlavor = flKey; ge.premierName = pm[1]; ge.premierPartyId = pm[2]; }
     if (state.turn >= prTurnOf(PR_END) && !state.prGameOver && !state.aiDynamicDossier) state.prEndDue = true;
   }
   var prEraOrigCore = advanceTurnLogicCore;
