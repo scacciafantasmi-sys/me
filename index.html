@@ -16620,12 +16620,21 @@
       "eccellente", "fantastic", "bellissim", "grande passo avanti", "risultato storico", "svolta positiva",
       "promessa mantenuta", "un successo per tutti"]
   };
+  // «nato» dentro «candidato», «cure» dentro «sicurezza», «onu» dentro «bonus»: l'indizio deve iniziare una parola.
+  function careerKwAtWordStart(norm, kw) {
+    var from = 0, at;
+    while ((at = norm.indexOf(kw, from)) !== -1) {
+      if (at === 0 || !/[a-z0-9]/.test(norm.charAt(at - 1))) return true;
+      from = at + 1;
+    }
+    return false;
+  }
   function detectStatementTheme(text) {
     var norm = normalizeStatementText(text);
     var best = null, bestScore = 0, bestKeyword = null;
     Object.keys(STATEMENT_THEME_KEYWORDS).forEach(function (metric) {
       STATEMENT_THEME_KEYWORDS[metric].forEach(function (kw) {
-        if (norm.indexOf(kw) !== -1 && kw.length > bestScore) { bestScore = kw.length; best = metric; bestKeyword = kw; }
+        if (kw.length > bestScore && careerKwAtWordStart(norm, kw)) { bestScore = kw.length; best = metric; bestKeyword = kw; }
       });
     });
     return best ? { metric: best, keyword: bestKeyword } : null;
@@ -36249,6 +36258,186 @@
     if (c.office.majority === undefined) c.office.majority = Math.random() < 0.45;
     return !!c.office.majority;
   }
+  // Segnalato dall'autore: in Carriera la CPU che legge le proposte, le delibere e gli atti scritti di pugno
+  // «non riesce quasi mai a selezionare la categoria giusta». Il vecchio riconoscimento prendeva la SINGOLA
+  // parola chiave più lunga trovata come sottostringa ovunque nel testo («nato» dentro «candidato», «cure»
+  // dentro «sicurezza», «parc» di parco dentro «parcheggio»), e la scheda Comune/Regione usava una lista di
+  // regole provate in ordine fisso, la prima che scattava vinceva. Ora:
+  // - il testo è diviso in parole e ogni indizio deve iniziare una parola (radice) o coincidere con essa;
+  // - ogni tema ha un vocabolario pesato (indizi forti e deboli) e vince il punteggio complessivo, non il
+  //   primo o il più lungo;
+  // - le espressioni di più parole («pronto soccorso», «messa in sicurezza», «sicurezza sul lavoro», «asilo
+  //   politico», «servizi sociali») si leggono per prime e «consumano» le loro parole, così «soccorso» non
+  //   finisce nella protezione civile e «sicurezza» non finisce nell'ordine pubblico;
+  // - le formule di copertura («dal bilancio», «fondi europei», «con la tassa di soggiorno») non spostano il
+  //   tema: dire da dove arrivano i soldi non fa diventare la proposta una delibera sul bilancio;
+  // - le parole all'inizio del testo, dove di solito sta l'oggetto della proposta, pesano un po' di più.
+  // Chiavi: "parola" = radice a inizio parola; "=parola" = parola esatta; "più parole" = espressione.
+  var CAREER_TOPICS = [
+    { id: "sanita", label: "Sanità", comune: "sociale", regione: "sanita", nat: "sanita", w: { ospedal: 3, sanit: 3, medic: 2, infermier: 3, ambulanz: 3, "pronto soccorso": 4, "liste d attesa": 4, "lista d attesa": 4, "liste di attesa": 4, "tempi di attesa per": 2, farmac: 2, vaccin: 3, "=asl": 3, "=ausl": 3, "=asp": 2, ricover: 3, ambulator: 3, consultor: 3, "guardia medica": 4, "casa di comunita": 3, "case di comunita": 3, pediatr: 3, ticket: 2, malat: 2, pazient: 3, "punto nascita": 4, "punti nascita": 4, telemedicin: 4, terapi: 2, oncolog: 3, chirurg: 3, psicolog: 2, psichiatr: 3, "salute mentale": 3, salut: 2, dentist: 2, degenz: 3, "=rsa": 1, screening: 3, prevenzione: 1, diagnost: 3, "visite specialistiche": 4, "=cup": 2, "elisoccorso": 3, "=118": 2 } },
+    { id: "trasporti", label: "Trasporti e mobilità", comune: "trasporti", regione: "trasporti", nat: "trasporti", w: { trasport: 3, autobus: 3, "=bus": 3, navett: 3, "=tram": 3, tramvi: 3, "=metro": 3, metropolitan: 3, "=treno": 3, "=treni": 3, ferrovi: 3, ferroviar: 3, stazion: 2, pendolar: 3, mobilit: 3, ciclabil: 3, "=bici": 2, biciclett: 2, parchegg: 3, traffic: 3, "zona 30": 2, "=ztl": 3, viabilit: 3, "=strada": 2, "=strade": 2, stradal: 2, rotatori: 2, semafor: 2, marciapied: 2, "=buche": 2, "=buca": 2, asfalt: 2, "=taxi": 2, "car sharing": 3, "bike sharing": 3, monopattin: 3, abbonament: 2, bigliett: 1, "=corse": 1, "trasporto pubblico": 4, "mezzi pubblici": 4, aeroport: 2, autostrad: 2, pedaggi: 2, "=linea": 1, "=linee": 1, capolinea: 2, fermat: 2, "piste ciclabili": 4, "pista ciclabile": 4, "=auto": 1, automobil: 1 } },
+    { id: "infrastrutture", label: "Infrastrutture e opere pubbliche", comune: "trasporti", regione: "infrastrutture", nat: "trasporti", w: { infrastrutt: 3, "=ponte": 3, "=ponti": 3, viadott: 3, cantier: 2, "opere pubbliche": 3, "opera pubblica": 3, "=lavori": 1, "lavori pubblici": 3, acquedott: 3, fognatur: 3, "rete idrica": 3, idric: 2, svincol: 2, tangenzial: 2, superstrad: 3, "=galleria": 1, "messa in sicurezza": 2, "=porto": 2, "=diga": 3, "edilizia pubblica": 2, depurator: 3 } },
+    { id: "scuola", label: "Scuola e istruzione", comune: "scuole", regione: "scuola", nat: "scuola", w: { scuol: 3, scolast: 3, istruzion: 3, student: 3, alunn: 3, insegnant: 3, docent: 3, professor: 2, maestr: 2, "=nido": 3, "=nidi": 3, "=asilo": 3, "=asili": 3, "=mensa": 2, "=mense": 2, universit: 3, atene: 2, "borse di studio": 3, "borsa di studio": 3, formazion: 2, doposcuol: 3, "=aula": 2, "=aule": 2, "=classi": 1, educat: 2, didattic: 3, "diritto allo studio": 4, laure: 2, tirocin: 1, "edilizia scolastica": 4, "libri di testo": 4, "trasporto scolastico": 3, "=its": 2, "dispersione scolastica": 5, "infanzia": 2, "=liceo": 3, "=licei": 3, "=istituti": 1, "materne": 3, "=materna": 3, "=elementari": 3, "=medie": 2, pedibus: 3, "=compiti": 2, "=zaini": 2 } },
+    { id: "casa", label: "Casa e abitare", comune: "casa", regione: "casa", nat: "casa", w: { "=casa": 2, "=case": 2, abitativ: 3, alloggi: 3, affitt: 3, "case popolari": 4, "edilizia popolare": 4, "edilizia residenziale": 3, sfratt: 3, "=mutui": 2, "=mutuo": 2, inquilin: 3, housing: 3, studentat: 3, "canone concordato": 3, "emergenza abitativa": 4, immobil: 2, sfitt: 3, condomin: 2, "=erp": 3, "=ater": 2, "=aler": 2, "affitti brevi": 2, appartament: 3, "=abitazioni": 3, "=abitazione": 3, "canone calmierato": 4, "affitto calmierato": 4, "giovani coppie": 3, "=coabitazione": 3 } },
+    { id: "sicurezza", label: "Sicurezza", comune: "sicurezza", regione: "trasparenza", nat: "sicurezza", w: { sicurezz: 2, polizi: 3, "polizia locale": 4, vigil: 3, carabinier: 3, telecamer: 3, videosorveglian: 4, crimin: 3, delinquen: 3, spacci: 3, "=droga": 2, "=droghe": 2, "=furti": 3, "=furto": 3, rapin: 3, aggression: 3, violenz: 1, degrado: 2, "baby gang": 4, "=gang": 2, pattugli: 3, prostituz: 2, microcriminal: 3, malavit: 3, sgomber: 2, "zona rossa": 2, "zone rosse": 2, ronde: 2, "=armi": 1, presidi: 1, scipp: 3, vandal: 3, "=agenti": 2, "occupazioni abusive": 3, "legittima difesa": 4, "=sicuri": 1, "=sicura": 1, "=insicurezza": 3, borseggi: 3, accoltell: 3, "=risse": 3, "=rissa": 3, alcol: 2, "=movida": 2 } },
+    { id: "verde", label: "Ambiente e verde", comune: "verde", regione: "ambiente", nat: "ambientalismo", w: { ambient: 3, "=verde": 2, "aree verdi": 3, "spazi verdi": 3, "=parco": 3, "=parchi": 3, alber: 3, giardin: 3, clima: 3, inquin: 3, smog: 3, emission: 3, "qualita dell aria": 4, polver: 2, biodivers: 3, natur: 1, "=fiume": 2, "=fiumi": 2, "=mare": 1, "consumo di suolo": 4, cementific: 3, forest: 2, "=bosco": 2, "=boschi": 2, animal: 2, canil: 3, "dissesto idrogeologico": 3, sostenibil: 1, ecolog: 3, "=green": 2, "=orti": 2, "=orto": 2, piantum: 3, riforestaz: 3, "isola pedonale": 2, plastic: 2, "=co2": 3, "zero emissioni": 4, "transizione ecologica": 4, "aiuole": 3, "=aiuola": 3, "parco giochi": 1, panchin: 2, fontanell: 2, "=giochi": 1, "=prato": 2, "=prati": 2 } },
+    { id: "rifiuti", label: "Rifiuti e pulizia", comune: "rifiuti", regione: "ambiente", nat: "ambientalismo", w: { rifiut: 3, "raccolta differenziata": 4, differenziat: 3, discaric: 3, inceneritor: 3, termovalorizzator: 3, spazzatur: 3, immondizi: 3, cassonett: 3, "porta a porta": 2, ricicl: 3, puliz: 2, spazzament: 3, "=tari": 2, compost: 2, "isola ecologica": 4, "isole ecologiche": 4, ecocentr: 3, sporc: 2, deiezion: 2, mozzicon: 2, "=decoro": 1, "abbandono dei rifiuti": 2, cestin: 3, netturb: 3, "operatori ecologici": 4, esaust: 3, "=oli usati": 3, ingombrant: 3, "=amianto": 2, "=rae": 2 } },
+    { id: "energia", label: "Energia", comune: "verde", regione: "energia", nat: "energia", w: { energ: 3, fotovolt: 4, solar: 3, pannell: 2, rinnovabil: 3, eolic: 4, bollett: 3, "caro energia": 4, "=gas": 2, elettric: 2, "comunita energetica": 5, "comunita energetiche": 5, efficientament: 3, nuclear: 3, idroelettric: 3, metan: 2, teleriscaldament: 4, cappott: 2, "=led": 2, "pompe di calore": 3, biogas: 3, idrogen: 3, petrol: 2, carbur: 2, "=kw": 2, "=mw": 2, "auto elettriche": 1 } },
+    { id: "lavoro", label: "Lavoro e occupazione", comune: "lavoro", regione: "lavoro", nat: "disoccupazione", w: { "=lavoro": 3, lavorat: 3, occupaz: 2, disoccupa: 3, assunz: 2, assum: 2, "posti di lavoro": 4, precari: 3, "centri per l impiego": 4, "centro per l impiego": 4, impieg: 2, sindacat: 2, licenziam: 3, stipend: 3, salar: 3, "salario minimo": 4, contratt: 1, "=stage": 2, tirocin: 2, scioper: 2, "cassa integrazione": 4, "sicurezza sul lavoro": 5, "morti sul lavoro": 5, infortun: 2, caporalat: 3, "lavoro nero": 4, "lavoro povero": 4, "smart working": 3, ricollocaz: 3, "politiche attive": 3, "=neet": 2, "busta paga": 4, "=paghe": 2, "=turni": 1, "mercato del lavoro": 4, "crisi aziendale": 2, "crisi aziendali": 2, "vertenz": 3, "=operai": 3, "=operaio": 3 } },
+    { id: "imprese", label: "Imprese e commercio", comune: "lavoro", regione: "lavoro", nat: "aziende", w: { impres: 3, aziend: 3, commerc: 3, negoz: 3, botteg: 3, artigian: 3, "=pmi": 3, industri: 3, fabbric: 3, stabiliment: 3, startup: 3, "start up": 3, "partita iva": 3, "partite iva": 3, "=mercato": 2, "=mercati": 2, "=dehor": 3, "=dehors": 3, esercent: 3, ristorat: 2, ristorant: 2, "attivita commerciali": 4, "attivita produttive": 3, burocraz: 2, "sportello unico": 2, incentiv: 1, export: 2, insediament: 1, distrett: 2, investiment: 1, "=fiera": 1, "=fiere": 1, "centro commerciale": 3, "zone industriali": 3, "zona industriale": 3, "=bar": 2, "esercizi commerciali": 4, "imprenditor": 3 } },
+    { id: "sociale", label: "Servizi sociali e welfare", comune: "sociale", regione: "sociale", nat: "welfare", w: { "servizi sociali": 4, "politiche sociali": 4, "=sociale": 1, "=sociali": 1, welfare: 3, anzian: 3, disabil: 3, handicap: 3, povert: 3, "=poveri": 3, "senza fissa dimora": 4, senzatetto: 3, clochard: 3, "senza dimora": 4, famigl: 2, natalit: 3, "assistenti sociali": 4, assistenz: 2, caregiver: 3, badant: 3, "=rsa": 2, "non autosufficien": 3, "banco alimentare": 4, "pacchi alimentari": 3, "buoni spesa": 3, sussid: 3, "=bonus": 2, "=isee": 3, "reddito di cittadinanza": 4, "assegno unico": 4, pension: 2, "=minori": 2, "centri antiviolenza": 4, "centro antiviolenza": 4, "violenza di genere": 4, femminic: 3, inclusion: 2, integraz: 1, volontar: 2, "terzo settore": 3, solidariet: 2, fragil: 2, dipendenz: 2, ludopat: 3, "emporio solidale": 4, "=mensa dei poveri": 4, "centri diurni": 3, "centro diurno": 3, "pari opportunita": 3, "=lgbt": 2, "=bambini": 1, solitudin: 2, "=over": 1, "terza eta": 3 } },
+    { id: "cultura", label: "Cultura ed eventi", comune: "cultura", regione: "turismo", nat: "felicita", w: { cultur: 3, "=museo": 3, "=musei": 3, museal: 3, teatr: 3, cinem: 3, bibliotec: 4, concert: 3, festival: 3, "=mostra": 2, "=mostre": 2, "=evento": 2, "=eventi": 2, "=arte": 2, artist: 2, music: 2, spettacol: 2, monument: 2, archeolog: 3, "=sagra": 2, "=sagre": 2, carneval: 2, "=libri": 1, "=libro": 1, lettur: 2, rassegn: 2, "centro culturale": 3, luminari: 2, "beni culturali": 4, "=natale": 1, "patrimonio storico": 3, "=storico": 1, "street art": 3, murales: 3, "=fumetti": 2, "=opera lirica": 3, "=lirica": 3, intitol: 3, partigian: 2, "=memoria": 2, anniversari: 2, "=resistenza": 2 } },
+    { id: "turismo", label: "Turismo", comune: "turismo", regione: "turismo", nat: "aziende", w: { turis: 3, "tassa di soggiorno": 2, albergh: 3, hotel: 3, "affitti brevi": 2, airbnb: 3, visitator: 3, crocier: 3, spiagg: 2, balnear: 3, lungomare: 2, "promozione del territorio": 3, "info point": 3, "ufficio turistico": 4, pellegrin: 2, "=borghi": 1, "=stagione estiva": 2, "presenze turistiche": 4, "overtourism": 4, "=guide": 1, "=souvenir": 2 } },
+    { id: "sport", label: "Sport e tempo libero", comune: "sport", regione: "turismo", nat: "felicita", w: { sport: 3, palestr: 3, palazzett: 4, "=stadio": 3, "=stadi": 3, piscin: 4, "campi da calcio": 4, "campo da calcio": 4, "=calcio": 2, calcett: 3, tennis: 3, basket: 3, pallavol: 3, atlet: 2, "impianti sportivi": 5, "impianto sportivo": 5, "tempo libero": 3, maraton: 3, "parco giochi": 2, skate: 3, "associazioni sportive": 5, olimpi: 2, ciclism: 2, "=nuoto": 3, padel: 3, "=rugby": 3, "=campetti": 3, "=campetto": 3 } },
+    { id: "digitale", label: "Digitale e innovazione", comune: "digitale", regione: "digitale", nat: "ricercaSviluppo", w: { digital: 3, online: 3, "on line": 3, internet: 3, "banda larga": 4, "=fibra": 3, "fibra ottica": 4, wifi: 3, "wi fi": 3, "=app": 3, piattaform: 2, software: 3, informatic: 3, "=spid": 3, pagopa: 3, innovaz: 2, tecnolog: 2, "intelligenza artificiale": 4, "=ia": 2, "smart city": 3, "open data": 3, cyber: 3, "=5g": 3, ricerc: 2, "ricerca scientifica": 3, "=sito": 1, "=web": 2, computer: 2, "=tablet": 2, "=pc": 2, "=qr": 2, "fascicolo elettronico": 2, "=portale": 3, "=digitali": 2, "=telematic": 2, telematic: 2 } },
+    { id: "trasparenza", label: "Trasparenza e legalità", comune: "trasparenza", regione: "trasparenza", nat: "corruzione", w: { trasparen: 3, corruz: 3, tangent: 3, mazzett: 3, appalt: 2, legalit: 3, mafi: 3, ndrangheta: 4, camorr: 4, clientel: 3, "conflitto di interessi": 4, "conflitto d interessi": 4, nepotism: 3, raccomandaz: 2, "voto di scambio": 4, "albo pretorio": 3, "accesso agli atti": 4, anticorruz: 4, "codice etico": 3, streaming: 2, "bilancio partecipativo": 2, partecipaz: 1, evasion: 2, riciclaggi: 3, rendicontaz: 3, lobb: 3, whistleblow: 3, "=nomine": 1, "registro delle": 1, "beni confiscati": 4, "=opacita": 3, "=sprechi": 1, "=spreco": 1, "=controlli": 1, rimbors: 2, "costi della politica": 4, "=indennita": 2, vitaliz: 3, "=pubblicare": 2, "rendere pubblic": 2 } },
+    { id: "bilancio", label: "Bilancio e tasse", comune: "bilancio", regione: "bilancio", nat: "economia", w: { bilanc: 1, "bilancio di previsione": 4, "bilancio comunale": 3, "bilancio regionale": 3, "=tasse": 2, "=tassa": 2, tribut: 3, "=imu": 2, "=tari": 1, irpef: 3, addizional: 3, fisc: 2, impost: 3, "=debito": 2, "=debiti": 2, deficit: 3, "spending review": 4, "=tagli": 1, "=taglio": 1, "conti pubblici": 3, "conti del comune": 4, "conti della regione": 4, "=entrate": 1, rating: 2, revisor: 2, "equilibrio di bilancio": 4, partecipat: 1, aliquot: 3, rateizz: 3, cartell: 2, condon: 3, "rendiconto": 2, "=avanzo": 1, "=disavanzo": 3, "=dissesto finanziario": 4, "=predissesto": 4 } },
+    { id: "periferie", label: "Periferie e quartieri", comune: "periferie", regione: "casa", nat: "casa", w: { periferi: 4, quartier: 3, rion: 3, borgat: 3, frazion: 3, riqualific: 3, rigenerazion: 3, "rigenerazione urbana": 4, degrado: 1, "spazi pubblici": 2, "=piazza": 2, "=piazze": 2, "aree dismesse": 3, "area dismessa": 3, "ex caserm": 3, "consulte di quartiere": 2, "case del quartiere": 2, "=municipio": 1, "=municipi": 1, "=sobborghi": 3, "arredo urbano": 3, panchin: 1 } },
+    { id: "servizi", label: "Servizi ai cittadini", comune: "servizi", regione: "digitale", nat: "felicita", w: { anagraf: 4, sportell: 3, "=uffici": 2, "=ufficio": 1, "carta d identita": 4, "carta di identita": 4, certificat: 2, "servizi al cittadino": 4, "servizi ai cittadini": 4, "orari di apertura": 3, "=urp": 3, "=code": 1, "tempi di attesa": 2, cimiter: 3, "acqua pubblica": 3, "servizio idrico": 3, "illuminazione pubblica": 2, pratich: 2, burocraz: 1, "dipendenti comunali": 3, "personale del comune": 3, semplificaz: 2, "=prenotazioni": 2, "=prenotazione": 2, "=uffici comunali": 4 } },
+    { id: "agricoltura", label: "Agricoltura", comune: "lavoro", regione: "agricoltura", nat: "aziende", w: { agricol: 4, agricoltor: 4, contadin: 4, coltiv: 3, "=raccolto": 3, allevam: 4, allevator: 4, "=vino": 2, vitivinicol: 4, viticolt: 4, "=olio": 2, oliv: 3, "km zero": 3, "chilometro zero": 3, filier: 2, irrigaz: 4, siccit: 3, bestiam: 3, "fauna selvatica": 2, cinghial: 3, "prodotti tipici": 3, "=dop": 2, "=igp": 2, "aziende agricole": 5, "azienda agricola": 5, "=terreni": 2, "=pac": 2, fitofarmac: 3, pestic: 3, biologic: 2, zootecn: 4, "=pesca": 2, pescator: 3, "mercati contadini": 4, "=campi": 1, "=grano": 3, "=frutta": 2, "=ortaggi": 3, "=serre": 2, "=stalle": 3, "=stalla": 3, caseific: 3, mangim: 3, "=latte": 2, "=vendemmia": 3, "=agriturismi": 3, agrituris: 3 } },
+    { id: "protezione", label: "Protezione civile", comune: "sicurezza", regione: "protezione", nat: "ambientalismo", w: { "protezione civile": 5, alluvion: 4, "=frana": 4, "=frane": 4, terremot: 4, sism: 4, incend: 3, emergenz: 2, "piano di emergenza": 4, esondaz: 4, "allerta meteo": 4, allert: 2, "rischio idrogeologico": 4, "dissesto idrogeologico": 3, "vigili del fuoco": 4, soccors: 2, evacuaz: 3, argin: 3, "casse di espansione": 4, valangh: 4, "eventi estremi": 3, "eventi climatici": 3, nubifrag: 4, "=grandine": 3, "=tromba d aria": 3, "=bombe d acqua": 4, "=alluvionati": 4, "=sfollati": 4, "=antisismic": 4 } },
+    { id: "montagna", label: "Aree interne e montagna", comune: "periferie", regione: "montagna", nat: "felicita", w: { montagn: 4, montan: 3, "aree interne": 5, "piccoli comuni": 4, spopolament: 4, "=borghi": 2, appennin: 3, alpin: 2, "comunita montane": 4, rifug: 2, "impianti di risalita": 4, "zone rurali": 3, "=rurale": 2, "=rurali": 2, collin: 2, entroterra: 4, "=valle": 1, "=valli": 1, "isole minori": 3, "=paesi": 1, "=borgo": 2 } },
+    { id: "immigrazione", label: "Immigrazione e integrazione", comune: "sociale", regione: "sociale", nat: "immigrazione", w: { immigra: 4, migrant: 4, stranier: 3, profug: 3, rifugiat: 3, "richiedenti asilo": 5, "asilo politico": 5, accoglien: 2, "centri di accoglienza": 5, "centro di accoglienza": 5, "=cpr": 3, "=cas": 2, "=sprar": 3, integraz: 2, "mediatori culturali": 4, cittadinanz: 2, "ius soli": 4, "ius scholae": 4, sbarch: 4, clandestin: 4, rimpatr: 4, "permesso di soggiorno": 4, "permessi di soggiorno": 4, extracomunitar: 3, "=rom": 3, "campi rom": 4, nomad: 3, "=moschea": 3, "=moschee": 3 } },
+    { id: "giustizia", label: "Giustizia", comune: "trasparenza", regione: "trasparenza", nat: "giustizia", w: { giustiz: 3, tribunal: 3, magistrat: 3, "=processi": 2, "=processo": 2, carcer: 3, detenut: 3, giudic: 3, avvocat: 2, sentenz: 2, prescriz: 3, "=pene": 2, "=pena": 1, penitenzi: 3, "giudice di pace": 4, "separazione delle carriere": 5, intercettaz: 4, "=reato": 2, "=reati": 2, "codice penale": 4 } },
+    { id: "difesa", label: "Difesa", comune: "sicurezza", regione: "protezione", nat: "difesa", w: { "=difesa": 2, militar: 3, "=esercito": 3, armament: 3, "spese militari": 4, "=nato": 3, caserm: 2, "forze armate": 4, soldat: 3, guerr: 2, ucrain: 2, missil: 3, "servizio di leva": 4, "=leva": 2, "=marina militare": 4, aeronautic: 3, "=droni": 2 } },
+    { id: "esteri", label: "Esteri ed Europa", comune: "cultura", regione: "lavoro", nat: "relazioniDiplomatiche", w: { "=esteri": 2, "=estero": 1, europ: 2, "=ue": 2, "unione europea": 3, diplomaz: 4, gemellag: 4, internazional: 1, ambasc: 3, "cooperazione internazionale": 4, "=onu": 3, palestin: 2, israel: 2, "=gaza": 2, "politica estera": 4, "=dazi": 2, "=trattati": 2 } },
+    { id: "prezzi", label: "Prezzi e caro vita", comune: "sociale", regione: "sociale", nat: "inflazione", w: { inflaz: 4, prezz: 3, "caro vita": 4, carovita: 4, "caro spesa": 4, "potere d acquisto": 4, rincar: 4, "carrello della spesa": 4, "=costo della vita": 4, "=aumenti": 1, "calmiera": 4 } }
+  ];
+  // Indizi che spesso dicono DOVE o PER CHI, non DI COSA: «una navetta per gli anziani dai quartieri
+  // periferici all'ospedale» parla di trasporti, «più medici nelle zone rurali» di sanità. Dopo «per», «nei»,
+  // «nella zona di», «all'»… (o subito dopo un altro luogo) pesano meno di un terzo. Dopo «dopo» (dopo
+  // l'alluvione, dopo l'incidente) pesa meno qualunque indizio: è la causa, non l'oggetto.
+  var CAREER_TOPIC_CTX = {
+    periferie: ["periferi", "quartier", "rion", "frazion", "borgat", "=piazza", "=piazze", "=municipio", "=municipi"],
+    montagna: ["montagn", "montan", "aree interne", "piccoli comuni", "zone rurali", "=rurale", "=rurali", "=borghi", "=borgo", "=paesi", "=valle", "=valli", "entroterra", "collin"],
+    sociale: ["anzian", "famigl", "=isee", "=minori", "=bambini", "=over", "disabil", "terza eta"],
+    trasporti: ["stazion", "=strada", "=strade"],
+    scuola: ["scuol", "student", "alunn", "universit"],
+    sanita: ["ospedal", "pazient"],
+    verde: ["=parco", "=parchi", "giardin"],
+    casa: ["=casa", "=case", "condomin"],
+    turismo: ["turis"],
+    imprese: ["aziend"]
+  };
+  var CAREER_CTX_PREPS = ["per", "ogni", "ciascun", "ciascuna", "nei", "nelle", "nella", "nel", "negli", "nello", "nell", "dai", "dalle", "dagli", "dal", "dall", "alla", "alle", "agli", "ai", "al", "all", "allo", "in", "a", "con", "verso", "presso", "tra", "fra", "sui", "sulle", "sul", "sull", "su", "fuori", "davanti", "vicino"];
+  var CAREER_CTX_NOUNS = ["zona", "zone", "area", "aree", "via", "viale", "corso", "pressi", "intorno"];
+  var CAREER_CTX_SKIP = ["il", "lo", "la", "i", "gli", "le", "l", "un", "una", "uno", "tutti", "tutte", "tutto", "tutta", "questi", "queste", "quei", "quelle", "nostri", "nostre", "nostro", "nostra", "piu", "chi", "di", "del", "della", "delle", "dei", "degli", "dell", "dello", "suoi", "sue", "loro", "nuovi", "nuove", "nuovo", "nuova"];
+  // Formule che dicono da dove arrivano i soldi o con quali strumenti: non decidono il tema.
+  var CAREER_TOPIC_NEUTRAL = ["in sicurezza", "in tutta sicurezza", "in modo sicuro", "dal bilancio", "del bilancio", "nel bilancio", "a bilancio", "in bilancio", "dai fondi", "con i fondi", "fondi europei", "fondi regionali", "fondi statali", "fondi del pnrr", "dalla tassa di soggiorno", "con la tassa di soggiorno", "con gli introiti della tassa di soggiorno", "dall avanzo", "avanzo di bilancio", "dai risparmi", "con i risparmi", "senza nuove tasse", "senza aumentare le tasse", "a costo zero", "dalle sanzioni", "con un bando", "tramite bando", "con un mutuo", "dalle multe", "con le multe", "dai proventi", "ufficio tecnico", "in consiglio comunale", "consiglio comunale", "giunta comunale", "giunta regionale", "consiglio regionale"];
+  var CAREER_PARTY_TOPICS = [
+    { id: "giovani", w: { giovan: 3, universit: 3, student: 3, tesser: 2, iscritt: 2, "under 30": 3, "under 35": 3, "=gd": 2, "=giovanile": 3, "scuola di formazione politica": 3, ragazz: 2, generaz: 2 } },
+    { id: "organizzazione", w: { circol: 3, sezion: 3, "=sede": 2, "=sedi": 2, organizz: 2, segreter: 2, militant: 2, volontar: 2, "=festa": 2, "=feste": 2, struttur: 2, dirigent: 1, formazion: 2, "=coordinament": 3, coordinament: 3, "=tesseramento": 3, "=iscritti": 1, "=responsabili": 1, "=dipartimenti": 3, "=dipartimento": 3 } },
+    { id: "finanze", w: { soldi: 3, finanz: 3, "=fondi": 2, bilanc: 3, autofinanz: 4, donazion: 3, "=cena": 2, "=cene": 2, "raccolta fondi": 4, "2 per mille": 4, "due per mille": 4, "=quote": 2, "=quota": 2, tesoreri: 3, "=debiti": 2, "=spese": 2, "=sponsor": 2, crowdfunding: 4, "=euro": 1, "=contributi": 2 } },
+    { id: "unita", w: { "=unita": 3, unitar: 3, corrent: 3, congress: 3, minoranz: 3, "=maggioranza": 1, regolament: 3, primari: 3, statut: 3, pluralism: 3, "democrazia interna": 4, dissens: 3, epuraz: 3, espuls: 3, garan: 2, pacificaz: 3, "=mozione": 1, "=candidature": 2, "=liste": 1, "=voto": 1, "=votazione": 2, "=assemblea": 1, "=probiviri": 4, "=commissione di garanzia": 4 } },
+    { id: "radicamento", w: { territor: 3, quartier: 3, ascolt: 2, "=paesi": 2, "=paese": 1, provinc: 2, "=comuni": 1, banchett: 3, "porta a porta": 3, gazeb: 3, "assemblee pubbliche": 3, "=mercati": 2, periferi: 2, "case del popolo": 3, "=presenza": 1, "=cittadini": 1, "=incontri": 2, "=fabbriche": 2, "=frazioni": 2 } },
+    { id: "comunicazione", w: { "=social": 3, "social network": 4, comunicaz: 4, "=stampa": 3, giornal: 3, "=tv": 3, televis: 3, campagn: 2, "=video": 3, instagram: 4, tiktok: 4, facebook: 4, twitter: 3, newsletter: 4, "=sito": 2, "=web": 2, "=logo": 3, slogan: 3, manifest: 2, volantin: 2, "ufficio stampa": 5, influencer: 3, podcast: 3, immagin: 2, simbol: 2, "=messaggio": 1, "=comunicati": 3 } }
+  ];
+  function careerTopicPrep(text) {
+    var norm = normalizeStatementText(text).replace(/[’'`]/g, " ").replace(/[^a-z0-9&]+/g, " ").replace(/\s+/g, " ").trim();
+    return { norm: " " + norm + " ", tokens: norm ? norm.split(" ") : [] };
+  }
+  // Indice (in parole) di un'espressione nel testo normalizzato, o -1.
+  function careerPhraseAt(prep, phrase, used) {
+    var from = 0, needle = " " + phrase;
+    while (true) {
+      var at = prep.norm.indexOf(needle, from);
+      if (at === -1) return -1;
+      var idx = prep.norm.slice(1, at + 1).split(" ").length - 1;
+      if (at === 0) idx = 0;
+      var len = phrase.split(" ").length, free = true;
+      for (var k = 0; k < len; k++) if (used[idx + k]) { free = false; break; }
+      if (free) return idx;
+      from = at + 1;
+    }
+  }
+  function careerScoreTopics(text, topics) {
+    var prep = careerTopicPrep(text);
+    if (!prep.tokens.length) return null;
+    var used = {}, scores = {}, first = {}, hits = {};
+    var isCareer = topics === CAREER_TOPICS;
+    // parole che corrispondono a un indizio «di luogo/destinatario»
+    var ctxTok = {};
+    if (isCareer) Object.keys(CAREER_TOPIC_CTX).forEach(function (tid) {
+      CAREER_TOPIC_CTX[tid].forEach(function (k) {
+        var exact = k.charAt(0) === "=", key = exact ? k.slice(1) : k;
+        if (key.indexOf(" ") !== -1) { var at = careerPhraseAt(prep, key, {}); if (at !== -1) ctxTok[at] = true; return; }
+        prep.tokens.forEach(function (tk, i) { if (exact ? tk === key : tk.lastIndexOf(key, 0) === 0) ctxTok[i] = true; });
+      });
+    });
+    // per ogni parola: "loc" se sta in posizione di luogo/destinatario, "dopo" se è una causa
+    var pos = {};
+    for (var pi = 0; pi < prep.tokens.length; pi++) {
+      pos[pi] = null;
+      for (var j = pi - 1; j >= Math.max(0, pi - 4); j--) {
+        var tj = prep.tokens[j];
+        if (tj === "dopo") { pos[pi] = "dopo"; break; }
+        if (CAREER_CTX_PREPS.indexOf(tj) !== -1 || CAREER_CTX_NOUNS.indexOf(tj) !== -1) { pos[pi] = "loc"; break; }
+        if (ctxTok[j] && pos[j]) { pos[pi] = pos[j]; break; }
+        if (CAREER_CTX_SKIP.indexOf(tj) !== -1) continue;
+        break;
+      }
+    }
+    function isCtxKey(id, key) { var l = CAREER_TOPIC_CTX[id]; return !!(l && (l.indexOf(key) !== -1 || l.indexOf("=" + key) !== -1)); }
+    function add(id, w, idx, key) {
+      var mult = idx < 8 ? 1.25 : 1;
+      if (isCareer && pos[idx] === "dopo") mult *= 0.35;
+      else if (isCareer && pos[idx] === "loc" && isCtxKey(id, key)) mult *= 0.3;
+      scores[id] = (scores[id] || 0) + w * mult;
+      if (first[id] === undefined || idx < first[id]) first[id] = idx;
+      (hits[id] = hits[id] || []).push(key);
+    }
+    // 1) espressioni di più parole, dalla più lunga, comprese le formule neutre
+    var phrases = [];
+    CAREER_TOPIC_NEUTRAL.forEach(function (p) { phrases.push({ id: null, p: p, w: 0 }); });
+    topics.forEach(function (t) { Object.keys(t.w).forEach(function (k) { var p = k.charAt(0) === "=" ? k.slice(1) : k; if (p.indexOf(" ") !== -1) phrases.push({ id: t.id, p: p, w: t.w[k] }); }); });
+    phrases.sort(function (a, b) { return b.p.length - a.p.length; });
+    phrases.forEach(function (ph) {
+      var n = 0, idx;
+      while (n < 3 && (idx = careerPhraseAt(prep, ph.p, used)) !== -1) {
+        var len = ph.p.split(" ").length;
+        for (var k = 0; k < len; k++) used[idx + k] = true;
+        if (ph.id) add(ph.id, n ? ph.w * 0.5 : ph.w, idx, ph.p);
+        n++;
+      }
+    });
+    // 2) singole parole: radice a inizio parola, o parola esatta; ogni chiave conta una volta (+50% se ripetuta)
+    topics.forEach(function (t) {
+      Object.keys(t.w).forEach(function (k) {
+        var exact = k.charAt(0) === "=", key = exact ? k.slice(1) : k;
+        if (key.indexOf(" ") !== -1) return;
+        var count = 0, idx0 = -1;
+        for (var i = 0; i < prep.tokens.length; i++) {
+          if (used[i]) continue;
+          var tk = prep.tokens[i];
+          if (exact ? tk === key : (tk.length >= key.length && tk.lastIndexOf(key, 0) === 0)) { count++; if (idx0 === -1) idx0 = i; }
+        }
+        if (count) add(t.id, t.w[k] * (count > 1 ? 1.5 : 1), idx0, key);
+      });
+    });
+    var ids = Object.keys(scores).filter(function (id) { return scores[id] > 0; });
+    if (!ids.length) return null;
+    ids.sort(function (a, b) { return (scores[b] - scores[a]) || (first[a] - first[b]); });
+    var best = topics.filter(function (t) { return t.id === ids[0]; })[0];
+    return { topic: best, score: scores[ids[0]], second: ids[1] || null, hits: hits[ids[0]] };
+  }
+  function careerClassifyText(text) {
+    var r = careerScoreTopics(text, CAREER_TOPICS);
+    if (!r || r.score < 1.5) return null;
+    return r.topic;
+  }
+  function careerTopicById(id) { return CAREER_TOPICS.filter(function (t) { return t.id === id; })[0] || null; }
+  // Metrica della scheda Comune/Regione per un atto: prima il tema già riconosciuto, poi il testo.
+  function careerTopicMetric(L, topicId, text) {
+    if (!L || (L.kind !== "comune" && L.kind !== "regione")) return null;
+    var t = (topicId && careerTopicById(topicId)) || careerClassifyText(text || "");
+    if (!t) return null;
+    var m = t[L.kind];
+    return L.metrics[m] !== undefined ? m : null;
+  }
+  function careerPartyTopicMetric(text) {
+    var r = careerScoreTopics(text, CAREER_PARTY_TOPICS);
+    return r && r.score >= 1.5 ? r.topic.id : null;
+  }
   function careerProposeAct(c, text) {
     var label = careerActLabel(c);
     if (!label) return;
@@ -36257,6 +36446,8 @@
     var kind = careerActKind(c);
     if (kind) label = kind.label;
     var cls = classifyStatement(text);
+    var ctop = careerClassifyText(text);
+    if (ctop) cls.topicLabel = ctop.label;
     var t = text.toLowerCase();
     var demagogic = CAREER_DEMAGOGIC_ADULT.some(function (k) { return t.indexOf(k) !== -1; });
     var ideo = { left: 0, right: 0, center: 0 };
@@ -36294,9 +36485,9 @@
       [!demagogic, demagogic ? "Suona come propaganda: promessa irrealizzabile" : "Credibile, non propaganda"]
     ];
     var tally = careerIsComuneRole(c) && !isQuestion && !(kind && (kind.id === "delibera" || kind.id === "ordinanza" || kind.id === "delibera_sindaco")) ? careerCouncilTally(passed) : null;
-    c.lastAtto = { turn: state.turn, label: label, text: text, passed: passed, verdict: verdict, checks: checks, tally: tally, topic: cls.topicLabel, chance: Math.round(chance * 100) };
-    c.atti.unshift({ turn: state.turn, label: label, text: text, topic: cls.topicLabel, passed: passed });
-    try { localRecordOwnAct(c, label, text, cls.topicLabel, passed, tally); } catch (lErr) { if (window.console) console.error(lErr); }
+    c.lastAtto = { turn: state.turn, label: label, text: text, passed: passed, verdict: verdict, checks: checks, tally: tally, topic: cls.topicLabel, topicId: ctop ? ctop.id : null, chance: Math.round(chance * 100) };
+    c.atti.unshift({ turn: state.turn, label: label, text: text, topic: cls.topicLabel, topicId: ctop ? ctop.id : null, passed: passed });
+    try { localRecordOwnAct(c, label, text, cls.topicLabel, passed, tally, ctop ? ctop.id : null); } catch (lErr) { if (window.console) console.error(lErr); }
     if (c.atti.length > 12) c.atti.length = 12;
     addCareerDiaryEntry(label, "«" + text.slice(0, 100) + (text.length > 100 ? "…" : "") + "» (" + cls.topicLabel.toLowerCase() + "): " + verdict + (tally ? " (" + tally + ")" : "") + "." + (demagogic ? " In molti la definiscono pura propaganda." : "") + (outOfScope ? " Più di un collega ti ricorda che non è materia del Comune." : "") + (fit < 0 ? " Il tuo partito non ha gradito." : ""));
     showSaveStatus(label + ": " + verdict + ".", !passed);
@@ -37553,7 +37744,9 @@
     }
     a.fxNow = now.join(" · "); a.fxLater = later.join(" · "); a.fxDone = !!historic;
   }
-  function localMetricFromTopic(L, txt) {
+  function localMetricFromTopic(L, txt, topicId) {
+    var cm = careerTopicMetric(L, topicId, txt);
+    if (cm) return cm;
     for (var i = 0; i < LOCAL_TOPIC_TO_METRIC.length; i++) if (LOCAL_TOPIC_TO_METRIC[i][0].test(txt || "")) { var m = LOCAL_TOPIC_TO_METRIC[i][1]; if (L.metrics[m] !== undefined) return m; }
     return localDefaultMetric(L.kind);
   }
@@ -37579,15 +37772,15 @@
     c.atti.forEach(function (x) {
       if (!re.test(x.label || "") || x.turn < L.legStart - 520) return;
       if (L.atti.some(function (a) { return a.own && a.turn === x.turn; })) return;
-      var a = { turn: x.turn, title: x.label + ": «" + String(x.text || "").slice(0, 90) + (String(x.text || "").length > 90 ? "…" : "") + "»", metric: localMetricFromTopic(L, (x.topic || "") + " " + x.text), by: "Tu", own: true, passed: !!x.passed, tally: "" };
+      var a = { turn: x.turn, title: x.label + ": «" + String(x.text || "").slice(0, 90) + (String(x.text || "").length > 90 ? "…" : "") + "»", metric: localMetricFromTopic(L, (x.topic || "") + " " + x.text, x.topicId), by: "Tu", own: true, passed: !!x.passed, tally: "" };
       localConsequences(L, a, null, true);
       L.atti.push(a);
     });
   }
   // i tuoi atti (mozioni, delibere, ordinanze, proposte di legge regionale)
-  function localRecordOwnAct(c, label, text, topic, passed, tally) {
+  function localRecordOwnAct(c, label, text, topic, passed, tally, topicId) {
     var L = localCurrent(c); if (!L) return;
-    var m = localMetricFromTopic(L, (topic || "") + " " + text);
+    var m = localMetricFromTopic(L, (topic || "") + " " + text, topicId);
     var a = { turn: state.turn, title: label + ": «" + text.slice(0, 90) + (text.length > 90 ? "…" : "") + "»", metric: m, by: "Tu", own: true, passed: passed, tally: tally || "" };
     localConsequences(L, a, null, false);
     L.atti.push(a);
@@ -37764,8 +37957,8 @@
     var passed = Math.random() < chance;
     c.partyActTurn = state.turn;
     careerAdultApply(c, passed ? { trust: rand(2, 5) + fit, rep: rand(0.5, 1.5) + (L.lvl === "nazionale" ? 1 : 0), rete: rand(1, 3) } : { trust: -rand(1, 3) + fit, rep: -rand(0, 0.5) });
-    var metric = "radicamento";
-    for (var i = 0; i < PARTY_ORG_TOPICS.length; i++) if (PARTY_ORG_TOPICS[i][0].test(text)) { metric = PARTY_ORG_TOPICS[i][1]; break; }
+    var metric = careerPartyTopicMetric(text);
+    if (!metric) { metric = "radicamento"; for (var i = 0; i < PARTY_ORG_TOPICS.length; i++) if (PARTY_ORG_TOPICS[i][0].test(text)) { metric = PARTY_ORG_TOPICS[i][1]; break; } }
     var seats = 60, half = 30, yes = passed ? half + 1 + Math.floor(Math.random() * 12) : half - 1 - Math.floor(Math.random() * 12), abst = Math.floor(Math.random() * 4);
     var a = { turn: state.turn, title: kind.label + ": «" + text.slice(0, 90) + (text.length > 90 ? "…" : "") + "»", metric: metric, by: "Tu", own: true, passed: passed, tally: yes + " sì, " + Math.max(0, seats - yes - abst) + " no, " + abst + " astenuti" };
     localConsequences(L, a, null, false);
@@ -48262,6 +48455,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "17 novembre 2026", m: "carriera", t: "La CPU capisce meglio quello che scrivi", x: "In Carriera, le proposte, le mozioni, le delibere di Giunta e le proposte alla direzione del partito scritte di pugno finiscono nella categoria giusta molto più spesso: il gioco legge tutto il testo con un vocabolario per tema molto più ampio, riconosce le espressioni (pronto soccorso, sicurezza sul lavoro, case popolari…), non si fa ingannare da dove prendi i soldi (dal bilancio, con la tassa di soggiorno) né da luoghi e destinatari (per gli anziani, nei quartieri)." },
     { d: "17 novembre 2026", m: "partito", t: "Nuova modalità: Prima Repubblica", x: "Dal menu iniziale puoi giocare dal 2 giugno 1946: guida la DC, il PCI, i socialisti, i liberali, i monarchici e gli altri partiti di allora, o fondane uno nuovo. 48 eventi storici fino al 1953 (Costituente, 18 aprile, Piano Marshall, attentato a Togliatti, Patto Atlantico, legge truffa…) da vivere o cambiare, dossier d'epoca, il clima della Guerra Fredda, le organizzazioni collaterali, il giornale e i comizi del partito, elezioni alle scadenze storiche e una grafica d'epoca tutta sua." },
     { d: "15 novembre 2026", m: "carriera", t: "Il Parlamento nella Carriera", x: "In Carriera, da deputato/a, da segretario/a di un partito con dei deputati, da premier o da ministro c'è la scheda «Parlamento»: l'emiciclo della Camera con governo e opposizione, le tue proposte di legge e mozioni con il voto in Aula partito per partito e le trattative per convincere gli altri gruppi, le interrogazioni al governo, e i voti sulle leggi del governo (da segretario/a decidi il voto di tutto il gruppo). Le leggi approvate cambiano la Scheda Paese." },
     { d: "14 novembre 2026", m: "carriera", t: "Segretario/a senza lasciare la Carriera", x: "Vincendo le primarie resti in Carriera: diventi Segretario/a nazionale e il partito ha te come leader, mentre incarichi, Comune, Regione e professione restano. Nella scheda «Nazionale» c'è la tua segreteria: campagne nazionali, correnti, programma, alleanze con gli altri partiti, la direzione che vota le tue proposte. Se il partito guida il governo diventi Presidente del Consiglio. Se la fiducia del partito resta troppo bassa la direzione ti sfiducia. Chi vuole può passare alla modalità partito con un pulsante." },
