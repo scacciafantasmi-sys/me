@@ -19864,6 +19864,16 @@
       ]
     };
   }
+  var pswOrigPrimarie = primarieLeadershipDossier;
+  primarieLeadershipDossier = function () {
+    var d = pswOrigPrimarie(), p = state.player;
+    if (p && !p.playerIsLeader && p.sidelineReason === "nuovo_iscritto") {
+      d.title = isPR() ? "Congresso: la corsa alla segreteria" : "Primarie per la guida del partito";
+      d.eyebrow = "Sei candidato/a alla guida di " + p.name;
+      d.brief = (p.interimLeaderName || "Il segretario") + " guida " + p.name + " da prima che arrivassi. " + (isPR() ? "Il congresso" : "Il partito") + " vota per la " + (isPR() ? "segreteria" : "guida") + ": con una fiducia interna del " + Math.round(p.leaderTrust) + "% hai circa il " + Math.round(clamp(p.leaderTrust / 100, 0.08, 0.85) * 100) + "% di probabilità di vincere. Se perdi resti iscritto/a e potrai riprovarci.";
+    }
+    return d;
+  };
   // Invece di contendere le primarie, il giocatore può rinunciare del tutto: il partito storico (nome,
   // colore, la maggioranza del seguito per la naturale forza dell'incumbency) resta in campo come CPU,
   // guidato dallo sfidante; il giocatore porta con sé una minoranza fedele e fonda subito un soggetto
@@ -19987,12 +19997,14 @@
     var title = "Primarie di Partito";
     var resultText;
     if (won) {
-      var wasSidelined = !p.playerIsLeader;
+      var wasSidelined = !p.playerIsLeader, wasNewcomer = p.sidelineReason === "nuovo_iscritto";
       p.playerIsLeader = true; p.sidelineReason = null;
       p.interimLeaderName = null;
       p.leaderTrust = clamp(55 + Math.random() * 15, 0, 100);
       p.reputazione = clamp(p.reputazione + rand(1, 4), 0, 100);
-      resultText = wasSidelined
+      resultText = wasNewcomer
+        ? "Ce l'hai fatta: arrivato/a da poco in " + p.name + ", vinci " + (isPR() ? "il congresso" : "le primarie") + " contro " + challenger + " e prendi la " + (isPR() ? "segreteria" : "guida") + " del partito. Da questa settimana decidi tu la linea."
+        : wasSidelined
         ? "Il congresso ti restituisce la guida del partito, superando " + challenger + ": torni tu a decidere la linea politica settimana per settimana."
         : "Il congresso di partito ti conferma alla guida, superando la sfida di " + challenger + ": la tua leadership esce rafforzata.";
     } else {
@@ -39614,7 +39626,7 @@
   function canLeaveAndFound(p) {
     if (p.playerIsLeader) return state.mode !== "president" && !state.regionalPresidency;
     return !p.permanentlyBanned && !(p.incarceratedUntilTurn && state.turn < p.incarceratedUntilTurn) &&
-      (p.sidelineReason === "dimissioni" || p.sidelineReason === "primarie" || !p.sidelineReason) && state.mode !== "president";
+      (p.sidelineReason === "dimissioni" || p.sidelineReason === "primarie" || p.sidelineReason === "nuovo_iscritto" || !p.sidelineReason) && state.mode !== "president";
   }
   function renderLeaveAndFoundForm(p, asLeader) {
     if (!canLeaveAndFound(p)) return "";
@@ -39636,6 +39648,233 @@
       '<div class="field"><label class="field-label" for="newparty-family">Area politica</label><select id="newparty-family" style="width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:inherit;">' + famOpts + "</select></div>" +
       '<button type="button" class="staff-btn" id="leave-found-btn">Lascia ' + p.name + " e fondane un altro</button></div>";
   }
+  // ---------- Cambiare partito: uscire dal proprio ed entrare in un altro (modalità partito e Prima Repubblica) ----------
+  // Richiesto dall'autore: «sia nella Prima Repubblica che in quella moderna si possa uscire dal partito e
+  // unirsi a un altro, e diventare anche segretario se serve fare qualcosa». Il tuo vecchio partito resta in
+  // campo, guidato da un dirigente interno, con la maggior parte di voti e parlamentari; ti seguono i
+  // fedelissimi (meno se cambi campo). Nel nuovo partito entri da iscritto/a: la segreteria resta al suo
+  // leader, finché non conquisti abbastanza fiducia interna da vincere le primarie o il congresso. Se il
+  // tuo partito è più grande di quello in cui entri, è una confluenza e ti offrono subito la guida.
+  var PSW_COOLDOWN = 26;
+  function pswTerm() { return isPR() ? "segreteria" : "guida"; }
+  function pswBlockReason(p) {
+    if (!p) return "Nessuna partita in corso.";
+    if (state.mode === "president" || (typeof playerIsExecutivePresident === "function" && playerIsExecutivePresident())) return "Da Capo dello Stato non puoi iscriverti a un partito.";
+    if (p.formationComplete === false) return "Il tuo partito non è ancora nato: finisci prima la raccolta firme.";
+    if (state.regime) return "Sotto un regime non si cambia partito.";
+    if (state.prGameOver) return "La partita è finita.";
+    if (p.permanentlyBanned) return "L'interdizione dai pubblici uffici ti impedisce di fare politica attiva.";
+    if (p.incarceratedUntilTurn && state.turn < p.incarceratedUntilTurn) return "Dal carcere non puoi cambiare partito.";
+    if (state.regionalPresidency) return "Guidi una Regione: prima lascia l'incarico.";
+    if (state.cabinet && state.cabinet.premierId === "player") return "Sei Presidente del Consiglio: prima dimettiti da premier.";
+    if (state.playerMinistry) return "Sei al governo da ministro: prima lascia il ministero.";
+    if (state.noConfMotion) return "C'è una mozione di sfiducia in corso: aspetta il voto.";
+    if (state.pendingGovFormationNegotiation) return "Sono in corso le trattative per il governo.";
+    var wk = (state.nextElectionTurn || 0) - state.turn;
+    if (wk >= 0 && wk <= 4) return "Le liste per le elezioni sono già depositate: potrai cambiare partito dopo il voto.";
+    if (p.lastPartySwitchTurn !== undefined && state.turn - p.lastPartySwitchTurn < PSW_COOLDOWN) return "Hai appena cambiato partito: potrai farlo di nuovo tra " + (PSW_COOLDOWN - (state.turn - p.lastPartySwitchTurn)) + " settimane.";
+    if (!pswTargets(p).length) return "Non c'è nessun altro partito in cui entrare.";
+    return null;
+  }
+  function pswTargets(p) {
+    return activeParties().filter(function (pt) { return pt && pt.id && (state.parties[pt.id] || 0) > 0.05; });
+  }
+  function pswDist(p, pt) { return Math.abs((LEFT_RIGHT_POSITION[p.family] || 0) - (LEFT_RIGHT_POSITION[pt.familyId] || 0)); }
+  function pswCrossed(famA, famB) { return !!((CENTRODESTRA_ALIGNED_FAMILIES[famA] && CAMPOLARGO_ALIGNED_FAMILIES[famB]) || (CAMPOLARGO_ALIGNED_FAMILIES[famA] && CENTRODESTRA_ALIGNED_FAMILIES[famB])); }
+  function pswFollow(p, pt) { var d = pswDist(p, pt); return pswCrossed(p.family, pt.familyId) ? 0.08 : d <= 1 ? 0.28 : d <= 2 ? 0.18 : 0.12; }
+  function pswIsMerger(p, pt) { return !!p.playerIsLeader && (p.sondaggi || 0) >= (state.parties[pt.id] || 0) * 1.2 && pswDist(p, pt) <= 1 && !pswCrossed(p.family, pt.familyId); }
+  function pswWelcome(p, pt) {
+    var d = pswDist(p, pt), t = 32 + (p.reputazione || 50) / 6 - d * 4 - (pswCrossed(p.family, pt.familyId) ? 12 : 0) + (p.playerIsLeader ? 4 : 0) + Math.min(8, (p.sondaggi || 0) / 2);
+    return clamp(Math.round(t), 12, 62);
+  }
+  function pswWelcomeLabel(v) { return v >= 48 ? "ti accolgono bene" : v >= 34 ? "accoglienza fredda" : "ti guardano con sospetto"; }
+  function pswSwapId(list, from, to) { if (!list) return list; var out = []; list.forEach(function (x) { var y = x === from ? to : x; if (y && out.indexOf(y) === -1) out.push(y); }); return out; }
+  function resolvePlayerJoinsParty(tid) {
+    var p = state.player, block = pswBlockReason(p); if (block) { showSaveStatus(block, true); return; }
+    var T = activeParties().filter(function (x) { return x.id === tid; })[0]; if (!T) return;
+    var merger = pswIsMerger(p, T), follow = merger ? 0.85 : pswFollow(p, T), welcome = pswWelcome(p, T);
+    var tPoll = state.parties[tid] || 0.5, myPoll = p.sondaggi || 0;
+    var oldName = p.name, oldShort = p.short || p.name, oldFam = p.family, oldColor = p.color;
+    var successor = p.playerIsLeader ? primariesChallengerName(p) : (p.interimLeaderName || primariesChallengerName(p));
+    var oldSeats = { camera: p.seatsCamera || 0, senato: p.seatsSenato || 0 };
+    var wasGov = p.parliamentRole === "governo";
+    // 1) il partito in cui entri esce dal roster della CPU (diventa il "tuo")
+    state.dissolvedPartyIds = (state.dissolvedPartyIds || []).concat([tid]);
+    delete state.parties[tid];
+    // 2) il tuo vecchio partito resta in campo, guidato da chi ti succede
+    var oldId = null, restoreId = p.takeoverPartyId && (state.dissolvedPartyIds || []).indexOf(p.takeoverPartyId) !== -1 && p.takeoverPartyId !== tid ? p.takeoverPartyId : null;
+    var keepPoll = Math.max(0.3, myPoll * (1 - follow));
+    // in Prima Repubblica il partito storico torna al suo leader storico di quella data
+    if (restoreId && isPR()) {
+      if (!state.partyLeaderOverrides) state.partyLeaderOverrides = {};
+      var hl = typeof PR_LEADERS !== "undefined" && PR_LEADERS[restoreId] ? prLatest(PR_LEADERS[restoreId]) : null;
+      if (hl) state.partyLeaderOverrides[restoreId] = hl[1]; else delete state.partyLeaderOverrides[restoreId];
+      var basePt = PARTIES.concat(state.dynamicParties || []).filter(function (x) { return x.id === restoreId; })[0];
+      successor = hl ? hl[1] : (basePt && basePt.leader) || successor;
+    }
+    if (merger && !restoreId) {
+      // confluenza: il tuo partito si scioglie dentro quello nuovo, chi non ti segue va nell'astensione
+      state.indecisi = (state.indecisi || 0) + keepPoll;
+    } else if (restoreId) {
+      oldId = restoreId;
+      state.dissolvedPartyIds = state.dissolvedPartyIds.filter(function (x) { return x !== restoreId; });
+      state.parties[oldId] = keepPoll;
+      if (!state.partyLeaderOverrides) state.partyLeaderOverrides = {};
+      if (!isPR()) state.partyLeaderOverrides[oldId] = successor;
+    } else if (activeParties().length < PARTY_COUNT_CAP) {
+      oldId = "dyn_" + oldName.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 18) + "_" + state.turn;
+      var famObj = familyById(oldFam);
+      if (!state.dynamicParties) state.dynamicParties = [];
+      state.dynamicParties.push({ id: oldId, name: oldName, short: (p.short || oldName.split(" ").map(function (w) { return w[0]; }).join("")).toUpperCase(), color: oldColor, coalition: wasGov ? "governo" : "opposizione", dynamic: true, parentId: "player", familyId: oldFam, leader: successor, famiglia: famObj ? famObj.label : "", corrente: "Il partito che hai guidato, rimasto a " + successor + " dopo il tuo passaggio a " + T.name + " (" + weekLabel(state.turn) + ")" });
+      state.parties[oldId] = keepPoll;
+      if (p.logoDataUrl) { if (!state.partyLogoOverrides) state.partyLogoOverrides = {}; state.partyLogoOverrides[oldId] = p.logoDataUrl; }
+    } else {
+      state.indecisi = (state.indecisi || 0) + keepPoll;
+    }
+    // 3) seggi in Parlamento: i parlamentari restano in gran parte nel vecchio gruppo, i fedelissimi ti seguono
+    var ps = state.parliamentSeats;
+    var newSeats = {};
+    ["camera", "senato"].forEach(function (ch) {
+      var tot = ch === "camera" ? 400 : 200, src = (ps && ps[ch]) || projectSeats(tot);
+      var tSeats = src[tid] || 0, mineOld = oldSeats[ch], moving = merger ? mineOld : Math.round(mineOld * follow);
+      newSeats[ch] = tSeats + moving;
+      if (ps && ps[ch]) {
+        delete ps[ch][tid];
+        if (oldId) ps[ch][oldId] = (ps[ch][oldId] || 0) + mineOld - moving;
+        ps[ch].player = newSeats[ch];
+      }
+    });
+    // 4) governo e coalizioni
+    var ge = state.govEntity, tInGov = !!(ge && (ge.memberIds || []).indexOf(tid) !== -1);
+    if (ge) {
+      var mem = ge.memberIds || [];
+      if (wasGov && oldId) mem = pswSwapId(mem, "player", oldId); else mem = mem.filter(function (x) { return x !== "player"; });
+      mem = pswSwapId(mem, tid, "player");
+      ge.memberIds = mem;
+      if (ge.id === "player") ge.id = oldId || ge.id;
+      if (ge.id === tid) ge.id = "player";
+      if (ge.premierPartyId === "player" && oldId) ge.premierPartyId = oldId;
+      if (ge.premierPartyId === tid) ge.premierPartyId = "player";
+    }
+    (state.dynamicCoalitions || []).forEach(function (dc) { if (!dc.members) return; var hadMe = dc.members.indexOf("player") !== -1; dc.members = dc.members.filter(function (x) { return x !== "player"; }); if (hadMe && oldId) dc.members.push(oldId); dc.members = pswSwapId(dc.members, tid, "player"); });
+    if (state.regions) Object.keys(state.regions).forEach(function (rk) { var r = state.regions[rk]; if (!r) return; if (r.governorPartyId === "player" && oldId) r.governorPartyId = oldId; else if (r.governorPartyId === tid) r.governorPartyId = "player"; });
+    // 5) da oggi sei in T: nome, simbolo, area, forza del partito
+    p.name = T.name; p.short = T.short || null; p.color = T.color; p.family = T.familyId || p.family;
+    p.logoDataUrl = (state.partyLogoOverrides || {})[tid] || null;
+    p.motto = ""; p.ideologyText = "";
+    p.sondaggi = Math.max(0.3, tPoll + myPoll * follow);
+    p.sondaggiHistory = [Math.round(p.sondaggi * 10) / 10];
+    p.baselineSondaggi = p.sondaggi;
+    p.iscritti = Math.round(p.sondaggi * 1200); p.fondi = Math.round(p.sondaggi * 15000); p.sezioni = Math.max(3, Math.round(p.sondaggi / 1.5));
+    p.reputazione = clamp((p.reputazione || 50) - (pswCrossed(oldFam, p.family) ? 8 : 3), 0, 100);
+    p.visibilita = Math.max(p.visibilita || 0, Math.min(70, p.sondaggi * 2.2));
+    p.amministratoriLocali = Math.round((p.amministratoriLocali || 0) * follow);
+    p.seggiEuropei = Math.round((p.seggiEuropei || 0) * follow);
+    p.seatsCamera = newSeats.camera; p.seatsSenato = newSeats.senato;
+    p.inParliament = (p.seatsCamera + p.seatsSenato) > 0;
+    if (p.inParliament) p.everElected = true;
+    p.parliamentRole = p.inParliament ? (tInGov ? "governo" : "opposizione") : null;
+    var cd = COALITIONS.centrodestra.members, cl = COALITIONS.campolargo.members;
+    p.allianceId = cd.indexOf(tid) !== -1 ? "centrodestra" : cl.indexOf(tid) !== -1 ? "campolargo" : null;
+    p.currentTermAllianceId = p.allianceId;
+    if (p.allianceId) { if (!state.coalitionTrust) state.coalitionTrust = {}; if (state.coalitionTrust[p.allianceId] === undefined) state.coalitionTrust[p.allianceId] = initialCoalitionTrust(p.allianceId); }
+    p.currents = null; p.correntiLeaders = null;
+    p.takeoverPartyId = tid; p.takeoverPartyLeader = T.leader; p.takeoverPartyFamiglia = T.famiglia; p.takeoverPartyCorrente = T.corrente;
+    p.baselineOrganicTarget = computeOrganicTarget(p);
+    p.lastPartySwitchTurn = state.turn; p.partySwitches = (p.partySwitches || 0) + 1;
+    if (!p.partyHistory) p.partyHistory = [];
+    p.partyHistory.push({ turn: state.turn, from: oldName, to: T.name, merger: merger });
+    var rel = initPartyRelations(p); Object.keys(state.partyRelations || {}).forEach(function (k) { if (rel[k] === undefined) rel[k] = state.partyRelations[k]; });
+    if (oldId) rel[oldId] = 12;
+    state.partyRelations = rel;
+    // 6) la guida: confluenza (sei tu il più forte) o ingresso da iscritto/a
+    var text;
+    if (merger) {
+      p.playerIsLeader = true; p.sidelineReason = null; p.interimLeaderName = null;
+      p.leaderTrust = clamp(52 + Math.random() * 10, 0, 100);
+      p.primariesCooldownTurn = state.turn + PRIMARIES_RETRY_COOLDOWN_TURNS;
+      text = "Lasci " + oldName + " e porti i tuoi in " + T.name + ": è una confluenza, e siccome sei tu il più forte " + (T.leader || "il vecchio gruppo dirigente") + " ti cede la " + pswTerm() + ". Guidi tu " + T.name + " da questa settimana.";
+    } else {
+      p.playerIsLeader = false; p.sidelineReason = "nuovo_iscritto"; p.interimLeaderName = T.leader || generateStaffName();
+      p.leaderTrust = welcome;
+      p.primariesCooldownTurn = state.turn + 26;
+      text = "Lasci " + oldName + " e ti iscrivi a " + T.name + ". La " + pswTerm() + " resta a " + p.interimLeaderName + ": tu parti da iscritto/a, con una fiducia interna del " + welcome + "% (" + pswWelcomeLabel(welcome) + "). Per prendere la guida devi conquistare il partito: gira i circoli, fai patti con le correnti, e candidati " + (isPR() ? "al congresso" : "alle primarie") + " quando hai i numeri. Trovi tutto nella scheda «Partito», riquadro «Conquistare il partito».";
+    }
+    text += " " + (merger ? oldName + " confluisce in " + T.name + ": ti seguono quasi tutti i tuoi elettori e tutti i tuoi " + (oldSeats.camera + oldSeats.senato) + " parlamentari." + (oldId ? " Chi non ci sta tiene in vita " + oldName + ", con " + successor + " e circa il " + Math.round(keepPoll * 10) / 10 + "% dei consensi." : "") : oldId ? oldName + " resta in campo con " + successor + " alla guida e circa il " + Math.round(keepPoll * 10) / 10 + "% dei consensi" + (oldSeats.camera ? "; dei tuoi " + oldSeats.camera + " deputati ti seguono in " + Math.round(oldSeats.camera * follow) : "") + "." : oldName + " non sopravvive alla tua uscita: con troppi partiti in campo, si scioglie.") +
+      (pswCrossed(oldFam, p.family) ? " Passi all'altro campo: ti segue pochissima gente, e i giornali parlano di trasformismo." : "");
+    state.log.unshift({ week: state.turn, title: "Cambio di partito: da " + oldShort + " a " + (T.short || T.name), choiceLabel: merger ? "Confluenza" : "Iscrizione", result: text, headlines: [], type: "cronaca", cat: "Partito" });
+    addDiaryEntry(merger ? "Una casa più grande" : "Ricomincio da un'altra parte", merger ? "Oggi porto la mia gente in " + T.name + ". Non è una resa: è un modo per contare di più." : "Ho lasciato " + oldName + ". Da oggi sono un iscritto come tanti in " + T.name + ": nessuno mi regala niente, la fiducia me la devo guadagnare.");
+    state.resultData = { resultText: text, headlines: [] };
+    state.phase = "result";
+    state.currentDossierId = null; state.aiDynamicDossier = null;
+  }
+  // da iscritto/a: guadagnarsi il partito fino alla segreteria
+  var PSW_CLIMB = [
+    { id: "circoli", label: "Gira i circoli e le federazioni", desc: "Ascolti la base, settimana dopo settimana", cd: 1, run: function (p) { var d = rand(2, 4); p.leaderTrust = clamp(p.leaderTrust + d, 0, 100); p.reputazione = clamp(p.reputazione + 0.4, 0, 100); return "Una settimana di assemblee nei circoli: la base comincia a conoscerti. Fiducia interna +" + d.toFixed(1).replace(".", ",") + "."; } },
+    { id: "corrente", label: "Stringi un patto con una corrente", desc: "Più voti al congresso, se l'accordo regge", cd: 6, run: function (p) { if (Math.random() < 0.62) { var d = rand(5, 9); p.leaderTrust = clamp(p.leaderTrust + d, 0, 100); return "L'accordo regge: una corrente interna sosterrà la tua candidatura. Fiducia interna +" + d.toFixed(1).replace(".", ",") + "."; } p.leaderTrust = clamp(p.leaderTrust - 2, 0, 100); return "L'accordo salta e la notizia esce sui giornali: sembri un arrampicatore. Fiducia interna −2."; } },
+    { id: "tv", label: "Fatti vedere in TV e sui giornali", desc: "Più noto agli iscritti, ma il leader non gradisce", cd: 3, run: function (p) { var d = rand(1, 3); p.leaderTrust = clamp(p.leaderTrust + d, 0, 100); p.visibilita = clamp((p.visibilita || 0) + 2, 0, 100); return (isPR() ? "Un intervento a Tribuna politica e un'intervista al quotidiano del partito" : "Un talk show e un'intervista al quotidiano") + ": gli iscritti ti notano. Fiducia interna +" + d.toFixed(1).replace(".", ",") + "."; } },
+    { id: "lealta", label: "Sostieni lealmente la linea di " + "chi guida", desc: "Poco rumore, ma ti guadagni la stima del gruppo dirigente", cd: 4, run: function (p) { var d = rand(2, 5); p.leaderTrust = clamp(p.leaderTrust + d, 0, 100); return "Voti con il gruppo dirigente e non fai polemiche: in direzione si fidano di più di te. Fiducia interna +" + d.toFixed(1).replace(".", ",") + "."; } }
+  ];
+  var PSW_CANDIDATE_MIN = 45;
+  function pswCanClimb(p) { return !!(p && !p.playerIsLeader && !p.permanentlyBanned && !(p.incarceratedUntilTurn && state.turn < p.incarceratedUntilTurn) && state.mode !== "president"); }
+  function pswClimb(id) {
+    var p = state.player; if (!pswCanClimb(p)) return;
+    if (!p.climbCd) p.climbCd = {};
+    if (id === "candidati") {
+      if (p.leaderTrust < PSW_CANDIDATE_MIN) { showSaveStatus("Ti serve almeno il " + PSW_CANDIDATE_MIN + "% di fiducia interna per candidarti.", true); return; }
+      p.primariesCooldownTurn = state.turn;
+      showSaveStatus((isPR() ? "Chiedi il congresso straordinario" : "Ti candidi alle primarie") + ": si vota alla prossima settimana.", false);
+      state.log.unshift({ week: state.turn, title: isPR() ? "Chiedi il congresso" : "Ti candidi alla guida del partito", choiceLabel: "Candidatura", result: "Raccogli le firme dei delegati e ti candidi contro " + (p.interimLeaderName || "chi guida il partito") + ". Probabilità di vincere oggi: circa " + Math.round(clamp(p.leaderTrust / 100, 0.08, 0.85) * 100) + "%.", headlines: [], type: "cronaca", cat: "Primarie di Partito" });
+      return;
+    }
+    var a = PSW_CLIMB.filter(function (x) { return x.id === id; })[0]; if (!a) return;
+    if ((p.climbCd[id] || 0) > state.turn || p.climbTurn === state.turn) { showSaveStatus("Una mossa alla volta: riprova la prossima settimana.", true); return; }
+    var txt = a.run(p);
+    p.climbCd[id] = state.turn + a.cd; p.climbTurn = state.turn;
+    state.log.unshift({ week: state.turn, title: a.label, choiceLabel: "Dentro il partito", result: txt, headlines: [], type: "cronaca", cat: "Partito" });
+    showSaveStatus(txt, false);
+  }
+  function renderPartyClimbPanel(p) {
+    if (!pswCanClimb(p)) return "";
+    var prob = Math.round(clamp(p.leaderTrust / 100, 0.08, 0.85) * 100), wait = (p.primariesCooldownTurn || 0) - state.turn;
+    var h = '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Conquistare il partito</div>' +
+      '<p class="ci-hint" style="margin:.3rem 0">Fiducia interna: <strong>' + Math.round(p.leaderTrust) + "%</strong>. Alle primarie" + (isPR() ? " (o al congresso)" : "") + " vinci con una probabilità di circa il " + prob + "%. " +
+      (wait > 0 ? "Le prossime si tengono tra " + wait + " settiman" + (wait === 1 ? "a" : "e") + ", ma con almeno il " + PSW_CANDIDATE_MIN + "% puoi chiederle prima." : "Si vota a breve.") + " Una mossa a settimana.</p><div class=\"option-grid\">";
+    PSW_CLIMB.forEach(function (a) {
+      var w = Math.max((p.climbCd && p.climbCd[a.id] || 0) - state.turn, p.climbTurn === state.turn ? 1 : 0);
+      h += '<button type="button" class="option-card" data-pclimb="' + a.id + '"' + (w > 0 ? " disabled" : "") + '><span class="olabel">' + (a.id === "lealta" ? "Sostieni lealmente " + fxEsc(p.interimLeaderName || "chi guida") : a.label) + '</span><span class="odesc">' + (w > 0 ? "Di nuovo tra " + w + " settiman" + (w === 1 ? "a" : "e") : a.desc) + "</span></button>";
+    });
+    var canCand = p.leaderTrust >= PSW_CANDIDATE_MIN && wait > 0;
+    h += '<button type="button" class="option-card" data-pclimb="candidati"' + (canCand ? "" : " disabled") + '><span class="olabel">' + (isPR() ? "Chiedi il congresso e candidati alla segreteria" : "Candidati alla guida del partito") + '</span><span class="odesc">' + (p.leaderTrust < PSW_CANDIDATE_MIN ? "Serve almeno il " + PSW_CANDIDATE_MIN + "% di fiducia interna" : wait > 0 ? "Si vota la prossima settimana" : "Le primarie sono già alle porte") + "</span></button></div></div>";
+    return h;
+  }
+  function renderPartySwitchPanel() {
+    var p = state.player; if (!p) return "";
+    var block = pswBlockReason(p);
+    var h = '<section aria-label="Cambia partito"><details class="log"><summary>Cambia partito<span>▾</span></summary>' +
+      '<p class="ci-hint">Puoi lasciare ' + fxEsc(p.name) + " ed entrare in un altro partito. " + fxEsc(p.name) + " resta in campo con un altro leader e con gran parte di voti e parlamentari; ti seguono i fedelissimi, molti meno se passi all'altro campo. Nel nuovo partito parti da iscritto/a: per arrivare alla " + pswTerm() + " devi conquistare la fiducia interna e vincere le primarie" + (isPR() ? " o il congresso" : "") + ". Se il tuo partito è più grande, è una confluenza e la guida la prendi subito.</p>";
+    if (block) return h + '<p class="ci-hint"><strong>' + fxEsc(block) + "</strong></p></details></section>";
+    var list = pswTargets(p).slice().sort(function (a, b) { return pswDist(p, a) - pswDist(p, b) || (state.parties[b.id] || 0) - (state.parties[a.id] || 0); });
+    h += '<div class="option-grid">' + list.map(function (pt) {
+      var w = pswWelcome(p, pt), fol = pswFollow(p, pt), merger = pswIsMerger(p, pt);
+      if (merger) fol = 0.85;
+      return '<button type="button" class="option-card" data-pswitch="' + pt.id + '"><span class="olabel"><span style="display:inline-block;width:.7em;height:.7em;border-radius:50%;background:' + pt.color + ';margin-right:.35em"></span>' + fxEsc(pt.name) + " · " + fmt1(state.parties[pt.id] || 0) + "%</span>" +
+        '<span class="odesc">' + fxEsc(pt.famiglia || "") + (pt.leader ? " · guida: " + fxEsc(pt.leader) : "") + "<br>" + (merger ? "<strong>Confluenza: la guida passa a te</strong>" : "Entri da iscritto/a: " + pswWelcomeLabel(w) + " (fiducia " + w + "%)") + " · ti segue il " + Math.round(fol * 100) + "% dei tuoi" + (pswCrossed(p.family, pt.familyId) ? " · <em>cambi campo</em>" : "") + "</span></button>";
+    }).join("") + "</div>";
+    return h + "</details></section>";
+  }
+  document.addEventListener("click", function (ev) {
+    var t = ev.target && ev.target.closest ? ev.target : null; if (!t) return;
+    var sw = t.closest("[data-pswitch]"), cl = t.closest("[data-pclimb]");
+    if (sw && !sw.disabled && state.player) {
+      var pt = partyById(sw.getAttribute("data-pswitch")); if (!pt) return;
+      var merger = pswIsMerger(state.player, pt);
+      if (!window.confirm("Lasci " + state.player.name + " ed entri in " + pt.name + "? " + (merger ? "È una confluenza: prendi tu la guida." : "Parti da iscritto/a: la guida resta a " + (pt.leader || "chi guida ora") + ".") + " Non potrai cambiare di nuovo partito per " + PSW_COOLDOWN + " settimane.")) return;
+      resolvePlayerJoinsParty(pt.id); save(); render(); window.scrollTo(0, 0);
+    } else if (cl && !cl.disabled && state.player) {
+      pswClimb(cl.getAttribute("data-pclimb")); save(); render();
+    }
+  });
   function renderPlayerStats() {
     var p = state.player;
     var html = '<section aria-label="Il tuo partito"><p class="eyebrow">Il tuo partito</p><div class="stat-grid">';
@@ -39670,14 +39909,15 @@
           dimissioni: "Hai dato le dimissioni da leader",
           scandalo: "Uno scandalo personale ti ha costretto a lasciare la guida",
           giustizia: "Le vicende giudiziarie ti hanno allontanato dalla guida",
-          regione: "Guidi una Regione: il partito nazionale è affidato a un interim"
+          regione: "Guidi una Regione: il partito nazionale è affidato a un interim",
+          nuovo_iscritto: "Sei entrato/a da poco in " + p.name + " e la guida è di " + (p.interimLeaderName || "un altro dirigente")
         };
         var why = sidelineReasons[p.sidelineReason] || "Hai perso le ultime primarie";
         sidelineHtml = '<span class="chip accent">' + (p.interimLeaderName || "Un dirigente del partito") + ' decide al posto tuo</span></div>' +
           '<p class="ci-hint" style="margin:0.4rem 0 0">' + why + ': le decisioni settimanali le prende la CPU, tu resti sullo sfondo. Sei ancora in gioco: ti si ripresenteranno nuove primarie per riconquistare la guida.</p></div>';
       }
       html += '<div class="stat-tile" style="grid-column:1/-1"><div class="label">Guida del partito</div><div class="row">' + sidelineHtml;
-      html += renderLeaveAndFoundForm(p);
+      html += renderPartyClimbPanel(p) + renderLeaveAndFoundForm(p);
     }
     if (p.currents && p.currents.length) {
       var CORRENTI_GAUGE_COLORS = ["var(--accent)", "var(--warning)", "var(--good)", "var(--critical)", "#9068c0"];
@@ -46059,7 +46299,7 @@
   });
   var PAGE_DEFS = [
     { id: "partito", label: "Il Partito — eventi, risorse e squadra", icon: "🏛️", nav: "Partito", render: function () {
-        return renderIndependencePanel() + renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderEuCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile();
+        return renderIndependencePanel() + renderPartyEvents() + renderCorrentiPanel() + renderYouthWingPanel() + renderCampaignPanel() + renderEuCampaignPanel() + renderCandidateListPanel() + renderFundraisingPanel() + renderVitaPubblicaPanel() + renderIstituzionaliPanel() + renderExternalMovementsPanel() + renderLobbyPanel() + renderStaffPanel() + renderElectoralProgramPanel() + renderLeaderDiary() + renderIdeologyProfile() + renderPartySwitchPanel();
       } },
     { id: "nuovostato", label: "Il nuovo Stato — riconoscimenti e scelte fondative", icon: "🏳️", nav: "Nuovo Stato",
       visible: function () { return !!(state.nsCountry && state.newState); },
@@ -49239,6 +49479,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "18 novembre 2026", m: "partito", t: "Cambiare partito", x: "In modalità Partito e in Prima Repubblica puoi lasciare il tuo partito ed entrare in un altro (scheda «Partito», riquadro «Cambia partito»). Il vecchio partito resta in campo con un nuovo leader e con gran parte di voti e parlamentari; ti seguono i fedelissimi, molti meno se passi all'altro campo. Nel nuovo partito parti da iscritto/a: giri i circoli, stringi patti con le correnti, sostieni il leader o vai in TV per guadagnare fiducia interna, poi ti candidi alle primarie (in Prima Repubblica al congresso) per prendere la guida. Se il tuo partito è più grande di quello in cui entri è una confluenza, e la guida passa subito a te." },
     { d: "18 novembre 2026", m: "carriera", t: "Il Comune: pratiche, bilancio e tasse", x: "Da sindaco/a non voti più in Consiglio: presenti e difendi le proposte della tua Giunta (puoi accogliere emendamenti, blindare il testo, rinviare o ritirare), e a votare sono i consiglieri. Lo stesso vale per gli assessori. Ogni delibera, mozione, ordine del giorno o ordinanza approvata diventa una pratica con un numero e un ufficio responsabile: nella scheda del Comune, sezione «Cosa sta facendo il Comune», vedi se la Giunta l'ha presa in carico, i soldi impegnati, il bando, i lavori e la conclusione, oppure se è ferma per mancanza di fondi o rimasta sulla carta. Da sindaco/a hai il pannello «Bilancio e tasse»: IMU, addizionale IRPEF, TARI e imposta di soggiorno, spesa corrente, mutui e recupero dell'evasione, con cassa, debito, revisori dei conti e, se esageri, il dissesto." },
     { d: "18 novembre 2026", m: "partito", t: "Sfiducia solo sotto il 40%", x: "In modalità Partito e in Prima Repubblica la mozione di sfiducia si può chiedere solo quando la fiducia nel governo scende sotto il 40%: vale per te quando sei all'opposizione (scheda «Parlamento») e per la CPU quando governi tu. Anche la mozione contro un singolo ministro ora compare solo sotto quella soglia." },
     { d: "18 novembre 2026", m: "partito", t: "Prima Repubblica: elezioni anticipate e governi liberi", x: "In Prima Repubblica, quando le Camere vengono sciolte (una sfiducia passata, una crisi senza maggioranza) si vota davvero alla data annunciata: prima le elezioni restavano sempre bloccate sul calendario storico. Dopo un voto anticipato la nuova legislatura dura fino a cinque anni. I governi non sono più quelli della storia imposti dall'alto: nascono e cadono in base a come va la tua partita, ai seggi e alle alleanze. Il nome storico del premier compare solo se a guidare il governo è lo stesso partito di allora." },
