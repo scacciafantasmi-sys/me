@@ -1650,8 +1650,11 @@
       if (!state.worldNews) state.worldNews = [];
       state.worldNews.unshift({ cat: "Popolazione", text: "ISTAT: " + (saldo >= 0 ? "la popolazione cresce" : "la popolazione cala") + " di " + fmtInt(Math.abs(saldo) * 1000) + " mila persone nel " + d.year + "." });
       if (state.worldNews.length > 6) state.worldNews.length = 6;
-      // più anziani, più spesa per pensioni e sanità
-      if (state.bilancioStato) state.bilancioStato.uscite += Math.max(0, d.over65 - 24.7) * 0.8;
+      // più anziani, più spesa per pensioni e sanità; un paese che ringiovanisce invece risparmia
+      // (circa 13 miliardi l'anno per ogni punto di over 65 in più o in meno)
+      if (d.over65Prev === undefined) d.over65Prev = d.over65;
+      if (state.bilancioStato) spesaStrutturale((d.over65 - d.over65Prev) * 13);
+      d.over65Prev = d.over65;
       d.year = y; d.popInizioAnno = d.pop; d.ytd = { nati: 0, morti: 0, imm: 0, emi: 0 }; d.partialYear = false;
     }
   }
@@ -1975,7 +1978,7 @@
     var text = ev.text.split("{city}").join(city);
     cp.sicurezza = clamp(cp.sicurezza - rand(0.15, 0.4), 1, 10);
     var stateCostBn = rand(0.05, 0.25);
-    if (state.bilancioStato) state.bilancioStato.uscite += stateCostBn;
+    if (state.bilancioStato) spesaUnaTantum(stateCostBn);
     if (state.consensoGoverno !== undefined && state.consensoGoverno !== null) {
       state.consensoGoverno = clamp(state.consensoGoverno - rand(1, 3), 0, 100);
     }
@@ -2125,23 +2128,50 @@
   // agganciate alla salute dell'economia della Scheda Paese (economia/PIL) — un paese che va meglio
   // incassa di più e spende relativamente meno in ammortizzatori sociali, e viceversa.
   function driftBilancioStato() {
-    var b = state.bilancioStato;
-    var econSignal = (state.countryProfile.economia + state.countryProfile.pil) / 2 - 5;
-    b.entrate = Math.max(400, b.entrate + econSignal * 0.6 + (Math.random() - 0.5) * 1.5);
-    b.uscite = Math.max(400, b.uscite - econSignal * 0.4 + (Math.random() - 0.5) * 1.5);
-    if (!state.currencyAbolished) {
-      var fpIdx = fiscalPressureIndex();
-      if (fpIdx) {
-        b.entrate += fpIdx * 3;
-        state.countryProfile.aziende = clamp(state.countryProfile.aziende - fpIdx * 0.01, 1, 10);
-      }
-    }
-    // Pareggio di bilancio in Costituzione (vedi le Riforme Costituzionali): la spesa frena ogni settimana.
-    if (constitutionHas("pareggio_bilancio")) b.uscite = Math.max(400, b.uscite - 0.15);
-    var saldo = b.entrate - b.uscite;
-    state.deficitPil = clamp(-saldo / 2100 * 100, -1, 12);
-    state.debitoPil = clamp(state.debitoPil + (saldo < 0 ? 0.04 : -0.03), 80, 220);
+    // Segnalato da un giocatore: con economia e indicatori in crescita, debito e spesa annua salivano
+    // senza sosta, il deficit restava inchiodato al 12% anche con disavanzi di centinaia di miliardi e
+    // il ringiovanimento della popolazione non faceva risparmiare nulla. Le cause erano quattro:
+    // il PIL era fisso a 2.100 miliardi (il deficit/PIL non poteva mai salire oltre il tetto né scendere
+    // con la crescita), il debito saliva di uno 0,04% fisso a settimana qualunque fosse il disavanzo,
+    // ogni spesa una tantum (opere, iniziative, guerre, il tesoretto annuale) restava sommata per sempre
+    // alla spesa annua, e la demografia poteva solo aggiungere spesa. Ora c'è un PIL nominale che cresce
+    // con l'economia, entrate e spese strutturali sono una quota di quel PIL (che si muove con la
+    // pressione fiscale, la salute dell'economia, le riforme e l'età della popolazione), le spese una
+    // tantum pesano sull'anno in cui si fanno e poi scadono, e il debito cresce davvero quanto il disavanzo.
+    var b = state.bilancioStato, cp = state.countryProfile;
+    bilancioEnsure();
+    var econSignal = (cp.economia + cp.pil) / 2 - 5;
+    var g = clamp(0.012 + (cp.pil - 5) * 0.004 + (cp.economia - 5) * 0.002, -0.05, 0.06);
+    state.pilMld = state.pilMld * (1 + g / 52);
+    var scale = state.pilMld / BILANCIO_PIL_BASE;
+    var fpIdx = state.currencyAbolished ? 0 : (fiscalPressureIndex() || 0);
+    if (fpIdx) state.countryProfile.aziende = clamp(state.countryProfile.aziende - fpIdx * 0.01, 1, 10);
+    // un paese che va meglio incassa di più e spende meno in ammortizzatori sociali, e viceversa
+    var entrateTarget = state.pilMld * clamp(0.438 + fpIdx * 0.006 + econSignal * 0.004, 0.25, 0.62);
+    var usciteTarget = state.pilMld * clamp(0.466 - econSignal * 0.004, 0.3, 0.65) + (b.strutturale || 0) * scale;
+    if (constitutionHas("pareggio_bilancio")) usciteTarget = Math.min(usciteTarget, entrateTarget);
+    b.entrate = Math.max(300, b.entrate + (entrateTarget - b.entrate) * 0.012 + (Math.random() - 0.5) * 1.5);
+    b.uscite = Math.max(300, b.uscite + (usciteTarget - b.uscite) * 0.012 + (Math.random() - 0.5) * 1.5);
+    // le spese una tantum si esauriscono nel giro di un anno circa
+    b.extra = (b.extra || 0) * 0.975; if (Math.abs(b.extra) < 0.05) b.extra = 0;
+    var saldo = b.entrate - b.uscite - b.extra;
+    state.deficitPil = clamp(-saldo / state.pilMld * 100, -10, 30);
+    var debitoMld = state.debitoPil * state.pilMld / 100 - saldo / 52;
+    state.debitoPil = clamp(debitoMld / state.pilMld * 100, 0, 300);
   }
+  var BILANCIO_PIL_BASE = 2100;
+  function bilancioEnsure() {
+    var b = state.bilancioStato; if (!b) return null;
+    if (!state.pilMld) state.pilMld = BILANCIO_PIL_BASE;
+    if (b.extra === undefined) b.extra = 0;
+    if (b.strutturale === undefined) b.strutturale = 0;
+    return b;
+  }
+  // una spesa (o un risparmio) che vale per quest'anno: pesa sul saldo e poi si esaurisce
+  function spesaUnaTantum(mld) { var b = bilancioEnsure(); if (b) b.extra += mld; }
+  // una spesa (o un taglio) permanente: entra nella spesa strutturale, in proporzione al PIL
+  function spesaStrutturale(mld) { var b = bilancioEnsure(); if (!b) return; b.uscite = Math.max(300, b.uscite + mld); b.strutturale += mld * BILANCIO_PIL_BASE / state.pilMld; }
+  function usciteTotali() { var b = bilancioEnsure(); return b ? b.uscite + (b.extra || 0) : 0; }
   // ---------- Economia causale: spread, occupazione, inflazione e crescita si parlano tra loro ----------
   // Prima questi quattro indicatori erano quasi indipendenti: lo spread si muoveva solo per eventi
   // scriptati (una crisi di governo, un discorso, mai per il debito in sé), l'occupazione era un
@@ -2648,7 +2678,7 @@
     w.front = clamp(w.front + (f.ratio - 0.5) * 5 + bias + rand(-1.5, 1.5), 0, 100);
     w.caduti += Math.round(rand(4, 22) * intensity * (1.25 - f.ratio));
     var weekly = 0.15 + 0.35 * intensity;
-    if (state.bilancioStato) state.bilancioStato.uscite += weekly;
+    if (state.bilancioStato) spesaUnaTantum(weekly);
     w.costMld = Math.round((w.costMld + weekly) * 10) / 10;
     cp.economia = clamp(cp.economia - 0.025 * intensity, 1, 10);
     cp.commercio = clamp(cp.commercio - 0.02, 1, 10);
@@ -2869,7 +2899,7 @@
   function annexTick() {
     (state.annexed || []).forEach(function (a) {
       a.resistance = clamp(a.resistance - 0.35 + rand(-0.4, 0.4), 5, 100);
-      if (state.bilancioStato) state.bilancioStato.uscite += 0.08 + a.resistance / 400;
+      if (state.bilancioStato) spesaUnaTantum(0.08 + a.resistance / 400);
       state.countryProfile.sicurezza = clamp(state.countryProfile.sicurezza - a.resistance / 9000, 1, 10);
       if (a.resistance >= 30 && state.turn - a.lastRevoltTurn >= 9 && Math.random() < 0.14) a.revoltDue = true;
     });
@@ -3188,7 +3218,7 @@
       cp.economia = clamp(cp.economia + 1.5, 1, 10); cp.commercio = clamp(cp.commercio + 2, 1, 10);
       cp.relazioniDiplomatiche = clamp(cp.relazioniDiplomatiche + 1, 1, 10); cp.inflazione = clamp(cp.inflazione + 0.8, 1, 10);
       state.spreadBps = Math.max(60, state.spreadBps - 140);
-      state.deficitPil = clamp((state.deficitPil || 0) - 0.8, -1, 12);
+      state.deficitPil = clamp((state.deficitPil || 0) - 0.8, -10, 30);
       state.ratingIdx = Math.min((state.ratingIdx || 0) + 1, 9);
       var weeks = state.turn - acc.startTurn;
       return { ok: true, text: "Tutti i 27 Paesi membri ratificano il trattato e il Parlamento europeo dà il via libera: dopo " + weeks + " settimane di negoziati l'Italia torna nell'Unione Europea. La lira viene convertita e l'euro torna in tasca agli italiani; i mercati festeggiano, anche se le cicatrici degli anni fuori non spariscono del tutto." };
@@ -3267,7 +3297,7 @@
     var a = choice.euChapterAction, name = dossier.euChapter;
     if (a === "accetta") {
       acc.chapters = Math.min(EU_ACCESSION_CHAPTERS, acc.chapters + 4);
-      if (dossier.euChapterDeficit) state.deficitPil = clamp((state.deficitPil || 0) + dossier.euChapterDeficit, -1, 12);
+      if (dossier.euChapterDeficit) state.deficitPil = clamp((state.deficitPil || 0) + dossier.euChapterDeficit, -10, 30);
       state.countryProfile.relazioniDiplomatiche = clamp(state.countryProfile.relazioniDiplomatiche + 0.15, 1, 10);
       return "Il governo accetta le condizioni: il capitolo «" + name + "» viene chiuso. Capitoli chiusi: " + Math.floor(acc.chapters) + " su " + EU_ACCESSION_CHAPTERS + ".";
     }
@@ -3491,26 +3521,26 @@
     var b = state.bilancioStato;
     var text, repDelta;
     if (id === "revisione_spesa") {
-      b.uscite = Math.max(400, b.uscite - rand(15, 30));
-      state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -1, 12);
-      state.debitoPil = clamp(state.debitoPil - rand(0.3, 0.6), 80, 220);
+      spesaStrutturale(-rand(15, 30));
+      state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -10, 30);
+      state.debitoPil = clamp(state.debitoPil - rand(0.3, 0.6), 0, 300);
       repDelta = -rand(1.5, 4);
       p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
       p.iscritti = Math.max(0, p.iscritti - rand(15, 35));
       text = "Il governo vara una revisione della spesa pubblica: capitoli improduttivi e doppioni vengono tagliati, liberando risorse vere per lo Stato. La misura abbassa deficit e debito pubblico, ma i tagli non passano inosservati tra chi ne risente.";
     } else if (id === "lotta_evasione") {
       b.entrate += rand(15, 30);
-      state.deficitPil = clamp(state.deficitPil - rand(0.25, 0.5), -1, 12);
-      state.debitoPil = clamp(state.debitoPil - rand(0.2, 0.4), 80, 220);
+      state.deficitPil = clamp(state.deficitPil - rand(0.25, 0.5), -10, 30);
+      state.debitoPil = clamp(state.debitoPil - rand(0.2, 0.4), 0, 300);
       repDelta = rand(0.5, 2);
       p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
       state.countryProfile.corruzione = clamp(state.countryProfile.corruzione + rand(0.1, 0.3), 1, 10);
       state.countryProfile.aziende = clamp(state.countryProfile.aziende - rand(0.05, 0.15), 1, 10);
       text = "Il governo rafforza i controlli e la riscossione fiscale, senza alzare un'aliquota: più gettito reale da chi già doveva pagare e non pagava. La misura abbassa deficit e debito pubblico; qualche malumore tra le imprese per i controlli più stringenti.";
     } else {
-      b.uscite = Math.max(400, b.uscite - rand(25, 45));
-      state.deficitPil = clamp(state.deficitPil - rand(0.5, 1), -1, 12);
-      state.debitoPil = clamp(state.debitoPil - rand(0.4, 0.8), 80, 220);
+      spesaStrutturale(-rand(25, 45));
+      state.deficitPil = clamp(state.deficitPil - rand(0.5, 1), -10, 30);
+      state.debitoPil = clamp(state.debitoPil - rand(0.4, 0.8), 0, 300);
       repDelta = -rand(3, 7);
       p.reputazione = clamp(p.reputazione + repDelta, 0, 100);
       p.iscritti = Math.max(0, p.iscritti - rand(30, 60));
@@ -3697,7 +3727,7 @@
     sp.activeMission = { stageIndex: sp.stageIndex, startTurn: state.turn, resolveTurn: state.turn + stage.duration };
     sp.nextProgressUpdateTurn = state.turn + Math.floor(rand(SPACE_PROGRESS_UPDATE_TURNS_MIN, SPACE_PROGRESS_UPDATE_TURNS_MAX));
     sp.investedTotal += stage.cost;
-    state.debitoPil = clamp(state.debitoPil + stage.cost / 500, 80, 220);
+    state.debitoPil = clamp(state.debitoPil + stage.cost / 500, 0, 300);
     var resultText = "Il governo avvia ufficialmente \"" + stage.label + "\": " + stage.desc + " Ci vorranno circa " + stage.duration + " settimane prima di sapere come è andata.";
     state.log.unshift({ week: state.turn, title: "Programma Spaziale: " + stage.label, choiceLabel: "Avvia il programma", result: resultText, headlines: [], type: "dossier", cat: "Spazio" });
     return { resultText: resultText, headlines: [] };
@@ -3985,7 +4015,7 @@
   }
   // Quanto "tesoretto" discrezionale c'è ogni anno da stanziare: una quota fissa della spesa pubblica
   // annua del Bilancio dello Stato, in miliardi di euro.
-  function budgetPoolTotal() { return Math.round(state.bilancioStato.uscite * 0.15); }
+  function budgetPoolTotal() { return Math.round(state.bilancioStato.uscite * 0.15); } // sulla spesa strutturale, non sulle una tantum
   // Peso relativo di ciascuna categoria per l'auto-stanziamento della CPU, in base all'ideologia di chi
   // guida davvero il governo in quel momento (vedi currentGoverningFamilyId). Le famiglie non elencate
   // usano pesi neutri (1 su tutto).
@@ -4127,7 +4157,8 @@
     // contraccolpo narrativo su un settore specifico, perché non è un taglio mirato a nulla).
     var residuo = Math.max(0, budgetPoolTotal() - totalAllocated + totalCut);
     var netBudgetImpact = totalAllocated - totalCut - residuo;
-    state.bilancioStato.uscite = Math.max(400, state.bilancioStato.uscite + netBudgetImpact);
+    // il tesoretto è una decisione annuale: stanziamenti, tagli e risparmi pesano su quest'anno e poi scadono
+    spesaUnaTantum(netBudgetImpact);
     // Conservato PRIMA del reset, per poter precompilare il modulo dell'anno prossimo con un solo
     // pulsante ("Conferma gli stanziamenti dell'anno scorso", vedi renderBudgetAllocation) — richiesto da
     // un giocatore stufo di dover riscrivere a mano ogni singola voce ogni anno, anche quando le sue
@@ -4138,7 +4169,7 @@
     // senza questo reset, un modulo mai più toccato dopo il primo anno si ripeterebbe identico (e si
     // risommerebbe alla spesa pubblica) ogni 52 settimane all'infinito.
     state.budgetAllocations = {};
-    var saldoAnno = Math.round((state.bilancioStato.entrate - state.bilancioStato.uscite) * 10) / 10;
+    var saldoAnno = Math.round((state.bilancioStato.entrate - usciteTotali()) * 10) / 10;
     var positives = lines.filter(function (l) { return l.outcome === "positivo"; }).length;
     var negatives = lines.filter(function (l) { return l.outcome === "negativo"; }).length;
     var cuts = lines.filter(function (l) { return l.outcome === "taglio"; }).length;
@@ -17555,7 +17586,7 @@
         var appliedDelta = outcome.deltas.national ? Math.abs(outcome.deltas.national[built.nationalMetric] || 0) : 0;
         if (appliedDelta > 0) {
           var stateCost = Math.round(appliedDelta * 6 * 10) / 10;
-          state.bilancioStato.uscite += stateCost;
+          spesaUnaTantum(stateCost);
           resultText += " Costo stimato per le casse pubbliche: " + fmtEuroMld(stateCost) + ", che si aggiunge alla spesa dello Stato di quest'anno.";
           state.log[0].result = resultText;
           outcome.resultText = resultText;
@@ -23950,7 +23981,7 @@
     } else if (reform.id === "parlamentare") {
       onPresidentialismRepealed();
     } else if (reform.id === "pareggio_bilancio") {
-      state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -1, 12);
+      state.deficitPil = clamp(state.deficitPil - rand(0.4, 0.8), -10, 30);
       state.spreadBps = clamp(state.spreadBps - rand(8, 20), 40, 500);
       applyCountryMetricDelta("welfare", -rand(0.2, 0.4));
     } else if (reform.id === "autonomia") {
@@ -25227,7 +25258,7 @@
       if (passed) {
         Object.keys(topic.option.effects).forEach(function (k) {
           var v = topic.option.effects[k];
-          if (k === "bilancio") { if (state.bilancioStato) state.bilancioStato.uscite -= v; }
+          if (k === "bilancio") { if (state.bilancioStato) spesaStrutturale(-v); }
           else applyCountryMetricDelta(k, v * rand(0.22, 0.32) * mult);
         });
         optEffectsNote = " Cosa cambia: " + topic.option.desc + " Effetti: " + amendmentEffectsLabel(topic.option.effects) + ".";
@@ -27899,7 +27930,7 @@
     // Leva diretta sul deficit (vedi gov_deficit_eccessivo): a differenza del lento drift automatico di
     // driftBilancioStato, una vera manovra correttiva scelta dal giocatore taglia il deficit subito, non
     // settimana dopo settimana.
-    if (eff.deficitPilDelta) state.deficitPil = clamp(state.deficitPil + eff.deficitPilDelta, -1, 12);
+    if (eff.deficitPilDelta) state.deficitPil = clamp(state.deficitPil + eff.deficitPilDelta, -10, 30);
     if (eff.rivalExtra) {
       var rival = familyById(p.family).rival;
       state.parties[rival] = Math.max(0.3, state.parties[rival] + eff.rivalExtra);
@@ -30907,7 +30938,7 @@
     state.spreadBps += 350;
     state.ratingIdx = Math.max(0, state.ratingIdx - 3);
     state.ratingOutlook = "Negativo";
-    state.deficitPil = clamp((state.deficitPil || 0) + 2, -1, 12);
+    state.deficitPil = clamp((state.deficitPil || 0) + 2, -10, 30);
     state.spreadHistory.push(state.spreadBps);
     if (state.spreadHistory.length > 12) state.spreadHistory.shift();
     state.leftEu = true;
@@ -41227,16 +41258,18 @@
   // Bilancio dello Stato semplificato: entrate, uscite, saldo, debito e deficit sul PIL. Sempre
   // visibile, con un dettaglio in più (voci di spesa indicative) quando il partito è a governo.
   function renderBilancioStato() {
-    var b = state.bilancioStato;
-    var saldo = b.entrate - b.uscite;
+    var b = bilancioEnsure();
+    var saldo = b.entrate - usciteTotali();
     var p = state.player;
     var html = '<section aria-label="Bilancio dello Stato"><p class="eyebrow">Bilancio dello Stato</p><div class="stat-grid">';
     html += '<div class="stat-tile"><div class="label">Entrate annue</div><div class="row"><span class="value">' + fmtEuroMld(b.entrate) + "</span></div></div>";
-    html += '<div class="stat-tile"><div class="label">Uscite annue</div><div class="row"><span class="value">' + fmtEuroMld(b.uscite) + "</span></div></div>";
+    html += '<div class="stat-tile"><div class="label">Uscite annue</div><div class="row"><span class="value">' + fmtEuroMld(usciteTotali()) + "</span></div>" + (Math.abs(b.extra) >= 1 ? '<p class="ci-hint" style="margin:.2rem 0 0">di cui ' + (b.extra > 0 ? "spese" : "risparmi") + " una tantum " + fmtEuroMld(Math.abs(b.extra)) + " (si esauriscono in circa un anno)</p>" : "") + "</div>";
+    html += '<div class="stat-tile"><div class="label">PIL nominale</div><div class="row"><span class="value">' + fmtEuroMld(state.pilMld) + "</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Saldo di bilancio</div><div class="row"><span class="value">' + (saldo >= 0 ? "+" : "") + fmtEuroMld(saldo) + "</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Debito pubblico / PIL</div><div class="row"><span class="value">' + fmt1(state.debitoPil) + "%</span></div></div>";
     html += '<div class="stat-tile"><div class="label">Deficit / PIL</div><div class="row"><span class="value">' + fmt1(state.deficitPil) + "%</span></div></div>";
     html += "</div>";
+    html += '<p class="ci-hint">Entrate e spese strutturali sono una quota del PIL: crescono con l\'economia, si muovono con le aliquote, le riforme e l\'età della popolazione. Le spese una tantum (opere, iniziative, il tesoretto annuale) pesano sull\'anno in cui si fanno e poi scadono. Il debito sale o scende di quanto è il disavanzo, e il suo peso sul PIL cala se il PIL cresce più in fretta.</p>';
     if (p && p.parliamentRole === "governo") {
       var difesa = Math.round(b.uscite * 0.05), sanita = Math.round(b.uscite * 0.14), pensioni = Math.round(b.uscite * 0.28),
         istruzione = Math.round(b.uscite * 0.08), interessiDebito = Math.round(b.uscite * 0.09);
@@ -49479,6 +49512,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "19 novembre 2026", m: "partito", t: "Bilancio dello Stato più realistico", x: "Corretto un problema segnalato da un giocatore: con l'economia in crescita, debito e spesa annua salivano lo stesso senza sosta e il deficit restava inchiodato al 12%. Ora c'è un PIL nominale che cresce con l'economia, entrate e spese strutturali sono una quota del PIL, e il deficit/PIL è calcolato su quel PIL, senza tetto. Le spese una tantum (infrastrutture, iniziative, il tesoretto annuale, i costi di una guerra) pesano sull'anno in cui si fanno e poi scadono, invece di restare per sempre nella spesa annua. Il debito sale o scende di quanto è davvero il disavanzo, e il suo peso cala se il PIL cresce più in fretta. Un paese che ringiovanisce risparmia su pensioni e sanità (circa 13 miliardi l'anno per ogni punto di over 65 in meno). I salvataggi già avviati si riassestano gradualmente nel giro di qualche anno." },
     { d: "18 novembre 2026", m: "partito", t: "Cambiare partito", x: "In modalità Partito e in Prima Repubblica puoi lasciare il tuo partito ed entrare in un altro (scheda «Partito», riquadro «Cambia partito»). Il vecchio partito resta in campo con un nuovo leader e con gran parte di voti e parlamentari; ti seguono i fedelissimi, molti meno se passi all'altro campo. Nel nuovo partito parti da iscritto/a: giri i circoli, stringi patti con le correnti, sostieni il leader o vai in TV per guadagnare fiducia interna, poi ti candidi alle primarie (in Prima Repubblica al congresso) per prendere la guida. Se il tuo partito è più grande di quello in cui entri è una confluenza, e la guida passa subito a te." },
     { d: "18 novembre 2026", m: "carriera", t: "Il Comune: pratiche, bilancio e tasse", x: "Da sindaco/a non voti più in Consiglio: presenti e difendi le proposte della tua Giunta (puoi accogliere emendamenti, blindare il testo, rinviare o ritirare), e a votare sono i consiglieri. Lo stesso vale per gli assessori. Ogni delibera, mozione, ordine del giorno o ordinanza approvata diventa una pratica con un numero e un ufficio responsabile: nella scheda del Comune, sezione «Cosa sta facendo il Comune», vedi se la Giunta l'ha presa in carico, i soldi impegnati, il bando, i lavori e la conclusione, oppure se è ferma per mancanza di fondi o rimasta sulla carta. Da sindaco/a hai il pannello «Bilancio e tasse»: IMU, addizionale IRPEF, TARI e imposta di soggiorno, spesa corrente, mutui e recupero dell'evasione, con cassa, debito, revisori dei conti e, se esageri, il dissesto." },
     { d: "18 novembre 2026", m: "partito", t: "Sfiducia solo sotto il 40%", x: "In modalità Partito e in Prima Repubblica la mozione di sfiducia si può chiedere solo quando la fiducia nel governo scende sotto il 40%: vale per te quando sei all'opposizione (scheda «Parlamento») e per la CPU quando governi tu. Anche la mozione contro un singolo ministro ora compare solo sotto quella soglia." },
