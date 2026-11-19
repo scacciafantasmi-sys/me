@@ -49506,12 +49506,76 @@
     var a = b.getAttribute("data-phone-reply").split(":");
     immPhoneReply(+a[0], +a[1]); save(); render();
   });
+  // ---- Prima Repubblica: niente smartphone, la corrispondenza del leader ----
+  // Segnalato dall'autore: «nella Prima Repubblica il concetto del telefono è da rivisitare, non c'erano i
+  // telefoni» (non quelli in tasca: fino al 1990 in Italia non c'è il cellulare). In Prima Repubblica i
+  // messaggi arrivano come allora: telefonate al centralino della sede, telegrammi, lettere, biglietti
+  // passati in Aula. Anche i testi e i giornali dei cronisti sono quelli dell'epoca.
+  var PR_PAPERS = [["Corriere della Sera", 1946], ["La Stampa", 1946], ["Il Messaggero", 1946], ["l'Unità", 1946], ["Avanti!", 1946], ["Il Popolo", 1946], ["Il Tempo", 1946], ["Paese Sera", 1949], ["Il Giorno", 1956], ["Il Giornale", 1974], ["la Repubblica", 1976]];
+  function prPaper() { var y = prYear(), l = PR_PAPERS.filter(function (x) { return x[1] <= y; }); return immPick(l)[0]; }
+  function prPhoneMedium(m) {
+    var role = (m.from && m.from.role) || "";
+    if (/capogruppo/.test(role)) return "biglietto passato in Aula";
+    if (/tesoriere/.test(role)) return "appunto lasciato sulla scrivania";
+    if (/portavoce/.test(role)) return "telefonata in sede";
+    if (/minoranza interna/.test(role)) return "lettera riservata";
+    if (/sezione/.test(role)) return "lettera della sezione";
+    if (/cronista/.test(role)) return "telefonata al centralino";
+    if (/^leader di/.test(role)) return immPick(["telegramma", "biglietto in Transatlantico"]);
+    if (m.from && m.from.name === "Mamma") return "lettera da casa";
+    return "lettera";
+  }
+  var immOrigPhoneTemplates = immPhoneTemplates;
+  immPhoneTemplates = function (p, im) {
+    var out = immOrigPhoneTemplates(p, im);
+    if (!isPR()) return out;
+    var tv = state.turn >= prTurnOf("1954-01-03");
+    return out.map(function (m) {
+      var t = m.text;
+      if (m.from && m.from.name === "Mamma") t = t.replace("Ti ho visto al telegiornale, eri stanco.", tv ? "Ti ho visto in televisione, eri stanco." : "Ti ho sentito alla radio, avevi la voce stanca.");
+      t = t.replace("lontano dalle telecamere", "lontano dai fotografi").replace("Ci servirebbe un proiettore per le assemblee", "Ci servirebbe un ciclostile per i volantini");
+      var from = m.from;
+      if (from && /^cronista di /.test(from.role || "")) from = { name: from.name, role: "cronista, " + prPaper() };
+      return Object.assign({}, m, { text: t, from: from, medium: prPhoneMedium(m) });
+    });
+  };
+  var immOrigPhoneTick = immPhoneTick;
+  immPhoneTick = function (p) {
+    var im = ensureImm(p), n0 = im ? im.phone.length && im.phone[0] : null;
+    immOrigPhoneTick(p);
+    // il messaggio appena arrivato ricorda come è arrivato (la scelta del mezzo avviene nei modelli sopra)
+    if (isPR() && im && im.phone[0] && im.phone[0] !== n0 && !im.phone[0].medium) {
+      var last = im.phone[0];
+      last.medium = prPhoneMedium({ from: { name: last.from, role: last.role } });
+    }
+  };
+  var immOrigDiario = renderImmDiario;
+  renderImmDiario = function () {
+    var html = immOrigDiario();
+    if (!isPR()) return html;
+    var im = state.player && ensureImm(state.player);
+    html = html.replace('<section aria-label="Telefono del leader"><h3>📱 Il tuo telefono</h3>',
+      '<section aria-label="Telefono del leader"><h3>📬 La corrispondenza del leader</h3><p class="ci-hint">Niente telefono in tasca: in sede c\'è il centralino, in Aula girano i biglietti, il resto arriva per telegramma o per lettera.</p>');
+    html = html.replace('Nessun messaggio, per ora. Arriveranno.', 'Nessuna lettera e nessuna telefonata, per ora. Arriveranno.');
+    // accanto al mittente, come è arrivato il messaggio (una volta per messaggio, nell'ordine in cui sono mostrati)
+    if (im) {
+      var parts = html.split('<div class="party-row" style="display:block"><div class="party-row-head">');
+      for (var i = 1; i < parts.length && i <= 12; i++) {
+        var m = im.phone[i - 1]; if (!m) break;
+        var md = m.medium || prPhoneMedium({ from: { name: m.from, role: m.role } });
+        parts[i] = parts[i].replace('<span class="chip">', '<span class="ci-hint" style="margin:0 0 0 6px">· ✉️ ' + fxEsc(md) + '</span><span class="chip">');
+      }
+      html = parts.join('<div class="party-row" style="display:block"><div class="party-row-head">');
+    }
+    return html;
+  };
   // ---- 3. Le prime pagine della settimana ----
   // ---------- Novità: tutti gli aggiornamenti del gioco, dal più recente ----------
   // Richiesto dal creatore del gioco: una scheda subito dopo il Diario con gli aggiornamenti man mano che
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "19 novembre 2026", m: "partito", t: "Prima Repubblica: la corrispondenza del leader", x: "In Prima Repubblica il «telefono del leader» non è più uno smartphone: i messaggi arrivano come allora, con le telefonate al centralino della sede, i telegrammi, le lettere e i biglietti passati in Aula. Anche i testi sono d'epoca (la radio prima della televisione, il ciclostile per i volantini) e i cronisti scrivono per i giornali che esistevano in quell'anno." },
     { d: "19 novembre 2026", m: "partito", t: "Bilancio dello Stato più realistico", x: "Corretto un problema segnalato da un giocatore: con l'economia in crescita, debito e spesa annua salivano lo stesso senza sosta e il deficit restava inchiodato al 12%. Ora c'è un PIL nominale che cresce con l'economia, entrate e spese strutturali sono una quota del PIL, e il deficit/PIL è calcolato su quel PIL, senza tetto. Le spese una tantum (infrastrutture, iniziative, il tesoretto annuale, i costi di una guerra) pesano sull'anno in cui si fanno e poi scadono, invece di restare per sempre nella spesa annua. Il debito sale o scende di quanto è davvero il disavanzo, e il suo peso cala se il PIL cresce più in fretta. Un paese che ringiovanisce risparmia su pensioni e sanità (circa 13 miliardi l'anno per ogni punto di over 65 in meno). I salvataggi già avviati si riassestano gradualmente nel giro di qualche anno." },
     { d: "18 novembre 2026", m: "partito", t: "Cambiare partito", x: "In modalità Partito e in Prima Repubblica puoi lasciare il tuo partito ed entrare in un altro (scheda «Partito», riquadro «Cambia partito»). Il vecchio partito resta in campo con un nuovo leader e con gran parte di voti e parlamentari; ti seguono i fedelissimi, molti meno se passi all'altro campo. Nel nuovo partito parti da iscritto/a: giri i circoli, stringi patti con le correnti, sostieni il leader o vai in TV per guadagnare fiducia interna, poi ti candidi alle primarie (in Prima Repubblica al congresso) per prendere la guida. Se il tuo partito è più grande di quello in cui entri è una confluenza, e la guida passa subito a te." },
     { d: "18 novembre 2026", m: "carriera", t: "Il Comune: pratiche, bilancio e tasse", x: "Da sindaco/a non voti più in Consiglio: presenti e difendi le proposte della tua Giunta (puoi accogliere emendamenti, blindare il testo, rinviare o ritirare), e a votare sono i consiglieri. Lo stesso vale per gli assessori. Ogni delibera, mozione, ordine del giorno o ordinanza approvata diventa una pratica con un numero e un ufficio responsabile: nella scheda del Comune, sezione «Cosa sta facendo il Comune», vedi se la Giunta l'ha presa in carico, i soldi impegnati, il bando, i lavori e la conclusione, oppure se è ferma per mancanza di fondi o rimasta sulla carta. Da sindaco/a hai il pannello «Bilancio e tasse»: IMU, addizionale IRPEF, TARI e imposta di soggiorno, spesa corrente, mutui e recupero dell'evasione, con cassa, debito, revisori dei conti e, se esageri, il dissesto." },
