@@ -20061,7 +20061,42 @@
   // drammatico di suo — richiede una vera caduta di governo, non un normale passaggio settimanale — non
   // deve anche azzerare mesi di lavoro in un colpo solo. Restano tagli pesanti e ben visibili, solo non
   // più catastrofici al punto da rendere irrilevante tutto quello fatto fino a quel momento.
+  // Segnalato da un giocatore («quando un governo cade, i partiti della coalizione caduta non perdono mai nei
+  // sondaggi»): il taglio c'era, ma il richiamo settimanale verso l'equilibrio (in Prima Repubblica il
+  // risultato storico) lo riassorbiva in poche settimane. Ora la caduta abbassa anche l'equilibrio dei
+  // partiti della coalizione, e la batosta si riassorbe piano, in circa 40 settimane.
+  var GOV_FALL_MALUS_WEEKS = 40;
+  function govFallMalus(id) {
+    var m = state.govFallMalus && state.govFallMalus[id]; if (!m) return 0;
+    var k = 1 - (state.turn - m.turn) / GOV_FALL_MALUS_WEEKS;
+    if (k <= 0) { delete state.govFallMalus[id]; return 0; }
+    return m.pts * k;
+  }
   function applyGovernmentCollapseLeadershipShock() {
+    try {
+      var gm = ((state.govEntity && state.govEntity.memberIds) || []).filter(function (id) { return id !== "player" && state.parties[id] !== undefined; });
+      if (gm.length) {
+        var lead = gm.reduce(function (b, id) { return state.parties[id] > state.parties[b] ? id : b; }, gm[0]);
+        if (!state.govFallMalus) state.govFallMalus = {};
+        gm.forEach(function (id) {
+          var pts = id === lead ? Math.min(4, Math.max(1.2, state.parties[id] * 0.14)) : Math.min(2.2, Math.max(0.5, state.parties[id] * 0.09));
+          state.govFallMalus[id] = { pts: Math.max(pts, govFallMalus(id)), turn: state.turn };
+        });
+      }
+    } catch (e) { if (window.console) console.error(e); }
+    var prevLeaders = Object.assign({}, state.partyLeaderOverrides || {});
+    applyGovernmentCollapseLeadershipShockBase();
+    // in Prima Repubblica i segretari sono quelli storici: niente nomi inventati, ma una resa dei conti tra le correnti
+    if (isPR() && state.log[0] && state.log[0].title === "Primarie interne dopo la caduta del Governo") {
+      state.partyLeaderOverrides = prevLeaders;
+      var gp = partyById(state.log[0].choiceLabel && activeParties().filter(function (x) { return x.short === state.log[0].choiceLabel; })[0] ? activeParties().filter(function (x) { return x.short === state.log[0].choiceLabel; })[0].id : "");
+      var nm = gp ? gp.name : "il partito di maggioranza relativa";
+      var txt = "La caduta del Governo costa cara a " + nm + " e al resto della coalizione, che perdono consensi nei sondaggi. Dentro " + nm + " si apre la resa dei conti tra le correnti: per qualche mese il partito resterà sotto i livelli di prima.";
+      state.log[0].title = "La crisi di governo pesa sulla coalizione"; state.log[0].result = txt;
+      if (state.worldNews && state.worldNews[0]) state.worldNews[0].text = txt;
+    }
+  }
+  function applyGovernmentCollapseLeadershipShockBase() {
     var p = state.player;
     var activeIds = activeParties().map(function (party) { return party.id; });
     var govMemberIds = (state.govEntity && state.govEntity.memberIds) || [];
@@ -28513,7 +28548,7 @@
       var isGovMemberForGrowth = govMemberIdsForGrowth.indexOf(party.id) !== -1;
       var partyCountryBias = clamp(countryTrendDelta * (isGovMemberForGrowth ? 0.25 : -0.1), isGovMemberForGrowth ? -1 : -0.4, isGovMemberForGrowth ? 1 : 0.4);
       state.partyBaselines[party.id] = clamp(state.partyBaselines[party.id] + partyCountryBias * 0.15, 0.3, 40);
-      var baseline = state.partyBaselines[party.id];
+      var baseline = Math.max(0.3, state.partyBaselines[party.id] - govFallMalus(party.id));
       // Richiesto da un giocatore: il rumore settimanale dei partiti CPU restava fisso (0.28) anche a
       // ridosso del voto, mentre quello del giocatore sale fino quasi al doppio nelle ultime 20 settimane
       // (vedi electionNoiseMult sopra, stessa logica reale: più istituti in campo, più attenzione
@@ -28567,9 +28602,17 @@
         if (party.id === rivalId) return;
         var partyBaseline = state.partyBaselines[party.id];
         if (partyBaseline === undefined) return;
+        partyBaseline = Math.max(0.3, partyBaseline - govFallMalus(party.id));
         state.parties[party.id] = Math.max(0.3, state.parties[party.id] + (partyBaseline - state.parties[party.id]) * 0.06);
       });
     }
+    // dopo la caduta di un governo, chi era in coalizione non si riprende i voti persi prima del tempo,
+    // neanche quando la redistribuzione lo favorisce (per esempio perché è il rivale diretto del giocatore)
+    if (state.govFallMalus) others.forEach(function (party) {
+      var mal = govFallMalus(party.id); if (!mal || state.partyBaselines[party.id] === undefined) return;
+      var cap = Math.max(0.3, state.partyBaselines[party.id] - mal) + 0.4;
+      if (state.parties[party.id] > cap) state.parties[party.id] = Math.max(0.3, state.parties[party.id] - (state.parties[party.id] - cap) * 0.6);
+    });
     // BUG segnalato da un giocatore ("i partiti a volte sommati superano il 100% dei voti, non può
     // essere"): il riproporzionamento sopra (scale2) non può MAI far scendere un partito sotto il
     // pavimento di 0.3 (vedi Math.max ovunque in questa funzione) — su una partita lunga, con molti
@@ -49584,6 +49627,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "19 novembre 2026", m: "partito", t: "La caduta del governo pesa davvero", x: "Corretto un problema segnalato da un giocatore: quando un governo cadeva, i partiti della coalizione recuperavano i consensi persi in poche settimane (in Prima Repubblica tornavano subito al risultato storico). Ora la caduta abbassa per mesi il loro livello nei sondaggi: il partito che guidava il governo perde di più, gli alleati un po' meno, e la batosta si riassorbe piano in circa 40 settimane. In Prima Repubblica il segretario resta quello storico: al posto delle primarie lampo c'è la resa dei conti tra le correnti." },
     { d: "19 novembre 2026", m: "partito", t: "Coalizioni d'epoca e direzioni nazionali", x: "In Prima Repubblica le coalizioni seguono la storia: il governo di unità antifascista, il centrismo, il Fronte Democratico Popolare (solo da dicembre 1947 al voto del 1948), il Blocco Nazionale di liberali e Uomo Qualunque nel 1948, l'apparentamento della legge del 1953, il centro-sinistra, la solidarietà nazionale e il pentapartito. Le alleanze che nascono da sole hanno nomi d'epoca. In tutte le modalità la direzione nazionale si riunisce ogni tre mesi, con un ordine del giorno diverso ogni volta (tesseramento, conti, alleanze, comunicazione, candidature, giovani, questione morale, congresso anticipato…), interventi contrapposti e scelte nuove: mettere ai voti, rinviare a una commissione o una mossa propria del tema." },
     { d: "19 novembre 2026", m: "partito", t: "Prima Repubblica: la corrispondenza del leader", x: "In Prima Repubblica il «telefono del leader» non è più uno smartphone: i messaggi arrivano come allora, con le telefonate al centralino della sede, i telegrammi, le lettere e i biglietti passati in Aula. Anche i testi sono d'epoca (la radio prima della televisione, il ciclostile per i volantini) e i cronisti scrivono per i giornali che esistevano in quell'anno." },
     { d: "19 novembre 2026", m: "partito", t: "Bilancio dello Stato più realistico", x: "Corretto un problema segnalato da un giocatore: con l'economia in crescita, debito e spesa annua salivano lo stesso senza sosta e il deficit restava inchiodato al 12%. Ora c'è un PIL nominale che cresce con l'economia, entrate e spese strutturali sono una quota del PIL, e il deficit/PIL è calcolato su quel PIL, senza tetto. Le spese una tantum (infrastrutture, iniziative, il tesoretto annuale, i costi di una guerra) pesano sull'anno in cui si fanno e poi scadono, invece di restare per sempre nella spesa annua. Il debito sale o scende di quanto è davvero il disavanzo, e il suo peso cala se il PIL cresce più in fretta. Un paese che ringiovanisce risparmia su pensioni e sanità (circa 13 miliardi l'anno per ogni punto di over 65 in meno). I salvataggi già avviati si riassestano gradualmente nel giro di qualche anno." },
