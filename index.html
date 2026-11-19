@@ -20272,11 +20272,19 @@
     function (famLabel) { return "Convergenza " + famLabel; },
     function (famLabel) { return "Blocco " + famLabel; }
   ];
+  var DYNAMIC_COALITION_NAME_TEMPLATES_PR = [
+    function (famLabel) { return "Blocco " + famLabel; }, function (famLabel) { return "Fronte " + famLabel; }, function (famLabel) { return "Unione " + famLabel; },
+    function (famLabel) { return "Alleanza " + famLabel; }, function (famLabel) { return "Cartello " + famLabel; }, function (famLabel) { return "Intesa " + famLabel; }
+  ];
   function generateDynamicCoalitionLabel(famLabel) {
     var existingLabels = (state.dynamicCoalitions || []).map(function (c) { return c.label.toLowerCase(); });
-    var label, tpl;
+    var label, tpl, pool = isPR() ? DYNAMIC_COALITION_NAME_TEMPLATES_PR : DYNAMIC_COALITION_NAME_TEMPLATES;
+    if (isPR() && famLabel && typeof PR_FAMILY_ERA !== "undefined") {
+      var fe = Object.keys(PR_FAMILY_ERA).filter(function (k) { var f = familyById(k); return f && f.label === famLabel; })[0];
+      if (fe) famLabel = PR_FAMILY_ERA[fe][0];
+    }
     for (var attempt = 0; attempt < 10; attempt++) {
-      tpl = DYNAMIC_COALITION_NAME_TEMPLATES[Math.floor(Math.random() * DYNAMIC_COALITION_NAME_TEMPLATES.length)];
+      tpl = pool[Math.floor(Math.random() * pool.length)];
       label = tpl(famLabel);
       if (existingLabels.indexOf(label.toLowerCase()) === -1) break;
     }
@@ -20306,7 +20314,8 @@
     var overcrowdMult = atCap ? 1.4 : 1;
     // Anche la formazione di coalizioni segue lo stesso ritmo generale della scena politica: più rara
     // nei primi anni di legislatura, a pieno regime più avanti (vedi politicalVolatilityMultiplier).
-    if (Math.random() > 0.025 * electionProximityMult * overcrowdMult * politicalVolatilityMultiplier()) return;
+    // con la proporzionale della Prima Repubblica i cartelli elettorali erano rari (il Fronte del 1948, il Blocco Nazionale)
+    if (Math.random() > 0.025 * electionProximityMult * overcrowdMult * politicalVolatilityMultiplier() * (isPR() ? 0.35 : 1)) return;
 
     var takenIds = COALITIONS.centrodestra.members.concat(COALITIONS.campolargo.members);
     state.dynamicCoalitions.forEach(function (c) { takenIds = takenIds.concat(c.members); });
@@ -20344,8 +20353,8 @@
     state.dynamicCoalitions.push({ id: coalitionId, label: coalitionLabel, familyId: famId, members: members.map(function (m) { return m.id; }) });
     state.log.unshift({
       week: state.turn, title: "Nasce una nuova coalizione", choiceLabel: coalitionLabel,
-      result: namesText + " annunciano la nascita di un'alleanza elettorale comune su base " + fam.label.toLowerCase() +
-        ", per superare insieme la soglia di sbarramento alle prossime elezioni politiche.",
+      result: namesText + " annunciano la nascita di un'alleanza elettorale comune su base " + (isPR() && typeof PR_FAMILY_ERA !== "undefined" && PR_FAMILY_ERA[famId] ? PR_FAMILY_ERA[famId][0] : fam.label).toLowerCase() +
+        (isPR() ? ", per presentare liste comuni alle prossime elezioni politiche." : ", per superare insieme la soglia di sbarramento alle prossime elezioni politiche."),
       headlines: [], type: "cronaca"
     });
   }
@@ -38293,7 +38302,7 @@
     var out = [];
     ["centrodestra", "campolargo"].forEach(function (id) { var co = coalitionById(id); if (co && careerCoalitionMembers(id).length) out.push(co.label); });
     (state.dynamicCoalitions || []).forEach(function (dc) { if (dc.members && dc.members.length > 1) out.push(dc.label); });
-    if (!out.length) out = ["Centrodestra", "Centrosinistra"];
+    if (!out.length) out = isPR() ? ["Centristi", "Sinistre"] : ["Centrodestra", "Centrosinistra"];
     return out;
   }
   function localGiunta(c, L, n) {
@@ -44494,7 +44503,7 @@
         var weeksLeft = cd - state.turn;
         var disabled = weeksLeft > 0;
         var status = weeksLeft > 0 ? "Riprova tra " + weeksLeft + " settiman" + (weeksLeft === 1 ? "a" : "e") : b[2] + " — soglia coalizione " + (state.electoralThresholdCoalition || 10) + "%";
-        html += '<button type="button" class="option-card" data-invite-bloc="' + b[0] + '"' + (disabled ? " disabled" : "") + '><span class="olabel">Invita il ' + b[1] + '</span><span class="odesc">' + status + '</span></button>';
+        html += '<button type="button" class="option-card" data-invite-bloc="' + b[0] + '"' + (disabled ? " disabled" : "") + '><span class="olabel">' + (isPR() ? "Entra nello schieramento: " + fxEsc(COALITIONS[b[0]].label) : "Invita il " + b[1]) + '</span><span class="odesc">' + status + '</span></button>';
       });
       (state.dynamicCoalitions || []).forEach(function (c) {
         var cd = p.coalitionInviteCooldowns[c.id] || 0;
@@ -49392,7 +49401,7 @@
   function ensureImm(p) {
     p = p || state.player;
     if (!p) return null;
-    if (!p.imm) p.imm = { phone: [], journal: [], nextDirezioneTurn: state.turn + 5 + Math.floor(Math.random() * 3), lastJournalTurn: state.turn, grudges: {} };
+    if (!p.imm) p.imm = { phone: [], journal: [], nextDirezioneTurn: state.turn + 10 + Math.floor(Math.random() * 4), lastJournalTurn: state.turn, grudges: {} };
     var im = p.imm;
     if (!im.cast) {
       // le persone fisse intorno al leader: se nello staff c'è già qualcuno con quel ruolo, è lui/lei
@@ -49575,6 +49584,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "19 novembre 2026", m: "partito", t: "Coalizioni d'epoca e direzioni nazionali", x: "In Prima Repubblica le coalizioni seguono la storia: il governo di unità antifascista, il centrismo, il Fronte Democratico Popolare (solo da dicembre 1947 al voto del 1948), il Blocco Nazionale di liberali e Uomo Qualunque nel 1948, l'apparentamento della legge del 1953, il centro-sinistra, la solidarietà nazionale e il pentapartito. Le alleanze che nascono da sole hanno nomi d'epoca. In tutte le modalità la direzione nazionale si riunisce ogni tre mesi, con un ordine del giorno diverso ogni volta (tesseramento, conti, alleanze, comunicazione, candidature, giovani, questione morale, congresso anticipato…), interventi contrapposti e scelte nuove: mettere ai voti, rinviare a una commissione o una mossa propria del tema." },
     { d: "19 novembre 2026", m: "partito", t: "Prima Repubblica: la corrispondenza del leader", x: "In Prima Repubblica il «telefono del leader» non è più uno smartphone: i messaggi arrivano come allora, con le telefonate al centralino della sede, i telegrammi, le lettere e i biglietti passati in Aula. Anche i testi sono d'epoca (la radio prima della televisione, il ciclostile per i volantini) e i cronisti scrivono per i giornali che esistevano in quell'anno." },
     { d: "19 novembre 2026", m: "partito", t: "Bilancio dello Stato più realistico", x: "Corretto un problema segnalato da un giocatore: con l'economia in crescita, debito e spesa annua salivano lo stesso senza sosta e il deficit restava inchiodato al 12%. Ora c'è un PIL nominale che cresce con l'economia, entrate e spese strutturali sono una quota del PIL, e il deficit/PIL è calcolato su quel PIL, senza tetto. Le spese una tantum (infrastrutture, iniziative, il tesoretto annuale, i costi di una guerra) pesano sull'anno in cui si fanno e poi scadono, invece di restare per sempre nella spesa annua. Il debito sale o scende di quanto è davvero il disavanzo, e il suo peso cala se il PIL cresce più in fretta. Un paese che ringiovanisce risparmia su pensioni e sanità (circa 13 miliardi l'anno per ogni punto di over 65 in meno). I salvataggi già avviati si riassestano gradualmente nel giro di qualche anno." },
     { d: "18 novembre 2026", m: "partito", t: "Cambiare partito", x: "In modalità Partito e in Prima Repubblica puoi lasciare il tuo partito ed entrare in un altro (scheda «Partito», riquadro «Cambia partito»). Il vecchio partito resta in campo con un nuovo leader e con gran parte di voti e parlamentari; ti seguono i fedelissimi, molti meno se passi all'altro campo. Nel nuovo partito parti da iscritto/a: giri i circoli, stringi patti con le correnti, sostieni il leader o vai in TV per guadagnare fiducia interna, poi ti candidi alle primarie (in Prima Repubblica al congresso) per prendere la guida. Se il tuo partito è più grande di quello in cui entri è una confluenza, e la guida passa subito a te." },
@@ -49655,28 +49665,82 @@
     }).join("") + '</div></section>';
     return html;
   }
-  // ---- 5. La direzione nazionale, una volta al mese ----
+  // ---- 5. La direzione nazionale, una volta ogni tre mesi ----
+  // Richiesto dall'autore: «metti più varietà nelle direzioni nazionali e falle una volta ogni 3 mesi».
+  // Ogni riunione ha un ordine del giorno scelto in base a com'è davvero il partito (conti, sondaggi,
+  // alleanze, voto in arrivo, scandali, fiducia nel leader…), con interventi contrapposti, una mossa
+  // propria del tema e le mosse di sempre: dare ragione a qualcuno, fare sintesi, mettere ai voti,
+  // rinviare a una commissione, chiudere da segretario.
+  function immDirezioneAgenda(p, im) {
+    var c = im.cast, pr = isPR(), trend = immPollTrend(p, 12), A = [];
+    var left = state.nextElectionTurn - state.turn, fam = p.family || "";
+    var isLeft = ["comunista", "sinistra", "progressista", "movimentista"].indexOf(fam) !== -1;
+    var youth = { name: generateStaffName(), role: "responsabile dei giovani" }, city = immCity(), fed = { name: generateStaffName(), role: "segretario della federazione di " + city };
+    A.push({ id: "tesseramento", w: p.iscritti < 2000 ? 3 : 1, t: "Il tesseramento", a: [c.organizzatore, "Gli iscritti sono " + fmtInt(p.iscritti) + ": serve una campagna di tesseramento casa per casa, quartiere per quartiere."], b: [c.tesoriere, "Una campagna così costa: prima di spendere, facciamo rendere le sezioni che abbiamo."],
+      x: { label: "Lancia la campagna di tesseramento", hint: "Costa, ma porta nuovi iscritti", result: "Parte la campagna: volantini, banchetti, porta a porta. In un mese arrivano centinaia di nuove tessere.", imm: { kind: "direzione", fondi: -1500, iscritti: Math.round(60 + p.iscritti * 0.04), trust: 1 } } });
+    A.push({ id: "governo", w: p.inParliament ? 2 : 0, t: p.parliamentRole === "governo" ? "Il nostro ruolo al governo" : "La linea verso il governo", a: [c.capogruppo, p.parliamentRole === "governo" ? "Al governo dobbiamo portare a casa risultati, anche a costo di qualche compromesso." : "Un'opposizione seria: votiamo le cose giuste, anche se le propone il governo."], b: [c.critico, p.parliamentRole === "governo" ? "Stiamo diventando la stampella degli altri: la nostra gente non ci riconosce più." : "Opposizione dura, senza sconti: è quello che ci chiedono i nostri elettori."],
+      x: { label: p.parliamentRole === "governo" ? "Presenta un documento con tre condizioni per restare al governo" : "Annuncia un'opposizione «senza sconti» in Aula", hint: "Più identità, meno margini di trattativa", result: "La linea è netta, e i giornali la riprendono. Gli alleati, o gli avversari, prendono nota.", imm: { kind: "direzione", vis: 3, trust: 1.5, rep: -0.5 } } });
+    A.push({ id: "alleanze", w: 2, t: "Le alleanze", a: [c.organizzatore, p.allianceId ? "L'alleanza tiene: rafforziamola con un programma comune." : "Da soli non andiamo da nessuna parte: serve un'alleanza prima del voto."], b: [c.critico, p.allianceId ? "L'alleanza con " + ((coalitionById(p.allianceId) || {}).label || "gli alleati") + " ci sta snaturando." : "Meglio soli che male accompagnati: la nostra identità non si svende."],
+      x: { label: "Dai mandato al segretario di trattare, senza vincoli", hint: "Più libertà a te, qualche malumore", result: "La direzione ti dà mandato pieno sulle alleanze. Qualcuno vota contro, ma passa.", imm: { kind: "direzione", trust: -1, rep: 1 } } });
+    A.push({ id: "conti", w: p.fondi < 5000 ? 4 : p.fondi > 60000 ? 2 : 0.5, t: "I conti del partito", a: [c.tesoriere, p.fondi < 5000 ? "I conti non reggono: o tagliamo, o troviamo nuovi finanziatori." : "Per una volta i conti sorridono: mettiamo da parte un fondo per la campagna."], b: [c.organizzatore, "I soldi servono a fare politica: investiamo in sezioni e militanti, non in un salvadanaio."],
+      x: { label: p.fondi < 5000 ? "Lancia una sottoscrizione straordinaria tra gli iscritti" : "Apri un fondo per la prossima campagna", hint: p.fondi < 5000 ? "Entra qualcosa, ma pesa sulla base" : "Prudenza", result: p.fondi < 5000 ? "La sottoscrizione raccoglie più del previsto: i militanti rispondono." : "Il fondo è approvato: la prossima campagna partirà con le spalle coperte.", imm: { kind: "direzione", fondi: p.fondi < 5000 ? 2500 : 0, trust: 1, rep: 0.5 } } });
+    A.push({ id: "comunicazione", w: 1.5, t: "La comunicazione", a: [c.portavoce, pr ? "Dobbiamo esserci di più: alla radio, sui giornali, " + (state.turn >= prTurnOf("1960-10-11") ? "a Tribuna politica, " : "") + "con i manifesti." : "Dobbiamo esserci di più: in televisione, sui social, nei podcast."], b: [c.critico, pr ? "La politica si fa nelle sezioni e nelle fabbriche, non sui giornali dei padroni." : "Più talk show e meno quartieri: così diventiamo un partito di plastica."],
+      x: { label: pr ? "Fonda un settimanale del partito" : "Apri una redazione digitale del partito", hint: "Costa, ma la voce arriva più lontano", result: pr ? "Esce il primo numero del settimanale: lo diffondono i militanti la domenica mattina." : "Nasce la redazione: video, dirette e newsletter ogni settimana.", imm: { kind: "direzione", fondi: -2000, vis: 4, rep: 0.5 } } });
+    A.push({ id: "programma", w: 1, t: "Il programma", a: [c.capogruppo, "Il programma è vecchio: va riscritto con gli esperti, tema per tema."], b: [fed, "Il programma lo scrivano i territori, non quattro professori a Roma."],
+      x: { label: "Convoca una conferenza programmatica aperta", hint: "Partecipazione, visibilità", result: "Tre giorni di conferenza: sale piene, tante proposte, qualche polemica. Il partito ne esce più vivo.", imm: { kind: "direzione", fondi: -800, vis: 2, trust: 2 } } });
+    A.push({ id: "giovani", w: 1, t: "I giovani", a: [youth, "Ai giovani date solo i volantini da distribuire: vogliamo posti veri, nelle liste e in segreteria."], b: [c.capogruppo, "Prima l'esperienza: i ragazzi crescano nelle sezioni, poi vedremo."],
+      x: { label: "Riserva un terzo della segreteria agli under 35", hint: "Rinnovamento, qualche mugugno tra i senatori del partito", result: "Il rinnovamento fa notizia: tra i ventenni crescono le iscrizioni, tra i dirigenti storici qualcuno si sente messo da parte.", imm: { kind: "direzione", iscritti: 80, trust: -1, rep: 1.5 } } });
+    A.push({ id: "candidature", w: left > 0 && left <= 40 ? 4 : 0, t: "Le candidature", a: [c.portavoce, "Mancano pochi mesi al voto: servono facce nuove in prima fila."], b: [c.capogruppo, "Squadra che vince non si cambia: ricandidiamo chi conosce l'Aula."],
+      x: { label: "Fai scegliere i candidati agli iscritti", hint: "Più partecipazione, risultati meno prevedibili", result: "Le consultazioni tra gli iscritti portano in lista volti nuovi e qualche sorpresa.", imm: { kind: "direzione", iscritti: 40, trust: 2, rep: 0.5 } } });
+    A.push({ id: "territorio", w: 1.5, t: "Il partito sul territorio", a: [fed, "Da " + city + " vi dico che sul territorio manca il partito: " + (pr ? "la gente ci vede solo sui manifesti." : "la gente ci vede solo in televisione.")], b: [c.organizzatore, "Le sezioni ci sono, ma vanno riempite: servono iniziative, non nuove sedi."],
+      x: { label: "Apri una nuova sezione a " + city, hint: "Costa, ma radica il partito", result: "A " + city + " si inaugura la nuova sezione: la sera c'è la fila per prendere la tessera.", imm: { kind: "direzione", fondi: -1200, iscritti: 50, trust: 1 } } });
+    A.push({ id: "disciplina", w: (p.leaderTrust || 65) < 55 ? 2 : 0.6, t: "La disciplina interna", a: [c.capogruppo, "Basta dichiarazioni in ordine sparso: chi parla ai giornali contro il partito ne risponde."], b: [c.critico, "Il dissenso non è un tradimento: un partito vivo discute, anche in pubblico."],
+      x: { label: "Istituisci una commissione di garanzia", hint: "Regole chiare per tutti", result: "Nasce la commissione di garanzia: il clima si raffredda, almeno per un po'.", imm: { kind: "direzione", trust: 2, rep: 0.5 } } });
+    A.push({ id: "lavoro", w: 1, t: isLeft ? "Il sindacato e le fabbriche" : "Le imprese e le categorie", a: [c.organizzatore, isLeft ? "Dobbiamo tornare davanti ai cancelli delle fabbriche, con il sindacato." : "Artigiani, commercianti e piccole imprese aspettano una nostra proposta."], b: [c.portavoce, isLeft ? "Il lavoro è cambiato: parliamo anche a chi non ha un sindacato." : "Non diventiamo il partito di una sola categoria."],
+      x: { label: isLeft ? "Organizza un'assemblea nazionale dei delegati di fabbrica" : "Convoca gli stati generali delle piccole imprese", hint: "Radicamento sociale", result: isLeft ? "Al palazzetto arrivano migliaia di delegati: una giornata che si ricorderà." : "Le associazioni di categoria rispondono in massa: il partito torna interlocutore.", imm: { kind: "direzione", vis: 2, iscritti: 40, rep: 1 } } });
+    var euOk = !pr || state.turn >= prTurnOf("1979-01-01");
+    var euLeft = (state.nextEuropeanElectionTurn || 0) - state.turn;
+    A.push({ id: "europa", w: euOk && euLeft > 0 && euLeft <= 30 ? 3 : 0, t: "Le elezioni europee", a: [c.portavoce, "Alle europee si vota con la proporzionale: è il momento di contarci da soli."], b: [c.organizzatore, "Le europee sono un test: non bruciamo energie che servono per le politiche."],
+      x: { label: "Candida te stesso come capolista simbolico", hint: "Traina la lista, ti esponi", result: "Il tuo nome in cima alla lista fa notizia: la campagna per le europee parte con più slancio.", imm: { kind: "direzione", vis: 3, rep: 0.5 } } });
+    A.push({ id: "scandalo", w: (p.reputazione || 50) < 35 || p.lingeringScandal ? 4 : 0, t: "La questione morale", a: [c.critico, "Dopo quello che si legge sui giornali serve un gesto: chi è coinvolto faccia un passo indietro."], b: [c.capogruppo, "Garantismo: nessuno si dimette per un articolo di giornale."],
+      x: { label: "Approva un codice etico per tutti i dirigenti", hint: "Un segnale di pulizia", result: "Il codice etico passa all'unanimità: i giornali parlano di svolta, qualche dirigente trema.", imm: { kind: "direzione", rep: 3, trust: 1 } } });
+    A.push({ id: "congresso", w: (p.leaderTrust || 65) < 45 ? 4 : 0, t: "Il congresso anticipato", a: [c.critico, "La fiducia nella segreteria è al minimo: chiediamo un congresso anticipato."], b: [c.organizzatore, "Un congresso adesso spaccherebbe il partito: andiamo avanti e ci contiamo dopo il voto."],
+      x: { label: "Accetti la sfida: congresso entro l'anno", hint: "Rischioso, ma chiarisce chi comanda", result: "Annunci il congresso. La minoranza è spiazzata: chi ti voleva logorare ora deve contarsi.", imm: { kind: "direzione", trust: 3, rep: 1.5 } } });
+    if (trend <= -1) A.push({ id: "sondaggi", w: 3, t: "Il calo nei sondaggi", a: [c.critico, "In tre mesi abbiamo perso " + fmt1(-trend) + " punti. Serve una svolta, e serve adesso: più piazza e meno palazzo."], b: [c.portavoce, "I sondaggi vanno e vengono: non cambiamo linea per un numero."],
+      x: { label: "Lancia una grande manifestazione nazionale", hint: "Per riprendere l'iniziativa", result: "La piazza si riempie: per qualche settimana si torna a parlare di voi.", imm: { kind: "direzione", fondi: -2500, vis: 5, trust: 1.5 } } });
+    if (trend >= 1) A.push({ id: "crescita", w: 3, t: "Il momento buono", a: [c.organizzatore, "Il vento è a favore: è il momento di osare, di aprire sezioni dove non siamo mai stati."], b: [c.tesoriere, "Non montiamoci la testa: consolidiamo, prima di allargarci."],
+      x: { label: "Lancia una campagna di adesioni in tutto il Paese", hint: "Sfrutta l'onda", result: "La campagna cavalca il buon momento: arrivano iscritti anche da regioni dove non c'eravate.", imm: { kind: "direzione", fondi: -1500, iscritti: 120, vis: 2 } } });
+    // evita di ripetere le ultime riunioni
+    var seen = im.agendaSeen || [];
+    var pool = A.filter(function (x) { return x.w > 0 && seen.indexOf(x.id) === -1; });
+    if (!pool.length) pool = A.filter(function (x) { return x.w > 0; });
+    var tot = pool.reduce(function (s, x) { return s + x.w; }, 0), r = Math.random() * tot;
+    for (var i = 0; i < pool.length; i++) { r -= pool[i].w; if (r <= 0) return pool[i]; }
+    return pool[pool.length - 1];
+  }
   function immDirezioneDossier(p) {
-    var im = ensureImm(p), c = im.cast, trend = immPollTrend(p, 4), issues = [];
-    if (trend <= -0.5) issues.push({ who: c.critico, say: "Così perdiamo voti. Serve una svolta, e serve adesso: più piazza e meno palazzo." });
-    if (trend >= 0.5) issues.push({ who: c.organizzatore, say: "Il vento è a favore: è il momento di osare, di aprire sezioni dove non siamo mai stati." });
-    if (p.fondi < 5000) issues.push({ who: c.tesoriere, say: "I conti non reggono: o tagliamo, o troviamo nuovi finanziatori. Non possiamo andare avanti così." });
-    if (p.pendingLegge) issues.push({ who: c.capogruppo, say: "La nostra legge su " + p.pendingLegge.noun + " rischia: dobbiamo cercare voti fuori dal nostro gruppo, anche a costo di concedere qualcosa." });
-    if (p.allianceId) issues.push({ who: c.critico, say: "L'alleanza con " + ((coalitionById(p.allianceId) || {}).label || "i nostri alleati") + " ci sta snaturando: la nostra gente non capisce." });
-    else issues.push({ who: c.organizzatore, say: "Da soli non andiamo da nessuna parte: serve un'alleanza prima del voto." });
-    if (state.nextElectionTurn - state.turn <= 26 && state.nextElectionTurn > state.turn) issues.push({ who: c.portavoce, say: "Mancano pochi mesi al voto: le liste vanno chiuse, e vanno messe facce nuove in prima fila." });
-    var city = immCity();
-    issues.push({ who: { name: generateStaffName(), role: "segretario della federazione di " + city }, say: "Da " + city + " vi dico che sul territorio manca il partito: " + (isPR() ? "la gente ci vede solo sui manifesti." : "la gente ci vede solo in televisione.") + "" });
-    var seenWho = {};
-    issues = issues.sort(function () { return Math.random() - 0.5; }).filter(function (x) { if (seenWho[x.who.name]) return false; seenWho[x.who.name] = 1; return true; }).slice(0, 3);
-    var brief = "Si riunisce la direzione nazionale, come ogni mese. Prendono la parola:" + issues.map(function (x) { return '<p style="margin:8px 0 0"><strong>' + fxEsc(x.who.name) + '</strong>' + (x.who.role ? ", " + fxEsc(x.who.role) : "") + ': «' + fxEsc(x.say) + '»</p>'; }).join("") +
-      '<p style="margin-top:10px">Tocca a te chiudere la discussione.</p>';
-    var choices = issues.slice(0, 2).map(function (x) {
-      return { label: "Dai ragione a " + x.who.name, hint: "Chi viene ascoltato si sente forte, gli altri meno", effects: {}, result: "Fai tua la linea di " + x.who.name + ". Una parte della direzione applaude, l'altra resta in silenzio.", imm: { kind: "direzione", trust: 1.5, rep: 0.5, side: x.who.name, others: issues.filter(function (y) { return y !== x; }).map(function (y) { return y.who.name; }) } };
-    });
-    choices.push({ label: "Fai sintesi tra le posizioni", hint: "Tieni unito il partito, senza strappi", effects: {}, result: "Trovi una formula che tiene insieme tutti. Nessuno è entusiasta, ma il partito esce unito.", imm: { kind: "direzione", trust: 3, rep: -0.5 } });
-    choices.push({ label: "Chiudi tu: la linea la dà il segretario", hint: "Più autorità, meno fiducia interna", effects: {}, result: "Chiudi la riunione in dieci minuti. Fuori, i giornalisti scrivono di un leader deciso; dentro, qualcuno mugugna.", imm: { kind: "direzione", trust: -3, rep: 1.5, others: issues.map(function (y) { return y.who.name; }) } });
-    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Partito — riunione della direzione nazionale", cat: "Vita di partito", title: "La direzione nazionale del mese", brief: brief, choices: choices };
+    var im = ensureImm(p), ag = immDirezioneAgenda(p, im);
+    var sp = [ag.a, ag.b];
+    if (Math.random() < 0.45) { var city2 = immCity(); sp.push([{ name: generateStaffName(), role: "segretaria della federazione di " + city2 }, immPick(["Da " + city2 + " chiediamo solo una cosa: decidete, e fatelo presto.", "I nostri iscritti di " + city2 + " ci chiedono chiarezza, non l'ennesimo rinvio.", "Qualunque cosa decidiate, a " + city2 + " la porteremo avanti casa per casa."])]); }
+    var who = function (x) { return '<strong>' + fxEsc(x[0].name) + '</strong>' + (x[0].role ? ", " + fxEsc(x[0].role) : ""); };
+    var quarter = ["d'inverno", "di primavera", "d'estate", "d'autunno"][Math.floor(((state.turn + (state.calendarOffset || 0)) % 52) / 13)] || "";
+    var brief = "Si riunisce la direzione nazionale " + quarter + ". All'ordine del giorno: <strong>" + fxEsc(ag.t.toLowerCase()) + "</strong>. Prendono la parola:" +
+      sp.map(function (x) { return '<p style="margin:8px 0 0">' + who(x) + ': «' + fxEsc(x[1]) + '»</p>'; }).join("") + '<p style="margin-top:10px">Tocca a te chiudere la discussione.</p>';
+    var base = { kind: "direzione", agendaId: ag.id };
+    var mk = function (o) { return Object.assign({}, base, o); };
+    var choices = [
+      { label: "Dai ragione a " + ag.a[0].name, hint: "Chi viene ascoltato si sente forte, gli altri meno", effects: {}, result: "Fai tua la linea di " + ag.a[0].name + ". Una parte della direzione applaude, l'altra resta in silenzio.", imm: mk({ trust: 1.5, rep: 0.5, others: [ag.b[0].name] }) },
+      { label: "Dai ragione a " + ag.b[0].name, hint: "Chi viene ascoltato si sente forte, gli altri meno", effects: {}, result: "Fai tua la linea di " + ag.b[0].name + ". Una parte della direzione applaude, l'altra resta in silenzio.", imm: mk({ trust: 1.5, rep: 0.5, others: [ag.a[0].name] }) },
+      Object.assign({ effects: {} }, ag.x, { imm: mk(ag.x.imm) })
+    ];
+    var extra = [
+      { label: "Fai sintesi tra le posizioni", hint: "Tieni unito il partito, senza strappi", effects: {}, result: "Trovi una formula che tiene insieme tutti. Nessuno è entusiasta, ma il partito esce unito.", imm: mk({ trust: 3, rep: -0.5 }) },
+      { label: "Metti ai voti la tua proposta", hint: "Se passa ti rafforzi, se perdi è un colpo duro", effects: {}, result: "", imm: mk({ vote: true }) },
+      { label: "Rinvia a una commissione di studio", hint: "Prendi tempo", effects: {}, result: "Il tema passa a una commissione: se ne riparlerà alla prossima direzione. I più impazienti sbuffano.", imm: mk({ trust: 0.5, rep: -0.5 }) },
+      { label: "Chiudi tu: la linea la dà il segretario", hint: "Più autorità, meno fiducia interna", effects: {}, result: "Chiudi la riunione in dieci minuti. Fuori, i giornalisti scrivono di un leader deciso; dentro, qualcuno mugugna.", imm: mk({ trust: -3, rep: 1.5, others: [ag.a[0].name, ag.b[0].name] }) }
+    ];
+    choices = choices.concat(shuffleN(extra, 2));
+    return { id: "ai_dynamic", kind: "situazione", localDynamic: false, eyebrow: "Partito — riunione della direzione nazionale", cat: "Vita di partito", title: "La direzione nazionale: " + ag.t.toLowerCase(), brief: brief, choices: choices };
   }
   // ---- 9. Il giro elettorale delle ultime settimane ----
   var IMM_GIRI = [
@@ -49736,7 +49800,7 @@
     if (left === 1 && im.lastClosingTurn !== state.turn) { im.lastClosingTurn = state.turn; return immSpeechDossier("chiusura"); }
     if ((left === 3 || left === 2) && im.lastGiroTurn !== state.turn) { im.lastGiroTurn = state.turn; return immGiroDossier(p, left); }
     if (p.inParliament && (state.lastElectionTurn || 0) > 0 && (im.inaugElection || -1) !== state.lastElectionTurn && state.turn >= state.lastElectionTurn + 1) { im.inaugElection = state.lastElectionTurn; return immSpeechDossier("insediamento"); }
-    if (state.turn >= im.nextDirezioneTurn) { im.nextDirezioneTurn = state.turn + 4 + Math.floor(Math.random() * 2); return immDirezioneDossier(p); }
+    if (state.turn >= im.nextDirezioneTurn) { im.nextDirezioneTurn = state.turn + 12 + Math.floor(Math.random() * 3); return immDirezioneDossier(p); }
     return null;
   }
   var immOrigEngageDue = engageDueDossier;
@@ -49757,7 +49821,10 @@
       if (dossier && dossier.id === CONGRESSO_DOSSIER.id && im) im.pendingSpeech = "congresso";
       if (choice && choice.annex) annexResolve(choice);
       if (choice && choice.imm && choice.imm.kind === "direzione") {
-        immApplyEff(p, { trust: choice.imm.trust, rep: choice.imm.rep });
+        var dv = choice.imm.vote ? (Math.random() < clamp(((p.leaderTrust === undefined ? 65 : p.leaderTrust) - 20) / 70, 0.15, 0.9)) : null;
+        immApplyEff(p, dv === null ? choice.imm : dv ? { trust: 2.5, rep: 1 } : { trust: -4, rep: -1 });
+        if (dv !== null && state.resultData) state.resultData.resultText = dv ? "Metti ai voti la tua proposta: la direzione la approva a larga maggioranza. La linea è tua, e adesso è anche del partito." : "Metti ai voti la tua proposta e la direzione la boccia: un colpo duro alla tua autorità. I giornali parlano di «segretario in minoranza».";
+        if (choice.imm.agendaId) { if (!im.agendaSeen) im.agendaSeen = []; im.agendaSeen.unshift(choice.imm.agendaId); im.agendaSeen = im.agendaSeen.slice(0, 5); }
         (choice.imm.others || []).forEach(function (n) { if (Math.random() < 0.5) im.grudges[n] = 1; });
       }
     } catch (err) { if (window.console) console.error(err); }
@@ -52047,10 +52114,42 @@
     try { if (dossier && dossier.prSecArea) prSecResolve(dossier, choice); } catch (e7) { if (window.console) console.error(e7); }
   };
   // coalizioni che cambiano con la storia: centrismo, centro-sinistra, pentapartito
-  var PR_COALS = [["1956-11-04", ["dc", "psli", "pli", "pri"], ["pci"], "Centrismo (DC e partiti laici)", "Le sinistre all'opposizione"],
+  // Richiesto dall'autore: «metti anche le coalizioni dell'epoca, se c'erano». Prima i due blocchi si
+  // chiamavano «Fronte Democratico Popolare» e «Blocco centrista» dal 1946 al 1956, anche quando il Fronte
+  // non esisteva ancora o era già sciolto. Ora seguono la storia vera: il tripartito antifascista, il
+  // centrismo, il Fronte Democratico Popolare (dic. 1947 – apr. 1948), il Blocco Nazionale dei liberali
+  // e dell'Uomo Qualunque alle elezioni del 1948, l'apparentamento della legge del 1953, il
+  // centro-sinistra, la solidarietà nazionale e il pentapartito. Vale come cornice d'epoca: i governi
+  // continuano a nascere e cadere in base a come va la partita.
+  var PR_COALS = [
+    ["1946-06-02", ["dc", "pci", "psi", "pri"], [], "Governo di unità antifascista (DC, PCI, PSI, PRI)", "All'opposizione: monarchici e qualunquisti"],
+    ["1947-06-01", ["dc", "psli", "pli", "pri"], ["pci", "psi"], "Centrismo (DC e partiti laici)", "Le sinistre all'opposizione"],
+    ["1947-12-28", ["dc", "psli", "pri"], ["pci", "psi"], "Centrismo (DC, socialdemocratici, repubblicani)", "Fronte Democratico Popolare (PCI e PSI)"],
+    ["1948-04-19", ["dc", "psli", "pli", "pri"], ["pci", "psi"], "Centrismo (DC e partiti laici)", "Le sinistre all'opposizione"],
+    ["1952-12-01", ["dc", "psli", "pli", "pri", "svp"], ["pci", "psi"], "Apparentamento centrista (legge del 1953)", "Le sinistre all'opposizione"],
+    ["1953-06-08", ["dc", "psli", "pli", "pri"], ["pci", "psi"], "Centrismo (DC e partiti laici)", "Le sinistre all'opposizione"],
+    ["1956-11-04", ["dc", "psli", "pli", "pri"], ["pci"], "Centrismo (DC e partiti laici)", "Le sinistre all'opposizione"],
     ["1963-12-04", ["dc", "psi", "psli", "pri"], ["pci", "psiup64"], "Centro-sinistra", "Le sinistre all'opposizione"],
     ["1972-06-26", ["dc", "psi", "psli", "pri", "pli"], ["pci", "dp"], "Maggioranze di centro e centro-sinistra", "Le sinistre all'opposizione"],
+    ["1976-07-29", ["dc", "psi", "psli", "pri", "pli", "pci"], ["dp", "radicali"], "Solidarietà nazionale (DC con l'appoggio del PCI)", "All'opposizione: radicali e Democrazia Proletaria"],
+    ["1979-01-31", ["dc", "psi", "psli", "pri", "pli"], ["pci", "dp"], "Governi di centro e tripartito", "Le sinistre all'opposizione"],
     ["1981-06-28", ["dc", "psi", "psli", "pri", "pli"], ["pci", "dp", "rc"], "Pentapartito", "Le sinistre all'opposizione"]];
+  // cartelli elettorali che non erano né l'uno né l'altro blocco (il Blocco Nazionale del 1948)
+  var PR_EXTRA_COALS = [{ id: "pr_blocco_nazionale", label: "Blocco Nazionale (liberali e Uomo Qualunque)", familyId: "liberale", members: ["pli", "uq"], from: "1947-12-28", to: "1948-04-19" }];
+  function prApplyExtraCoalitions() {
+    if (!state.dynamicCoalitions) state.dynamicCoalitions = [];
+    var pid = prPid();
+    PR_EXTRA_COALS.forEach(function (x) {
+      var on = state.turn >= prTurnOf(x.from) && state.turn < prTurnOf(x.to);
+      var cur = state.dynamicCoalitions.filter(function (c) { return c.id === x.id; })[0];
+      var mem = x.members.filter(function (id) { return prAlive(id) && id !== pid; });
+      if (on && mem.length >= 2) {
+        if (!cur) { state.dynamicCoalitions.push({ id: x.id, label: x.label, familyId: x.familyId, members: mem, historic: true });
+          state.dynamicCoalitions.forEach(function (c) { if (c.id !== x.id) c.members = c.members.filter(function (m) { return mem.indexOf(m) === -1; }); }); }
+        else cur.members = mem;
+      } else if (cur) state.dynamicCoalitions = state.dynamicCoalitions.filter(function (c) { return c.id !== x.id; });
+    });
+  }
   function prApplyCoalitions() {
     if (!isPR()) return;
     var c = prLatest(PR_COALS); if (!c) return;
@@ -52058,6 +52157,7 @@
     COALITIONS.centrodestra.members = c[1].filter(function (id) { return prAlive(id) && id !== pid; });
     COALITIONS.campolargo.members = c[2].filter(function (id) { return prAlive(id) && id !== pid; });
     COALITIONS.centrodestra.label = c[3]; COALITIONS.campolargo.label = c[4];
+    try { prApplyExtraCoalitions(); } catch (e) { if (window.console) console.error(e); }
   }
   var prCoalOrigCore = advanceTurnLogicCore;
   advanceTurnLogicCore = async function () {
