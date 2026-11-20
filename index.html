@@ -1944,6 +1944,85 @@
     if (state.worldNews.length > 6) state.worldNews.length = 6;
     state.log.unshift({ week: state.turn, title: ev.title, choiceLabel: ev.cat, result: ev.text, headlines: [], type: "shock", cat: ev.cat });
   }
+  // ---------- Disastri ambientali legati alla transizione ambientale ----------
+  // Richiesto dall'autore: «più è bassa la transizione ambientale nella Scheda Paese, più disastri ambientali
+  // nelle varie parti d'Italia, soprattutto se scende sotto 4». Sopra 6 restano rari; tra 4 e 6 crescono;
+  // sotto 4 diventano frequenti e più gravi (con l'indicatore a 1, circa uno ogni 8 settimane).
+  var ENV_DISASTERS = [
+    { id: "alluvione", regions: ["Emilia-Romagna", "Liguria", "Toscana", "Piemonte", "Veneto", "Marche", "Sardegna", "Campania", "Sicilia"], t: function (c) { return "Alluvione " + presAt(c); },
+      b: function (c, r, s) { return "Piogge record fanno esondare i fiumi intorno a " + c + " (" + r + "): " + (s >= 2 ? "interi quartieri sott'acqua, vittime e migliaia di sfollati" : s >= 1 ? "strade e campi allagati, centinaia di evacuati" : "danni a scantinati e campagne") + "."; }, hit: { economia: 0.12, felicita: 0.08, casa: 0.05 } },
+    { id: "frana", regions: ["Liguria", "Campania", "Calabria", "Trentino-Alto Adige", "Valle d'Aosta", "Piemonte", "Abruzzo"], t: function (c) { return "Frana sopra " + c; },
+      b: function (c, r, s) { return "Il fianco della montagna cede sopra " + c + " (" + r + "): " + (s >= 2 ? "case travolte e dispersi sotto il fango" : "strade interrotte e un paese isolato") + ". Il dissesto idrogeologico era segnalato da anni."; }, hit: { trasporti: 0.08, felicita: 0.05 } },
+    { id: "incendi", regions: ["Sicilia", "Sardegna", "Calabria", "Puglia", "Campania", "Lazio", "Basilicata"], t: function (c) { return "Incendi devastanti intorno a " + c; },
+      b: function (c, r, s) { return "Con 44 gradi e il vento di scirocco un fronte di fuoco brucia migliaia di ettari intorno a " + c + " (" + r + ")" + (s >= 2 ? ": case distrutte e vittime tra i residenti" : ": evacuati villaggi turistici e masserie") + "."; }, hit: { ambientalismo: 0.05, felicita: 0.06, economia: 0.05 } },
+    { id: "siccita", regions: ["Sicilia", "Sardegna", "Puglia", "Basilicata", "Piemonte", "Lombardia", "Emilia-Romagna"], t: function (c, r) { return "Siccità record " + presInRegion(r); },
+      b: function (c, r, s) { return "Il Po e i laghi sono ai minimi storici: acqua razionata a " + c + ", raccolti perduti " + presInRegion(r) + (s >= 1 ? ", allevamenti in ginocchio e centrali idroelettriche ferme" : "") + "."; }, hit: { economia: 0.1, commercio: 0.05 } },
+    { id: "smog", regions: ["Lombardia", "Piemonte", "Veneto", "Emilia-Romagna"], t: function (c) { return "Allarme smog " + presAt(c); },
+      b: function (c, r, s) { return "Da trenta giorni le polveri sottili a " + c + " superano i limiti: blocco del traffico, scuole chiuse" + (s >= 1 ? ", ospedali pieni di bambini e anziani con problemi respiratori" : "") + ". La Pianura Padana è tra le aree più inquinate d'Europa."; }, hit: { sanita: 0.08, felicita: 0.05 } },
+    { id: "terra_fuochi", regions: ["Campania", "Puglia", "Lazio", "Sicilia"], t: function (c) { return "Rifiuti tossici nelle campagne di " + c; },
+      b: function (c, r, s) { return "Nelle campagne intorno a " + c + " si scoprono discariche abusive di rifiuti industriali: fumi tossici la notte, falde inquinate" + (s >= 1 ? ", e un aumento dei tumori che i medici denunciano da anni" : "") + "."; }, hit: { sanita: 0.1, corruzione: 0.05 } },
+    { id: "fiume", regions: ["Lombardia", "Veneto", "Piemonte", "Toscana", "Umbria", "Lazio"], t: function (c) { return "Il fiume avvelenato vicino a " + c; },
+      b: function (c, r, s) { return "Uno sversamento industriale tinge di schiuma il fiume vicino a " + c + " (" + r + "): moria di pesci, divieto di pesca e di irrigazione" + (s >= 1 ? ", e l'acqua dei rubinetti dichiarata non potabile" : "") + "."; }, hit: { sanita: 0.06, economia: 0.04 } },
+    { id: "mareggiata", regions: ["Liguria", "Toscana", "Calabria", "Puglia", "Marche", "Abruzzo", "Sicilia"], t: function (c) { return "Mareggiata e spiagge mangiate dal mare " + presAt(c); },
+      b: function (c, r, s) { return "Una mareggiata eccezionale distrugge il lungomare di " + c + " (" + r + ")" + (s >= 1 ? ": stabilimenti spazzati via, la ferrovia costiera interrotta" : "") + ". L'erosione delle coste avanza ogni anno."; }, hit: { turismo: 0.08, trasporti: 0.05, economia: 0.04 } },
+    { id: "acqua_alta", regions: ["Veneto"], t: function () { return "Acqua alta eccezionale a Venezia"; },
+      b: function (c, r, s) { return "La marea a Venezia tocca " + (150 + s * 15) + " centimetri: San Marco sommersa, negozi e case allagati" + (s >= 2 ? ", la cripta della basilica sott'acqua" : "") + "."; }, hit: { turismo: 0.08, economia: 0.04 } },
+    { id: "ghiacciaio", regions: ["Trentino-Alto Adige", "Valle d'Aosta", "Lombardia", "Veneto"], t: function () { return "Crolla un ghiacciaio sulle Alpi"; },
+      b: function (c, r, s) { return "Con lo zero termico a 4.800 metri un seracco si stacca da un ghiacciaio " + presInRegion(r) + (s >= 1 ? ": una valanga di ghiaccio travolge una cordata di escursionisti" : ": evacuati i rifugi della zona") + "."; }, hit: { felicita: 0.05, turismo: 0.05 } },
+    { id: "calore", regions: ["Lazio", "Campania", "Puglia", "Sicilia", "Toscana", "Emilia-Romagna", "Lombardia"], t: function (c) { return "Ondata di calore record " + presAt(c); },
+      b: function (c, r, s) { return "Da due settimane a " + c + " non si scende sotto i 40 gradi: blackout per i condizionatori, pronto soccorso pieni" + (s >= 1 ? ", centinaia di morti in più tra gli anziani" : "") + "."; }, hit: { sanita: 0.08, felicita: 0.06 } },
+    { id: "tromba", regions: ["Lombardia", "Veneto", "Emilia-Romagna", "Puglia", "Lazio", "Toscana"], t: function (c) { return "Tromba d'aria su " + c; },
+      b: function (c, r, s) { return "Una tromba d'aria spazza " + c + " (" + r + "): tetti scoperchiati, alberi abbattuti" + (s >= 1 ? ", capannoni industriali distrutti e feriti" : "") + ". Fenomeni così, qui, un tempo erano rarissimi."; }, hit: { economia: 0.06, casa: 0.05 } }
+  ];
+  function presAt(c) { return (/^[AEIOU]/i.test(c) ? "ad " : "a ") + c; }
+  function envDisasterChance(amb) {
+    if (amb >= 6) return 0.004;
+    if (amb >= 4) return 0.004 + (6 - amb) * 0.011;
+    return 0.026 + (4 - amb) * 0.033;
+  }
+  function triggerEnvDisaster() {
+    if (isPR() || state.nsCountry || state.mode === "president" || !state.countryProfile || state.countryProfile.ambientalismo === undefined) return;
+    var amb = state.countryProfile.ambientalismo;
+    if (state.turn < (state.envDisasterCd || 0) || Math.random() > envDisasterChance(amb)) return;
+    state.envDisasterCd = state.turn + 3;
+    var d = pickFrom(ENV_DISASTERS), region = pickFrom(d.regions), cities = citiesForRegion(region), city = cities.length ? pickFrom(cities) : region;
+    var sev = amb < 3 ? (Math.random() < 0.5 ? 2 : 1) : amb < 4 ? (Math.random() < 0.3 ? 2 : Math.random() < 0.6 ? 1 : 0) : Math.floor(Math.random() * 2);
+    Object.keys(d.hit).forEach(function (k) { if (state.countryProfile[k] !== undefined) applyCountryMetricDelta(k, -d.hit[k] * (sev + 1) * rand(0.7, 1.2)); });
+    var cost = Math.round(rand(0.4, 1.4) * (sev + 1) * 10) / 10;
+    try { spesaUnaTantum(cost * 3); } catch (e) {}
+    if (state.consensoGoverno !== undefined) state.consensoGoverno = clamp(state.consensoGoverno - (sev + 1) * rand(0.5, 1.2), 0, 100);
+    var title = d.t(city, region), text = d.b(city, region, sev) + " " + (amb < 4 ? "Gli scienziati lo collegano al ritardo della transizione ambientale del Paese (" + fmt1(amb) + "/10): eventi così diventeranno sempre più frequenti." : "Gli esperti chiedono di accelerare sulla prevenzione e sulla transizione ambientale.");
+    state.log.unshift({ week: state.turn, title: title, choiceLabel: "Disastro ambientale", result: text, headlines: [], type: "shock", cat: "Disastro ambientale" });
+    if (!state.worldNews) state.worldNews = [];
+    state.worldNews.unshift({ week: state.turn, cat: "Ambiente", text: title + ". " + text.split(". ")[0] + "." }); if (state.worldNews.length > 6) state.worldNews.length = 6;
+    // chi ha fatto della transizione la sua bandiera ne guadagna un po' in credibilità
+    var p = state.player;
+    if (p && ["ecologista", "progressista", "tecnoprogressista"].indexOf(p.family) !== -1 && amb < 5) p.sondaggi = clamp(p.sondaggi + 0.15, 0, 60);
+    if (p && p.parliamentRole === "governo" && sev >= 1 && state.turn >= (state.envDisasterDossierCd || 0)) state.envDisasterPending = { title: title, text: text, sev: sev, city: city, region: region, id: d.id, cost: cost };
+  }
+  function envDisasterDossier() {
+    var e = state.envDisasterPending; state.envDisasterPending = null; state.envDisasterDossierCd = state.turn + 8;
+    return { id: "ai_dynamic", kind: "crisis", localDynamic: false, eyebrow: "Disastro ambientale — " + e.region, cat: "Ambiente", title: e.title,
+      brief: e.text + " Il tuo partito è al governo: tutti guardano a voi. Cosa fate?",
+      choices: [
+        { label: "Stato di emergenza e fondi subito per " + e.city, hint: "Costa, ma la gente lo vede", effects: { fondi: -rand(300, 700), reputazione: 2, national: { felicita: 0.1, economia: 0.04 } }, result: "Il Consiglio dei ministri dichiara lo stato di emergenza: arrivano soldi, Protezione civile ed esercito." },
+        { label: "Un piano nazionale contro il dissesto e per la transizione", hint: "Lungo periodo: l'indicatore ambientale risale", effects: { reputazione: 3, national: { ambientalismo: 0.35 } }, result: "Il piano viene presentato in Parlamento: opere di prevenzione, rinnovabili, controlli. I risultati arriveranno negli anni." },
+        { label: "Vai sul posto con gli stivali nel fango", hint: "Presenza, visibilità", effects: { visibilita: 4, sondaggi: 0.2 }, result: "Le immagini del leader tra i volontari fanno il giro dei telegiornali." },
+        { label: "Colpa della natura: non è il momento delle polemiche", hint: "Nessun costo, molte critiche", effects: { reputazione: -3 }, result: "Gli ambientalisti e l'opposizione ti accusano di negare il problema." }
+      ] };
+  }
+  var envOrigEngage = engageDueDossier;
+  engageDueDossier = function () {
+    try {
+      var p = state.player;
+      if (state.envDisasterPending && p && p.playerIsLeader && p.parliamentRole === "governo" && !isPR()) {
+        state.aiDynamicDossier = envDisasterDossier(); state.currentDossierId = "ai_dynamic"; state.phase = "building"; return true;
+      }
+    } catch (e) { if (window.console) console.error(e); }
+    return envOrigEngage.apply(this, arguments);
+  };
+  var envOrigShock = triggerCountryShock;
+  triggerCountryShock = function () { envOrigShock.apply(this, arguments); try { triggerEnvDisaster(); } catch (e) { if (window.console) console.error(e); } };
   // ---------- Scioperi: disordine sociale quando la qualità della vita crolla ----------
   // Segnalato da un giocatore: finché la Felicità e qualità della vita della Scheda Paese resta sotto una
   // soglia critica, il paese non sta a guardare — sindacati e cittadini scendono in piazza. A differenza
@@ -49631,6 +49710,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "20 novembre 2026", m: "partito", t: "Disastri ambientali e transizione", x: "Più è bassa la «Transizione ambientale» nella Scheda Paese, più disastri ambientali colpiscono le varie zone d'Italia: alluvioni in Emilia e in Liguria, frane, incendi al Sud, siccità del Po, smog in Pianura Padana, rifiuti tossici nelle campagne, fiumi avvelenati, mareggiate, acqua alta a Venezia, ghiacciai che crollano, ondate di calore, trombe d'aria. Sopra 6 sono rari; sotto 4 diventano frequenti e più gravi. Ogni disastro pesa su economia, salute, felicità e conti pubblici, e fa calare la fiducia nel governo. Se sei al governo, i più gravi diventano un dossier: stato di emergenza, un piano nazionale per la transizione (che fa risalire l'indicatore), la visita sul posto o la scelta di minimizzare." },
     { d: "20 novembre 2026", m: "partito", t: "Prima Repubblica: gli anni di piombo", x: "Dal 1970 agiscono le Brigate Rosse (e Prima Linea), con il picco tra il 1977 e il 1980: magistrati, giornalisti, dirigenti d'azienda, agenti ed esponenti politici gambizzati, uccisi o rapiti. Se guidi un partito conservatore o moderato, o un partito di sinistra al governo (per i comunisti anche negli anni del compromesso storico), il tuo nome può finire in un covo: scegli se accettare la scorta, e le BR possono colpire i tuoi dirigenti o rapire te. Durante la prigionia il partito lo guida il tuo vice, e tu decidi la linea da tenere (fermezza, trattativa, appello, blitz dei NOCS) fino alla liberazione. Nei loro anni agiscono anche i gruppi neofascisti (Ordine Nuovo, Avanguardia Nazionale, Ordine Nero, NAR): bombe, aggressioni squadriste e attentati alle sezioni di sinistra, anche alla tua. In più 31 nuovi eventi (dalle prime azioni delle BR al sequestro Dozier, da Acca Larentia all'arresto di Fioravanti) e vicende interne dei partiti che arrivano solo se guidi quel partito (il manifesto dei 101, lo strappo di Berlinguer, il Midas, la notte di Santa Dorotea, Almirante, la scissione di Lauro…), e 36 nuove proposte di legge e mozioni d'epoca." },
     { d: "19 novembre 2026", m: "partito", t: "Prima Repubblica più ricca, e due correzioni", x: "In Prima Repubblica arrivano 54 nuovi dossier d'epoca per ogni decennio (dal ciclostile della sezione alle scarpe del voto di scambio, dal frigorifero a rate ai teddy boys, dai licei occupati alla strategia della tensione, dalla scorta alle leghe del Nord e alla busta del costruttore) e 39 nuovi eventi storici nel giorno vero (Modena 1950, Marcinelle, la Nuova 500, Modugno, la scuola media unica, Avola, il colera a Napoli, Pasolini, Ambrosoli, Pio La Torre, Vermicino, Calvi, Tortora, Craxi a Palazzo Chigi, la Bolognina, Italia '90, la guerra del Golfo…). Corretto un bug: in Prima Repubblica gli altri partiti non presentavano mai mozioni, proposte di legge o modifiche di legge; ora lo fanno, su temi d'epoca. Corretto anche l'ordine della notte elettorale: l'animazione dei risultati arriva solo dopo exit poll e proiezioni, insieme al dato definitivo." },
     { d: "19 novembre 2026", m: "partito", t: "La caduta del governo pesa davvero", x: "Corretto un problema segnalato da un giocatore: quando un governo cadeva, i partiti della coalizione recuperavano i consensi persi in poche settimane (in Prima Repubblica tornavano subito al risultato storico). Ora la caduta abbassa per mesi il loro livello nei sondaggi: il partito che guidava il governo perde di più, gli alleati un po' meno, e la batosta si riassorbe piano in circa 40 settimane. In Prima Repubblica il segretario resta quello storico: al posto delle primarie lampo c'è la resa dei conti tra le correnti." },
