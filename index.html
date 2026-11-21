@@ -50653,6 +50653,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "21 novembre 2026", m: "partito", t: "Voti sulle leggi più realistici", x: "Corretto un problema segnalato da un giocatore: soprattutto in Prima Repubblica, quando votavi sì a una legge vinceva quasi sempre il sì, e quando votavi no vinceva il no. Ogni gruppo votava compatto come un blocco unico e il tuo gruppo finiva quasi sempre per decidere. Ora nessun gruppo è compatto al 100%: ci sono sempre dei dissidenti, molti di più quando la posizione di un partito è in bilico. I tuoi deputati ti seguono meno quando la tua indicazione va contro la linea naturale del partito, per esempio votare no a una legge del tuo stesso governo. E il voto segreto sposta qualche voto in più. Un partito grande come la DC conta ancora molto, ma non decide più da solo ogni votazione." },
     { d: "21 novembre 2026", m: "partito", t: "Question time: molti più imprevisti", x: "Al question time possono succedere molte più cose: 33 nuovi imprevisti in Aula, come l'ostruzionismo con mille emendamenti, i banchi del governo occupati, il numero legale che manca, un deputato che cambia gruppo in diretta, la gaffe del ministro, due ministri che si contraddicono, un documento riservato sventolato, i «pianisti» che votano per i colleghi assenti, gli operai o i familiari delle vittime in tribuna, la manifestazione davanti a Montecitorio, la ressa in Transatlantico, la fuga di notizie su un decreto, Dante citato in Aula e molti altri. Molti chiedono una tua scelta, diversa se sei al governo o all'opposizione. Ora in una seduta capitano anche più spesso." },
     { d: "21 novembre 2026", m: "partito", t: "Prima Repubblica: la coalizione di sinistra non si scioglie più ogni settimana", x: "Corretto un problema segnalato da un giocatore: in Prima Repubblica la coalizione di sinistra poteva sciogliersi una settimana dopo l'altra, per decine di turni. Succedeva quando nel blocco restava un solo partito (dopo il 1956, quando il PSI si stacca dal PCI, o se guidi tu il PSI o il PCI): il gioco la scioglieva e la settimana dopo la ricreava. Ora un blocco con un solo partito semplicemente non c'è, e il Blocco Nazionale del 1948 segue solo le sue date storiche." },
     { d: "21 novembre 2026", m: "partito", t: "Sondaggi oltre il 40%, guerra e colonie da gestire", x: "Corretto un problema segnalato da un giocatore: nella modalità partito i sondaggi del tuo partito non potevano superare il 40%. Ora il tetto è al 70%, ma oltre il 40% ogni punto costa sempre di più: ci si arriva solo con un consenso eccezionale. La guerra ora si gestisce direttamente, in qualunque settimana, dal pannello della guerra: cambi postura, lanci un assalto, bombardamenti mirati, richiami i riservisti, blocco navale, discorso alla Nazione, tregua umanitaria, chiedi alleati, proponi il cessate il fuoco (ogni comando ha il suo tempo di recupero; il bollettino ogni 8 settimane resta come riepilogo). Anche i territori annessi si governano direttamente: nomini un governatore civile o militare, investi, apri scuole bilingui, mantieni l'ordine, sfrutti le risorse, concedi un'autonomia speciale, indici un referendum sull'annessione quando la resistenza è bassa (se passa, l'annessione diventa definitiva e il territorio non costa più) o concedi l'indipendenza. Guerra e territori li comanda solo chi guida il governo." },
@@ -57795,6 +57796,51 @@
     if (txt) showSaveStatus(txt, false);
     save(); render();
   });
+
+  // Segnalato da un giocatore: «ogni volta che voto sì a una legge vince il sì, e ogni volta che dico no
+  // vince il no». Ogni gruppo votava compatto come un blocco unico, e con un partito grande (la DC in Prima
+  // Repubblica) il voto del giocatore decideva quasi sempre da solo. Ora nessun gruppo è compatto al 100%:
+  // ci sono sempre dei dissidenti, molti di più quando la posizione del partito è in bilico; e i deputati
+  // del giocatore lo seguono meno quando la sua indicazione va contro la linea naturale del partito
+  // (votare no a una legge del proprio governo, sì a una legge lontanissima): franchi tiratori.
+  var voteOrigCount = lawVoteCount;
+  lawVoteCount = function (law, playerVote) {
+    var c = voteOrigCount.apply(this, arguments);
+    try {
+      var p = state.player, t = { si: 0, no: 0, astenuto: 0 };
+      var spread = function (seats, main, keep) {
+        var rest = seats * (1 - keep), other = main === "si" ? ["no", "astenuto"] : main === "no" ? ["si", "astenuto"] : ["si", "no"];
+        t[main] += seats * keep; t[other[0]] += rest * 0.6; t[other[1]] += rest * 0.4;
+      };
+      c.rows.forEach(function (r) {
+        if (r.isPlayer) {
+          var nat = lawStanceVote(lawPartyStance({ id: "player", familyId: p.family, name: p.name }, law));
+          var keep = law.proposerId === "player" ? 0.97 : r.vote === nat ? 0.93 : r.vote === "astenuto" || nat === "astenuto" ? 0.8 : 0.66;
+          r.discipline = keep;
+          spread(r.seats, r.vote, keep);
+          return;
+        }
+        var st = r.stance, edge = Math.min(Math.abs(st - 0.2), Math.abs(st + 0.15));
+        var keepCpu = edge < 0.08 ? 0.68 : edge < 0.2 ? 0.8 : 0.92;
+        if (law.deals && law.deals[r.id] === "si") keepCpu = Math.max(keepCpu, 0.9);
+        spread(r.seats, r.vote, keepCpu);
+      });
+      c.si = Math.round(t.si); c.no = Math.round(t.no); c.astenuti = Math.round(t.astenuto);
+      c.margin = (c.si - c.no) / Math.max(1, c.si + c.no);
+      c.estimate = clamp(Math.round(50 + c.margin * 160), 3, 97);
+    } catch (e) { if (window.console) console.error(e); }
+    return c;
+  };
+  var voteOrigResolve = lawVoteResolve;
+  lawVoteResolve = function (law, playerVote, bonus) {
+    var c = lawVoteCount(law, playerVote);
+    var total = c.si + c.no + c.astenuti;
+    // voto segreto: i franchi tiratori spostano fino al 6% dell'Aula
+    var swing = Math.round(total * rand(-0.06, 0.06));
+    c.si = Math.max(0, c.si + swing); c.no = Math.max(0, c.no - swing);
+    c.passed = c.si + total * (bonus || 0) > c.no;
+    return c;
+  };
 
   render();
 })();
