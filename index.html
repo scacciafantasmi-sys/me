@@ -16096,7 +16096,7 @@
     return out;
   }
   function noConfTotal(seats) { return Object.keys(seats).reduce(function (s, id) { return s + seats[id]; }, 0); }
-  function noConfName(id) { if (id === "player") return state.player.name; var pt = partyById(id); return pt ? pt.name : id; }
+  function noConfName(id) { if (id === "player") return state.player.name; var pt = partyById(id); return pt ? pt.name : entityNameFallback(id); }
   function noConfShort(id) { if (id === "player") return state.player.short || state.player.name; var pt = partyById(id); return pt ? (pt.short || pt.name) : id; }
   function noConfGovIds() {
     var ids = ((state.govEntity && state.govEntity.memberIds) || []).slice();
@@ -16307,7 +16307,7 @@
       state.resultData = { resultText: choice.result, headlines: [] };
       return;
     }
-    var supporterNames = (ctx.supporterIds || []).map(function (id) { var pt = partyById(id); return pt ? pt.name : id; });
+    var supporterNames = (ctx.supporterIds || []).map(function (id) { var pt = partyById(id); return pt ? pt.name : entityNameFallback(id); });
     var namesText = supporterNames.length ? supporterNames.join(", ") : "nessun altro partito";
     var text;
     if (ctx.passes) {
@@ -28708,6 +28708,15 @@
       return s;
     });
   }
+  // Nome leggibile per un id che non è (più) un partito: una coalizione, il giocatore o un partito
+  // sciolto. Mai mostrare a schermo un id interno come "dyn_coal_movimentista_204".
+  function entityNameFallback(id) {
+    if (id === "player" && state.player) return state.player.name;
+    try { var c = coalitionById(id); if (c && c.label) return c.label; } catch (e) {}
+    var info = state.govEntity && state.govEntity.extraAllyInfo && state.govEntity.extraAllyInfo[id];
+    if (info && info.label) return info.label;
+    return /^(dyn_|c_|dp_|split_)|_\d+$/.test(String(id)) ? "un'altra forza politica" : id;
+  }
   function partyById(id) {
     var all = PARTIES.concat(state.dynamicParties || []);
     // Segnalato: dopo un cambio di segretario alcune schermate (Scheda Paese, governo) mostravano ancora
@@ -29545,7 +29554,7 @@
     p.rivalCountermoveCooldownTurn = state.turn + RIVAL_COUNTERMOVE_COOLDOWN_TURNS;
     var move = RIVAL_COUNTERMOVES[Math.floor(Math.random() * RIVAL_COUNTERMOVES.length)];
     var rivalParty = partyById(rivalId);
-    var rivalName = rivalParty ? rivalParty.name : rivalId;
+    var rivalName = rivalParty ? rivalParty.name : entityNameFallback(rivalId);
     Object.keys(move.mult).forEach(function (key) {
       var range = move.mult[key];
       var magnitude = rand(range[0], range[1]);
@@ -32225,6 +32234,10 @@
     // fatica (vedi governmentCohesionPenalty) — un compromesso vero deve pesare anche DOPO la
     // formazione del governo, non solo nel giorno dell'insediamento.
     state.govEntity = { id: winner.id, formedTurn: state.turn, memberIds: winnerMemberIds, seatSplit: seatSplit, minority: !hasRealMajority, extraAllyIds: extraAllies.map(function (a) { return a.id; }), forcedAllyIds: extraAllies.filter(function (a) { return a.wasIdeologicallyForced; }).map(function (a) { return a.id; }) };
+    // nome e partiti di ogni alleato esterno (può essere un'intera coalizione, non solo un partito):
+    // servono se l'alleato lascia il governo dopo che la coalizione si è sciolta (vedi departGoverningAlly)
+    state.govEntity.extraAllyInfo = {};
+    extraAllies.forEach(function (a) { state.govEntity.extraAllyInfo[a.id] = { label: a.label || null, members: (a.members || []).slice() }; });
     // Un nuovo governo riparte da una fiducia standard del 50% SOLO se nasce con una maggioranza vera e
     // senza dover allargare l'intesa oltre il blocco uscito naturalmente dalle urne: ogni alleato affine
     // in più negoziato dopo il voto costa un po' di fiducia iniziale, un alleato ideologicamente
@@ -32694,7 +32707,7 @@
     var lockedCandidates = neg.candidates.filter(function (c) { return !c.fits && (!oppositeAllowed || c.acceptChance === 0); });
     var rejectedLabels = (neg.rejectedIds || []).map(function (id) {
       var coal = coalitionById(id); if (coal) return coal.label;
-      var party = partyById(id); return party ? party.name : id;
+      var party = partyById(id); return party ? party.name : entityNameFallback(id);
     });
     var proposableLabels = choices.map(function (c) { return c.label.replace("Proponi un'alleanza a ", ""); });
     choices.push({
@@ -32725,7 +32738,7 @@
     if (!neg) return;
     var winner = { id: neg.winnerId, label: neg.winnerLabel };
     var extraAllies = neg.acceptedAllies.map(function (a) {
-      return { id: a.id, label: a.label, wasIdeologicallyForced: a.wasIdeologicallyForced };
+      return { id: a.id, label: a.label, members: a.members || [], wasIdeologicallyForced: a.wasIdeologicallyForced };
     });
     var blocSeats = { camera: neg.camera, senato: neg.senato };
     finishGovernmentFormation(winner, extraAllies, neg.governingMemberIds, blocSeats, neg.seatsById);
@@ -34011,7 +34024,7 @@
     // alleanze. Qui le coalizioni di oggi e la cronaca politica delle ultime settimane.
     var blocs = careerElectionBlocs().filter(function (bl) { return bl.members.length >= 2; });
     html += '<section aria-label="Coalizioni"><h3>Coalizioni e alleanze</h3>' + (blocs.length ? '<ul class="enacted-policy-list">' + blocs.map(function (bl) {
-      return "<li><strong>" + careerBlocLabel(bl.id) + "</strong> — " + fmt1(careerCoalitionPoll(bl.id)) + "% nei sondaggi<br>" + bl.members.map(function (id) { var pt = partyById(id); return pt ? pt.name : id; }).join(", ") + "</li>";
+      return "<li><strong>" + careerBlocLabel(bl.id) + "</strong> — " + fmt1(careerCoalitionPoll(bl.id)) + "% nei sondaggi<br>" + bl.members.map(function (id) { var pt = partyById(id); return pt ? pt.name : entityNameFallback(id); }).join(", ") + "</li>";
     }).join("") + "</ul>" : '<p class="ci-hint">Nessuna coalizione in piedi: ogni partito corre da solo.</p>') + "</section>";
     var news = (state.log || []).slice(0, 12);
     if (news.length) {
@@ -42827,7 +42840,7 @@
     var names = ge.memberIds.map(function (id) {
       if (id === "player") return state.player ? state.player.name : "il tuo partito";
       var party = partyById(id);
-      return party ? party.name : id;
+      return party ? party.name : entityNameFallback(id);
     });
     if (playerInGov) {
       var playerName = state.player ? state.player.name : "il tuo partito";
@@ -44091,7 +44104,7 @@
     var pcf = state.pendingCabinetFormation;
     var d = pcf.demand;
     var allyParty = partyById(d.allyId);
-    var allyName = allyParty ? allyParty.name : d.allyId;
+    var allyName = allyParty ? allyParty.name : entityNameFallback(d.allyId);
     var articled = MINISTRY_ARTICLED[d.ministry] || ("di " + d.ministry);
     return {
       id: "coalition_ministry_demand", kind: "situazione", localDynamic: false,
@@ -44673,7 +44686,7 @@
     }
     var allyParty = partyById(allyId);
     state.log.unshift({
-      week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : allyId, coalition: coal.label,
+      week: state.turn, title: "Un alleato lascia la coalizione", choiceLabel: allyParty ? allyParty.name : entityNameFallback(allyId), coalition: coal.label,
       result: reasonText, headlines: [], type: "cronaca", cat: "Strategia Elettorale"
     });
     if (!state.worldNews) state.worldNews = [];
@@ -44718,7 +44731,7 @@
       if (Math.random() < leaveChance) {
         p.allyReactionCooldownTurn = state.turn + ALLY_REACTION_COOLDOWN_TURNS;
         var allyBad = partyById(worstId);
-        var reasonText = (allyBad ? allyBad.name : worstId) + " lascia la coalizione, denunciando pubblicamente una distanza ormai incolmabile con la linea del partito: settimane di rapporti trascurati, alla fine, si pagano.";
+        var reasonText = (allyBad ? allyBad.name : entityNameFallback(worstId)) + " lascia la coalizione, denunciando pubblicamente una distanza ormai incolmabile con la linea del partito: settimane di rapporti trascurati, alla fine, si pagano.";
         var leaveDossier = allyLeavesCoalition(p.allianceId, worstId, reasonText);
         if (state.coalitionTrust && state.coalitionTrust[p.allianceId] !== undefined) {
           state.coalitionTrust[p.allianceId] = clamp(state.coalitionTrust[p.allianceId] - rand(8, 15), 0, 100);
@@ -44732,7 +44745,7 @@
       if (Math.random() < supportChance) {
         p.allyReactionCooldownTurn = state.turn + ALLY_REACTION_COOLDOWN_TURNS;
         var allyGood = partyById(bestId);
-        var name = allyGood ? allyGood.name : bestId;
+        var name = allyGood ? allyGood.name : entityNameFallback(bestId);
         p.reputazione = clamp(p.reputazione + rand(2, 4), 0, 100);
         p.visibilita = clamp(p.visibilita + rand(2, 5), 0, 100);
         relations[bestId] = clamp((relations[bestId] !== undefined ? relations[bestId] : 50) + rand(2, 5), 0, 100);
@@ -44866,6 +44879,8 @@
     // partita, con id "dyn_coal_..."), non solo un partito: il titolo mostrava l'id interno al posto del
     // nome. Ora si usa il nome della coalizione, ed escono dalla maggioranza anche i suoi partiti.
     var allyCoal = !ally && typeof coalitionById === "function" ? coalitionById(allyId) : null;
+    var allyInfo = ge.extraAllyInfo && ge.extraAllyInfo[allyId];
+    if (!ally && allyInfo) allyCoal = { label: (allyCoal && allyCoal.label) || allyInfo.label, members: (allyCoal && allyCoal.members && allyCoal.members.length) ? allyCoal.members : allyInfo.members };
     var lostMajority = detachFromGovernmentMajority(allyId).lostMajority;
     if (allyCoal && allyCoal.members) allyCoal.members.forEach(function (mid) {
       if (mid !== "player" && state.govEntity && state.govEntity.memberIds.indexOf(mid) !== -1) lostMajority = detachFromGovernmentMajority(mid).lostMajority || lostMajority;
@@ -45746,7 +45761,7 @@
           var party = partyById(id);
           // "tecnico" non e' un vero partito (vedi vacateCabinetMinistries): è il gruppo dei ministeri
           // tappati con un tecnico dopo l'uscita di un alleato, non riassegnati a nessun'altra forza.
-          var name = id === "player" ? p.name : id === "tecnico" ? "Ministri tecnici" : (party ? party.name : id);
+          var name = id === "player" ? p.name : id === "tecnico" ? "Ministri tecnici" : (party ? party.name : entityNameFallback(id));
           var ministerLines = list.map(function (ministry) {
             var a = cabinet.assignments && cabinet.assignments[ministry];
             var articled = MINISTRY_ARTICLED[ministry] || ministry;
@@ -49613,7 +49628,7 @@
             var accepted = Math.random() < acceptChance;
             if (accepted) {
               neg.governingMemberIds = neg.governingMemberIds.concat(target.members);
-              neg.acceptedAllies.push({ id: target.id, label: target.label, wasIdeologicallyForced: !target.fits });
+              neg.acceptedAllies.push({ id: target.id, label: target.label, members: (target.members || []).slice(), wasIdeologicallyForced: !target.fits });
               neg.camera += target.seats.camera; neg.senato += target.seats.senato;
               choice.result = target.label + " accetta la tua proposta: entra nella coalizione di governo, portando " + (target.seats.camera + target.seats.senato) + " seggi.";
             } else {
@@ -50668,7 +50683,7 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
-    { d: "23 novembre 2026", m: "partito", t: "Crisi di governo: nome della coalizione corretto", x: "Corretto un problema segnalato da un giocatore: quando a lasciare la maggioranza era un'intera coalizione alleata nata durante la partita, il titolo della crisi mostrava un codice interno (per esempio «dyn_coal_movimentista_204 ritira la fiducia») invece del nome. Ora compare il nome vero della coalizione, ed escono dalla maggioranza anche tutti i suoi partiti." },
+    { d: "23 novembre 2026", m: "partito", t: "Crisi di governo: nome della coalizione corretto", x: "Corretto un problema segnalato da un giocatore: quando a lasciare la maggioranza era un'intera coalizione alleata nata durante la partita, il titolo della crisi mostrava un codice interno (per esempio «dyn_coal_movimentista_204 ritira la fiducia») invece del nome. Ora compare il nome vero della coalizione, anche se nel frattempo si è sciolta (il gioco se lo ricorda da quando è nato il governo), ed escono dalla maggioranza anche tutti i suoi partiti. Lo stesso controllo vale ora anche per le altre schermate che nominano partiti e alleati (crisi, coalizioni, ministri, mozioni di sfiducia): nessun codice interno compare più a schermo."" },
     { d: "23 novembre 2026", m: "partito", t: "Il leader può morire di vecchiaia", x: "Chiesto da un giocatore: nella modalità partito il leader invecchiava, ma non moriva mai. Ora, dopo i 70 anni, ogni settimana c'è una piccola probabilità di morte naturale, che cresce con l'età come nella realtà (circa il 2% l'anno a 70 anni, il 6% a 80, il 16% a 90). La partita però non finisce: dopo il lutto scegli chi guida il partito, tra i dirigenti presenti in quel momento (i leader delle correnti, chi guida ad interim, il vicesegretario, il capogruppo, il presidente del partito…), ognuno con la sua età, i suoi tratti e la sua fiducia iniziale. Oppure crei un leader personalizzato, scegliendo nome, età e due tratti. Da lì giochi con il nuovo leader. Se avevi già avviato un percorso di successione, il passaggio è più morbido. Se il leader era Presidente del Consiglio, il successore giura al suo posto; se era Presidente della Repubblica, si torna a votare." },
     { d: "23 novembre 2026", m: "partito", t: "Question time: puoi non andarci (ma si nota)", x: "Chiesto da un giocatore: prima di entrare in Aula ora puoi scegliere di saltare il question time. Come nella realtà, se non vai le tue presenze scendono e l'opinione su di te peggiora (di più se sei al governo, perché il banco vuoto è il tuo). Il gioco conta le presenze di ogni legislatura e le mostra prima di entrare in Aula e nel Quadro parlamentare. Se in una legislatura scendi sotto il 50%, i giornalisti ti attaccano sulle assenze («il deputato fantasma») e la tua reputazione cala ancora. Il conto riparte da zero a ogni nuova legislatura." },
     { d: "21 novembre 2026", m: "partito", t: "Voti sulle leggi più realistici", x: "Corretto un problema segnalato da un giocatore: soprattutto in Prima Repubblica, quando votavi sì a una legge vinceva quasi sempre il sì, e quando votavi no vinceva il no. Ogni gruppo votava compatto come un blocco unico e il tuo gruppo finiva quasi sempre per decidere. Ora nessun gruppo è compatto al 100%: ci sono sempre dei dissidenti, molti di più quando la posizione di un partito è in bilico. I tuoi deputati ti seguono meno quando la tua indicazione va contro la linea naturale del partito, per esempio votare no a una legge del tuo stesso governo. E il voto segreto sposta qualche voto in più. Un partito grande come la DC conta ancora molto, ma non decide più da solo ogni votazione." },
