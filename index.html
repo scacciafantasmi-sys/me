@@ -6768,6 +6768,8 @@
       r.pendingRegionalLaw = null;
       var passProb = clamp(0.35 + ((r.approvalLocal === undefined ? 50 : r.approvalLocal) - 50) / 150, 0.15, 0.75);
       var passed = Math.random() < passProb;
+      // la regione del giocatore: decide il voto vero dei gruppi in Consiglio Regionale (vedi regLawVote)
+      if (r.playerIsGovernor) { try { passed = regLawVote(id, law).passed; } catch (rvErr) { if (window.console) console.error(rvErr); } }
       var metricDelta = passed ? rand(0.9, 1.4) : -rand(0.2, 0.5);
       var approvalDelta = passed ? rand(7, 12) : -rand(3, 6);
       applyRegionalMetricDelta(r, law.themeId, metricDelta);
@@ -50683,6 +50685,8 @@
   // escono. Va aggiornata a ogni nuova pubblicazione (in cima, il più recente). m: "partito", "carriera"
   // o "tutte" (vale per entrambe le modalità).
   var GAME_UPDATES = [
+    { d: "23 novembre 2026", m: "partito", t: "Presidente di Regione: il bilancio della Regione", x: "Chiesto da un giocatore: da Presidente di Regione le casse non avevano entrate regolari e, in debito, non c'era modo di fare cassa. Ora nella scheda della Regione c'è il «Bilancio della Regione»: ogni settimana entrano i trasferimenti dello Stato, l'addizionale regionale IRPEF (da 1,23% a 3,33%) e l'IRAP (da 2,9% a 4,82%), ed esce la spesa per sanità e servizi (tagli severi, ridotta, normale o espansiva), più le rate dei mutui. Alzare le tasse o tagliare la spesa fa cassa ma costa gradimento (e i tagli peggiorano la sanità); con l'IRAP troppo alta le imprese assumono meno. Per fare cassa subito ci sono: il mutuo con Cassa Depositi e Prestiti (da restituire in due anni), l'anticipo di cassa da Roma (più facile se sei in sintonia con il Governo), il programma per i fondi europei (risposta da Bruxelles dopo 8 settimane), la vendita di immobili della Regione e il piano contro l'evasione. Quando la cassa torna in attivo, una parte ripaga il debito da sola." },
+    { d: "23 novembre 2026", m: "partito", t: "Voti sulle leggi: chi ha votato cosa e perché", x: "Chiesto da un giocatore: ora il Consiglio Regionale ha una composizione vera (50 consiglieri, con il premio di maggioranza alla coalizione del Presidente) e, quando una tua legge regionale va al voto, vedi come ha votato ogni gruppo (sì, no, astenuti, quanti dissidenti) e perché è passata o è stata respinta: per esempio chi in maggioranza si è sfilato, l'opposizione compatta contro, o i franchi tiratori. Anche le leggi nazionali, oltre allo scrutinio partito per partito, ora spiegano perché sono passate o cadute." },
     { d: "23 novembre 2026", m: "partito", t: "Crisi di governo: nome della coalizione corretto", x: "Corretto un problema segnalato da un giocatore: quando a lasciare la maggioranza era un'intera coalizione alleata nata durante la partita, il titolo della crisi mostrava un codice interno (per esempio «dyn_coal_movimentista_204 ritira la fiducia») invece del nome. Ora compare il nome vero della coalizione, anche se nel frattempo si è sciolta (il gioco se lo ricorda da quando è nato il governo), ed escono dalla maggioranza anche tutti i suoi partiti. Lo stesso controllo vale ora anche per le altre schermate che nominano partiti e alleati (crisi, coalizioni, ministri, mozioni di sfiducia): nessun codice interno compare più a schermo." },
     { d: "23 novembre 2026", m: "partito", t: "Il leader può morire di vecchiaia", x: "Chiesto da un giocatore: nella modalità partito il leader invecchiava, ma non moriva mai. Ora, dopo i 70 anni, ogni settimana c'è una piccola probabilità di morte naturale, che cresce con l'età come nella realtà (circa il 2% l'anno a 70 anni, il 6% a 80, il 16% a 90). La partita però non finisce: dopo il lutto scegli chi guida il partito, tra i dirigenti presenti in quel momento (i leader delle correnti, chi guida ad interim, il vicesegretario, il capogruppo, il presidente del partito…), ognuno con la sua età, i suoi tratti e la sua fiducia iniziale. Oppure crei un leader personalizzato, scegliendo nome, età e due tratti. Da lì giochi con il nuovo leader. Se avevi già avviato un percorso di successione, il passaggio è più morbido. Se il leader era Presidente del Consiglio, il successore giura al suo posto; se era Presidente della Repubblica, si torna a votare." },
     { d: "23 novembre 2026", m: "partito", t: "Question time: puoi non andarci (ma si nota)", x: "Chiesto da un giocatore: prima di entrare in Aula ora puoi scegliere di saltare il question time. Come nella realtà, se non vai le tue presenze scendono e l'opinione su di te peggiora (di più se sei al governo, perché il banco vuoto è il tuo). Il gioco conta le presenze di ogni legislatura e le mostra prima di entrare in Aula e nel Quadro parlamentare. Se in una legislatura scendi sotto il 50%, i giornalisti ti attaccano sulle assenze («il deputato fantasma») e la tua reputazione cala ancora. Il conto riparte da zero a ogni nuova legislatura." },
@@ -57872,6 +57876,7 @@
     var swing = Math.round(total * rand(-0.06, 0.06));
     c.si = Math.max(0, c.si + swing); c.no = Math.max(0, c.no - swing);
     c.passed = c.si + total * (bonus || 0) > c.no;
+    c.law = law;
     return c;
   };
 
@@ -58115,6 +58120,306 @@
       if (i === -1) return html;
       return html.slice(0, i + 4) + '<p class="ci-hint">' + qtPresLine() + "</p>" + html.slice(i + 4);
     } catch (e) { return html; }
+  };
+
+  // ---------- Bilancio della Regione ----------
+  // Segnalato da un giocatore: da Presidente di Regione le casse non avevano entrate regolari, e in debito
+  // non c'era modo di fare cassa (solo tagliare i fondi a una città). Ora la Regione ha un vero bilancio
+  // settimanale: trasferimenti dello Stato, addizionale regionale IRPEF e IRAP (aliquote che scegli tu,
+  // entro i limiti di legge), spesa per sanità e servizi (che puoi tagliare o aumentare), rate dei mutui.
+  // E strumenti per fare cassa: anticipo da Roma, mutuo con Cassa Depositi e Prestiti, fondi europei,
+  // vendita di immobili, piano contro l'evasione.
+  var RB_SPESA = [
+    { id: "tagli", label: "Tagli severi", mult: 0.82, appr: -0.12, metric: -0.012 },
+    { id: "ridotta", label: "Spesa ridotta", mult: 0.92, appr: -0.05, metric: -0.005 },
+    { id: "normale", label: "Spesa normale", mult: 1, appr: 0, metric: 0 },
+    { id: "espansiva", label: "Spesa espansiva", mult: 1.12, appr: 0.06, metric: 0.006 }
+  ];
+  function rbScale(regionId) {
+    var region = regionById(regionId) || {};
+    var m = region.specialStatute ? 1.4 : 1;
+    if (region.area === "nord") m *= 1.15; else if (region.area === "sud" || region.area === "isole") m *= 0.9;
+    return m;
+  }
+  function rbGet(regionId) {
+    var r = state.regions[regionId];
+    if (!r.budget) r.budget = { irpef: 1.23, irap: 3.9, spesa: "normale", mutui: [], evasione: 0, cd: {}, ue: null, lastTick: state.turn };
+    if (r.fondiRegionali === undefined || r.fondiRegionali === null) r.fondiRegionali = Math.round(regionalTreasurySeed(regionId));
+    return r.budget;
+  }
+  function rbSpesaDef(b) { return RB_SPESA.filter(function (s) { return s.id === b.spesa; })[0] || RB_SPESA[2]; }
+  function rbWeekly(regionId) {
+    var r = state.regions[regionId], b = rbGet(regionId), sc = rbScale(regionId);
+    var align = nationalRegionalAlignment(regionId);
+    var trasf = 190 * sc * (align === "allineato" ? 1.05 : align === "opposto" ? 0.95 : 1);
+    var irpef = 115 * sc * (b.irpef / 1.23);
+    var irap = 95 * sc * (b.irap / 3.9);
+    var evas = b.evasione > state.turn ? 35 * sc : 0;
+    var spesa = 385 * sc * rbSpesaDef(b).mult;
+    var rate = (b.mutui || []).reduce(function (s, m) { return s + (m.left > 0 ? m.rate : 0); }, 0);
+    return { trasf: trasf, irpef: irpef, irap: irap, evas: evas, spesa: spesa, rate: rate, net: trasf + irpef + irap + evas - spesa - rate };
+  }
+  function rbTick(regionId) {
+    var r = state.regions[regionId], b = rbGet(regionId);
+    if (b.lastTick >= state.turn) return;
+    var weeks = Math.min(4, state.turn - b.lastTick);
+    b.lastTick = state.turn;
+    for (var w = 0; w < weeks; w++) {
+      var f = rbWeekly(regionId);
+      applyRegionalTreasuryDelta(r, Math.round(f.net), regionId);
+      (b.mutui || []).forEach(function (m) { if (m.left > 0) m.left--; });
+      // tasse alte e tagli pesano sul gradimento; la spesa espansiva lo aiuta
+      var sp = rbSpesaDef(b);
+      var appr = -(b.irpef - 1.23) * 0.06 - (b.irap - 3.9) * 0.05 + sp.appr;
+      r.approvalLocal = clamp((r.approvalLocal === undefined ? 50 : r.approvalLocal) + appr, 0, 100);
+      if (sp.metric) applyRegionalMetricDelta(r, "sanita", sp.metric);
+      if (b.irap > 4.2) applyRegionalMetricDelta(r, "lavoro", -0.004 * (b.irap - 4.2) * 5);
+    }
+    b.mutui = (b.mutui || []).filter(function (m) { return m.left > 0; });
+    if (b.ue && state.turn >= b.ue.turn) {
+      var ok = Math.random() < b.ue.prob;
+      var amt = Math.round(rand(1500, 3200) * rbScale(regionId));
+      if (ok) { applyRegionalTreasuryDelta(r, amt, regionId); addRegionalNews(regionId, "Bruxelles approva il programma regionale: arrivano " + fmtEuro(amt) + " di fondi europei."); }
+      else addRegionalNews(regionId, "Bruxelles boccia il programma regionale per i fondi europei: progetti giudicati troppo deboli.");
+      b.ue = null;
+    }
+  }
+  var rbOrigAdvance = advanceRegionalPresidentTurnLogic;
+  advanceRegionalPresidentTurnLogic = function () {
+    try { var rp = state.regionalPresidency; if (rp && rp.regionId) rbTick(rp.regionId); } catch (e) { if (window.console) console.error(e); }
+    return rbOrigAdvance.apply(this, arguments);
+  };
+  function rbFmtW(n) { return (n >= 0 ? "+" : "−") + fmtEuro(Math.abs(Math.round(n))) + "/sett."; }
+  function rbCd(b, k) { return Math.max(0, (b.cd[k] || 0) - state.turn); }
+  function rbPanel(regionId) {
+    var r = state.regions[regionId], b = rbGet(regionId), f = rbWeekly(regionId);
+    var debt = r.debitoRegionale || 0;
+    var h = '<section aria-label="Bilancio della Regione"><p class="eyebrow">Bilancio della Regione</p>';
+    h += '<p class="ci-hint">Ogni settimana entrano i trasferimenti dello Stato e le tasse regionali ed escono la spesa per sanità e servizi e le rate dei mutui. Se la cassa va sotto zero si accumula debito; quando torni in attivo, una parte dell\'incasso ripaga il debito da sola.' +
+      (debt ? " <strong>Sei in debito di " + fmtEuro(Math.round(debt)) + "</strong>: per fare cassa alza le tasse regionali, riduci la spesa o usa gli strumenti qui sotto (mutuo, anticipo da Roma, fondi europei, immobili, evasione)." : "") + "</p>";
+    h += '<div class="stat-grid">' +
+      '<div class="stat-tile"><div class="label">Trasferimenti dello Stato</div><div class="row"><span class="value" style="font-size:1rem">' + rbFmtW(f.trasf) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">Addizionale IRPEF (' + b.irpef.toFixed(2).replace(".", ",") + '%)</div><div class="row"><span class="value" style="font-size:1rem">' + rbFmtW(f.irpef) + "</span></div></div>" +
+      '<div class="stat-tile"><div class="label">IRAP (' + b.irap.toFixed(2).replace(".", ",") + '%)</div><div class="row"><span class="value" style="font-size:1rem">' + rbFmtW(f.irap) + "</span></div></div>" +
+      (f.evas ? '<div class="stat-tile"><div class="label">Recupero evasione</div><div class="row"><span class="value" style="font-size:1rem">' + rbFmtW(f.evas) + "</span></div></div>" : "") +
+      '<div class="stat-tile"><div class="label">Sanità e servizi (' + rbSpesaDef(b).label.toLowerCase() + ')</div><div class="row"><span class="value" style="font-size:1rem">' + rbFmtW(-f.spesa) + "</span></div></div>" +
+      (f.rate ? '<div class="stat-tile"><div class="label">Rate dei mutui</div><div class="row"><span class="value" style="font-size:1rem">' + rbFmtW(-f.rate) + "</span></div></div>" : "") +
+      '<div class="stat-tile"><div class="label">Saldo settimanale</div><div class="row"><span class="value" style="font-size:1rem;color:' + (f.net >= 0 ? "#4fe0a8" : "#e0605a") + '">' + rbFmtW(f.net) + "</span></div></div></div>";
+    function stepper(key, label, val, min, max, hint) {
+      return '<div class="party-row"><div class="party-row-body" style="width:100%"><div class="party-row-head"><strong>' + label + '</strong><span class="chip">' + val.toFixed(2).replace(".", ",") + "%</span></div>" +
+        '<div class="party-row-sub">' + hint + "</div>" +
+        '<div style="display:flex;gap:0.4rem;margin-top:0.4rem"><button type="button" class="save-bar-btn" data-rb-step="' + key + ':-1"' + (val <= min + 1e-9 ? " disabled" : "") + '>− abbassa</button>' +
+        '<button type="button" class="save-bar-btn" data-rb-step="' + key + ':1"' + (val >= max - 1e-9 ? " disabled" : "") + ">+ alza</button></div></div></div>";
+    }
+    h += '<div class="party-directory" style="margin-top:0.6rem">' +
+      stepper("irpef", "Addizionale regionale IRPEF", b.irpef, 1.23, 3.33, "Da 1,23% a 3,33%. Più alta: più entrate, ma i cittadini se ne accorgono (gradimento in calo ogni settimana).") +
+      stepper("irap", "IRAP sulle imprese", b.irap, 2.9, 4.82, "Da 2,9% a 4,82%. Più alta: più entrate, ma sopra il 4,2% le imprese assumono meno.") +
+      '<div class="party-row"><div class="party-row-body" style="width:100%"><div class="party-row-head"><strong>Spesa per sanità e servizi</strong></div>' +
+      '<div class="party-row-sub">Tagliare fa cassa ma peggiora la sanità e il gradimento; la spesa espansiva fa il contrario.</div><div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.4rem">' +
+      RB_SPESA.map(function (s) { return '<button type="button" class="save-bar-btn' + (b.spesa === s.id ? " primary" : "") + '" data-rb-spesa="' + s.id + '">' + s.label + "</button>"; }).join("") + "</div></div></div></div>";
+    var mutuoOk = (b.mutui || []).length < 3;
+    var acts = [
+      { k: "mutuo", label: "Accendi un mutuo con Cassa Depositi e Prestiti", hint: mutuoOk ? "+" + fmtEuro(Math.round(4000 * rbScale(regionId))) + " subito, poi una rata ogni settimana per due anni (circa il 10% in più). Massimo 3 mutui insieme." : "Hai già 3 mutui aperti: prima finisci di pagarne uno.", dis: !mutuoOk },
+      { k: "anticipo", label: "Chiedi un anticipo di cassa a Roma", hint: "Da 1.500 a 3.000 subito. Più facile se sei allineato al Governo nazionale; se sei in rotta, può dire di no." },
+      { k: "ue", label: "Presenta un programma per i fondi europei", hint: b.ue ? "Programma in valutazione a Bruxelles: risposta tra " + Math.max(0, b.ue.turn - state.turn) + " settimane." : "Costa 200 di progettazione; dopo 8 settimane Bruxelles decide (di solito sì) e arrivano da 1.500 a 3.200.", dis: !!b.ue },
+      { k: "immobili", label: "Vendi immobili della Regione", hint: "Da 1.500 a 2.500 una tantum. Le opposizioni parlano di svendita: gradimento in leggero calo." },
+      { k: "evasione", label: "Piano contro l'evasione dei tributi regionali", hint: b.evasione > state.turn ? "Piano attivo per altre " + (b.evasione - state.turn) + " settimane." : "Costa 300 subito, poi porta entrate in più ogni settimana per un anno.", dis: b.evasione > state.turn }
+    ];
+    var cdMap = { mutuo: 8, anticipo: 26, ue: 0, immobili: 52, evasione: 0 };
+    h += '<p class="eyebrow" style="margin-top:0.8rem">Fare cassa</p><div class="choices">' + acts.map(function (a) {
+      var cd = rbCd(b, a.k), dis = a.dis || cd > 0;
+      return '<button type="button" class="choice-btn" data-rb-act="' + a.k + '"' + (dis ? " disabled" : "") + '><span class="clabel">' + a.label + "</span><span class=\"chint\">" + (cd > 0 ? "Di nuovo disponibile tra " + cd + " settimane. " : "") + a.hint + "</span></button>";
+    }).join("") + "</div>";
+    if ((b.mutui || []).length) h += '<p class="ci-hint">Mutui in corso: ' + b.mutui.map(function (m) { return fmtEuro(Math.round(m.rate)) + "/sett. per altre " + m.left + " settimane"; }).join(" · ") + ".</p>";
+    return h + "</section>";
+  }
+  function rbAct(regionId, k) {
+    var r = state.regions[regionId], b = rbGet(regionId), sc = rbScale(regionId), msg = "", bad = false;
+    if (rbCd(b, k) > 0) return;
+    if (k === "mutuo") {
+      if ((b.mutui || []).length >= 3) return;
+      var cap = Math.round(4000 * sc);
+      applyRegionalTreasuryDelta(r, cap, regionId);
+      b.mutui.push({ rate: cap * 1.1 / 104, left: 104 });
+      b.cd.mutuo = state.turn + 8;
+      msg = "La Regione accende un mutuo con Cassa Depositi e Prestiti: " + fmtEuro(cap) + " in cassa, da restituire in due anni.";
+    } else if (k === "anticipo") {
+      var align = nationalRegionalAlignment(regionId);
+      var p = align === "allineato" ? 0.9 : align === "opposto" ? 0.45 : 0.7;
+      b.cd.anticipo = state.turn + 26;
+      if (Math.random() < p) { var a = Math.round(rand(1500, 3000) * sc); applyRegionalTreasuryDelta(r, a, regionId); msg = "Roma concede un anticipo di cassa di " + fmtEuro(a) + " alla Regione."; }
+      else { msg = "Il Governo nazionale nega l'anticipo di cassa: «La Regione metta ordine nei suoi conti»."; bad = true; r.approvalLocal = clamp((r.approvalLocal || 50) - 1, 0, 100); }
+    } else if (k === "ue") {
+      if (b.ue) return;
+      applyRegionalTreasuryDelta(r, -200, regionId);
+      var dig = r.metrics && r.metrics.digitale !== undefined ? r.metrics.digitale : 5;
+      b.ue = { turn: state.turn + 8, prob: clamp(0.55 + (dig - 5) * 0.04, 0.35, 0.85) };
+      msg = "La Regione presenta a Bruxelles il programma per i fondi europei: la risposta arriverà tra 8 settimane.";
+    } else if (k === "immobili") {
+      var v = Math.round(rand(1500, 2500) * sc);
+      applyRegionalTreasuryDelta(r, v, regionId);
+      r.approvalLocal = clamp((r.approvalLocal || 50) - rand(1, 2.5), 0, 100);
+      b.cd.immobili = state.turn + 52;
+      msg = "La Regione vende alcuni immobili di sua proprietà e incassa " + fmtEuro(v) + ". Le opposizioni parlano di svendita del patrimonio.";
+    } else if (k === "evasione") {
+      if (b.evasione > state.turn) return;
+      applyRegionalTreasuryDelta(r, -300, regionId);
+      b.evasione = state.turn + 52;
+      msg = "Parte il piano regionale contro l'evasione di bollo auto, IRAP e addizionale IRPEF: le entrate cresceranno per un anno.";
+    }
+    if (msg) { addRegionalNews(regionId, msg); showSaveStatus(msg, bad); }
+  }
+  document.addEventListener("click", function (e) {
+    if (state.mode !== "regional_president" || !state.regionalPresidency) return;
+    var t = e.target.closest && e.target.closest("[data-rb-step],[data-rb-spesa],[data-rb-act]");
+    if (!t || t.disabled) return;
+    e.stopPropagation();
+    var regionId = state.regionalPresidency.regionId, b = rbGet(regionId);
+    try {
+      if (t.hasAttribute("data-rb-step")) {
+        var parts = t.getAttribute("data-rb-step").split(":"), key = parts[0], dir = +parts[1];
+        if (key === "irpef") b.irpef = clamp(Math.round((b.irpef + dir * 0.25) * 100) / 100, 1.23, 3.33);
+        else b.irap = clamp(Math.round((b.irap + dir * 0.25) * 100) / 100, 2.9, 4.82);
+      } else if (t.hasAttribute("data-rb-spesa")) b.spesa = t.getAttribute("data-rb-spesa");
+      else rbAct(regionId, t.getAttribute("data-rb-act"));
+    } catch (err) { if (window.console) console.error(err); }
+    save(); render();
+  }, true);
+  var rbOrigScheda = renderRegionalSchedaPage;
+  renderRegionalSchedaPage = function () {
+    var html = rbOrigScheda.apply(this, arguments);
+    try {
+      var i = html.indexOf("</section>");
+      if (i !== -1) html = html.slice(0, i + 10) + rbPanel(state.regionalPresidency.regionId) + html.slice(i + 10);
+    } catch (e) { if (window.console) console.error(e); }
+    return html;
+  };
+
+  // ---------- Voto delle leggi regionali partito per partito, e perché passano o cadono ----------
+  // Segnalato da un giocatore: al voto delle leggi regionali non si vedeva chi votava sì e chi no, né
+  // perché una legge veniva respinta (vale anche per le leggi nazionali). Ora il Consiglio Regionale ha
+  // una composizione vera (50 consiglieri, con il premio di maggioranza alla coalizione del Presidente),
+  // ogni gruppo vota secondo la sua posizione (con qualche dissidente) e l'esito arriva con la spiegazione.
+  var RC_SEATS = 50;
+  function rcCouncil(regionId) {
+    var r = state.regions[regionId], p = state.player, leg = r.lastElectionTurn || 0;
+    if (r.council && r.council.leg === leg) return r.council;
+    var pf = LEFT_RIGHT_POSITION[p.family];
+    var list = activeParties().map(function (pt) { return { id: pt.id, name: pt.short || pt.name, color: pt.color, fam: pt.familyId, poll: (state.parties && state.parties[pt.id]) || 0 }; });
+    list.push({ id: "player", name: p.short || p.name, color: p.color, fam: p.family, poll: Math.max(p.sondaggi || 0, 8), isPlayer: true });
+    list = list.filter(function (x) { return x.poll >= 2.5 || x.isPlayer; });
+    var maj = list.filter(function (x) { if (x.isPlayer) return true; var d = (LEFT_RIGHT_POSITION[x.fam] === undefined || pf === undefined) ? 9 : Math.abs(LEFT_RIGHT_POSITION[x.fam] - pf); return d <= 1; });
+    maj.sort(function (a, b) { return b.poll - a.poll; }); maj = maj.slice(0, 4);
+    var opp = list.filter(function (x) { return maj.indexOf(x) === -1; });
+    function alloc(group, total) {
+      var sum = group.reduce(function (s, x) { return s + x.poll; }, 0) || 1, out = {}, used = 0;
+      group.forEach(function (x) { out[x.id] = Math.floor(total * x.poll / sum); used += out[x.id]; });
+      var rest = group.slice().sort(function (a, b) { return (b.poll / sum * total - out[b.id]) - (a.poll / sum * total - out[a.id]); });
+      for (var i = 0; used < total && rest.length; i = (i + 1) % rest.length) { out[rest[i].id]++; used++; }
+      return out;
+    }
+    var seats = Object.assign(alloc(maj, 30), alloc(opp, 20));
+    var parties = list.filter(function (x) { return seats[x.id] > 0; }).map(function (x) { return { id: x.id, name: x.name, color: x.color, fam: x.fam, seats: seats[x.id], maj: maj.indexOf(x) !== -1, isPlayer: !!x.isPlayer }; });
+    r.council = { leg: leg, parties: parties };
+    return r.council;
+  }
+  function rcHash(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return (h % 1000) / 1000; }
+  function regLawVote(regionId, law) {
+    var r = state.regions[regionId], c = rcCouncil(regionId), p = state.player, pf = LEFT_RIGHT_POSITION[p.family];
+    var appr = r.approvalLocal === undefined ? 50 : r.approvalLocal;
+    var t = { si: 0, no: 0, astenuto: 0 }, rows = [];
+    c.parties.forEach(function (x) {
+      var d = (LEFT_RIGHT_POSITION[x.fam] === undefined || pf === undefined) ? 2 : Math.abs(LEFT_RIGHT_POSITION[x.fam] - pf);
+      var s = x.isPlayer ? 2 : x.maj ? 0.75 - 0.2 * d + (appr - 50) / 90 : 0.1 - 0.3 * d + (appr - 50) / 200;
+      s += (rcHash((law.noun || "") + "|" + x.id + "|" + state.turn) - 0.5) * 0.5;
+      var vote = s >= 0.2 ? "si" : s <= -0.15 ? "no" : "astenuto";
+      var edge = Math.min(Math.abs(s - 0.2), Math.abs(s + 0.15));
+      var keep = x.isPlayer ? 0.97 : edge < 0.08 ? 0.7 : edge < 0.2 ? 0.82 : 0.93;
+      var main = Math.round(x.seats * keep), rest = x.seats - main;
+      var other = vote === "si" ? ["no", "astenuto"] : vote === "no" ? ["si", "astenuto"] : ["si", "no"];
+      t[vote] += main; t[other[0]] += Math.round(rest * 0.6); t[other[1]] += rest - Math.round(rest * 0.6);
+      rows.push({ id: x.id, short: x.name, color: x.color, seats: x.seats, vote: vote, maj: x.maj, isPlayer: x.isPlayer, dissent: rest, stance: s });
+    });
+    rows.sort(function (a, b) { return b.seats - a.seats; });
+    var res = { rows: rows, si: t.si, no: t.no, astenuti: t.astenuto, passed: t.si > t.no, regional: true, approval: appr };
+    law._vote = res;
+    return res;
+  }
+  // Perché una legge è passata o è caduta, letto dai voti veri dei gruppi.
+  function voteWhyText(c, majIds, opts) {
+    opts = opts || {};
+    var isMaj = function (row) { return row.isPlayer ? !!opts.playerInMaj : majIds.indexOf(row.id) !== -1; };
+    var majRows = c.rows.filter(isMaj), oppRows = c.rows.filter(function (x) { return !isMaj(x); });
+    var majSeats = majRows.reduce(function (s, x) { return s + x.seats; }, 0), total = c.rows.reduce(function (s, x) { return s + x.seats; }, 0);
+    var majOff = majRows.filter(function (x) { return x.vote !== "si"; }), oppYes = oppRows.filter(function (x) { return x.vote === "si"; });
+    var nm = function (arr) { return arr.map(function (x) { return x.short + (x.isPlayer ? " (tu)" : "") + " (" + x.seats + ")"; }).join(", "); };
+    var gap = Math.abs(c.si - c.no), diss = c.rows.reduce(function (s, x) { return s + (x.dissent || 0); }, 0);
+    var parts = [];
+    if (opts.oppProposal) {
+      var majNo = majRows.filter(function (x) { return x.vote !== "si"; }), majYes = majRows.filter(function (x) { return x.vote === "si"; });
+      if (c.passed) {
+        parts.push("Passa con " + gap + " voti di scarto (" + c.si + " sì contro " + c.no + " no), anche se non è una proposta della maggioranza di governo.");
+        if (majYes.length) parts.push("Decisivi i sì di " + nm(majYes) + ", che pure stanno al governo.");
+      } else {
+        parts.push("Respinta: " + c.si + " sì contro " + c.no + " no" + (c.astenuti ? " e " + c.astenuti + " astenuti" : "") + ".");
+        parts.push("Non è una proposta della maggioranza di governo" + (majNo.length ? ", e " + nm(majNo) + " non la votano" : "") + ": senza almeno una parte del governo i numeri in Aula non ci sono.");
+        if (majYes.length) parts.push("Tra i partiti di governo la sostiene solo " + nm(majYes) + ".");
+      }
+      var oppY = oppRows.filter(function (x) { return x.vote === "si"; });
+      if (oppY.length) parts.push("A favore: " + nm(oppY) + ".");
+      return parts.join(" ");
+    }
+    if (c.passed) {
+      parts.push("Passa con " + gap + " voti di scarto (" + c.si + " sì contro " + c.no + " no).");
+      if (!majOff.length && majRows.length) parts.push("La maggioranza (" + nm(majRows) + ") vota compatta.");
+      else if (majOff.length) parts.push("Nonostante " + nm(majOff) + " non votino sì, i numeri bastano.");
+      if (oppYes.length) parts.push("Arrivano anche i sì di " + nm(oppYes) + " dall'opposizione.");
+    } else {
+      parts.push("Respinta: " + c.si + " sì contro " + c.no + " no" + (c.astenuti ? " e " + c.astenuti + " astenuti" : "") + ".");
+      if (majRows.length && majSeats * 2 <= total) parts.push("Chi la sostiene non ha la maggioranza: " + majSeats + " seggi su " + total + ".");
+      if (majOff.length) parts.push("Decisivi " + majOff.map(function (x) { return (x.vote === "no" ? "i no di " : "l'astensione di ") + x.short + " (" + x.seats + ")"; }).join(" e ") + ", che pure stanno in maggioranza: giudicano la legge troppo lontana dalla loro linea" + (opts.approval !== undefined && opts.approval < 45 ? " e, con il gradimento al " + Math.round(opts.approval) + "%, preferiscono prendere le distanze" : "") + ".");
+      var oppNo = oppRows.filter(function (x) { return x.vote === "no"; });
+      if (oppNo.length) parts.push("L'opposizione vota contro: " + nm(oppNo) + ".");
+      if (!majOff.length && majSeats * 2 > total && diss) parts.push("Sulla carta i numeri c'erano: a far cadere la legge sono stati circa " + diss + " franchi tiratori e dissidenti.");
+    }
+    return parts.join(" ");
+  }
+  function regVoteHtml(c) {
+    var rowsHtml = '<div class="party-directory" style="margin-top:0.4rem">' + c.rows.map(function (x) {
+      return '<div class="party-row"><div class="party-row-body" style="width:100%"><div class="party-row-head" style="flex-wrap:wrap;gap:0.35rem"><strong style="color:' + (x.color || "inherit") + '">' + fxEsc(x.short) + (x.isPlayer ? " (tu)" : "") + "</strong>" +
+        '<span class="chip">' + x.seats + (x.seats === 1 ? " consigliere · " : " consiglieri · ") + (x.maj ? "maggioranza" : "opposizione") + '</span><span class="chip ' + (x.vote === "si" ? "good" : x.vote === "no" ? "critical" : "neutral") + '">' + LAW_VOTE_ICON[x.vote] + " " + LAW_VOTE_LABEL[x.vote] + "</span>" +
+        (x.dissent ? '<span class="chip neutral">' + x.dissent + " dissident" + (x.dissent === 1 ? "e" : "i") + "</span>" : "") + "</div></div></div>";
+    }).join("") + "</div>";
+    return lawTallyHtml(c) + '<p class="ci-hint"><strong>' + (c.passed ? "Perché è passata" : "Perché è stata respinta") + ":</strong> " +
+      voteWhyText(c, c.rows.filter(function (x) { return x.maj && !x.isPlayer; }).map(function (x) { return x.id; }), { playerInMaj: true, approval: c.approval }) + "</p>" +
+      '<details class="log" open><summary>Come hanno votato i gruppi in Consiglio Regionale<span>▾</span></summary>' + rowsHtml + "</details>";
+  }
+  var rcOrigAnnounce = buildRegionalLawAnnouncementDossier;
+  buildRegionalLawAnnouncementDossier = function (regionId, law, passed) {
+    var d = rcOrigAnnounce.apply(this, arguments);
+    try {
+      if (law._vote) {
+        var banner = '<div class="enactment-banner' + (passed ? "" : " rejected") + '">' + ("Legge regionale " + (passed ? "APPROVATA" : "RESPINTA")).toUpperCase() + "</div>";
+        var i = d.brief.indexOf("</div>", d.brief.indexOf("vote-tally"));
+        var esito = i !== -1 ? d.brief.slice(i + 6) : "";
+        d.brief = banner + regVoteHtml(law._vote) + esito;
+      }
+    } catch (e) { if (window.console) console.error(e); }
+    return d;
+  };
+  // Leggi nazionali: oltre a chi ha votato cosa, ora anche il perché.
+  var whyOrigScrutinio = lawScrutinioHtml;
+  lawScrutinioHtml = function (c) {
+    var html = whyOrigScrutinio.apply(this, arguments);
+    try {
+      if (c && c.passed !== undefined && c.rows) {
+        var inGov = state.player && state.player.parliamentRole === "governo", L = c.law || {};
+        var propGov = L.proposerId === "player" ? inGov : L.proposerId ? lawGovIds().indexOf(L.proposerId) !== -1 : true;
+        var why = voteWhyText(c, lawGovIds(), { playerInMaj: inGov, oppProposal: !propGov });
+        html = '<p class="ci-hint" style="margin-top:0.6rem"><strong>' + (c.passed ? "Perché è passata" : "Perché è stata respinta") + ":</strong> " + why + "</p>" + html;
+      }
+    } catch (e) { if (window.console) console.error(e); }
+    return html;
   };
 
   render();
